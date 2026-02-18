@@ -21,9 +21,14 @@ func RootCmd() *cobra.Command {
 	root.SetOut(cfg.Out)
 	root.SetErr(cfg.Err)
 
+	// Local operations
 	root.AddCommand(InitCmd(cfg))
 	root.AddCommand(AddCmd(cfg))
 
+	// Helper commands
+	root.AddCommand(ViewCmd(cfg))
+
+	// Placeholders for upcoming features
 	for _, ph := range placeholderCommands {
 		root.AddCommand(PlaceholderCmd(ph, cfg))
 	}
