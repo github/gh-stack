@@ -25,6 +25,10 @@ func RootCmd() *cobra.Command {
 	root.AddCommand(InitCmd(cfg))
 	root.AddCommand(AddCmd(cfg))
 
+	// Remote operations
+	root.AddCommand(CheckoutCmd(cfg))
+	root.AddCommand(MergeCmd(cfg))
+
 	// Helper commands
 	root.AddCommand(ViewCmd(cfg))
 	root.AddCommand(UpdateCmd(cfg))
