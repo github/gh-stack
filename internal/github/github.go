@@ -84,3 +84,106 @@ func (c *Client) FindPRForBranch(branch string) (*PullRequest, error) {
 		IsDraft:     n.IsDraft,
 	}, nil
 }
+
+// CreatePR creates a new pull request.
+func (c *Client) CreatePR(base, head, title, body string, draft bool) (*PullRequest, error) {
+	var mutation struct {
+		CreatePullRequest struct {
+			PullRequest struct {
+				ID          string
+				Number      int
+				Title       string
+				State       string
+				URL         string `graphql:"url"`
+				HeadRefName string
+				BaseRefName string
+				IsDraft     bool
+			}
+		} `graphql:"createPullRequest(input: $input)"`
+	}
+
+	repoID, err := c.repositoryID()
+	if err != nil {
+		return nil, err
+	}
+
+	type CreatePullRequestInput struct {
+		RepositoryID string `json:"repositoryId"`
+		BaseRefName  string `json:"baseRefName"`
+		HeadRefName  string `json:"headRefName"`
+		Title        string `json:"title"`
+		Body         string `json:"body,omitempty"`
+		Draft        bool   `json:"draft"`
+	}
+
+	variables := map[string]interface{}{
+		"input": CreatePullRequestInput{
+			RepositoryID: repoID,
+			BaseRefName:  base,
+			HeadRefName:  head,
+			Title:        title,
+			Body:         body,
+			Draft:        draft,
+		},
+	}
+
+	if err := c.gql.Mutate("CreatePullRequest", &mutation, variables); err != nil {
+		return nil, fmt.Errorf("creating PR: %w", err)
+	}
+
+	pr := mutation.CreatePullRequest.PullRequest
+	return &PullRequest{
+		ID:          pr.ID,
+		Number:      pr.Number,
+		Title:       pr.Title,
+		State:       pr.State,
+		URL:         pr.URL,
+		HeadRefName: pr.HeadRefName,
+		BaseRefName: pr.BaseRefName,
+		IsDraft:     pr.IsDraft,
+	}, nil
+}
+
+// UpdatePRBase updates the base branch of a pull request.
+func (c *Client) UpdatePRBase(prID, newBase string) error {
+	var mutation struct {
+		UpdatePullRequest struct {
+			PullRequest struct {
+				ID string
+			}
+		} `graphql:"updatePullRequest(input: $input)"`
+	}
+
+	type UpdatePullRequestInput struct {
+		PullRequestID string `json:"pullRequestId"`
+		BaseRefName   string `json:"baseRefName"`
+	}
+
+	variables := map[string]interface{}{
+		"input": UpdatePullRequestInput{
+			PullRequestID: prID,
+			BaseRefName:   newBase,
+		},
+	}
+
+	return c.gql.Mutate("UpdatePullRequest", &mutation, variables)
+}
+
+func (c *Client) repositoryID() (string, error) {
+	var query struct {
+		Repository struct {
+			ID string
+		} `graphql:"repository(owner: $owner, name: $name)"`
+	}
+
+	variables := map[string]interface{}{
+		"owner": graphql.String(c.owner),
+		"name":  graphql.String(c.repo),
+	}
+
+	if err := c.gql.Query("RepositoryID", &query, variables); err != nil {
+		return "", fmt.Errorf("fetching repository ID: %w", err)
+	}
+
+	return query.Repository.ID, nil
+}
