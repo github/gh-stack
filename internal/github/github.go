@@ -169,6 +169,12 @@ func (c *Client) UpdatePRBase(prID, newBase string) error {
 	return c.gql.Mutate("UpdatePullRequest", &mutation, variables)
 }
 
+// DeleteStack deletes a stack on GitHub.
+// TODO: Implement once the stack API is available.
+func (c *Client) DeleteStack() error {
+	return fmt.Errorf("deleting a stack on GitHub is not yet supported by the API")
+}
+
 func (c *Client) repositoryID() (string, error) {
 	var query struct {
 		Repository struct {
