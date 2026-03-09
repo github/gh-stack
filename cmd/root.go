@@ -33,7 +33,7 @@ func RootCmd() *cobra.Command {
 
 	// Helper commands
 	root.AddCommand(ViewCmd(cfg))
-	root.AddCommand(UpdateCmd(cfg))
+	root.AddCommand(RebaseCmd(cfg))
 
 	// Navigation commands
 	root.AddCommand(UpCmd(cfg))

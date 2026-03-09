@@ -12,7 +12,7 @@ import (
 	"github.com/spf13/cobra"
 )
 
-type updateOptions struct {
+type rebaseOptions struct {
 	branch    string
 	downstack bool
 	upstack   bool
@@ -30,38 +30,38 @@ type rebaseState struct {
 
 const rebaseStateFile = "gh-stack-rebase-state"
 
-func UpdateCmd(cfg *config.Config) *cobra.Command {
-	opts := &updateOptions{}
+func RebaseCmd(cfg *config.Config) *cobra.Command {
+	opts := &rebaseOptions{}
 
 	cmd := &cobra.Command{
-		Use:   "update [branch]",
-		Short: "Update and rebase a stack of branches",
+		Use:   "rebase [branch]",
+		Short: "Rebase a stack of branches",
 		Long: `Pull from remote and do a cascading rebase across the stack.
 
 Ensures that each branch in the stack has the tip of the previous
 layer in its commit history, rebasing if necessary.`,
-		Example: `  $ gh stack update
-  $ gh stack update --downstack
-  $ gh stack update --continue
-  $ gh stack update --abort`,
+		Example: `  $ gh stack rebase
+  $ gh stack rebase --downstack
+  $ gh stack rebase --continue
+  $ gh stack rebase --abort`,
 		Args: cobra.MaximumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			if len(args) > 0 {
 				opts.branch = args[0]
 			}
-			return runUpdate(cfg, opts)
+			return runRebase(cfg, opts)
 		},
 	}
 
-	cmd.Flags().BoolVar(&opts.downstack, "downstack", false, "Only update branches from trunk to current branch")
-	cmd.Flags().BoolVar(&opts.upstack, "upstack", false, "Only update branches from current branch to top")
+	cmd.Flags().BoolVar(&opts.downstack, "downstack", false, "Only rebase branches from trunk to current branch")
+	cmd.Flags().BoolVar(&opts.upstack, "upstack", false, "Only rebase branches from current branch to top")
 	cmd.Flags().BoolVar(&opts.cont, "continue", false, "Continue rebase after resolving conflicts")
 	cmd.Flags().BoolVar(&opts.abort, "abort", false, "Abort rebase and restore all branches")
 
 	return cmd
 }
 
-func runUpdate(cfg *config.Config, opts *updateOptions) error {
+func runRebase(cfg *config.Config, opts *rebaseOptions) error {
 	gitDir, err := git.GitDir()
 	if err != nil {
 		cfg.Errorf("not a git repository")
@@ -69,11 +69,11 @@ func runUpdate(cfg *config.Config, opts *updateOptions) error {
 	}
 
 	if opts.cont {
-		return continueUpdate(cfg, gitDir)
+		return continueRebase(cfg, gitDir)
 	}
 
 	if opts.abort {
-		return abortUpdate(cfg, gitDir)
+		return abortRebase(cfg, gitDir)
 	}
 
 	sf, err := stack.Load(gitDir)
@@ -125,15 +125,15 @@ func runUpdate(cfg *config.Config, opts *updateOptions) error {
 		startIdx = currentIdx
 	}
 
-	branchesToUpdate := s.Branches[startIdx:endIdx]
+	branchesToRebase := s.Branches[startIdx:endIdx]
 
-	if len(branchesToUpdate) == 0 {
-		cfg.Printf("No branches to update")
+	if len(branchesToRebase) == 0 {
+		cfg.Printf("No branches to rebase")
 		return nil
 	}
 
-	cfg.Printf("Updating branches in order, starting from %s to %s",
-		branchesToUpdate[0].Branch, branchesToUpdate[len(branchesToUpdate)-1].Branch)
+	cfg.Printf("Rebasing branches in order, starting from %s to %s",
+		branchesToRebase[0].Branch, branchesToRebase[len(branchesToRebase)-1].Branch)
 
 	originalRefs := make(map[string]string)
 	for _, b := range s.Branches {
@@ -141,7 +141,7 @@ func runUpdate(cfg *config.Config, opts *updateOptions) error {
 		originalRefs[b.Branch] = sha
 	}
 
-	for i, br := range branchesToUpdate {
+	for i, br := range branchesToRebase {
 		var base string
 		absIdx := startIdx + i
 		if absIdx == 0 {
@@ -160,8 +160,8 @@ func runUpdate(cfg *config.Config, opts *updateOptions) error {
 			cfg.Warningf("Rebasing %s onto %s ... conflict", br.Branch, base)
 
 			remaining := make([]string, 0)
-			for j := i + 1; j < len(branchesToUpdate); j++ {
-				remaining = append(remaining, branchesToUpdate[j].Branch)
+			for j := i + 1; j < len(branchesToRebase); j++ {
+				remaining = append(remaining, branchesToRebase[j].Branch)
 			}
 
 			state := &rebaseState{
@@ -177,9 +177,9 @@ func runUpdate(cfg *config.Config, opts *updateOptions) error {
 			cfg.Printf("")
 
 			cfg.Printf("Resolve conflicts on %s, then run %s",
-				br.Branch, cfg.ColorCyan("gh stack update --continue"))
+				br.Branch, cfg.ColorCyan("gh stack rebase --continue"))
 			cfg.Printf("Or abort this operation with %s",
-				cfg.ColorCyan("gh stack update --abort"))
+				cfg.ColorCyan("gh stack rebase --abort"))
 			return fmt.Errorf("rebase conflict on %s", br.Branch)
 		}
 
@@ -201,14 +201,14 @@ func runUpdate(cfg *config.Config, opts *updateOptions) error {
 		rangeDesc = fmt.Sprintf("All upstack branches from %s", currentBranch)
 	}
 
-	cfg.Printf("%s updated locally with %s", rangeDesc, s.Trunk.Branch)
+	cfg.Printf("%s rebased locally with %s", rangeDesc, s.Trunk.Branch)
 	cfg.Printf("To push up your changes and open/update the stack of PRs, run %s",
 		cfg.ColorCyan("gh stack push -f"))
 
 	return nil
 }
 
-func continueUpdate(cfg *config.Config, gitDir string) error {
+func continueRebase(cfg *config.Config, gitDir string) error {
 	state, err := loadRebaseState(gitDir)
 	if err != nil {
 		cfg.Errorf("no rebase in progress")
@@ -235,7 +235,7 @@ func continueUpdate(cfg *config.Config, gitDir string) error {
 		conflictBranch = s.Branches[state.CurrentBranchIndex].Branch
 	}
 
-	cfg.Printf("Continuing update of stack, resuming from %s to %s",
+	cfg.Printf("Continuing rebase of stack, resuming from %s to %s",
 		conflictBranch, s.Branches[len(s.Branches)-1].Branch)
 
 	if git.IsRebaseInProgress() {
@@ -285,9 +285,9 @@ func continueUpdate(cfg *config.Config, gitDir string) error {
 			printConflictDetails(cfg, base)
 			cfg.Printf("")
 			cfg.Printf("Resolve conflicts on %s, then run %s",
-				branchName, cfg.ColorCyan("gh stack update --continue"))
+				branchName, cfg.ColorCyan("gh stack rebase --continue"))
 			cfg.Printf("Or abort this operation with %s",
-				cfg.ColorCyan("gh stack update --abort"))
+				cfg.ColorCyan("gh stack rebase --abort"))
 			return fmt.Errorf("rebase conflict on %s", branchName)
 		}
 
@@ -303,14 +303,14 @@ func continueUpdate(cfg *config.Config, gitDir string) error {
 	}
 	_ = stack.Save(gitDir, sf)
 
-	cfg.Printf("All branches in stack updated locally with %s", s.Trunk.Branch)
+	cfg.Printf("All branches in stack rebased locally with %s", s.Trunk.Branch)
 	cfg.Printf("To push up your changes and open/update the stack of PRs, run %s",
 		cfg.ColorCyan("gh stack push -f"))
 
 	return nil
 }
 
-func abortUpdate(cfg *config.Config, gitDir string) error {
+func abortRebase(cfg *config.Config, gitDir string) error {
 	state, err := loadRebaseState(gitDir)
 	if err != nil {
 		cfg.Errorf("no rebase in progress")
@@ -382,5 +382,5 @@ func printConflictDetails(cfg *config.Config, branch string) {
 	cfg.Printf("     %s  (changes being rebased)", cfg.ColorCyan(">>>>>>>"))
 	cfg.Printf("  2. Edit the file to keep the desired changes and remove the markers")
 	cfg.Printf("  3. Stage resolved files: %s", cfg.ColorCyan("git add <file>"))
-	cfg.Printf("  4. Continue the update:  %s", cfg.ColorCyan("gh stack update --continue"))
+	cfg.Printf("  4. Continue the rebase:  %s", cfg.ColorCyan("gh stack rebase --continue"))
 }
