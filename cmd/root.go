@@ -41,6 +41,9 @@ func RootCmd() *cobra.Command {
 	root.AddCommand(TopCmd(cfg))
 	root.AddCommand(BottomCmd(cfg))
 
+	// Feedback
+	root.AddCommand(FeedbackCmd(cfg))
+
 	// Placeholders for upcoming features
 	for _, ph := range placeholderCommands {
 		root.AddCommand(PlaceholderCmd(ph, cfg))
