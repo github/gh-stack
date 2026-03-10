@@ -1,0 +1,100 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "gh-stack file",
+  "description": "Schema for the .git/gh-stack file that stores the state of all stacks in a repository.",
+  "type": "object",
+  "required": ["schemaVersion", "stacks"],
+  "properties": {
+    "schemaVersion": {
+      "type": "integer",
+      "const": 1,
+      "description": "Schema version for forward compatibility."
+    },
+    "repository": {
+      "type": "string",
+      "description": "The owner/name slug of the repository (e.g. 'github/gh-stack')."
+    },
+    "stacks": {
+      "type": "array",
+      "description": "All stacks tracked in this repository.",
+      "items": { "$ref": "#/$defs/stack" }
+    }
+  },
+  "$defs": {
+    "stack": {
+      "type": "object",
+      "description": "A single stack of branches.",
+      "required": ["trunk", "branches"],
+      "properties": {
+        "id": {
+          "type": "string",
+          "description": "Identifier for this stack, populated from the API when available."
+        },
+        "state": {
+          "type": "string",
+          "description": "State of the stack from the API (e.g. 'open', 'merged')."
+        },
+        "open": {
+          "type": "boolean",
+          "description": "Whether the stack is open or closed."
+        },
+        "trunk": {
+          "$ref": "#/$defs/branchRef",
+          "description": "The trunk (base) branch of the stack."
+        },
+        "branches": {
+          "type": "array",
+          "description": "Ordered list of branches in the stack, from bottom to top.",
+          "items": { "$ref": "#/$defs/branchRef" }
+        }
+      }
+    },
+    "branchRef": {
+      "type": "object",
+      "description": "A reference to a branch and its associated commit hash. For the trunk, 'head' stores the HEAD commit. For stacked branches, 'base' stores the merge-base commit (the last common commit before divergence from the parent branch).",
+      "required": ["branch"],
+      "properties": {
+        "branch": {
+          "type": "string",
+          "description": "The branch name."
+        },
+        "head": {
+          "type": "string",
+          "description": "The HEAD commit SHA of this branch. Used for the trunk branch."
+        },
+        "base": {
+          "type": "string",
+          "description": "The merge-base commit SHA — the last commit before this branch diverged from its parent. Used for stacked branches."
+        },
+        "pullRequest": {
+          "$ref": "#/$defs/pullRequestRef",
+          "description": "Associated pull request information, if a PR exists for this branch."
+        }
+      }
+    },
+    "pullRequestRef": {
+      "type": "object",
+      "description": "A snapshot of relatively immutable pull request metadata.",
+      "required": ["number"],
+      "properties": {
+        "number": {
+          "type": "integer",
+          "description": "The PR number."
+        },
+        "id": {
+          "type": "string",
+          "description": "The PR node ID (GraphQL ID)."
+        },
+        "url": {
+          "type": "string",
+          "format": "uri",
+          "description": "Direct URL to the pull request."
+        },
+        "title": {
+          "type": "string",
+          "description": "The PR title at the time it was recorded."
+        }
+      }
+    }
+  }
+}
