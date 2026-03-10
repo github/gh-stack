@@ -56,7 +56,7 @@ func runInit(cfg *config.Config, opts *initOptions) error {
 	if trunk == "" {
 		trunk, err = git.DefaultBranch()
 		if err != nil {
-			cfg.Errorf("unable to determine default branch: %s\nUse -b to specify the trunk branch", err)
+			cfg.Errorf("unable to determine default branch\nUse -b to specify the trunk branch")
 			return nil
 		}
 	}
@@ -76,6 +76,14 @@ func runInit(cfg *config.Config, opts *initOptions) error {
 
 	currentBranch, _ := git.CurrentBranch()
 
+	// Don't allow initializing a stack if the current branch is already part of another stack
+	if currentBranch != "" {
+		if existing := sf.FindStackForBranch(currentBranch); existing != nil {
+			cfg.Errorf("current branch %q is already part of a stack", currentBranch)
+			return nil
+		}
+	}
+
 	var branches []string
 
 	if opts.adopt {
@@ -90,7 +98,7 @@ func runInit(cfg *config.Config, opts *initOptions) error {
 				return nil
 			}
 			if err := sf.ValidateNoDuplicateBranch(b); err != nil {
-				cfg.Errorf("branch %q already exists in the stack", b)
+				cfg.Errorf("branch %q already exists in a stack", b)
 				return nil
 			}
 		}
@@ -99,7 +107,7 @@ func runInit(cfg *config.Config, opts *initOptions) error {
 		// Explicit branch names provided — create them
 		for _, b := range opts.branches {
 			if err := sf.ValidateNoDuplicateBranch(b); err != nil {
-				cfg.Errorf("branch %q already exists in the stack", b)
+				cfg.Errorf("branch %q already exists in a stack", b)
 				return nil
 			}
 			if !git.BranchExists(b) {
@@ -144,7 +152,7 @@ func runInit(cfg *config.Config, opts *initOptions) error {
 				return nil
 			}
 			if err := sf.ValidateNoDuplicateBranch(branchName); err != nil {
-				cfg.Errorf("branch %q already exists in the stack", branchName)
+				cfg.Errorf("branch %q already exists in a stack", branchName)
 				return nil
 			}
 			if !git.BranchExists(branchName) {

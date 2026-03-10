@@ -2,7 +2,6 @@ package git
 
 import (
 	"context"
-	"fmt"
 	"os"
 	"os/exec"
 	"strconv"
@@ -73,16 +72,17 @@ func Fetch(remote string) error {
 
 // --- Custom operations not available in cligit ---
 
-// DefaultBranch returns the default branch of origin.
+// DefaultBranch returns the HEAD branch from origin.
 func DefaultBranch() (string, error) {
 	ref, err := run("symbolic-ref", "refs/remotes/origin/HEAD")
+	// fallback: if origin/HEAD doesn't exist, look for common default branch names
 	if err != nil {
 		for _, name := range []string{"main", "master"} {
 			if BranchExists(name) {
 				return name, nil
 			}
 		}
-		return "", fmt.Errorf("unable to determine default branch: %w", err)
+		return "", err
 	}
 	return strings.TrimPrefix(ref, "refs/remotes/origin/"), nil
 }
