@@ -13,14 +13,30 @@ const (
 	stackFileName = "gh-stack"
 )
 
-// BranchRef represents a branch and its HEAD commit.
+// PullRequestRef holds relatively immutable metadata about an associated PR.
+type PullRequestRef struct {
+	Number int    `json:"number"`
+	ID     string `json:"id,omitempty"`
+	URL    string `json:"url,omitempty"`
+	Title  string `json:"title,omitempty"`
+}
+
+// BranchRef represents a branch and its associated commit hash.
+// For the trunk, Head stores the HEAD commit SHA.
+// For stacked branches, Base stores the merge-base commit SHA
+// (the last common commit before divergence from the parent branch).
 type BranchRef struct {
-	Branch string `json:"branch"`
-	Head   string `json:"head"`
+	Branch      string          `json:"branch"`
+	Head        string          `json:"head,omitempty"`
+	Base        string          `json:"base,omitempty"`
+	PullRequest *PullRequestRef `json:"pullRequest,omitempty"`
 }
 
 // Stack represents a single stack of branches.
 type Stack struct {
+	ID       string      `json:"id,omitempty"`
+	State    string      `json:"state,omitempty"`
+	Open     bool        `json:"open,omitempty"`
 	Trunk    BranchRef   `json:"trunk"`
 	Branches []BranchRef `json:"branches"`
 }
@@ -144,6 +160,7 @@ func Load(gitDir string) (*StackFile, error) {
 	if err := json.Unmarshal(data, &sf); err != nil {
 		return nil, fmt.Errorf("parsing stack file: %w", err)
 	}
+
 	return &sf, nil
 }
 

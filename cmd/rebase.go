@@ -200,8 +200,12 @@ func runRebase(cfg *config.Config, opts *rebaseOptions) error {
 	_ = git.CheckoutBranch(currentBranch)
 
 	for i := range s.Branches {
-		sha, _ := git.HeadSHA(s.Branches[i].Branch)
-		s.Branches[i].Head = sha
+		parent := s.Trunk.Branch
+		if i > 0 {
+			parent = s.Branches[i-1].Branch
+		}
+		base, _ := git.HeadSHA(parent)
+		s.Branches[i].Base = base
 	}
 	_ = stack.Save(gitDir, sf)
 
@@ -312,8 +316,12 @@ func continueRebase(cfg *config.Config, gitDir string) error {
 	_ = git.CheckoutBranch(state.OriginalBranch)
 
 	for i := range s.Branches {
-		sha, _ := git.HeadSHA(s.Branches[i].Branch)
-		s.Branches[i].Head = sha
+		parent := s.Trunk.Branch
+		if i > 0 {
+			parent = s.Branches[i-1].Branch
+		}
+		base, _ := git.HeadSHA(parent)
+		s.Branches[i].Base = base
 	}
 	_ = stack.Save(gitDir, sf)
 

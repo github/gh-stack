@@ -114,6 +114,12 @@ func runPush(cfg *config.Config, opts *pushOptions) error {
 				continue
 			}
 			cfg.Successf("Created PR #%d for %s\n", newPR.Number, b.Branch)
+			s.Branches[i].PullRequest = &stack.PullRequestRef{
+				Number: newPR.Number,
+				ID:     newPR.ID,
+				URL:    newPR.URL,
+				Title:  newPR.Title,
+			}
 		} else {
 			// Update base if needed
 			if pr.BaseRefName != baseBranch {
@@ -124,6 +130,14 @@ func runPush(cfg *config.Config, opts *pushOptions) error {
 				}
 			} else {
 				cfg.Printf("PR #%d for %s is up to date\n", pr.Number, b.Branch)
+			}
+			if s.Branches[i].PullRequest == nil {
+				s.Branches[i].PullRequest = &stack.PullRequestRef{
+					Number: pr.Number,
+					ID:     pr.ID,
+					URL:    pr.URL,
+					Title:  pr.Title,
+				}
 			}
 		}
 	}
@@ -138,10 +152,14 @@ func runPush(cfg *config.Config, opts *pushOptions) error {
 	fmt.Fprintf(cfg.Err, "  Once the GitHub Stacks API is available, PRs will be automatically\n")
 	fmt.Fprintf(cfg.Err, "  grouped into a Stack.\n")
 
-	// Update head SHAs
-	for i, b := range s.Branches {
-		if sha, err := git.HeadSHA(b.Branch); err == nil {
-			s.Branches[i].Head = sha
+	// Update base commit hashes
+	for i := range s.Branches {
+		parent := s.Trunk.Branch
+		if i > 0 {
+			parent = s.Branches[i-1].Branch
+		}
+		if base, err := git.HeadSHA(parent); err == nil {
+			s.Branches[i].Base = base
 		}
 	}
 

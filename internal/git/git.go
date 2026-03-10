@@ -207,6 +207,11 @@ func HeadSHA(ref string) (string, error) {
 	return run("rev-parse", ref)
 }
 
+// MergeBase returns the best common ancestor commit between two refs.
+func MergeBase(a, b string) (string, error) {
+	return run("merge-base", a, b)
+}
+
 // Log returns recent commits for the given branch.
 func Log(ref string, maxCount int) ([]CommitInfo, error) {
 	format := "%H\t%s\t%at"

@@ -71,7 +71,7 @@ func runInit(cfg *config.Config, opts *initOptions) error {
 	// Set repository context
 	repo, err := cfg.Repo()
 	if err == nil {
-		sf.Repository = repo.Owner + "/" + repo.Name
+		sf.Repository = repo.Host + ":" + repo.Owner + "/" + repo.Name
 	}
 
 	currentBranch, _ := git.CurrentBranch()
@@ -169,8 +169,12 @@ func runInit(cfg *config.Config, opts *initOptions) error {
 	trunkSHA, _ := git.HeadSHA(trunk)
 	branchRefs := make([]stack.BranchRef, len(branches))
 	for i, b := range branches {
-		sha, _ := git.HeadSHA(b)
-		branchRefs[i] = stack.BranchRef{Branch: b, Head: sha}
+		parent := trunk
+		if i > 0 {
+			parent = branches[i-1]
+		}
+		base, _ := git.MergeBase(b, parent)
+		branchRefs[i] = stack.BranchRef{Branch: b, Base: base}
 	}
 
 	newStack := stack.Stack{

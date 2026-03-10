@@ -98,8 +98,8 @@ func runAdd(cfg *config.Config, args []string) error {
 		return nil
 	}
 
-	head, _ := git.HeadSHA(branchName)
-	s.Branches = append(s.Branches, stack.BranchRef{Branch: branchName, Head: head})
+	base, _ := git.HeadSHA(currentBranch)
+	s.Branches = append(s.Branches, stack.BranchRef{Branch: branchName, Base: base})
 
 	if err := stack.Save(gitDir, sf); err != nil {
 		cfg.Errorf("failed to save stack state: %s", err)
