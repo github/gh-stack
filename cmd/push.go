@@ -159,6 +159,9 @@ func runPush(cfg *config.Config, opts *pushOptions) error {
 		if base, err := git.HeadSHA(parent); err == nil {
 			s.Branches[i].Base = base
 		}
+		if head, err := git.HeadSHA(s.Branches[i].Branch); err == nil {
+			s.Branches[i].Head = head
+		}
 	}
 	syncStackPRs(cfg, s)
 

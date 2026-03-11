@@ -106,8 +106,19 @@ func Push(remote string, branches []string, force, atomic bool) error {
 }
 
 // Rebase rebases the current branch onto the given base.
-func Rebase(onto string) error {
-	return runSilent("rebase", onto)
+func Rebase(base string) error {
+	return runSilent("rebase", base)
+}
+
+// RebaseOnto rebases a branch using the three-argument form:
+//
+//	git rebase --onto <newBase> <oldBase> <branch>
+//
+// This replays commits after oldBase from branch onto newBase. It is used
+// when a prior branch was squash-merged and the normal rebase cannot detect
+// which commits have already been applied.
+func RebaseOnto(newBase, oldBase, branch string) error {
+	return runSilent("rebase", "--onto", newBase, oldBase, branch)
 }
 
 // RebaseContinue continues an in-progress rebase.

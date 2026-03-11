@@ -26,6 +26,8 @@ type rebaseState struct {
 	RemainingBranches  []string          `json:"remainingBranches"`
 	OriginalBranch     string            `json:"originalBranch"`
 	OriginalRefs       map[string]string `json:"originalRefs"`
+	UseOnto            bool              `json:"useOnto,omitempty"`
+	OntoOldBase        string            `json:"ontoOldBase,omitempty"`
 }
 
 const rebaseStateFile = "gh-stack-rebase-state"
@@ -146,11 +148,18 @@ func runRebase(cfg *config.Config, opts *rebaseOptions) error {
 	cfg.Printf("Rebasing branches in order, starting from %s to %s",
 		branchesToRebase[0].Branch, branchesToRebase[len(branchesToRebase)-1].Branch)
 
+	// Sync PR state before rebase so we can detect merged PRs.
+	syncStackPRs(cfg, s)
+
 	originalRefs := make(map[string]string)
 	for _, b := range s.Branches {
 		sha, _ := git.HeadSHA(b.Branch)
 		originalRefs[b.Branch] = sha
 	}
+
+	// Track --onto rebase state for squash-merged branches.
+	needsOnto := false
+	var ontoOldBase string
 
 	for i, br := range branchesToRebase {
 		var base string
@@ -161,51 +170,118 @@ func runRebase(cfg *config.Config, opts *rebaseOptions) error {
 			base = s.Branches[absIdx-1].Branch
 		}
 
-		cfg.Printf("Rebasing %s onto %s ...", br.Branch, base)
-
-		if err := git.CheckoutBranch(br.Branch); err != nil {
-			return fmt.Errorf("checking out %s: %w", br.Branch, err)
+		// Skip branches whose PRs have already been merged (e.g. via squash).
+		// Record state so subsequent branches can use --onto rebase.
+		if br.PullRequest != nil && br.PullRequest.Merged {
+			ontoOldBase = originalRefs[br.Branch]
+			needsOnto = true
+			cfg.Successf("Skipping %s (PR #%d merged)", br.Branch, br.PullRequest.Number)
+			continue
 		}
 
-		if err := git.Rebase(base); err != nil {
-			cfg.Warningf("Rebasing %s onto %s ... conflict", br.Branch, base)
-
-			remaining := make([]string, 0)
-			for j := i + 1; j < len(branchesToRebase); j++ {
-				remaining = append(remaining, branchesToRebase[j].Branch)
+		if needsOnto {
+			// Find the proper --onto target: the first non-merged ancestor, or trunk.
+			newBase := s.Trunk.Branch
+			for j := absIdx - 1; j >= 0; j-- {
+				b := s.Branches[j]
+				if b.PullRequest == nil || !b.PullRequest.Merged {
+					newBase = b.Branch
+					break
+				}
 			}
 
-			state := &rebaseState{
-				CurrentBranchIndex: absIdx,
-				ConflictBranch:     br.Branch,
-				RemainingBranches:  remaining,
-				OriginalBranch:     currentBranch,
-				OriginalRefs:       originalRefs,
+			cfg.Printf("Rebasing %s onto %s (squash-merge detected) ...", br.Branch, newBase)
+
+			if err := git.RebaseOnto(newBase, ontoOldBase, br.Branch); err != nil {
+				cfg.Warningf("Rebasing %s onto %s ... conflict", br.Branch, newBase)
+
+				remaining := make([]string, 0)
+				for j := i + 1; j < len(branchesToRebase); j++ {
+					remaining = append(remaining, branchesToRebase[j].Branch)
+				}
+
+				state := &rebaseState{
+					CurrentBranchIndex: absIdx,
+					ConflictBranch:     br.Branch,
+					RemainingBranches:  remaining,
+					OriginalBranch:     currentBranch,
+					OriginalRefs:       originalRefs,
+					UseOnto:            true,
+					OntoOldBase:        originalRefs[br.Branch],
+				}
+				saveRebaseState(gitDir, state)
+
+				printConflictDetails(cfg, newBase)
+				cfg.Printf("")
+
+				cfg.Printf("Resolve conflicts on %s, then run %s",
+					br.Branch, cfg.ColorCyan("gh stack rebase --continue"))
+				cfg.Printf("Or abort this operation with %s",
+					cfg.ColorCyan("gh stack rebase --abort"))
+				return fmt.Errorf("rebase conflict on %s", br.Branch)
 			}
-			saveRebaseState(gitDir, state)
 
-			printConflictDetails(cfg, base)
-			cfg.Printf("")
+			cfg.Successf("Rebasing %s onto %s", br.Branch, newBase)
+			// Keep --onto mode; update old base for the next branch.
+			ontoOldBase = originalRefs[br.Branch]
+		} else {
+			cfg.Printf("Rebasing %s onto %s ...", br.Branch, base)
 
-			cfg.Printf("Resolve conflicts on %s, then run %s",
-				br.Branch, cfg.ColorCyan("gh stack rebase --continue"))
-			cfg.Printf("Or abort this operation with %s",
-				cfg.ColorCyan("gh stack rebase --abort"))
-			return fmt.Errorf("rebase conflict on %s", br.Branch)
+			if err := git.CheckoutBranch(br.Branch); err != nil {
+				return fmt.Errorf("checking out %s: %w", br.Branch, err)
+			}
+
+			if err := git.Rebase(base); err != nil {
+				cfg.Warningf("Rebasing %s onto %s ... conflict", br.Branch, base)
+
+				remaining := make([]string, 0)
+				for j := i + 1; j < len(branchesToRebase); j++ {
+					remaining = append(remaining, branchesToRebase[j].Branch)
+				}
+
+				state := &rebaseState{
+					CurrentBranchIndex: absIdx,
+					ConflictBranch:     br.Branch,
+					RemainingBranches:  remaining,
+					OriginalBranch:     currentBranch,
+					OriginalRefs:       originalRefs,
+				}
+				saveRebaseState(gitDir, state)
+
+				printConflictDetails(cfg, base)
+				cfg.Printf("")
+
+				cfg.Printf("Resolve conflicts on %s, then run %s",
+					br.Branch, cfg.ColorCyan("gh stack rebase --continue"))
+				cfg.Printf("Or abort this operation with %s",
+					cfg.ColorCyan("gh stack rebase --abort"))
+				return fmt.Errorf("rebase conflict on %s", br.Branch)
+			}
+
+			cfg.Successf("Rebasing %s onto %s", br.Branch, base)
 		}
-
-		cfg.Successf("Rebasing %s onto %s", br.Branch, base)
 	}
 
 	_ = git.CheckoutBranch(currentBranch)
 
 	for i := range s.Branches {
+		// Skip merged branches when updating base SHAs.
+		if s.Branches[i].PullRequest != nil && s.Branches[i].PullRequest.Merged {
+			continue
+		}
+		// Find the first non-merged ancestor, or trunk.
 		parent := s.Trunk.Branch
-		if i > 0 {
-			parent = s.Branches[i-1].Branch
+		for j := i - 1; j >= 0; j-- {
+			if s.Branches[j].PullRequest == nil || !s.Branches[j].PullRequest.Merged {
+				parent = s.Branches[j].Branch
+				break
+			}
 		}
 		base, _ := git.HeadSHA(parent)
 		s.Branches[i].Base = base
+		if head, err := git.HeadSHA(s.Branches[i].Branch); err == nil {
+			s.Branches[i].Head = head
+		}
 	}
 
 	syncStackPRs(cfg, s)
@@ -275,6 +351,16 @@ func continueRebase(cfg *config.Config, gitDir string) error {
 
 	for _, branchName := range state.RemainingBranches {
 		idx := s.IndexOf(branchName)
+
+		// Skip branches whose PRs have already been merged.
+		br := s.Branches[idx]
+		if br.PullRequest != nil && br.PullRequest.Merged {
+			state.OntoOldBase = state.OriginalRefs[branchName]
+			state.UseOnto = true
+			cfg.Successf("Skipping %s (PR #%d merged)", branchName, br.PullRequest.Number)
+			continue
+		}
+
 		var base string
 		if idx == 0 {
 			base = s.Trunk.Branch
@@ -282,49 +368,101 @@ func continueRebase(cfg *config.Config, gitDir string) error {
 			base = s.Branches[idx-1].Branch
 		}
 
-		cfg.Printf("Rebasing %s onto %s ...", branchName, base)
-
-		if err := git.CheckoutBranch(branchName); err != nil {
-			cfg.Errorf("checking out %s: %s", branchName, err)
-			return nil
-		}
-
-		if err := git.Rebase(base); err != nil {
-			remainIdx := -1
-			for ri, rb := range state.RemainingBranches {
-				if rb == branchName {
-					remainIdx = ri
+		if state.UseOnto {
+			// Find the proper --onto target: first non-merged ancestor, or trunk.
+			newBase := s.Trunk.Branch
+			for j := idx - 1; j >= 0; j-- {
+				b := s.Branches[j]
+				if b.PullRequest == nil || !b.PullRequest.Merged {
+					newBase = b.Branch
 					break
 				}
 			}
-			state.RemainingBranches = state.RemainingBranches[remainIdx+1:]
-			state.CurrentBranchIndex = idx
-			state.ConflictBranch = branchName
-			saveRebaseState(gitDir, state)
 
-			cfg.Warningf("Rebasing %s onto %s ... conflict", branchName, base)
-			printConflictDetails(cfg, base)
-			cfg.Printf("")
-			cfg.Printf("Resolve conflicts on %s, then run %s",
-				branchName, cfg.ColorCyan("gh stack rebase --continue"))
-			cfg.Printf("Or abort this operation with %s",
-				cfg.ColorCyan("gh stack rebase --abort"))
-			return fmt.Errorf("rebase conflict on %s", branchName)
+			cfg.Printf("Rebasing %s onto %s (squash-merge detected) ...", branchName, newBase)
+
+			if err := git.RebaseOnto(newBase, state.OntoOldBase, branchName); err != nil {
+				remainIdx := -1
+				for ri, rb := range state.RemainingBranches {
+					if rb == branchName {
+						remainIdx = ri
+						break
+					}
+				}
+				state.RemainingBranches = state.RemainingBranches[remainIdx+1:]
+				state.CurrentBranchIndex = idx
+				state.ConflictBranch = branchName
+				state.OntoOldBase = state.OriginalRefs[branchName]
+				saveRebaseState(gitDir, state)
+
+				cfg.Warningf("Rebasing %s onto %s ... conflict", branchName, newBase)
+				printConflictDetails(cfg, newBase)
+				cfg.Printf("")
+				cfg.Printf("Resolve conflicts on %s, then run %s",
+					branchName, cfg.ColorCyan("gh stack rebase --continue"))
+				cfg.Printf("Or abort this operation with %s",
+					cfg.ColorCyan("gh stack rebase --abort"))
+				return fmt.Errorf("rebase conflict on %s", branchName)
+			}
+
+			cfg.Successf("Rebasing %s onto %s", branchName, newBase)
+			state.OntoOldBase = state.OriginalRefs[branchName]
+		} else {
+			cfg.Printf("Rebasing %s onto %s ...", branchName, base)
+
+			if err := git.CheckoutBranch(branchName); err != nil {
+				cfg.Errorf("checking out %s: %s", branchName, err)
+				return nil
+			}
+
+			if err := git.Rebase(base); err != nil {
+				remainIdx := -1
+				for ri, rb := range state.RemainingBranches {
+					if rb == branchName {
+						remainIdx = ri
+						break
+					}
+				}
+				state.RemainingBranches = state.RemainingBranches[remainIdx+1:]
+				state.CurrentBranchIndex = idx
+				state.ConflictBranch = branchName
+				saveRebaseState(gitDir, state)
+
+				cfg.Warningf("Rebasing %s onto %s ... conflict", branchName, base)
+				printConflictDetails(cfg, base)
+				cfg.Printf("")
+				cfg.Printf("Resolve conflicts on %s, then run %s",
+					branchName, cfg.ColorCyan("gh stack rebase --continue"))
+				cfg.Printf("Or abort this operation with %s",
+					cfg.ColorCyan("gh stack rebase --abort"))
+				return fmt.Errorf("rebase conflict on %s", branchName)
+			}
+
+			cfg.Successf("Rebasing %s onto %s", branchName, base)
 		}
-
-		cfg.Successf("Rebasing %s onto %s", branchName, base)
 	}
 
 	clearRebaseState(gitDir)
 	_ = git.CheckoutBranch(state.OriginalBranch)
 
 	for i := range s.Branches {
+		// Skip merged branches when updating base SHAs.
+		if s.Branches[i].PullRequest != nil && s.Branches[i].PullRequest.Merged {
+			continue
+		}
+		// Find the first non-merged ancestor, or trunk.
 		parent := s.Trunk.Branch
-		if i > 0 {
-			parent = s.Branches[i-1].Branch
+		for j := i - 1; j >= 0; j-- {
+			if s.Branches[j].PullRequest == nil || !s.Branches[j].PullRequest.Merged {
+				parent = s.Branches[j].Branch
+				break
+			}
 		}
 		base, _ := git.HeadSHA(parent)
 		s.Branches[i].Base = base
+		if head, err := git.HeadSHA(s.Branches[i].Branch); err == nil {
+			s.Branches[i].Head = head
+		}
 	}
 
 	syncStackPRs(cfg, s)
