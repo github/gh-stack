@@ -10,7 +10,6 @@ import (
 )
 
 type pushOptions struct {
-	force  bool
 	draft  bool
 	dryRun bool
 }
@@ -26,7 +25,6 @@ func PushCmd(cfg *config.Config) *cobra.Command {
 		},
 	}
 
-	cmd.Flags().BoolVarP(&opts.force, "force", "f", false, "Force-push branches")
 	cmd.Flags().BoolVar(&opts.draft, "draft", false, "Create PRs as drafts")
 	cmd.Flags().BoolVar(&opts.dryRun, "dry-run", false, "Show what would be pushed without pushing")
 
@@ -83,7 +81,7 @@ func runPush(cfg *config.Config, opts *pushOptions) error {
 		}
 
 		cfg.Printf("Pushing %s...", b.Branch)
-		if err := git.Push("origin", []string{b.Branch}, opts.force, false); err != nil {
+		if err := git.Push("origin", []string{b.Branch}, true, false); err != nil {
 			cfg.Errorf("failed to push %s: %s", b.Branch, err)
 			return nil
 		}

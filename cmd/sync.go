@@ -249,10 +249,10 @@ func runSync(cfg *config.Config, _ *syncOptions) error {
 		if !force {
 			cfg.Warningf("Push failed — branches may need force push after rebase")
 			cfg.Printf("  Run %s to push with --force-with-lease.",
-				cfg.ColorCyan("gh stack push -f"))
+				cfg.ColorCyan("gh stack push"))
 		} else {
 			cfg.Warningf("Push failed: %v", err)
-			cfg.Printf("  Run %s to retry.", cfg.ColorCyan("gh stack push -f"))
+			cfg.Printf("  Run %s to retry.", cfg.ColorCyan("gh stack push"))
 		}
 	} else {
 		cfg.Successf("Pushed %d branches", len(branches))

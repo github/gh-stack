@@ -197,11 +197,10 @@ Push all branches in the current stack and create or update pull requests.
 gh stack push [flags]
 ```
 
-Pushes every branch to the remote, then for each branch either creates a new PR (with the correct base branch) or updates the base of an existing PR if it has changed.
+Pushes every branch to the remote, then for each branch either creates a new PR (with the correct base branch) or updates the base of an existing PR if it has changed. Uses `--force-with-lease` by default to safely update rebased branches.
 
 | Flag | Description |
 |------|-------------|
-| `-f, --force` | Force-push branches |
 | `--draft` | Create new PRs as drafts |
 | `--dry-run` | Show what would be pushed without actually pushing |
 
@@ -209,7 +208,6 @@ Pushes every branch to the remote, then for each branch either creates a new PR 
 
 ```sh
 gh stack push
-gh stack push --force
 gh stack push --draft
 gh stack push --dry-run
 ```
@@ -350,8 +348,8 @@ gh stack bottom
 # 6. Rebase the rest of the stack on top of your fix
 gh stack rebase
 
-# 7. Force-push the updated stack
-gh stack push --force
+# 7. Push the updated stack
+gh stack push
 
 # 8. When the first PR is merged, sync the stack
 gh stack sync
