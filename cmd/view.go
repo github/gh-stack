@@ -90,16 +90,64 @@ func runView(cfg *config.Config, opts *viewOptions) error {
 }
 
 func viewShort(cfg *config.Config, s *stack.Stack, currentBranch string) error {
+	var repoOwner, repoName string
+	if repo, err := cfg.Repo(); err == nil {
+		repoOwner = repo.Owner
+		repoName = repo.Name
+	}
+
 	for i := len(s.Branches) - 1; i >= 0; i-- {
 		b := s.Branches[i]
+		merged := b.PullRequest != nil && b.PullRequest.Merged
+		indicator := branchStatusIndicator(cfg, s, b)
+		prSuffix := shortPRSuffix(cfg, b, repoOwner, repoName)
 		if b.Branch == currentBranch {
-			cfg.Outf("● %s %s\n", cfg.ColorBold(b.Branch), cfg.ColorCyan("(current)"))
+			cfg.Outf("» %s%s%s %s\n", cfg.ColorBold(b.Branch), indicator, prSuffix, cfg.ColorCyan("(current)"))
+		} else if merged {
+			cfg.Outf("│ %s%s%s\n", cfg.ColorGray(b.Branch), indicator, prSuffix)
 		} else {
-			cfg.Outf("○ %s\n", b.Branch)
+			cfg.Outf("├ %s%s%s\n", b.Branch, indicator, prSuffix)
 		}
 	}
 	cfg.Outf("└ %s\n", s.Trunk.Branch)
 	return nil
+}
+
+// branchStatusIndicator returns a colored status icon for a branch:
+//   - ✓ (purple) if the PR has been merged
+//   - ⚠ (yellow) if the branch needs rebasing (non-linear history)
+//   - ○ (green) if there is an open PR
+func branchStatusIndicator(cfg *config.Config, s *stack.Stack, b stack.BranchRef) string {
+	if b.PullRequest != nil && b.PullRequest.Merged {
+		return " " + cfg.ColorMagenta("✓")
+	}
+
+	baseBranch := s.BaseBranch(b.Branch)
+	if needsRebase, err := git.IsAncestor(baseBranch, b.Branch); err == nil && !needsRebase {
+		return " " + cfg.ColorWarning("⚠")
+	}
+
+	if b.PullRequest != nil && b.PullRequest.Number != 0 {
+		return " " + cfg.ColorSuccess("○")
+	}
+
+	return ""
+}
+
+func shortPRSuffix(cfg *config.Config, b stack.BranchRef, owner, repo string) string {
+	if b.PullRequest == nil || b.PullRequest.Number == 0 {
+		return ""
+	}
+	prNum := fmt.Sprintf("#%d", b.PullRequest.Number)
+	if owner != "" && repo != "" {
+		url := fmt.Sprintf("https://github.com/%s/%s/pull/%d", owner, repo, b.PullRequest.Number)
+		prNum = fmt.Sprintf("\033]8;;%s\033\\%s\033]8;;\033\\", url, prNum)
+	}
+	colorFn := cfg.ColorSuccess // green for open
+	if b.PullRequest.Merged {
+		colorFn = cfg.ColorMagenta // purple for merged
+	}
+	return fmt.Sprintf(" %s", colorFn(prNum))
 }
 
 func viewFull(cfg *config.Config, s *stack.Stack, currentBranch string) error {
@@ -123,6 +171,8 @@ func viewFull(cfg *config.Config, s *stack.Stack, currentBranch string) error {
 			bullet = "●"
 		}
 
+		indicator := branchStatusIndicator(cfg, s, b)
+
 		prInfo := ""
 		if clientErr == nil && repoErr == nil {
 			pr, err := client.FindPRForBranch(b.Branch)
@@ -136,7 +186,7 @@ func viewFull(cfg *config.Config, s *stack.Stack, currentBranch string) error {
 			branchName = cfg.ColorCyan(b.Branch + " (current)")
 		}
 
-		fmt.Fprintf(&buf, "%s %s%s\n", bullet, branchName, prInfo)
+		fmt.Fprintf(&buf, "%s %s %s%s\n", bullet, branchName, indicator, prInfo)
 
 		commits, err := git.Log(b.Branch, 1)
 		if err == nil && len(commits) > 0 {

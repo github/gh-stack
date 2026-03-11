@@ -2,6 +2,7 @@ package git
 
 import (
 	"context"
+	"errors"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -277,7 +278,8 @@ func IsAncestor(ancestor, descendant string) (bool, error) {
 		return true, nil
 	}
 	// Exit code 1 means "not an ancestor", which is not an error condition.
-	if exitErr, ok := err.(*exec.ExitError); ok && exitErr.ExitCode() == 1 {
+	var exitErr *exec.ExitError
+	if errors.As(err, &exitErr) && exitErr.ExitCode() == 1 {
 		return false, nil
 	}
 	return false, err
