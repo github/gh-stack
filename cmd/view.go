@@ -174,7 +174,11 @@ func viewFull(cfg *config.Config, s *stack.Stack, currentBranch string) error {
 		indicator := branchStatusIndicator(cfg, s, b)
 
 		prInfo := ""
-		if clientErr == nil && repoErr == nil {
+		if b.PullRequest != nil {
+			if url := b.PullRequest.URL; url != "" {
+				prInfo = "  " + url
+			}
+		} else if clientErr == nil && repoErr == nil {
 			pr, err := client.FindPRForBranch(b.Branch)
 			if err == nil && pr != nil {
 				prInfo = fmt.Sprintf("  https://github.com/%s/%s/pull/%d", repoOwner, repoName, pr.Number)
@@ -298,11 +302,16 @@ func viewWeb(cfg *config.Config, s *stack.Stack) error {
 
 	opened := 0
 	for _, br := range s.Branches {
-		pr, err := client.FindPRForBranch(br.Branch)
-		if err != nil || pr == nil {
-			continue
+		var url string
+		if br.PullRequest != nil && br.PullRequest.URL != "" {
+			url = br.PullRequest.URL
+		} else {
+			pr, err := client.FindPRForBranch(br.Branch)
+			if err != nil || pr == nil {
+				continue
+			}
+			url = fmt.Sprintf("https://github.com/%s/%s/pull/%d", repo.Owner, repo.Name, pr.Number)
 		}
-		url := fmt.Sprintf("https://github.com/%s/%s/pull/%d", repo.Owner, repo.Name, pr.Number)
 		if err := b.Browse(url); err != nil {
 			cfg.Warningf("failed to open %s: %v", url, err)
 		} else {
