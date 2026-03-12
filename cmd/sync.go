@@ -2,6 +2,7 @@ package cmd
 
 import (
 	"fmt"
+	"strings"
 
 	"github.com/github/gh-stack/internal/config"
 	"github.com/github/gh-stack/internal/git"
@@ -154,7 +155,7 @@ func runSync(cfg *config.Config, _ *syncOptions) error {
 			}
 
 			// Skip branches whose PRs have already been merged.
-			if br.PullRequest != nil && br.PullRequest.Merged {
+			if br.IsMerged() {
 				ontoOldBase = originalRefs[br.Branch]
 				needsOnto = true
 				cfg.Successf("Skipping %s (PR #%d merged)", br.Branch, br.PullRequest.Number)
@@ -166,7 +167,7 @@ func runSync(cfg *config.Config, _ *syncOptions) error {
 				newBase := trunk
 				for j := i - 1; j >= 0; j-- {
 					b := s.Branches[j]
-					if b.PullRequest == nil || !b.PullRequest.Merged {
+					if !b.IsMerged() {
 						newBase = b.Branch
 						break
 					}
@@ -232,26 +233,36 @@ func runSync(cfg *config.Config, _ *syncOptions) error {
 
 	// --- Step 4: Push ---
 	cfg.Printf("")
-	branches := make([]string, len(s.Branches))
-	for i, b := range s.Branches {
-		branches[i] = b.Branch
+	var branches []string
+	for _, b := range s.Branches {
+		if !b.IsMerged() {
+			branches = append(branches, b.Branch)
+		}
 	}
 
-	// After rebase, force-with-lease is required (history rewritten).
-	// Without rebase, try a normal push first.
-	force := rebased
-	cfg.Printf("Pushing branches ...")
-	if err := git.Push("origin", branches, force, false); err != nil {
-		if !force {
-			cfg.Warningf("Push failed — branches may need force push after rebase")
-			cfg.Printf("  Run %s to push with --force-with-lease.",
-				cfg.ColorCyan("gh stack push"))
-		} else {
-			cfg.Warningf("Push failed: %v", err)
-			cfg.Printf("  Run %s to retry.", cfg.ColorCyan("gh stack push"))
-		}
+	if mergedCount := len(s.MergedBranches()); mergedCount > 0 {
+		cfg.Printf("Skipping %d merged %s", mergedCount, plural(mergedCount, "branch", "branches"))
+	}
+
+	if len(branches) == 0 {
+		cfg.Printf("No active branches to push (all merged)")
 	} else {
-		cfg.Successf("Pushed %d branches", len(branches))
+		// After rebase, force-with-lease is required (history rewritten).
+		// Without rebase, try a normal push first.
+		force := rebased
+		cfg.Printf("Pushing branches ...")
+		if err := git.Push("origin", branches, force, false); err != nil {
+			if !force {
+				cfg.Warningf("Push failed — branches may need force push after rebase")
+				cfg.Printf("  Run %s to push with --force-with-lease.",
+					cfg.ColorCyan("gh stack push"))
+			} else {
+				cfg.Warningf("Push failed: %v", err)
+				cfg.Printf("  Run %s to retry.", cfg.ColorCyan("gh stack push"))
+			}
+		} else {
+			cfg.Successf("Pushed %d branches", len(branches))
+		}
 	}
 
 	// --- Step 5: Sync PR state ---
@@ -261,31 +272,35 @@ func runSync(cfg *config.Config, _ *syncOptions) error {
 
 	// Report PR status for each branch
 	for _, b := range s.Branches {
+		if b.IsMerged() {
+			continue
+		}
 		if b.PullRequest != nil {
-			state := "Open"
-			if b.PullRequest.Merged {
-				state = "Merged"
-			}
-			cfg.Successf("PR #%d (%s) — %s", b.PullRequest.Number, b.Branch, state)
+			cfg.Successf("PR #%d (%s) — Open", b.PullRequest.Number, b.Branch)
 		} else {
 			cfg.Warningf("%s has no PR", b.Branch)
 		}
+	}
+	merged := s.MergedBranches()
+	if len(merged) > 0 {
+		names := make([]string, len(merged))
+		for i, m := range merged {
+			if m.PullRequest != nil {
+				names[i] = fmt.Sprintf("#%d", m.PullRequest.Number)
+			} else {
+				names[i] = m.Branch
+			}
+		}
+		cfg.Printf("Merged: %s", strings.Join(names, ", "))
 	}
 
 	// --- Step 6: Update base SHAs and save ---
 	for i := range s.Branches {
 		// Skip merged branches when updating base SHAs.
-		if s.Branches[i].PullRequest != nil && s.Branches[i].PullRequest.Merged {
+		if s.Branches[i].IsMerged() {
 			continue
 		}
-		// Find the first non-merged ancestor, or trunk.
-		parent := trunk
-		for j := i - 1; j >= 0; j-- {
-			if s.Branches[j].PullRequest == nil || !s.Branches[j].PullRequest.Merged {
-				parent = s.Branches[j].Branch
-				break
-			}
-		}
+		parent := s.ActiveBaseBranch(s.Branches[i].Branch)
 		if base, err := git.HeadSHA(parent); err == nil {
 			s.Branches[i].Base = base
 		}

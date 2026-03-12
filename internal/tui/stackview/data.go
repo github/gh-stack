@@ -31,7 +31,7 @@ func LoadBranchNodes(cfg *config.Config, s *stack.Stack, currentBranch string) [
 	nodes := make([]BranchNode, len(s.Branches))
 
 	for i, b := range s.Branches {
-		baseBranch := s.BaseBranch(b.Branch)
+		baseBranch := s.ActiveBaseBranch(b.Branch)
 
 		node := BranchNode{
 			Ref:        b,

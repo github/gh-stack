@@ -16,13 +16,13 @@ import (
 
 // keyMap defines the key bindings for the stack view.
 type keyMap struct {
-	Up           key.Binding
-	Down         key.Binding
+	Up            key.Binding
+	Down          key.Binding
 	ToggleCommits key.Binding
-	ToggleFiles  key.Binding
-	OpenPR       key.Binding
-	Checkout     key.Binding
-	Quit         key.Binding
+	ToggleFiles   key.Binding
+	OpenPR        key.Binding
+	Checkout      key.Binding
+	Quit          key.Binding
 }
 
 func (k keyMap) ShortHelp() []key.Binding {
@@ -176,7 +176,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		switch msg.Action {
 		case tea.MouseActionPress:
 			if msg.Button == tea.MouseButtonLeft {
-				return m.handleMouseClick(msg.Y)
+				return m.handleMouseClick(msg.X, msg.Y)
 			}
 			if msg.Button == tea.MouseButtonWheelUp {
 				if m.scrollOffset > 0 {
@@ -200,24 +200,52 @@ func openBrowserInBackground(url string) {
 	_ = cmd.Start()
 }
 
-// handleMouseClick processes a mouse click at the given screen row.
-func (m Model) handleMouseClick(screenY int) (tea.Model, tea.Cmd) {
+// handleMouseClick processes a mouse click at the given screen position.
+func (m Model) handleMouseClick(screenX, screenY int) (tea.Model, tea.Cmd) {
 	// Map screen Y to content line, accounting for scroll offset
 	contentLine := screenY + m.scrollOffset
 
-	// Walk through rendered lines to find which node was clicked
+	// Walk through rendered lines to find which node was clicked.
+	// Account for the merged separator line that may appear between nodes.
 	line := 0
+	prevWasMerged := false
 	for i := 0; i < len(m.nodes); i++ {
+		isMerged := m.nodes[i].Ref.IsMerged()
+		if isMerged && !prevWasMerged && i > 0 {
+			line++ // separator line
+		}
+		prevWasMerged = isMerged
+
 		nodeStart := line
 		nodeLines := m.nodeLineCount(i)
 
 		if contentLine >= nodeStart && contentLine < nodeStart+nodeLines {
 			m.cursor = i
-			// If clicking on the commits toggle line, toggle expansion
-			commitToggleLine := nodeStart + m.commitToggleLineOffset(i)
-			if contentLine == commitToggleLine && len(m.nodes[i].Commits) > 0 {
-				m.nodes[i].CommitsExpanded = !m.nodes[i].CommitsExpanded
+
+			// Click on PR header line — only open browser if clicking the PR number
+			if contentLine == nodeStart && m.nodes[i].PR != nil && m.nodes[i].PR.URL != "" {
+				prStartX, prEndX := m.prLabelColumns(i)
+				if screenX >= prStartX && screenX < prEndX {
+					openBrowserInBackground(m.nodes[i].PR.URL)
+				}
 			}
+
+			// Click on files toggle line → toggle expansion
+			if len(m.nodes[i].FilesChanged) > 0 {
+				filesToggleLine := nodeStart + m.filesToggleLineOffset(i)
+				if contentLine == filesToggleLine {
+					m.nodes[i].FilesExpanded = !m.nodes[i].FilesExpanded
+				}
+			}
+
+			// Click on commits toggle line → toggle expansion
+			if len(m.nodes[i].Commits) > 0 {
+				commitToggleLine := nodeStart + m.commitToggleLineOffset(i)
+				if contentLine == commitToggleLine {
+					m.nodes[i].CommitsExpanded = !m.nodes[i].CommitsExpanded
+				}
+			}
+
 			return m, nil
 		}
 		line += nodeLines
@@ -269,16 +297,55 @@ func (m Model) commitToggleLineOffset(idx int) int {
 	return offset
 }
 
+// filesToggleLineOffset returns the offset from node start to the files toggle line.
+func (m Model) filesToggleLineOffset(idx int) int {
+	node := m.nodes[idx]
+	offset := 1 // after header
+	if node.PR != nil {
+		offset++ // branch + diff line
+	}
+	return offset
+}
+
+// prLabelColumns returns the start and end X columns of the PR number label
+// (e.g. "#123") on the PR header line, for click hit-testing.
+func (m Model) prLabelColumns(idx int) (int, int) {
+	node := m.nodes[idx]
+	// Layout: "├ " (2) + optional status icon + " " (2) + "#N..."
+	col := 2 // bullet + space
+	if node.PR != nil && (node.PR.Merged || !node.IsLinear || node.PR.Number != 0) {
+		icon := m.statusIcon(node)
+		if icon != "" {
+			col += 2 // icon (1 visible char) + space
+		}
+	}
+	prLabel := fmt.Sprintf("#%d", node.PR.Number)
+	return col, col + len(prLabel)
+}
+
 // ensureVisible adjusts scroll offset so the cursor is visible.
 func (m *Model) ensureVisible() {
 	if m.height == 0 {
 		return
 	}
 
-	// Calculate the line range for the cursor node
+	// Calculate the line range for the cursor node, accounting for separator lines
 	startLine := 0
+	prevWasMerged := false
 	for i := 0; i < m.cursor; i++ {
+		isMerged := m.nodes[i].Ref.IsMerged()
+		if isMerged && !prevWasMerged && i > 0 {
+			startLine++ // separator line
+		}
+		prevWasMerged = isMerged
 		startLine += m.nodeLineCount(i)
+	}
+	// Check if the cursor node itself is preceded by a separator
+	if m.cursor < len(m.nodes) {
+		isMerged := m.nodes[m.cursor].Ref.IsMerged()
+		if isMerged && !prevWasMerged && m.cursor > 0 {
+			startLine++
+		}
 	}
 	endLine := startLine + m.nodeLineCount(m.cursor)
 
@@ -304,8 +371,14 @@ func (m Model) View() string {
 	var b strings.Builder
 
 	// Render nodes in order (index 0 = top of stack, displayed first)
+	prevWasMerged := false
 	for i := 0; i < len(m.nodes); i++ {
+		isMerged := m.nodes[i].Ref.IsMerged()
+		if isMerged && !prevWasMerged && i > 0 {
+			b.WriteString(connectorStyle.Render("────") + dimStyle.Render(" merged ") + connectorStyle.Render("─────") + "\n")
+		}
 		m.renderNode(&b, i)
+		prevWasMerged = isMerged
 	}
 
 	// Trunk
@@ -356,6 +429,8 @@ func (m Model) renderNode(b *strings.Builder, idx int) {
 	if isFocused {
 		if node.IsCurrent {
 			connStyle = connectorCurrentStyle
+		} else if isMerged {
+			connStyle = connectorMergedStyle
 		} else {
 			connStyle = connectorFocusedStyle
 		}
@@ -417,7 +492,7 @@ func (m Model) renderPRHeader(b *strings.Builder, node BranchNode, isFocused boo
 	default:
 		stateLabel = " OPEN"
 	}
-	b.WriteString(style.Render(prLabel + stateLabel))
+	b.WriteString(style.Underline(true).Render(prLabel) + style.Render(stateLabel))
 
 	b.WriteString("\n")
 }

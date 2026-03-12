@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 
 	"github.com/github/gh-stack/internal/config"
 	"github.com/github/gh-stack/internal/git"
@@ -132,6 +133,10 @@ func runRebase(cfg *config.Config, opts *rebaseOptions) error {
 		currentIdx = 0
 	}
 
+	if opts.upstack && currentIdx >= 0 && s.Branches[currentIdx].IsMerged() {
+		cfg.Warningf("Current branch %q has already been merged", currentBranch)
+	}
+
 	startIdx := 0
 	endIdx := len(s.Branches)
 
@@ -180,7 +185,7 @@ func runRebase(cfg *config.Config, opts *rebaseOptions) error {
 
 		// Skip branches whose PRs have already been merged (e.g. via squash).
 		// Record state so subsequent branches can use --onto rebase.
-		if br.PullRequest != nil && br.PullRequest.Merged {
+		if br.IsMerged() {
 			ontoOldBase = originalRefs[br.Branch]
 			needsOnto = true
 			cfg.Successf("Skipping %s (PR #%d merged)", br.Branch, br.PullRequest.Number)
@@ -192,7 +197,7 @@ func runRebase(cfg *config.Config, opts *rebaseOptions) error {
 			newBase := s.Trunk.Branch
 			for j := absIdx - 1; j >= 0; j-- {
 				b := s.Branches[j]
-				if b.PullRequest == nil || !b.PullRequest.Merged {
+				if !b.IsMerged() {
 					newBase = b.Branch
 					break
 				}
@@ -289,13 +294,13 @@ func runRebase(cfg *config.Config, opts *rebaseOptions) error {
 
 	for i := range s.Branches {
 		// Skip merged branches when updating base SHAs.
-		if s.Branches[i].PullRequest != nil && s.Branches[i].PullRequest.Merged {
+		if s.Branches[i].IsMerged() {
 			continue
 		}
 		// Find the first non-merged ancestor, or trunk.
 		parent := s.Trunk.Branch
 		for j := i - 1; j >= 0; j-- {
-			if s.Branches[j].PullRequest == nil || !s.Branches[j].PullRequest.Merged {
+			if !s.Branches[j].IsMerged() {
 				parent = s.Branches[j].Branch
 				break
 			}
@@ -310,6 +315,15 @@ func runRebase(cfg *config.Config, opts *rebaseOptions) error {
 	syncStackPRs(cfg, s)
 
 	_ = stack.Save(gitDir, sf)
+
+	merged := s.MergedBranches()
+	if len(merged) > 0 {
+		names := make([]string, len(merged))
+		for i, m := range merged {
+			names[i] = m.Branch
+		}
+		cfg.Printf("Skipped %d merged %s: %s", len(merged), plural(len(merged), "branch", "branches"), strings.Join(names, ", "))
+	}
 
 	rangeDesc := "All branches in stack"
 	if opts.downstack {
@@ -380,7 +394,7 @@ func continueRebase(cfg *config.Config, gitDir string) error {
 
 		// Skip branches whose PRs have already been merged.
 		br := s.Branches[idx]
-		if br.PullRequest != nil && br.PullRequest.Merged {
+		if br.IsMerged() {
 			state.OntoOldBase = state.OriginalRefs[branchName]
 			state.UseOnto = true
 			cfg.Successf("Skipping %s (PR #%d merged)", branchName, br.PullRequest.Number)
@@ -399,7 +413,7 @@ func continueRebase(cfg *config.Config, gitDir string) error {
 			newBase := s.Trunk.Branch
 			for j := idx - 1; j >= 0; j-- {
 				b := s.Branches[j]
-				if b.PullRequest == nil || !b.PullRequest.Merged {
+				if !b.IsMerged() {
 					newBase = b.Branch
 					break
 				}
@@ -484,13 +498,13 @@ func continueRebase(cfg *config.Config, gitDir string) error {
 
 	for i := range s.Branches {
 		// Skip merged branches when updating base SHAs.
-		if s.Branches[i].PullRequest != nil && s.Branches[i].PullRequest.Merged {
+		if s.Branches[i].IsMerged() {
 			continue
 		}
 		// Find the first non-merged ancestor, or trunk.
 		parent := s.Trunk.Branch
 		for j := i - 1; j >= 0; j-- {
-			if s.Branches[j].PullRequest == nil || !s.Branches[j].PullRequest.Merged {
+			if !s.Branches[j].IsMerged() {
 				parent = s.Branches[j].Branch
 				break
 			}

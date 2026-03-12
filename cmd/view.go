@@ -100,7 +100,13 @@ func viewShort(cfg *config.Config, s *stack.Stack, currentBranch string) error {
 
 	for i := len(s.Branches) - 1; i >= 0; i-- {
 		b := s.Branches[i]
-		merged := b.PullRequest != nil && b.PullRequest.Merged
+		merged := b.IsMerged()
+
+		// Insert separator when transitioning from active to merged section
+		if merged && (i == len(s.Branches)-1 || !s.Branches[i+1].IsMerged()) {
+			cfg.Outf("├─── %s ────\n", cfg.ColorMagenta("merged"))
+		}
+
 		indicator := branchStatusIndicator(cfg, s, b)
 		prSuffix := shortPRSuffix(cfg, b, repoOwner, repoName)
 		if b.Branch == currentBranch {
@@ -120,11 +126,11 @@ func viewShort(cfg *config.Config, s *stack.Stack, currentBranch string) error {
 //   - ⚠ (yellow) if the branch needs rebasing (non-linear history)
 //   - ○ (green) if there is an open PR
 func branchStatusIndicator(cfg *config.Config, s *stack.Stack, b stack.BranchRef) string {
-	if b.PullRequest != nil && b.PullRequest.Merged {
+	if b.IsMerged() {
 		return " " + cfg.ColorMagenta("✓")
 	}
 
-	baseBranch := s.BaseBranch(b.Branch)
+	baseBranch := s.ActiveBaseBranch(b.Branch)
 	if needsRebase, err := git.IsAncestor(baseBranch, b.Branch); err == nil && !needsRebase {
 		return " " + cfg.ColorWarning("⚠")
 	}
@@ -145,6 +151,8 @@ func shortPRSuffix(cfg *config.Config, b stack.BranchRef, owner, repo string) st
 		url := fmt.Sprintf("https://github.com/%s/%s/pull/%d", owner, repo, b.PullRequest.Number)
 		prNum = fmt.Sprintf("\033]8;;%s\033\\%s\033]8;;\033\\", url, prNum)
 	}
+	// Underline to hint that the PR number is a clickable link
+	prNum = fmt.Sprintf("\033[4m%s\033[24m", prNum)
 	colorFn := cfg.ColorSuccess // green for open
 	if b.PullRequest.Merged {
 		colorFn = cfg.ColorMagenta // purple for merged
@@ -211,6 +219,12 @@ func viewFullStatic(cfg *config.Config, s *stack.Stack, currentBranch string) er
 
 	for i := len(s.Branches) - 1; i >= 0; i-- {
 		b := s.Branches[i]
+
+		// Insert separator when transitioning from active to merged section
+		if b.IsMerged() && (i == len(s.Branches)-1 || !s.Branches[i+1].IsMerged()) {
+			fmt.Fprintf(&buf, "╌╌╌ %s ╌╌╌\n", cfg.ColorGray("merged"))
+		}
+
 		isCurrent := b.Branch == currentBranch
 
 		bullet := "○"
@@ -349,6 +363,9 @@ func viewWeb(cfg *config.Config, s *stack.Stack) error {
 
 	opened := 0
 	for _, br := range s.Branches {
+		if br.IsMerged() {
+			continue
+		}
 		var url string
 		if br.PullRequest != nil && br.PullRequest.URL != "" {
 			url = br.PullRequest.URL
@@ -370,6 +387,10 @@ func viewWeb(cfg *config.Config, s *stack.Stack) error {
 		cfg.Printf("No PRs found to open in browser.")
 	} else {
 		cfg.Successf("Opened %d PRs in browser", opened)
+	}
+
+	if mergedCount := len(s.MergedBranches()); mergedCount > 0 {
+		cfg.Printf("Skipped %d merged PRs", mergedCount)
 	}
 
 	return nil

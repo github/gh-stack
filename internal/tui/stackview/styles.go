@@ -36,6 +36,10 @@ var (
 	connectorDashedStyle  = lipgloss.NewStyle().Foreground(lipgloss.Color("3"))  // yellow (non-linear)
 	connectorFocusedStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("15")) // white (focused)
 	connectorCurrentStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("14")) // cyan (current branch focused)
+	connectorMergedStyle  = lipgloss.NewStyle().Foreground(lipgloss.Color("5"))  // magenta (merged branch focused)
+
+	// Dim text (separators, secondary labels)
+	dimStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("240"))
 
 	// Expand/collapse toggle
 	expandedIcon  = "▾"

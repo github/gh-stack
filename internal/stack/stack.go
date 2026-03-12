@@ -86,6 +86,69 @@ func (s *Stack) BaseBranch(branch string) string {
 	return s.Branches[idx-1].Branch
 }
 
+// IsMerged returns whether a branch's PR has been merged.
+func (b *BranchRef) IsMerged() bool {
+	return b.PullRequest != nil && b.PullRequest.Merged
+}
+
+// ActiveBranches returns only non-merged branches, preserving order.
+func (s *Stack) ActiveBranches() []BranchRef {
+	var active []BranchRef
+	for _, b := range s.Branches {
+		if !b.IsMerged() {
+			active = append(active, b)
+		}
+	}
+	return active
+}
+
+// MergedBranches returns only merged branches, preserving order.
+func (s *Stack) MergedBranches() []BranchRef {
+	var merged []BranchRef
+	for _, b := range s.Branches {
+		if b.IsMerged() {
+			merged = append(merged, b)
+		}
+	}
+	return merged
+}
+
+// FirstActiveBranchIndex returns the index of the first non-merged branch, or -1.
+func (s *Stack) FirstActiveBranchIndex() int {
+	for i, b := range s.Branches {
+		if !b.IsMerged() {
+			return i
+		}
+	}
+	return -1
+}
+
+// ActiveBaseBranch returns the effective parent for a branch, skipping merged
+// ancestors. For the first active branch (or any branch whose downstack is all
+// merged), this returns the trunk.
+func (s *Stack) ActiveBaseBranch(branch string) string {
+	idx := s.IndexOf(branch)
+	if idx <= 0 {
+		return s.Trunk.Branch
+	}
+	for j := idx - 1; j >= 0; j-- {
+		if !s.Branches[j].IsMerged() {
+			return s.Branches[j].Branch
+		}
+	}
+	return s.Trunk.Branch
+}
+
+// IsFullyMerged returns true if all branches in the stack have been merged.
+func (s *Stack) IsFullyMerged() bool {
+	for _, b := range s.Branches {
+		if !b.IsMerged() {
+			return false
+		}
+	}
+	return len(s.Branches) > 0
+}
+
 // StackFile represents the JSON file stored in .git/gh-stack.
 type StackFile struct {
 	SchemaVersion int     `json:"schemaVersion"`

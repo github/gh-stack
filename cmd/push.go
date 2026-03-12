@@ -74,7 +74,11 @@ func runPush(cfg *config.Config, opts *pushOptions) error {
 	}
 
 	// Push all branches
-	for _, b := range s.Branches {
+	merged := s.MergedBranches()
+	if len(merged) > 0 {
+		cfg.Printf("Skipping %d merged %s", len(merged), plural(len(merged), "branch", "branches"))
+	}
+	for _, b := range s.ActiveBranches() {
 		if opts.dryRun {
 			cfg.Printf("Would push %s", b.Branch)
 			continue
@@ -93,7 +97,10 @@ func runPush(cfg *config.Config, opts *pushOptions) error {
 
 	// Create or update PRs
 	for i, b := range s.Branches {
-		baseBranch := s.BaseBranch(b.Branch)
+		if s.Branches[i].IsMerged() {
+			continue
+		}
+		baseBranch := s.ActiveBaseBranch(b.Branch)
 
 		pr, err := client.FindPRForBranch(b.Branch)
 		if err != nil {
@@ -150,10 +157,10 @@ func runPush(cfg *config.Config, opts *pushOptions) error {
 
 	// Update base commit hashes and sync PR state
 	for i := range s.Branches {
-		parent := s.Trunk.Branch
-		if i > 0 {
-			parent = s.Branches[i-1].Branch
+		if s.Branches[i].IsMerged() {
+			continue
 		}
+		parent := s.ActiveBaseBranch(s.Branches[i].Branch)
 		if base, err := git.HeadSHA(parent); err == nil {
 			s.Branches[i].Base = base
 		}
@@ -168,6 +175,6 @@ func runPush(cfg *config.Config, opts *pushOptions) error {
 		return nil
 	}
 
-	cfg.Successf("Pushed and synced %d branches", len(s.Branches))
+	cfg.Successf("Pushed and synced %d branches", len(s.ActiveBranches()))
 	return nil
 }
