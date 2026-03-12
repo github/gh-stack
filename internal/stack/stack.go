@@ -160,6 +160,10 @@ func Load(gitDir string) (*StackFile, error) {
 		return nil, fmt.Errorf("parsing stack file: %w", err)
 	}
 
+	if sf.SchemaVersion > schemaVersion {
+		return nil, fmt.Errorf("stack file has schema version %d, but this version of gh-stack only supports up to version %d — please upgrade gh-stack", sf.SchemaVersion, schemaVersion)
+	}
+
 	return &sf, nil
 }
 

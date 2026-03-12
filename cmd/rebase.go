@@ -374,6 +374,9 @@ func continueRebase(cfg *config.Config, gitDir string) error {
 
 	for _, branchName := range state.RemainingBranches {
 		idx := s.IndexOf(branchName)
+		if idx < 0 {
+			return fmt.Errorf("branch %q from saved rebase state is no longer in the stack — the stack may have been modified since the rebase started; consider aborting with --abort", branchName)
+		}
 
 		// Skip branches whose PRs have already been merged.
 		br := s.Branches[idx]

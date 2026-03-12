@@ -173,7 +173,10 @@ func tryAutoResolveRebase(originalErr error) error {
 		if !IsRebaseInProgress() {
 			return nil
 		}
-		conflicts, _ := ConflictedFiles()
+		conflicts, err := ConflictedFiles()
+		if err != nil {
+			return originalErr
+		}
 		if len(conflicts) > 0 {
 			return originalErr
 		}
