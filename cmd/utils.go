@@ -44,6 +44,10 @@ func resolveStack(sf *stack.StackFile, branch string, cfg *config.Config) (*stac
 
 	s := stacks[selected]
 
+	if len(s.Branches) == 0 {
+		return nil, fmt.Errorf("selected stack %q has no branches", s.DisplayName())
+	}
+
 	// Switch to the top branch of the selected stack so future commands
 	// resolve unambiguously.
 	topBranch := s.Branches[len(s.Branches)-1].Branch
