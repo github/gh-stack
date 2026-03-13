@@ -43,7 +43,7 @@
     },
     "branchRef": {
       "type": "object",
-      "description": "A reference to a branch and its associated commit hash. For the trunk, 'head' stores the HEAD commit. For stacked branches, 'base' stores the merge-base commit (the last common commit before divergence from the parent branch).",
+      "description": "A reference to a branch and its associated commit hash. For the trunk, 'head' stores the HEAD commit. For stacked branches, 'base' stores the parent branch's HEAD SHA at the time of last sync/rebase.",
       "required": ["branch"],
       "properties": {
         "branch": {
@@ -56,7 +56,7 @@
         },
         "base": {
           "type": "string",
-          "description": "The merge-base commit SHA — the last commit before this branch diverged from its parent. Used for stacked branches."
+          "description": "The parent branch's HEAD SHA at the time of last sync/rebase. Used to identify which commits are unique to this branch."
         },
         "pullRequest": {
           "$ref": "#/$defs/pullRequestRef",

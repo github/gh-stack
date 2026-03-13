@@ -23,8 +23,8 @@ type PullRequestRef struct {
 
 // BranchRef represents a branch and its associated commit hash.
 // For the trunk, Head stores the HEAD commit SHA.
-// For stacked branches, Base stores the merge-base commit SHA
-// (the last common commit before divergence from the parent branch).
+// For stacked branches, Base stores the parent branch's HEAD SHA
+// at the time of last sync/rebase, used to identify unique commits.
 type BranchRef struct {
 	Branch      string          `json:"branch"`
 	Head        string          `json:"head,omitempty"`
