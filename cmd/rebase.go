@@ -120,6 +120,32 @@ func runRebase(cfg *config.Config, opts *rebaseOptions) error {
 		cfg.Successf("Fetched origin")
 	}
 
+	// Fast-forward trunk so the cascade rebase targets the latest upstream.
+	trunk := s.Trunk.Branch
+	localSHA, localErr := git.HeadSHA(trunk)
+	remoteSHA, remoteErr := git.HeadSHA("origin/" + trunk)
+
+	if localErr == nil && remoteErr == nil && localSHA != remoteSHA {
+		isAncestor, err := git.IsAncestor(localSHA, remoteSHA)
+		if err != nil {
+			cfg.Warningf("Could not determine fast-forward status for %s: %v", trunk, err)
+		} else if !isAncestor {
+			cfg.Warningf("Trunk %s has diverged from origin — skipping trunk update", trunk)
+		} else if currentBranch == trunk {
+			if err := ffMerge(trunk); err != nil {
+				cfg.Warningf("Failed to fast-forward %s: %v", trunk, err)
+			} else {
+				cfg.Successf("Trunk %s fast-forwarded to %s", trunk, short(remoteSHA))
+			}
+		} else {
+			if err := updateBranchRef(trunk, remoteSHA); err != nil {
+				cfg.Warningf("Failed to fast-forward %s: %v", trunk, err)
+			} else {
+				cfg.Successf("Trunk %s fast-forwarded to %s", trunk, short(remoteSHA))
+			}
+		}
+	}
+
 	chainParts := []string{s.Trunk.Branch}
 	for _, b := range s.Branches {
 		chainParts = append(chainParts, b.Branch)
@@ -373,7 +399,16 @@ func continueRebase(cfg *config.Config, gitDir string) error {
 	}
 
 	var baseBranch string
-	if state.CurrentBranchIndex > 0 {
+	if state.UseOnto {
+		// The --onto path targets the first non-merged ancestor, or trunk.
+		baseBranch = s.Trunk.Branch
+		for j := state.CurrentBranchIndex - 1; j >= 0; j-- {
+			if !s.Branches[j].IsMerged() {
+				baseBranch = s.Branches[j].Branch
+				break
+			}
+		}
+	} else if state.CurrentBranchIndex > 0 {
 		baseBranch = s.Branches[state.CurrentBranchIndex-1].Branch
 	} else {
 		baseBranch = s.Trunk.Branch
