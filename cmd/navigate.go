@@ -166,7 +166,7 @@ func runNavigate(cfg *config.Config, delta int) error {
 	}
 
 	if skipped > 0 {
-		cfg.Printf("Skipped %d merged %s", skipped, plural(skipped, "branch", "branch(es)"))
+		cfg.Printf("Skipped %d merged %s", skipped, plural(skipped, "branch", "branches"))
 	}
 
 	moved := newIdx - idx
