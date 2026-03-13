@@ -169,14 +169,21 @@ func runAdd(cfg *config.Config, opts *addOptions, args []string) error {
 			branchName = explicitName
 		}
 	} else {
-		// No -m, no explicit name — prompt
-		fmt.Fprintf(cfg.Err, "Enter a name for the new branch: ")
-		if _, err := fmt.Fscan(cfg.In, &branchName); err != nil {
-			return fmt.Errorf("could not read branch name: %w", err)
-		}
-		if s.Prefix != "" && branchName != "" {
-			branchName = s.Prefix + "/" + branchName
-			cfg.Infof("Branch name prefixed: %s", branchName)
+		// No -m, no explicit name — auto-generate if following numbered
+		// convention, otherwise prompt for a name.
+		existingBranches := s.BranchNames()
+		if s.Prefix != "" && len(existingBranches) > 0 &&
+			branch.FollowsNumbering(s.Prefix, existingBranches[len(existingBranches)-1]) {
+			branchName = branch.NextNumberedName(s.Prefix, existingBranches)
+		} else {
+			fmt.Fprintf(cfg.Err, "Enter a name for the new branch: ")
+			if _, err := fmt.Fscan(cfg.In, &branchName); err != nil {
+				return fmt.Errorf("could not read branch name: %w", err)
+			}
+			if s.Prefix != "" && branchName != "" {
+				branchName = s.Prefix + "/" + branchName
+				cfg.Infof("Branch name prefixed: %s", branchName)
+			}
 		}
 	}
 
