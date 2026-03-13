@@ -120,7 +120,7 @@ func runPush(cfg *config.Config, opts *pushOptions) error {
 					title = input
 				}
 			}
-			body := fmt.Sprintf("Part %d of stack.\n\nBase: `%s`", i+1, baseBranch)
+			body := generatePRBody(s, b.Branch)
 
 			newPR, createErr := client.CreatePR(baseBranch, b.Branch, title, body, opts.draft)
 			if createErr != nil {
@@ -197,6 +197,47 @@ func defaultPRTitle(base, head string) string {
 		return commits[0].Subject
 	}
 	return humanize(head)
+}
+
+// generatePRBody builds a rich PR description showing the downstack branches,
+// the current branch, and a footer with links to the CLI and feedback form.
+func generatePRBody(s *stack.Stack, currentBranch string) string {
+	var lines []string
+
+	// Current branch entry (always first)
+	lines = append(lines, fmt.Sprintf("- `%s` ← *this PR*", currentBranch))
+
+	// Walk downstack from just below current to the bottom, skipping merged branches
+	found := false
+	for i := len(s.Branches) - 1; i >= 0; i-- {
+		b := s.Branches[i]
+		if b.Branch == currentBranch {
+			found = true
+			continue
+		}
+		if !found {
+			continue
+		}
+		if b.IsMerged() {
+			continue
+		}
+		if b.PullRequest != nil && b.PullRequest.URL != "" {
+			lines = append(lines, fmt.Sprintf("- `%s` %s", b.Branch, b.PullRequest.URL))
+		} else {
+			lines = append(lines, fmt.Sprintf("- `%s`", b.Branch))
+		}
+	}
+
+	// Trunk entry
+	lines = append(lines, fmt.Sprintf("- `%s` (base)", s.Trunk.Branch))
+
+	body := "---\n\n**Stacked Pull Requests**\n" + strings.Join(lines, "\n")
+	body += fmt.Sprintf(
+		"\n\n<sub>Stack created with <a href=\"https://github.com/github/gh-stack\">GitHub Stacks CLI</a> • <a href=\"%s\">Give Feedback 💬</a></sub>",
+		feedbackBaseURL,
+	)
+
+	return body
 }
 
 // humanize replaces hyphens and underscores with spaces.
