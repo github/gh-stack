@@ -76,8 +76,6 @@ func runSync(cfg *config.Config, _ *syncOptions) error {
 	}
 
 	// --- Step 1: Fetch ---
-	cfg.Printf("Fetching origin ...")
-
 	// Enable git rerere so conflict resolutions are remembered.
 	_ = git.EnableRerere()
 
