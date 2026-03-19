@@ -17,6 +17,7 @@ var client = &cligit.Client{}
 type CommitInfo struct {
 	SHA     string
 	Subject string
+	Body    string
 	Time    time.Time
 }
 

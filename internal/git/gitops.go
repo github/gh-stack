@@ -264,7 +264,7 @@ func (d *defaultOps) Log(ref string, maxCount int) ([]CommitInfo, error) {
 }
 
 func (d *defaultOps) LogRange(base, head string) ([]CommitInfo, error) {
-	format := "%H\t%s\t%at"
+	format := "%H%x01%B%x01%at%x00"
 	rangeSpec := base + ".." + head
 	output, err := run("log", rangeSpec, "--format="+format)
 	if err != nil {
@@ -275,19 +275,38 @@ func (d *defaultOps) LogRange(base, head string) ([]CommitInfo, error) {
 	}
 
 	var commits []CommitInfo
-	for _, line := range strings.Split(output, "\n") {
-		parts := strings.SplitN(line, "\t", 3)
+	for _, record := range strings.Split(output, "\x00") {
+		record = strings.TrimSpace(record)
+		if record == "" {
+			continue
+		}
+		parts := strings.SplitN(record, "\x01", 3)
 		if len(parts) < 3 {
 			continue
 		}
-		ts, _ := strconv.ParseInt(parts[2], 10, 64)
+		ts, _ := strconv.ParseInt(strings.TrimSpace(parts[2]), 10, 64)
+		subject, body := splitCommitMessage(parts[1])
 		commits = append(commits, CommitInfo{
 			SHA:     parts[0],
-			Subject: parts[1],
+			Subject: subject,
+			Body:    body,
 			Time:    time.Unix(ts, 0),
 		})
 	}
 	return commits, nil
+}
+
+// splitCommitMessage splits a full commit message into subject (first line)
+// and body (remaining lines with leading/trailing blank lines trimmed).
+func splitCommitMessage(msg string) (subject, body string) {
+	msg = strings.TrimSpace(msg)
+	if i := strings.IndexByte(msg, '\n'); i >= 0 {
+		subject = msg[:i]
+		body = strings.TrimSpace(msg[i+1:])
+	} else {
+		subject = msg
+	}
+	return
 }
 
 func (d *defaultOps) DiffStatRange(base, head string) (additions, deletions int, err error) {

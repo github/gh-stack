@@ -112,7 +112,8 @@ func runPush(cfg *config.Config, opts *pushOptions) error {
 			// Create new PR — auto-generate title from commits/branch name,
 			// then prompt interactively unless --auto or non-interactive.
 			baseBranchForDiff := s.ActiveBaseBranch(b.Branch)
-			title := defaultPRTitle(baseBranchForDiff, b.Branch)
+			title, commitBody := defaultPRTitleBody(baseBranchForDiff, b.Branch)
+			originalTitle := title
 			if !opts.auto && cfg.IsInteractive() {
 				p := prompter.New(cfg.In, cfg.Out, cfg.Err)
 				input, err := p.Input(fmt.Sprintf("Title for PR (branch %s):", b.Branch), title)
@@ -120,7 +121,15 @@ func runPush(cfg *config.Config, opts *pushOptions) error {
 					title = input
 				}
 			}
-			body := generatePRBody(s, b.Branch)
+
+			// If the user changed the title and the commit had a multi-line
+			// message, put the full commit message in the PR body so no
+			// content is lost.
+			prBody := commitBody
+			if title != originalTitle && commitBody != "" {
+				prBody = originalTitle + "\n\n" + commitBody
+			}
+			body := generatePRBody(prBody)
 
 			newPR, createErr := client.CreatePR(baseBranch, b.Branch, title, body, opts.draft)
 			if createErr != nil {
@@ -188,56 +197,33 @@ func runPush(cfg *config.Config, opts *pushOptions) error {
 	return nil
 }
 
-// defaultPRTitle generates a PR title from the branch's commits.
-// If there is exactly one commit, use its subject. Otherwise, humanize the
-// branch name (replace hyphens/underscores with spaces).
-func defaultPRTitle(base, head string) string {
+// defaultPRTitleBody generates a PR title and body from the branch's commits.
+// If there is exactly one commit, use its subject as the title and its body
+// (if any) as the PR body. Otherwise, humanize the branch name for the title.
+func defaultPRTitleBody(base, head string) (string, string) {
 	commits, err := git.LogRange(base, head)
 	if err == nil && len(commits) == 1 {
-		return commits[0].Subject
+		return commits[0].Subject, strings.TrimSpace(commits[0].Body)
 	}
-	return humanize(head)
+	return humanize(head), ""
 }
 
-// generatePRBody builds a rich PR description showing the downstack branches,
-// the current branch, and a footer with links to the CLI and feedback form.
-func generatePRBody(s *stack.Stack, currentBranch string) string {
-	var lines []string
+// generatePRBody builds a PR description from the commit body (if any)
+// and a footer linking to the CLI and feedback form.
+func generatePRBody(commitBody string) string {
+	var parts []string
 
-	// Current branch entry (always first)
-	lines = append(lines, fmt.Sprintf("- `%s` ← *this PR*", currentBranch))
-
-	// Walk downstack from just below current to the bottom, skipping merged branches
-	found := false
-	for i := len(s.Branches) - 1; i >= 0; i-- {
-		b := s.Branches[i]
-		if b.Branch == currentBranch {
-			found = true
-			continue
-		}
-		if !found {
-			continue
-		}
-		if b.IsMerged() {
-			continue
-		}
-		if b.PullRequest != nil && b.PullRequest.URL != "" {
-			lines = append(lines, fmt.Sprintf("- `%s` %s", b.Branch, b.PullRequest.URL))
-		} else {
-			lines = append(lines, fmt.Sprintf("- `%s`", b.Branch))
-		}
+	if commitBody != "" {
+		parts = append(parts, commitBody)
 	}
 
-	// Trunk entry
-	lines = append(lines, fmt.Sprintf("- `%s` (base)", s.Trunk.Branch))
-
-	body := "---\n\n**Stacked Pull Requests**\n" + strings.Join(lines, "\n")
-	body += fmt.Sprintf(
-		"\n\n<sub>Stack created with <a href=\"https://github.com/github/gh-stack\">GitHub Stacks CLI</a> • <a href=\"%s\">Give Feedback 💬</a></sub>",
+	footer := fmt.Sprintf(
+		"<sub>Stack created with <a href=\"https://github.com/github/gh-stack\">GitHub Stacks CLI</a> • <a href=\"%s\">Give Feedback 💬</a></sub>",
 		feedbackBaseURL,
 	)
+	parts = append(parts, footer)
 
-	return body
+	return strings.Join(parts, "\n\n---\n\n")
 }
 
 // humanize replaces hyphens and underscores with spaces.
