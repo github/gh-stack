@@ -108,7 +108,7 @@ func runAdd(cfg *config.Config, opts *addOptions, args []string) error {
 			cfg.Errorf("failed to commit: %s", err)
 			return nil
 		}
-		cfg.Successf("Created commit %s on %s", cfg.ColorBold(sha[:7]), currentBranch)
+		cfg.Successf("Created commit %s on %s", cfg.ColorBold(sha), currentBranch)
 		cfg.Warningf("Branch %s has no prior commits — adding your commit here instead of creating a new branch", currentBranch)
 		cfg.Printf("When you're ready for the next layer, run %s again", cfg.ColorCyan("gh stack add"))
 		return nil
@@ -213,7 +213,7 @@ func runAdd(cfg *config.Config, opts *addOptions, args []string) error {
 			cfg.Errorf("failed to commit: %s", err)
 			return nil
 		}
-		commitSHA = sha[:7]
+		commitSHA = sha
 	}
 
 	if err := stack.Save(gitDir, sf); err != nil {
