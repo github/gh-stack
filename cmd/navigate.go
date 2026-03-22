@@ -68,26 +68,22 @@ func runNavigate(cfg *config.Config, delta int) error {
 
 	idx := s.IndexOf(currentBranch)
 	if idx < 0 {
-		// Might be on the trunk
-		if currentBranch == s.Trunk.Branch {
-			if delta > 0 && len(s.Branches) > 0 {
-				targetIdx := s.FirstActiveBranchIndex()
-				if targetIdx < 0 {
-					// All merged — fall back to top branch with warning
-					targetIdx = len(s.Branches) - 1
-					cfg.Warningf("Warning: all branches in this stack have been merged")
-				}
-				target := s.Branches[targetIdx].Branch
-				if err := git.CheckoutBranch(target); err != nil {
-					return err
-				}
-				cfg.Successf("Switched to %s", target)
-				return nil
+		// Current branch is the trunk (not in s.Branches).
+		// loadStack guarantees the branch is part of the stack.
+		if delta > 0 && len(s.Branches) > 0 {
+			targetIdx := s.FirstActiveBranchIndex()
+			if targetIdx < 0 {
+				targetIdx = len(s.Branches) - 1
+				cfg.Warningf("Warning: all branches in this stack have been merged")
 			}
-			cfg.Printf("Already at the bottom of the stack")
+			target := s.Branches[targetIdx].Branch
+			if err := git.CheckoutBranch(target); err != nil {
+				return err
+			}
+			cfg.Successf("Switched to %s", target)
 			return nil
 		}
-		cfg.Errorf("current branch %q is not in the stack", currentBranch)
+		cfg.Printf("Already at the bottom of the stack")
 		return nil
 	}
 
@@ -110,12 +106,7 @@ func runNavigate(cfg *config.Config, delta int) error {
 		}
 	} else {
 		// Build list of active (non-merged) branch indices
-		var activeIndices []int
-		for i, b := range s.Branches {
-			if !b.IsMerged() {
-				activeIndices = append(activeIndices, i)
-			}
-		}
+		activeIndices := s.ActiveBranchIndices()
 
 		// Find current position in active list
 		activePos := -1

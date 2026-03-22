@@ -124,6 +124,17 @@ func (s *Stack) FirstActiveBranchIndex() int {
 	return -1
 }
 
+// ActiveBranchIndices returns the indices of all non-merged branches.
+func (s *Stack) ActiveBranchIndices() []int {
+	var indices []int
+	for i, b := range s.Branches {
+		if !b.IsMerged() {
+			indices = append(indices, i)
+		}
+	}
+	return indices
+}
+
 // ActiveBaseBranch returns the effective parent for a branch, skipping merged
 // ancestors. For the first active branch (or any branch whose downstack is all
 // merged), this returns the trunk.

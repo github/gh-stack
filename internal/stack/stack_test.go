@@ -192,6 +192,39 @@ func TestFirstActiveBranchIndex(t *testing.T) {
 	})
 }
 
+// --- ActiveBranchIndices: navigation ---
+
+func TestActiveBranchIndices(t *testing.T) {
+	t.Run("all active", func(t *testing.T) {
+		s := makeStack("main", "b1", "b2", "b3")
+		assert.Equal(t, []int{0, 1, 2}, s.ActiveBranchIndices())
+	})
+
+	t.Run("some merged", func(t *testing.T) {
+		s := Stack{
+			Trunk: BranchRef{Branch: "main"},
+			Branches: []BranchRef{
+				makeMergedBranch("b1", 1),
+				{Branch: "b2"},
+				makeMergedBranch("b3", 3),
+				{Branch: "b4"},
+			},
+		}
+		assert.Equal(t, []int{1, 3}, s.ActiveBranchIndices())
+	})
+
+	t.Run("all merged", func(t *testing.T) {
+		s := Stack{
+			Trunk: BranchRef{Branch: "main"},
+			Branches: []BranchRef{
+				makeMergedBranch("b1", 1),
+				makeMergedBranch("b2", 2),
+			},
+		}
+		assert.Empty(t, s.ActiveBranchIndices())
+	})
+}
+
 // --- Load / Save round-trip persistence ---
 
 func TestLoad_Save_RoundTrip(t *testing.T) {
