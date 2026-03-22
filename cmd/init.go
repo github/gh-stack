@@ -32,8 +32,8 @@ Unless specified, prompts user to create/select branch for first layer of the st
 Trunk defaults to default branch, unless specified otherwise.`,
 		Example: `  $ gh stack init
   $ gh stack init myBranch
-  $ gh stack init branch1 branch2 branch3 --adopt
-  $ gh stack init firstBranch -b integrationBranch`,
+  $ gh stack init --adopt branch1 branch2 branch3
+  $ gh stack init --base integrationBranch firstBranch`,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			opts.branches = args
 			return runInit(cfg, opts)
@@ -114,6 +114,25 @@ func runInit(cfg *config.Config, opts *initOptions) error {
 			}
 		}
 		branches = opts.branches
+
+		// Check if any adopted branches already have PRs on GitHub.
+		// If offline or unable to create client, skip silently.
+		if client, clientErr := cfg.GitHubClient(); clientErr == nil {
+			for _, b := range branches {
+				pr, err := client.FindAnyPRForBranch(b)
+				if err != nil {
+					continue
+				}
+				if pr != nil {
+					state := "open"
+					if pr.Merged {
+						state = "merged"
+					}
+					cfg.Errorf("branch %q already has a %s PR (#%d: %s)", b, state, pr.Number, pr.URL)
+					return nil
+				}
+			}
+		}
 	} else if len(opts.branches) > 0 {
 		// Explicit branch names provided — create them
 		for _, b := range opts.branches {
@@ -267,4 +286,3 @@ func runInit(cfg *config.Config, opts *initOptions) error {
 
 	return nil
 }
-
