@@ -5,7 +5,6 @@ import (
 
 	"github.com/github/gh-stack/internal/config"
 	"github.com/github/gh-stack/internal/git"
-	"github.com/github/gh-stack/internal/stack"
 	"github.com/spf13/cobra"
 )
 
@@ -60,10 +59,12 @@ func BottomCmd(cfg *config.Config) *cobra.Command {
 }
 
 func runNavigate(cfg *config.Config, delta int) error {
-	s, currentBranch, err := loadCurrentStack(cfg)
+	result, err := loadStack(cfg, "")
 	if err != nil {
 		return nil
 	}
+	s := result.Stack
+	currentBranch := result.CurrentBranch
 
 	idx := s.IndexOf(currentBranch)
 	if idx < 0 {
@@ -181,11 +182,12 @@ func runNavigate(cfg *config.Config, delta int) error {
 }
 
 func runNavigateToEnd(cfg *config.Config, top bool) error {
-	s, currentBranch, err := loadCurrentStack(cfg)
+	result, err := loadStack(cfg, "")
 	if err != nil {
-		cfg.Errorf("failed to load current stack: %s", err)
 		return nil
 	}
+	s := result.Stack
+	currentBranch := result.CurrentBranch
 
 	if len(s.Branches) == 0 {
 		cfg.Errorf("stack has no branches")
@@ -224,51 +226,6 @@ func runNavigateToEnd(cfg *config.Config, top bool) error {
 
 	cfg.Successf("Switched to %s", target)
 	return nil
-}
-
-func loadCurrentStack(cfg *config.Config) (*stack.Stack, string, error) {
-	gitDir, err := git.GitDir()
-	if err != nil {
-		errMsg := "not a git repository"
-		cfg.Errorf("%s", errMsg)
-		return nil, "", fmt.Errorf("%s", errMsg)
-	}
-
-	sf, err := stack.Load(gitDir)
-	if err != nil {
-		errMsg := fmt.Sprintf("failed to load stack state: %s", err)
-		cfg.Errorf("%s", errMsg)
-		return nil, "", fmt.Errorf("%s", errMsg)
-	}
-
-	currentBranch, err := git.CurrentBranch()
-	if err != nil {
-		errMsg := fmt.Sprintf("failed to get current branch: %s", err)
-		cfg.Errorf("%s", errMsg)
-		return nil, "", fmt.Errorf("%s", errMsg)
-	}
-
-	s, err := resolveStack(sf, currentBranch, cfg)
-	if err != nil {
-		cfg.Errorf("%s", err)
-		return nil, "", err
-	}
-	if s == nil {
-		errMsg := fmt.Sprintf("current branch %q is not part of a stack", currentBranch)
-		cfg.Errorf("current branch %q is not part of a stack", currentBranch)
-		cfg.Printf("Checkout an existing stack using %s or create a new stack using %s", cfg.ColorCyan("gh stack checkout"), cfg.ColorCyan("gh stack init"))
-		return nil, "", fmt.Errorf("%s", errMsg)
-	}
-
-	// Re-read current branch in case disambiguation caused a checkout
-	currentBranch, err = git.CurrentBranch()
-	if err != nil {
-		errMsg := fmt.Sprintf("failed to get current branch: %s", err)
-		cfg.Errorf("%s", errMsg)
-		return nil, "", fmt.Errorf("%s", errMsg)
-	}
-
-	return s, currentBranch, nil
 }
 
 func plural(n int, singular, pluralForm string) string {

@@ -55,40 +55,14 @@ func runAdd(cfg *config.Config, opts *addOptions, args []string) error {
 		return nil
 	}
 
-	gitDir, err := git.GitDir()
+	result, err := loadStack(cfg, "")
 	if err != nil {
-		cfg.Errorf("not a git repository")
 		return nil
 	}
-
-	sf, err := stack.Load(gitDir)
-	if err != nil {
-		cfg.Errorf("failed to load stack state: %s", err)
-		return nil
-	}
-
-	currentBranch, err := git.CurrentBranch()
-	if err != nil {
-		cfg.Errorf("failed to get current branch: %s", err)
-		return nil
-	}
-
-	s, err := resolveStack(sf, currentBranch, cfg)
-	if err != nil {
-		cfg.Errorf("%s", err)
-		return nil
-	}
-	if s == nil {
-		cfg.Errorf("current branch %q is not part of a stack; run 'gh stack init' first", currentBranch)
-		return nil
-	}
-
-	// Re-read current branch in case disambiguation caused a checkout
-	currentBranch, err = git.CurrentBranch()
-	if err != nil {
-		cfg.Errorf("failed to get current branch: %s", err)
-		return nil
-	}
+	gitDir := result.GitDir
+	sf := result.StackFile
+	s := result.Stack
+	currentBranch := result.CurrentBranch
 
 	if s.IsFullyMerged() {
 		cfg.Warningf("All branches in this stack have been merged")

@@ -9,6 +9,72 @@ import (
 	"github.com/github/gh-stack/internal/stack"
 )
 
+// loadStackResult holds everything returned by loadStack.
+type loadStackResult struct {
+	GitDir        string
+	StackFile     *stack.StackFile
+	Stack         *stack.Stack
+	CurrentBranch string
+}
+
+// loadStack is the standard way to obtain a Stack for the current (or given)
+// branch.  It resolves the git directory, loads the stack file, determines the
+// branch, calls resolveStack (which may prompt for disambiguation), checks for
+// a nil stack, and re-reads the current branch (in case disambiguation caused
+// a checkout).  Errors are printed via cfg and returned.
+func loadStack(cfg *config.Config, branch string) (*loadStackResult, error) {
+	gitDir, err := git.GitDir()
+	if err != nil {
+		cfg.Errorf("not a git repository")
+		return nil, fmt.Errorf("not a git repository")
+	}
+
+	sf, err := stack.Load(gitDir)
+	if err != nil {
+		cfg.Errorf("failed to load stack state: %s", err)
+		return nil, fmt.Errorf("failed to load stack state: %w", err)
+	}
+
+	branchFromArg := branch != ""
+	if branch == "" {
+		branch, err = git.CurrentBranch()
+		if err != nil {
+			cfg.Errorf("failed to get current branch: %s", err)
+			return nil, fmt.Errorf("failed to get current branch: %w", err)
+		}
+	}
+
+	s, err := resolveStack(sf, branch, cfg)
+	if err != nil {
+		cfg.Errorf("%s", err)
+		return nil, err
+	}
+	if s == nil {
+		if branchFromArg {
+			cfg.Errorf("branch %q is not part of a stack", branch)
+		} else {
+			cfg.Errorf("current branch %q is not part of a stack", branch)
+		}
+		cfg.Printf("Checkout an existing stack using %s or create a new stack using %s",
+			cfg.ColorCyan("gh stack checkout"), cfg.ColorCyan("gh stack init"))
+		return nil, fmt.Errorf("branch %q is not part of a stack", branch)
+	}
+
+	// Re-read current branch in case disambiguation caused a checkout.
+	currentBranch, err := git.CurrentBranch()
+	if err != nil {
+		cfg.Errorf("failed to get current branch: %s", err)
+		return nil, fmt.Errorf("failed to get current branch: %w", err)
+	}
+
+	return &loadStackResult{
+		GitDir:        gitDir,
+		StackFile:     sf,
+		Stack:         s,
+		CurrentBranch: currentBranch,
+	}, nil
+}
+
 // resolveStack finds the stack for the given branch, handling ambiguity when
 // a branch (typically a trunk) belongs to multiple stacks. If exactly one
 // stack matches, it is returned directly. If multiple stacks match, the user

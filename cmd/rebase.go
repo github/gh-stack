@@ -79,37 +79,13 @@ func runRebase(cfg *config.Config, opts *rebaseOptions) error {
 		return abortRebase(cfg, gitDir)
 	}
 
-	sf, err := stack.Load(gitDir)
+	result, err := loadStack(cfg, opts.branch)
 	if err != nil {
-		cfg.Errorf("failed to load stack state: %s", err)
 		return nil
 	}
-
-	currentBranch := opts.branch
-	if currentBranch == "" {
-		currentBranch, err = git.CurrentBranch()
-		if err != nil {
-			cfg.Errorf("unable to determine current branch: %s", err)
-			return nil
-		}
-	}
-
-	s, err := resolveStack(sf, currentBranch, cfg)
-	if err != nil {
-		cfg.Errorf("%s", err)
-		return nil
-	}
-	if s == nil {
-		cfg.Errorf("no stack found for branch %s", currentBranch)
-		return nil
-	}
-
-	// Re-read current branch in case disambiguation caused a checkout
-	currentBranch, err = git.CurrentBranch()
-	if err != nil {
-		cfg.Errorf("failed to get current branch: %s", err)
-		return nil
-	}
+	sf := result.StackFile
+	s := result.Stack
+	currentBranch := result.CurrentBranch
 
 	// Enable git rerere so conflict resolutions are remembered.
 	_ = git.EnableRerere()

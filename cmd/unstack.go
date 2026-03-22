@@ -2,7 +2,6 @@ package cmd
 
 import (
 	"github.com/github/gh-stack/internal/config"
-	"github.com/github/gh-stack/internal/git"
 	"github.com/github/gh-stack/internal/stack"
 	"github.com/spf13/cobra"
 )
@@ -34,35 +33,16 @@ func UnstackCmd(cfg *config.Config) *cobra.Command {
 }
 
 func runUnstack(cfg *config.Config, opts *unstackOptions) error {
-	gitDir, err := git.GitDir()
+	result, err := loadStack(cfg, opts.target)
 	if err != nil {
-		cfg.Errorf("not a git repository")
 		return nil
 	}
-
-	sf, err := stack.Load(gitDir)
-	if err != nil {
-		cfg.Errorf("failed to load stack state: %s", err)
-		return nil
-	}
-
+	gitDir := result.GitDir
+	sf := result.StackFile
+	s := result.Stack
 	target := opts.target
 	if target == "" {
-		target, err = git.CurrentBranch()
-		if err != nil {
-			cfg.Errorf("unable to determine current branch: %s", err)
-			return nil
-		}
-	}
-
-	s, err := resolveStack(sf, target, cfg)
-	if err != nil {
-		cfg.Errorf("%s", err)
-		return nil
-	}
-	if s == nil {
-		cfg.Errorf("branch %q is not part of a stack", target)
-		return nil
+		target = result.CurrentBranch
 	}
 
 	cfg.Printf("Stack branches: %v", s.BranchNames())

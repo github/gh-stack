@@ -40,40 +40,14 @@ conflicts interactively.`,
 }
 
 func runSync(cfg *config.Config, _ *syncOptions) error {
-	gitDir, err := git.GitDir()
+	result, err := loadStack(cfg, "")
 	if err != nil {
-		cfg.Errorf("not a git repository")
 		return nil
 	}
-
-	sf, err := stack.Load(gitDir)
-	if err != nil {
-		cfg.Errorf("failed to load stack state: %s", err)
-		return nil
-	}
-
-	currentBranch, err := git.CurrentBranch()
-	if err != nil {
-		cfg.Errorf("failed to get current branch: %s", err)
-		return nil
-	}
-
-	s, err := resolveStack(sf, currentBranch, cfg)
-	if err != nil {
-		cfg.Errorf("%s", err)
-		return nil
-	}
-	if s == nil {
-		cfg.Errorf("current branch %q is not part of a stack", currentBranch)
-		return nil
-	}
-
-	// Re-read current branch in case disambiguation caused a checkout
-	currentBranch, err = git.CurrentBranch()
-	if err != nil {
-		cfg.Errorf("failed to get current branch: %s", err)
-		return nil
-	}
+	gitDir := result.GitDir
+	sf := result.StackFile
+	s := result.Stack
+	currentBranch := result.CurrentBranch
 
 	// Resolve remote once for fetch and push
 	remote, err := pickRemote(cfg, currentBranch)
