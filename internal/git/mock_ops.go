@@ -12,6 +12,7 @@ type MockOps struct {
 	DefaultBranchFn       func() (string, error)
 	CreateBranchFn        func(string, string) error
 	PushFn                func(string, []string, bool, bool) error
+	ResolveRemoteFn       func(string) (string, error)
 	RebaseFn              func(string) error
 	EnableRerereFn        func() error
 	RebaseOntoFn          func(string, string, string) error
@@ -21,7 +22,8 @@ type MockOps struct {
 	ConflictedFilesFn     func() ([]string, error)
 	FindConflictMarkersFn func(string) (*ConflictMarkerInfo, error)
 	IsAncestorFn          func(string, string) (bool, error)
-	HeadSHAFn             func(string) (string, error)
+	RevParseFn            func(string) (string, error)
+	RevParseMultiFn       func([]string) ([]string, error)
 	MergeBaseFn           func(string, string) (string, error)
 	LogFn                 func(string, int) ([]CommitInfo, error)
 	LogRangeFn            func(string, string) ([]CommitInfo, error)
@@ -98,6 +100,13 @@ func (m *MockOps) Push(remote string, branches []string, force, atomic bool) err
 	return nil
 }
 
+func (m *MockOps) ResolveRemote(branch string) (string, error) {
+	if m.ResolveRemoteFn != nil {
+		return m.ResolveRemoteFn(branch)
+	}
+	return "origin", nil
+}
+
 func (m *MockOps) Rebase(base string) error {
 	if m.RebaseFn != nil {
 		return m.RebaseFn(base)
@@ -161,11 +170,27 @@ func (m *MockOps) IsAncestor(ancestor, descendant string) (bool, error) {
 	return false, nil
 }
 
-func (m *MockOps) HeadSHA(ref string) (string, error) {
-	if m.HeadSHAFn != nil {
-		return m.HeadSHAFn(ref)
+func (m *MockOps) RevParse(ref string) (string, error) {
+	if m.RevParseFn != nil {
+		return m.RevParseFn(ref)
 	}
 	return "", nil
+}
+
+func (m *MockOps) RevParseMulti(refs []string) ([]string, error) {
+	if m.RevParseMultiFn != nil {
+		return m.RevParseMultiFn(refs)
+	}
+	// Default: delegate to RevParse for each ref.
+	shas := make([]string, len(refs))
+	for i, ref := range refs {
+		sha, err := m.RevParse(ref)
+		if err != nil {
+			return nil, err
+		}
+		shas[i] = sha
+	}
+	return shas, nil
 }
 
 func (m *MockOps) MergeBase(a, b string) (string, error) {

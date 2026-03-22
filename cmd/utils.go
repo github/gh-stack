@@ -90,3 +90,59 @@ func syncStackPRs(cfg *config.Config, s *stack.Stack) {
 		}
 	}
 }
+
+// updateBaseSHAs refreshes the Base and Head SHAs for all active branches
+// in a stack. Call this after any operation that may have moved branch refs
+// (rebase, push, etc.).
+func updateBaseSHAs(s *stack.Stack) {
+	// Collect all refs we need to resolve, then batch into one git call.
+	var refs []string
+	type refPair struct {
+		index  int
+		parent string
+		branch string
+	}
+	var pairs []refPair
+	seen := make(map[string]bool)
+	for i := range s.Branches {
+		if s.Branches[i].IsMerged() {
+			continue
+		}
+		parent := s.ActiveBaseBranch(s.Branches[i].Branch)
+		branch := s.Branches[i].Branch
+		pairs = append(pairs, refPair{i, parent, branch})
+		if !seen[parent] {
+			refs = append(refs, parent)
+			seen[parent] = true
+		}
+		if !seen[branch] {
+			refs = append(refs, branch)
+			seen[branch] = true
+		}
+	}
+	if len(refs) == 0 {
+		return
+	}
+	shaMap, err := git.RevParseMap(refs)
+	if err != nil {
+		return
+	}
+	for _, p := range pairs {
+		if base, ok := shaMap[p.parent]; ok {
+			s.Branches[p.index].Base = base
+		}
+		if head, ok := shaMap[p.branch]; ok {
+			s.Branches[p.index].Head = head
+		}
+	}
+}
+
+// activeBranchNames returns the branch names for all non-merged branches in a stack.
+func activeBranchNames(s *stack.Stack) []string {
+	active := s.ActiveBranches()
+	names := make([]string, len(active))
+	for i, b := range active {
+		names[i] = b.Branch
+	}
+	return names
+}

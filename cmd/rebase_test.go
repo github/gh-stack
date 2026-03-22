@@ -34,7 +34,7 @@ func newRebaseMock(tmpDir string, currentBranch string) *git.MockOps {
 	return &git.MockOps{
 		GitDirFn:        func() (string, error) { return tmpDir, nil },
 		CurrentBranchFn: func() (string, error) { return currentBranch, nil },
-		HeadSHAFn:       func(ref string) (string, error) { return "sha-" + ref, nil },
+		RevParseFn:       func(ref string) (string, error) { return "sha-" + ref, nil },
 		IsAncestorFn:    func(a, d string) (bool, error) { return true, nil },
 		FetchFn:         func(string) error { return nil },
 		EnableRerereFn:  func() error { return nil },

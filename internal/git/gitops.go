@@ -3,6 +3,7 @@ package git
 import (
 	"context"
 	"errors"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -23,6 +24,7 @@ type Ops interface {
 	DefaultBranch() (string, error)
 	CreateBranch(name, base string) error
 	Push(remote string, branches []string, force, atomic bool) error
+	ResolveRemote(branch string) (string, error)
 	Rebase(base string) error
 	EnableRerere() error
 	RebaseOnto(newBase, oldBase, branch string) error
@@ -32,7 +34,8 @@ type Ops interface {
 	ConflictedFiles() ([]string, error)
 	FindConflictMarkers(filePath string) (*ConflictMarkerInfo, error)
 	IsAncestor(ancestor, descendant string) (bool, error)
-	HeadSHA(ref string) (string, error)
+	RevParse(ref string) (string, error)
+	RevParseMulti(refs []string) ([]string, error)
 	MergeBase(a, b string) (string, error)
 	Log(ref string, maxCount int) ([]CommitInfo, error)
 	LogRange(base, head string) ([]CommitInfo, error)
@@ -120,6 +123,38 @@ func (d *defaultOps) Push(remote string, branches []string, force, atomic bool) 
 	}
 	args = append(args, branches...)
 	return runSilent(args...)
+}
+
+// ResolveRemote determines the remote for pushing a branch. It checks git
+// config keys in priority order (branch.<name>.pushRemote, remote.pushDefault,
+// branch.<name>.remote), then falls back to listing all remotes. If exactly
+// one remote exists it is returned. If multiple exist, ErrMultipleRemotes is
+// returned with the list attached. If none exist, a plain error is returned.
+func (d *defaultOps) ResolveRemote(branch string) (string, error) {
+	candidates := []string{
+		"branch." + branch + ".pushRemote",
+		"remote.pushDefault",
+		"branch." + branch + ".remote",
+	}
+	for _, key := range candidates {
+		out, err := run("config", "--get", key)
+		if err == nil && out != "" {
+			return out, nil
+		}
+	}
+
+	out, err := run("remote")
+	if err != nil {
+		return "", fmt.Errorf("could not list remotes: %w", err)
+	}
+	remotes := strings.Fields(strings.TrimSpace(out))
+	if len(remotes) == 1 {
+		return remotes[0], nil
+	}
+	if len(remotes) > 1 {
+		return "", &ErrMultipleRemotes{Remotes: remotes}
+	}
+	return "", fmt.Errorf("no remotes configured")
 }
 
 func (d *defaultOps) Rebase(base string) error {
@@ -229,8 +264,24 @@ func (d *defaultOps) IsAncestor(ancestor, descendant string) (bool, error) {
 	return false, err
 }
 
-func (d *defaultOps) HeadSHA(ref string) (string, error) {
+func (d *defaultOps) RevParse(ref string) (string, error) {
 	return run("rev-parse", ref)
+}
+
+func (d *defaultOps) RevParseMulti(refs []string) ([]string, error) {
+	if len(refs) == 0 {
+		return nil, nil
+	}
+	args := append([]string{"rev-parse"}, refs...)
+	out, err := run(args...)
+	if err != nil {
+		return nil, err
+	}
+	shas := strings.Split(out, "\n")
+	if len(shas) != len(refs) {
+		return nil, fmt.Errorf("rev-parse returned %d SHAs for %d refs", len(shas), len(refs))
+	}
+	return shas, nil
 }
 
 func (d *defaultOps) MergeBase(a, b string) (string, error) {

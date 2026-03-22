@@ -114,25 +114,35 @@ func runRebase(cfg *config.Config, opts *rebaseOptions) error {
 	// Enable git rerere so conflict resolutions are remembered.
 	_ = git.EnableRerere()
 
-	if err := git.Fetch("origin"); err != nil {
-		cfg.Warningf("Failed to fetch origin: %v", err)
+	// Resolve remote for fetch and trunk comparison
+	remote, err := pickRemote(cfg, currentBranch)
+	if err != nil {
+		cfg.Errorf("%s", err)
+		return nil
+	}
+
+	if err := git.Fetch(remote); err != nil {
+		cfg.Warningf("Failed to fetch %s: %v", remote, err)
 	} else {
-		cfg.Successf("Fetched origin")
+		cfg.Successf("Fetched %s", remote)
 	}
 
 	// Fast-forward trunk so the cascade rebase targets the latest upstream.
 	trunk := s.Trunk.Branch
-	localSHA, localErr := git.HeadSHA(trunk)
-	remoteSHA, remoteErr := git.HeadSHA("origin/" + trunk)
+	localSHA, remoteSHA := "", ""
+	trunkRefs, trunkErr := git.RevParseMulti([]string{trunk, remote + "/" + trunk})
+	if trunkErr == nil {
+		localSHA, remoteSHA = trunkRefs[0], trunkRefs[1]
+	}
 
-	if localErr == nil && remoteErr == nil && localSHA != remoteSHA {
+	if trunkErr == nil && localSHA != remoteSHA {
 		isAncestor, err := git.IsAncestor(localSHA, remoteSHA)
 		if err != nil {
 			cfg.Warningf("Could not determine fast-forward status for %s: %v", trunk, err)
 		} else if !isAncestor {
-			cfg.Warningf("Trunk %s has diverged from origin — skipping trunk update", trunk)
+			cfg.Warningf("Trunk %s has diverged from %s — skipping trunk update", trunk, remote)
 		} else if currentBranch == trunk {
-			if err := ffMerge(trunk); err != nil {
+			if err := git.MergeFF(remote + "/" + trunk); err != nil {
 				cfg.Warningf("Failed to fast-forward %s: %v", trunk, err)
 			} else {
 				cfg.Successf("Trunk %s fast-forwarded to %s", trunk, short(remoteSHA))
@@ -184,14 +194,14 @@ func runRebase(cfg *config.Config, opts *rebaseOptions) error {
 	// Sync PR state before rebase so we can detect merged PRs.
 	syncStackPRs(cfg, s)
 
-	originalRefs := make(map[string]string)
-	for _, b := range s.Branches {
-		sha, err := git.HeadSHA(b.Branch)
-		if err != nil {
-			cfg.Errorf("failed to resolve HEAD SHA for %s: %s", b.Branch, err)
-			return nil
-		}
-		originalRefs[b.Branch] = sha
+	branchNames := make([]string, len(s.Branches))
+	for i, b := range s.Branches {
+		branchNames[i] = b.Branch
+	}
+	originalRefs, err := git.RevParseMap(branchNames)
+	if err != nil {
+		cfg.Errorf("failed to resolve branch SHAs: %s", err)
+		return nil
 	}
 
 	// Track --onto rebase state for squash-merged branches.
@@ -312,25 +322,7 @@ func runRebase(cfg *config.Config, opts *rebaseOptions) error {
 
 	_ = git.CheckoutBranch(currentBranch)
 
-	for i := range s.Branches {
-		// Skip merged branches when updating base SHAs.
-		if s.Branches[i].IsMerged() {
-			continue
-		}
-		// Find the first non-merged ancestor, or trunk.
-		parent := s.Trunk.Branch
-		for j := i - 1; j >= 0; j-- {
-			if !s.Branches[j].IsMerged() {
-				parent = s.Branches[j].Branch
-				break
-			}
-		}
-		base, _ := git.HeadSHA(parent)
-		s.Branches[i].Base = base
-		if head, err := git.HeadSHA(s.Branches[i].Branch); err == nil {
-			s.Branches[i].Head = head
-		}
-	}
+	updateBaseSHAs(s)
 
 	syncStackPRs(cfg, s)
 
@@ -521,25 +513,7 @@ func continueRebase(cfg *config.Config, gitDir string) error {
 	clearRebaseState(gitDir)
 	_ = git.CheckoutBranch(state.OriginalBranch)
 
-	for i := range s.Branches {
-		// Skip merged branches when updating base SHAs.
-		if s.Branches[i].IsMerged() {
-			continue
-		}
-		// Find the first non-merged ancestor, or trunk.
-		parent := s.Trunk.Branch
-		for j := i - 1; j >= 0; j-- {
-			if !s.Branches[j].IsMerged() {
-				parent = s.Branches[j].Branch
-				break
-			}
-		}
-		base, _ := git.HeadSHA(parent)
-		s.Branches[i].Base = base
-		if head, err := git.HeadSHA(s.Branches[i].Branch); err == nil {
-			s.Branches[i].Head = head
-		}
-	}
+	updateBaseSHAs(s)
 
 	syncStackPRs(cfg, s)
 

@@ -1,6 +1,7 @@
 package cmd
 
 import (
+	"errors"
 	"fmt"
 	"strings"
 
@@ -12,8 +13,8 @@ import (
 )
 
 type pushOptions struct {
-	auto  bool
-	draft bool
+	auto    bool
+	draft   bool
 	skipPRs bool
 }
 
@@ -54,22 +55,18 @@ func runPush(cfg *config.Config, opts *pushOptions) error {
 		return nil
 	}
 
-	s, err := resolveStack(sf, currentBranch, cfg)
-	if err != nil {
-		cfg.Errorf("%s", err)
-		return nil
-	}
-	if s == nil {
+	// Find the stack for the current branch without switching branches.
+	// Push should never change the user's checked-out branch.
+	stacks := sf.FindAllStacksForBranch(currentBranch)
+	if len(stacks) == 0 {
 		cfg.Errorf("current branch %q is not part of a stack", currentBranch)
 		return nil
 	}
-
-	// Re-read current branch in case disambiguation caused a checkout
-	currentBranch, err = git.CurrentBranch()
-	if err != nil {
-		cfg.Errorf("failed to get current branch: %s", err)
+	if len(stacks) > 1 {
+		cfg.Errorf("branch %q belongs to multiple stacks; checkout a non-trunk branch first", currentBranch)
 		return nil
 	}
+	s := stacks[0]
 
 	client, err := cfg.GitHubClient()
 	if err != nil {
@@ -77,17 +74,21 @@ func runPush(cfg *config.Config, opts *pushOptions) error {
 		return nil
 	}
 
-	// Push all branches
+	// Push all active branches atomically
+	remote, err := pickRemote(cfg, currentBranch)
+	if err != nil {
+		cfg.Errorf("%s", err)
+		return nil
+	}
 	merged := s.MergedBranches()
 	if len(merged) > 0 {
 		cfg.Printf("Skipping %d merged %s", len(merged), plural(len(merged), "branch", "branches"))
 	}
-	for _, b := range s.ActiveBranches() {
-		cfg.Printf("Pushing %s...", b.Branch)
-		if err := git.Push("origin", []string{b.Branch}, true, false); err != nil {
-			cfg.Errorf("failed to push %s: %s", b.Branch, err)
-			return nil
-		}
+	activeBranches := activeBranchNames(s)
+	cfg.Printf("Pushing %d %s to %s...", len(activeBranches), plural(len(activeBranches), "branch", "branches"), remote)
+	if err := git.Push(remote, activeBranches, true, true); err != nil {
+		cfg.Errorf("failed to push: %s", err)
+		return nil
 	}
 
 	if opts.skipPRs {
@@ -174,18 +175,7 @@ func runPush(cfg *config.Config, opts *pushOptions) error {
 	fmt.Fprintf(cfg.Err, "  grouped into a Stack.\n")
 
 	// Update base commit hashes and sync PR state
-	for i := range s.Branches {
-		if s.Branches[i].IsMerged() {
-			continue
-		}
-		parent := s.ActiveBaseBranch(s.Branches[i].Branch)
-		if base, err := git.HeadSHA(parent); err == nil {
-			s.Branches[i].Base = base
-		}
-		if head, err := git.HeadSHA(s.Branches[i].Branch); err == nil {
-			s.Branches[i].Head = head
-		}
-	}
+	updateBaseSHAs(s)
 	syncStackPRs(cfg, s)
 
 	if err := stack.Save(gitDir, sf); err != nil {
@@ -234,4 +224,31 @@ func humanize(s string) string {
 		}
 		return r
 	}, s)
+}
+
+// pickRemote determines which remote to push to. It delegates to
+// git.ResolveRemote for config-based resolution and remote listing.
+// If multiple remotes exist with no configured default, the user is
+// prompted to select one interactively.
+func pickRemote(cfg *config.Config, branch string) (string, error) {
+	remote, err := git.ResolveRemote(branch)
+	if err == nil {
+		return remote, nil
+	}
+
+	var multi *git.ErrMultipleRemotes
+	if !errors.As(err, &multi) {
+		return "", err
+	}
+
+	if !cfg.IsInteractive() {
+		return "", fmt.Errorf("multiple remotes configured; set remote.pushDefault or use an interactive terminal")
+	}
+
+	p := prompter.New(cfg.In, cfg.Out, cfg.Err)
+	selected, promptErr := p.Select("Multiple remotes found. Which remote should be used?", "", multi.Remotes)
+	if promptErr != nil {
+		return "", fmt.Errorf("remote selection: %w", promptErr)
+	}
+	return multi.Remotes[selected], nil
 }

@@ -213,7 +213,7 @@ func runInit(cfg *config.Config, opts *initOptions) error {
 	}
 
 	// Build stack
-	trunkSHA, _ := git.HeadSHA(trunk)
+	trunkSHA, _ := git.RevParse(trunk)
 	branchRefs := make([]stack.BranchRef, len(branches))
 	for i, b := range branches {
 		parent := trunk

@@ -22,12 +22,12 @@ type pushCall struct {
 
 // newSyncMock creates a MockOps pre-configured for sync tests. By default
 // trunk and origin/trunk return the same SHA (no update needed). Override
-// HeadSHAFn for specific test scenarios.
+// RevParseFn for specific test scenarios.
 func newSyncMock(tmpDir string, currentBranch string) *git.MockOps {
 	return &git.MockOps{
 		GitDirFn:        func() (string, error) { return tmpDir, nil },
 		CurrentBranchFn: func() (string, error) { return currentBranch, nil },
-		HeadSHAFn:       func(ref string) (string, error) { return "sha-" + ref, nil },
+		RevParseFn:       func(ref string) (string, error) { return "sha-" + ref, nil },
 		IsAncestorFn:    func(a, d string) (bool, error) { return true, nil },
 		FetchFn:         func(string) error { return nil },
 		EnableRerereFn:  func() error { return nil },
@@ -55,7 +55,7 @@ func TestSync_TrunkAlreadyUpToDate(t *testing.T) {
 
 	mock := newSyncMock(tmpDir, "b1")
 	// Same SHA for trunk and origin/trunk → already up to date
-	mock.HeadSHAFn = func(ref string) (string, error) {
+	mock.RevParseFn = func(ref string) (string, error) {
 		if ref == "origin/main" {
 			return "sha-main", nil // same as local trunk
 		}
@@ -116,7 +116,7 @@ func TestSync_TrunkFastForward_TriggersRebase(t *testing.T) {
 
 	mock := newSyncMock(tmpDir, "b1")
 	// Different SHAs for trunk vs origin/trunk
-	mock.HeadSHAFn = func(ref string) (string, error) {
+	mock.RevParseFn = func(ref string) (string, error) {
 		if ref == "main" {
 			return "local-sha", nil
 		}
@@ -197,7 +197,7 @@ func TestSync_TrunkFastForward_WhenOnTrunk(t *testing.T) {
 	var updateBranchRefCalls []string
 
 	mock := newSyncMock(tmpDir, "main")
-	mock.HeadSHAFn = func(ref string) (string, error) {
+	mock.RevParseFn = func(ref string) (string, error) {
 		if ref == "main" {
 			return "local-sha", nil
 		}
@@ -256,7 +256,7 @@ func TestSync_TrunkDiverged(t *testing.T) {
 	var pushCalls []pushCall
 
 	mock := newSyncMock(tmpDir, "b1")
-	mock.HeadSHAFn = func(ref string) (string, error) {
+	mock.RevParseFn = func(ref string) (string, error) {
 		if ref == "main" {
 			return "local-sha", nil
 		}
@@ -321,7 +321,7 @@ func TestSync_RebaseConflict_RestoresAll(t *testing.T) {
 	abortCalled := false
 
 	mock := newSyncMock(tmpDir, "b1")
-	mock.HeadSHAFn = func(ref string) (string, error) {
+	mock.RevParseFn = func(ref string) (string, error) {
 		if ref == "main" {
 			return "local-sha", nil
 		}
@@ -403,7 +403,7 @@ func TestSync_NoRebaseWhenTrunkDidntMove(t *testing.T) {
 
 	mock := newSyncMock(tmpDir, "b1")
 	// Same SHA = no trunk movement
-	mock.HeadSHAFn = func(ref string) (string, error) {
+	mock.RevParseFn = func(ref string) (string, error) {
 		return "same-sha", nil
 	}
 	mock.RebaseFn = func(string) error {
@@ -464,7 +464,7 @@ func TestSync_PushForceFlagDependsOnRebase(t *testing.T) {
 			mock.RebaseOntoFn = func(string, string, string) error { return nil }
 
 			if tt.trunkMoved {
-				mock.HeadSHAFn = func(ref string) (string, error) {
+				mock.RevParseFn = func(ref string) (string, error) {
 					if ref == "main" {
 						return "local-sha", nil
 					}
@@ -478,7 +478,7 @@ func TestSync_PushForceFlagDependsOnRebase(t *testing.T) {
 				}
 				mock.UpdateBranchRefFn = func(string, string) error { return nil }
 			} else {
-				mock.HeadSHAFn = func(ref string) (string, error) {
+				mock.RevParseFn = func(ref string) (string, error) {
 					return "same-sha", nil
 				}
 			}

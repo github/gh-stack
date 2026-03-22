@@ -213,7 +213,7 @@ func runAdd(cfg *config.Config, opts *addOptions, args []string) error {
 		return nil
 	}
 
-	base, _ := git.HeadSHA(currentBranch)
+	base, _ := git.RevParse(currentBranch)
 	s.Branches = append(s.Branches, stack.BranchRef{Branch: branchName, Base: base})
 
 	// Stage and commit on the NEW branch if -m is provided

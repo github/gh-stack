@@ -2,6 +2,7 @@ package git
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"os/exec"
 	"strings"
@@ -12,6 +13,16 @@ import (
 
 // client is a shared git client used by all package-level functions.
 var client = &cligit.Client{}
+
+// ErrMultipleRemotes is returned by ResolveRemote when multiple remotes
+// are configured and none is designated as the push target.
+type ErrMultipleRemotes struct {
+	Remotes []string
+}
+
+func (e *ErrMultipleRemotes) Error() string {
+	return fmt.Sprintf("multiple remotes configured: %s", strings.Join(e.Remotes, ", "))
+}
 
 // CommitInfo holds metadata about a single commit.
 type CommitInfo struct {
@@ -118,6 +129,13 @@ func Push(remote string, branches []string, force, atomic bool) error {
 	return ops.Push(remote, branches, force, atomic)
 }
 
+// ResolveRemote determines the remote for pushing a branch. Checks git
+// config in priority order, falls back to listing remotes. Returns
+// *ErrMultipleRemotes if multiple remotes exist with no configured default.
+func ResolveRemote(branch string) (string, error) {
+	return ops.ResolveRemote(branch)
+}
+
 // Rebase rebases the current branch onto the given base.
 // If rerere resolves all conflicts automatically, the rebase continues
 // without user intervention.
@@ -191,9 +209,28 @@ func IsAncestor(ancestor, descendant string) (bool, error) {
 	return ops.IsAncestor(ancestor, descendant)
 }
 
-// HeadSHA returns the full SHA of the given ref.
-func HeadSHA(ref string) (string, error) {
-	return ops.HeadSHA(ref)
+// RevParse resolves a ref to its full SHA via git rev-parse.
+func RevParse(ref string) (string, error) {
+	return ops.RevParse(ref)
+}
+
+// RevParseMulti resolves multiple refs to their full SHAs in a single
+// git rev-parse invocation. Returns SHAs in the same order as the input refs.
+func RevParseMulti(refs []string) ([]string, error) {
+	return ops.RevParseMulti(refs)
+}
+
+// RevParseMap resolves multiple refs and returns a ref→SHA map.
+func RevParseMap(refs []string) (map[string]string, error) {
+	shas, err := ops.RevParseMulti(refs)
+	if err != nil {
+		return nil, err
+	}
+	m := make(map[string]string, len(refs))
+	for i, ref := range refs {
+		m[ref] = shas[i]
+	}
+	return m, nil
 }
 
 // MergeBase returns the best common ancestor commit between two refs.
