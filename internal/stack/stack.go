@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 )
 
 const (
@@ -40,14 +41,14 @@ type Stack struct {
 	Branches []BranchRef `json:"branches"`
 }
 
-// DisplayName returns a human-readable chain representation of the stack.
+// DisplayChain returns a human-readable chain representation of the stack.
 // Format: (trunk) <- branch1 <- branch2 <- branch3
-func (s *Stack) DisplayName() string {
-	result := "(" + s.Trunk.Branch + ")"
+func (s *Stack) DisplayChain() string {
+	parts := []string{"(" + s.Trunk.Branch + ")"}
 	for _, b := range s.Branches {
-		result += " <- " + b.Branch
+		parts = append(parts, b.Branch)
 	}
-	return result
+	return strings.Join(parts, " <- ")
 }
 
 // BranchNames returns the list of branch names in order.

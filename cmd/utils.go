@@ -99,7 +99,7 @@ func resolveStack(sf *stack.StackFile, branch string, cfg *config.Config) (*stac
 
 	options := make([]string, len(stacks))
 	for i, s := range stacks {
-		options[i] = s.DisplayName()
+		options[i] = s.DisplayChain()
 	}
 
 	p := prompter.New(cfg.In, cfg.Out, cfg.Err)
@@ -111,7 +111,7 @@ func resolveStack(sf *stack.StackFile, branch string, cfg *config.Config) (*stac
 	s := stacks[selected]
 
 	if len(s.Branches) == 0 {
-		return nil, fmt.Errorf("selected stack %q has no branches", s.DisplayName())
+		return nil, fmt.Errorf("selected stack %q has no branches", s.DisplayChain())
 	}
 
 	// Switch to the top branch of the selected stack so future commands

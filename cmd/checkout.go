@@ -89,7 +89,7 @@ func runCheckout(cfg *config.Config, opts *checkoutOptions) error {
 	currentBranch, _ := git.CurrentBranch()
 	if targetBranch == currentBranch {
 		cfg.Infof("Already on %s", targetBranch)
-		cfg.Printf("Stack: %s", s.DisplayName())
+		cfg.Printf("Stack: %s", s.DisplayChain())
 		return nil
 	}
 
@@ -99,7 +99,7 @@ func runCheckout(cfg *config.Config, opts *checkoutOptions) error {
 	}
 
 	cfg.Successf("Switched to %s", targetBranch)
-	cfg.Printf("Stack: %s", s.DisplayName())
+	cfg.Printf("Stack: %s", s.DisplayChain())
 	return nil
 }
 
@@ -148,7 +148,7 @@ func interactiveStackPicker(cfg *config.Config, sf *stack.StackFile) (*stack.Sta
 
 	options := make([]string, len(sf.Stacks))
 	for i := range sf.Stacks {
-		options[i] = sf.Stacks[i].DisplayName()
+		options[i] = sf.Stacks[i].DisplayChain()
 	}
 
 	p := prompter.New(cfg.In, cfg.Out, cfg.Err)

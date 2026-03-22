@@ -132,11 +132,7 @@ func runRebase(cfg *config.Config, opts *rebaseOptions) error {
 		}
 	}
 
-	chainParts := []string{s.Trunk.Branch}
-	for _, b := range s.Branches {
-		chainParts = append(chainParts, b.Branch)
-	}
-	cfg.Printf("Stack detected: %s", joinChain(chainParts))
+	cfg.Printf("Stack detected: %s", s.DisplayChain())
 
 	currentIdx := s.IndexOf(currentBranch)
 	if currentIdx < 0 {

@@ -245,11 +245,7 @@ func runInit(cfg *config.Config, opts *initOptions) error {
 	// Print result
 	if opts.adopt {
 		cfg.Printf("Adopting stack with trunk %s and %d branches", trunk, len(branches))
-		chainParts := []string{"(" + trunk + ")"}
-		for _, b := range branches {
-			chainParts = append(chainParts, b)
-		}
-		cfg.Printf("Initializing stack: %s", joinChain(chainParts))
+		cfg.Printf("Initializing stack: %s", newStack.DisplayChain())
 		cfg.Printf("You can continue working on %s", branches[len(branches)-1])
 	} else {
 		cfg.Successf("Creating stack with trunk %s and branch %s", trunk, branches[len(branches)-1])
@@ -272,11 +268,3 @@ func runInit(cfg *config.Config, opts *initOptions) error {
 	return nil
 }
 
-// joinChain formats branches as: (trunk) <- branch1 <- branch2
-func joinChain(parts []string) string {
-	result := parts[0]
-	for _, p := range parts[1:] {
-		result += " <- " + p
-	}
-	return result
-}
