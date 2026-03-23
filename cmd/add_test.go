@@ -106,16 +106,37 @@ func TestAdd_MutuallyExclusiveFlags(t *testing.T) {
 	}
 }
 
-func TestAdd_StagingRequiresMessage(t *testing.T) {
-	restore := git.SetOps(&git.MockOps{})
+func TestAdd_StagingWithoutMessageUsesEditor(t *testing.T) {
+	gitDir := t.TempDir()
+	saveStack(t, gitDir, stack.Stack{
+		Trunk:    stack.BranchRef{Branch: "main"},
+		Branches: []stack.BranchRef{{Branch: "b1"}},
+	})
+
+	interactiveCalled := false
+	restore := git.SetOps(&git.MockOps{
+		GitDirFn:        func() (string, error) { return gitDir, nil },
+		CurrentBranchFn: func() (string, error) { return "b1", nil },
+		RevParseMultiFn: func(refs []string) ([]string, error) {
+			return []string{"aaa", "bbb"}, nil
+		},
+		RevParseFn:         func(ref string) (string, error) { return "abc", nil },
+		CreateBranchFn:     func(name, base string) error { return nil },
+		CheckoutBranchFn:   func(name string) error { return nil },
+		StageAllFn:         func() error { return nil },
+		HasStagedChangesFn: func() bool { return true },
+		CommitInteractiveFn: func() (string, error) {
+			interactiveCalled = true
+			return "def1234567890", nil
+		},
+	})
 	defer restore()
 
-	cfg, outR, errR := config.NewTestConfig()
-	runAdd(cfg, &addOptions{stageAll: true}, []string{"branch"})
-	output := collectOutput(cfg, outR, errR)
+	cfg, _, _ := config.NewTestConfig()
+	runAdd(cfg, &addOptions{stageAll: true}, []string{"new-branch"})
 
-	if !strings.Contains(output, "require -m") {
-		t.Errorf("expected 'require -m' error, got: %s", output)
+	if !interactiveCalled {
+		t.Error("expected CommitInteractive to be called when -m is omitted")
 	}
 }
 
@@ -184,8 +205,9 @@ func TestAdd_BranchWithCommitsCreatesNew(t *testing.T) {
 	restore := git.SetOps(&git.MockOps{
 		GitDirFn:        func() (string, error) { return gitDir, nil },
 		CurrentBranchFn: func() (string, error) { return "b1", nil },
-		LogRangeFn: func(base, head string) ([]git.CommitInfo, error) {
-			return []git.CommitInfo{{SHA: "abc1234567890", Subject: "existing"}}, nil
+		RevParseMultiFn: func(refs []string) ([]string, error) {
+			// Parent and current branch point to different commits (branch has commits)
+			return []string{"aaa", "bbb"}, nil
 		},
 		CreateBranchFn: func(name, base string) error {
 			createCalled = true
@@ -264,8 +286,8 @@ func TestAdd_NumberedNaming(t *testing.T) {
 	restore := git.SetOps(&git.MockOps{
 		GitDirFn:        func() (string, error) { return gitDir, nil },
 		CurrentBranchFn: func() (string, error) { return "feat/01", nil },
-		LogRangeFn: func(base, head string) ([]git.CommitInfo, error) {
-			return []git.CommitInfo{{SHA: "abc1234567890", Subject: "existing"}}, nil
+		RevParseMultiFn: func(refs []string) ([]string, error) {
+			return []string{"aaa", "bbb"}, nil
 		},
 		CreateBranchFn: func(name, base string) error {
 			createdBranch = name
@@ -325,9 +347,10 @@ func TestAdd_NothingToCommit(t *testing.T) {
 	restore := git.SetOps(&git.MockOps{
 		GitDirFn:        func() (string, error) { return gitDir, nil },
 		CurrentBranchFn: func() (string, error) { return "b1", nil },
-		LogRangeFn: func(base, head string) ([]git.CommitInfo, error) {
-			return nil, nil // empty branch
+		RevParseMultiFn: func(refs []string) ([]string, error) {
+			return []string{"aaa", "aaa"}, nil // same SHA = empty branch
 		},
+		StageAllFn:         func() error { return nil },
 		HasStagedChangesFn: func() bool { return false },
 	})
 	defer restore()
@@ -336,7 +359,7 @@ func TestAdd_NothingToCommit(t *testing.T) {
 	runAdd(cfg, &addOptions{stageAll: true, message: "msg"}, nil)
 	output := collectOutput(cfg, outR, errR)
 
-	if !strings.Contains(output, "nothing to commit") {
-		t.Errorf("expected 'nothing to commit' error, got: %s", output)
+	if !strings.Contains(output, "no changes to commit") {
+		t.Errorf("expected 'no changes to commit' error, got: %s", output)
 	}
 }

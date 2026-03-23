@@ -42,6 +42,7 @@ type MockOps struct {
 	StageTrackedFn        func() error
 	HasStagedChangesFn    func() bool
 	CommitFn              func(string) (string, error)
+	CommitInteractiveFn   func() (string, error)
 	ValidateRefNameFn     func(string) error
 }
 
@@ -318,6 +319,13 @@ func (m *MockOps) HasStagedChanges() bool {
 func (m *MockOps) Commit(message string) (string, error) {
 	if m.CommitFn != nil {
 		return m.CommitFn(message)
+	}
+	return "", nil
+}
+
+func (m *MockOps) CommitInteractive() (string, error) {
+	if m.CommitInteractiveFn != nil {
+		return m.CommitInteractiveFn()
 	}
 	return "", nil
 }

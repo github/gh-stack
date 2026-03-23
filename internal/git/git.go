@@ -54,6 +54,16 @@ func runSilent(args ...string) error {
 	return cmd.Run()
 }
 
+// runInteractive runs a git command with stdin/stdout/stderr connected to
+// the terminal, allowing interactive programs like editors to work.
+func runInteractive(args ...string) error {
+	cmd := exec.Command("git", args...)
+	cmd.Stdin = os.Stdin
+	cmd.Stdout = os.Stdout
+	cmd.Stderr = os.Stderr
+	return cmd.Run()
+}
+
 // rebaseContinueOnce runs a single git rebase --continue without auto-resolve.
 func rebaseContinueOnce() error {
 	cmd := exec.Command("git", "rebase", "--continue")
@@ -329,6 +339,12 @@ func HasStagedChanges() bool {
 // Commit creates a commit with the given message and returns the new HEAD SHA.
 func Commit(message string) (string, error) {
 	return ops.Commit(message)
+}
+
+// CommitInteractive launches the user's configured editor for the commit
+// message, equivalent to running `git commit` without `-m`.
+func CommitInteractive() (string, error) {
+	return ops.CommitInteractive()
 }
 
 // ValidateRefName checks whether name is a valid git branch name.

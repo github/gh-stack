@@ -102,11 +102,11 @@ You can optionally stage changes and create a commit as part of the `add` flow. 
 
 | Flag | Description |
 |------|-------------|
-| `-a, --all` | Stage all changes (including untracked files); requires `-m` |
+| `-A, --all` | Stage all changes (including untracked files); requires `-m` |
 | `-u, --update` | Stage changes to tracked files only; requires `-m` |
 | `-m, --message <string>` | Create a commit with this message before creating the branch |
 
-> **Note:** `-a` and `-u` are mutually exclusive.
+> **Note:** `-A` and `-u` are mutually exclusive.
 
 **Examples:**
 
@@ -118,7 +118,7 @@ gh stack add api-routes
 gh stack add
 
 # Stage all changes, commit, and auto-generate the branch name
-gh stack add -am "Add login endpoint"
+gh stack add -Am "Add login endpoint"
 
 # Stage only tracked files, commit, and auto-generate the branch name
 gh stack add -um "Fix auth bug"
@@ -127,7 +127,7 @@ gh stack add -um "Fix auth bug"
 gh stack add -m "Add user model"
 
 # Stage all changes, commit, and use an explicit branch name
-gh stack add -am "Add tests" test-layer
+gh stack add -Am "Add tests" test-layer
 
 # Stage only tracked files, commit, and use an explicit branch name
 gh stack add -um "Update docs" docs-layer
@@ -391,9 +391,9 @@ gh stack sync
 
 ## Abbreviated workflow
 
-If you want to minimize keystrokes, use a branch prefix and the `-am` flags to fold staging, committing, and branch creation into a single command. Branch names are auto-generated from your commit messages.
+If you want to minimize keystrokes, use a branch prefix and the `-Am` flags to fold staging, committing, and branch creation into a single command. Branch names are auto-generated from your commit messages.
 
-When a branch has no commits yet (e.g., right after `init`), `add -am` stages and commits directly on that branch instead of creating a new one. Once a branch has commits, `add -am` creates a new branch, checks it out, and commits there.
+When a branch has no commits yet (e.g., right after `init`), `add -Am` stages and commits directly on that branch instead of creating a new one. Once a branch has commits, `add -Am` creates a new branch, checks it out, and commits there.
 
 ```sh
 # 1. Start a stack with a prefix
@@ -404,7 +404,7 @@ gh stack init -p feat
 #    ... write code ...
 
 # 3. Stage and commit on the current branch
-gh stack add -am "Auth middleware"
+gh stack add -Am "Auth middleware"
 #    → feat/01 has no commits yet, so the commit lands here
 #      (no new branch is created)
 
@@ -412,18 +412,18 @@ gh stack add -am "Auth middleware"
 #    ... write code ...
 
 # 5. Create the next branch and commit
-gh stack add -am "API routes"
+gh stack add -Am "API routes"
 #    → feat/01 already has commits, so a new branch feat/02 is
 #      created, checked out, and the commit lands there
 
 # 6. Keep going
 #    ... write code ...
 
-gh stack add -am "Frontend components"
+gh stack add -Am "Frontend components"
 #    → feat/02 already has commits, creates feat/03 and commits there
 
 # 7. Push everything and create PRs
 gh stack push
 ```
 
-Compared to the typical workflow, there's no need to name branches, run `git add`, or run `git commit` separately. Each `gh stack add -am "..."` does it all.
+Compared to the typical workflow, there's no need to name branches, run `git add`, or run `git commit` separately. Each `gh stack add -Am "..."` does it all.

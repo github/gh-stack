@@ -25,20 +25,17 @@ func AddCmd(cfg *config.Config) *cobra.Command {
 		Short: "Add a new branch on top of the current stack",
 		Long: `Add a new branch on top of the current stack.
 
-Optionally stage changes and create a commit before creating the branch:
-  -a    Stage all changes (including untracked) before committing
-  -u    Stage tracked file changes before committing
-  -m    Create a commit with the given message
-
-When -m is provided without an explicit branch name, the branch name
-is auto-generated based on the commit message and stack prefix.`,
+When -m is omitted but -A or -u is used, your editor opens for the
+commit message. When -m is provided without an explicit branch name,
+the branch name is auto-generated based on the commit message and
+stack prefix.`,
 		Args: cobra.MaximumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			return runAdd(cfg, opts, args)
 		},
 	}
 
-	cmd.Flags().BoolVarP(&opts.stageAll, "all", "a", false, "Stage all changes including untracked files")
+	cmd.Flags().BoolVarP(&opts.stageAll, "all", "A", false, "Stage all changes including untracked files")
 	cmd.Flags().BoolVarP(&opts.stageTracked, "update", "u", false, "Stage changes to tracked files only")
 	cmd.Flags().StringVarP(&opts.message, "message", "m", "", "Create a commit with this message")
 
@@ -48,11 +45,7 @@ is auto-generated based on the commit message and stack prefix.`,
 func runAdd(cfg *config.Config, opts *addOptions, args []string) error {
 	// Validate flag combinations
 	if opts.stageAll && opts.stageTracked {
-		cfg.Errorf("flags -a and -u are mutually exclusive")
-		return nil
-	}
-	if (opts.stageAll || opts.stageTracked) && opts.message == "" {
-		cfg.Errorf("staging flags (-a, -u) require -m to create a commit")
+		cfg.Errorf("flags -A and -u are mutually exclusive")
 		return nil
 	}
 
@@ -72,39 +65,32 @@ func runAdd(cfg *config.Config, opts *addOptions, args []string) error {
 	}
 
 	idx := s.IndexOf(currentBranch)
+	// idx < 0 means we're on the trunk — that's allowed (we'll create
+	// a new branch from it). Only block if we're in the middle of the stack.
 	if idx >= 0 && idx < len(s.Branches)-1 {
 		cfg.Errorf("can only add branches on top of the stack; run `%s` to switch to %q", cfg.ColorCyan("gh stack top"), s.Branches[len(s.Branches)-1].Branch)
 		return nil
 	}
 
-	// When -m is provided, check if the current branch is a stack branch with
-	// no unique commits relative to its parent. If so, the commit should land
-	// on this branch without creating a new one (e.g., right after init).
+	// Check if the current branch is a stack branch with no unique commits
+	// relative to its parent. If so, the commit should land on this branch
+	// without creating a new one (e.g., right after init).
+	wantsCommit := opts.message != "" || opts.stageAll || opts.stageTracked
 	var branchIsEmpty bool
-	if opts.message != "" && idx >= 0 {
+	if wantsCommit && idx >= 0 {
 		parentBranch := s.ActiveBaseBranch(currentBranch)
-		commits, _ := git.LogRange(parentBranch, currentBranch)
-		branchIsEmpty = len(commits) == 0
+		shas, err := git.RevParseMulti([]string{parentBranch, currentBranch})
+		if err == nil {
+			branchIsEmpty = shas[0] == shas[1]
+		}
 	}
 
 	// Empty branch path: stage and commit here, don't create a new branch.
-	if branchIsEmpty && opts.message != "" {
-		if opts.stageAll {
-			if err := git.StageAll(); err != nil {
-				cfg.Errorf("failed to stage changes: %s", err)
-				return nil
-			}
-		} else if opts.stageTracked {
-			if err := git.StageTracked(); err != nil {
-				cfg.Errorf("failed to stage changes: %s", err)
-				return nil
-			}
-		}
-		if !git.HasStagedChanges() {
-			cfg.Errorf("nothing to commit; stage changes first or use -a/-u")
+	if branchIsEmpty {
+		if err := stageAndValidate(cfg, opts); err != nil {
 			return nil
 		}
-		sha, err := git.Commit(opts.message)
+		sha, err := doCommit(opts.message)
 		if err != nil {
 			cfg.Errorf("failed to commit: %s", err)
 			return nil
@@ -121,10 +107,10 @@ func runAdd(cfg *config.Config, opts *addOptions, args []string) error {
 	if len(args) > 0 {
 		explicitName = args[0]
 	}
+	existingBranches := s.BranchNames()
 
 	if opts.message != "" {
 		// Auto-naming mode
-		existingBranches := s.BranchNames()
 		isFirstBranch := len(existingBranches) == 0
 		name, info := branch.ResolveBranchName(s.Prefix, opts.message, explicitName, existingBranches, isFirstBranch)
 		if name == "" {
@@ -136,34 +122,30 @@ func runAdd(cfg *config.Config, opts *addOptions, args []string) error {
 			cfg.Infof("%s", info)
 		}
 	} else if explicitName != "" {
-		// No -m, but explicit name given
-		if s.Prefix != "" {
-			branchName = s.Prefix + "/" + explicitName
-			cfg.Infof("Branch name prefixed: %s", branchName)
-		} else {
-			branchName = explicitName
-		}
+		branchName = applyPrefix(cfg, s.Prefix, explicitName)
 	} else {
 		// No -m, no explicit name — auto-generate if following numbered
 		// convention, otherwise prompt for a name.
-		existingBranches := s.BranchNames()
 		if s.Prefix != "" && len(existingBranches) > 0 &&
 			branch.FollowsNumbering(s.Prefix, existingBranches[len(existingBranches)-1]) {
 			branchName = branch.NextNumberedName(s.Prefix, existingBranches)
 		} else {
 			p := prompter.New(cfg.In, cfg.Out, cfg.Err)
-			input, err := p.Input("Enter a name for the new branch", "")
-			if err != nil {
-				if isInterruptError(err) {
-					printInterrupt(cfg)
-					return nil
+			for {
+				input, err := p.Input("Enter a name for the new branch", "")
+				if err != nil {
+					if isInterruptError(err) {
+						printInterrupt(cfg)
+						return nil
+					}
+					return fmt.Errorf("could not read branch name: %w", err)
 				}
-				return fmt.Errorf("could not read branch name: %w", err)
-			}
-			branchName = input
-			if s.Prefix != "" && branchName != "" {
-				branchName = s.Prefix + "/" + branchName
-				cfg.Infof("Branch name prefixed: %s", branchName)
+				if input == "" {
+					cfg.Warningf("branch name cannot be empty, please try again")
+					continue
+				}
+				branchName = applyPrefix(cfg, s.Prefix, input)
+				break
 			}
 		}
 	}
@@ -179,8 +161,16 @@ func runAdd(cfg *config.Config, opts *addOptions, args []string) error {
 	}
 
 	if git.BranchExists(branchName) {
-		cfg.Errorf("branch %q already exists; provide an explicit name", branchName)
+		cfg.Errorf("branch %q already exists", branchName)
 		return nil
+	}
+
+	// Stage changes before creating the branch so we can fail early if
+	// there's nothing to commit (avoids leaving an empty orphan branch).
+	if wantsCommit {
+		if err := stageAndValidate(cfg, opts); err != nil {
+			return nil
+		}
 	}
 
 	// Create the new branch from the current HEAD and check it out
@@ -194,28 +184,16 @@ func runAdd(cfg *config.Config, opts *addOptions, args []string) error {
 		return nil
 	}
 
-	base, _ := git.RevParse(currentBranch)
+	base, err := git.RevParse(currentBranch)
+	if err != nil {
+		cfg.Warningf("could not resolve base SHA for %s: %s", currentBranch, err)
+	}
 	s.Branches = append(s.Branches, stack.BranchRef{Branch: branchName, Base: base})
 
-	// Stage and commit on the NEW branch if -m is provided
+	// Commit on the NEW branch (staging already done above)
 	var commitSHA string
-	if opts.message != "" {
-		if opts.stageAll {
-			if err := git.StageAll(); err != nil {
-				cfg.Errorf("failed to stage changes: %s", err)
-				return nil
-			}
-		} else if opts.stageTracked {
-			if err := git.StageTracked(); err != nil {
-				cfg.Errorf("failed to stage changes: %s", err)
-				return nil
-			}
-		}
-		if !git.HasStagedChanges() {
-			cfg.Errorf("nothing to commit; stage changes first or use -a/-u")
-			return nil
-		}
-		sha, err := git.Commit(opts.message)
+	if wantsCommit {
+		sha, err := doCommit(opts.message)
 		if err != nil {
 			cfg.Errorf("failed to commit: %s", err)
 			return nil
@@ -237,4 +215,49 @@ func runAdd(cfg *config.Config, opts *addOptions, args []string) error {
 	}
 
 	return nil
+}
+
+// stageAndValidate stages files (if -A or -u is set) and verifies there are
+// staged changes to commit. Prints a user-facing error and returns non-nil
+// if staging fails or there is nothing to commit.
+func stageAndValidate(cfg *config.Config, opts *addOptions) error {
+	if opts.stageAll {
+		if err := git.StageAll(); err != nil {
+			cfg.Errorf("failed to stage changes: %s", err)
+			return err
+		}
+	} else if opts.stageTracked {
+		if err := git.StageTracked(); err != nil {
+			cfg.Errorf("failed to stage changes: %s", err)
+			return err
+		}
+	}
+
+	if !git.HasStagedChanges() {
+		if opts.stageAll || opts.stageTracked {
+			cfg.Errorf("no changes to commit after staging")
+		} else {
+			cfg.Errorf("nothing to commit; stage changes first or use -A/-u")
+		}
+		return fmt.Errorf("nothing to commit")
+	}
+	return nil
+}
+
+// doCommit commits staged changes. If message is provided, uses it directly.
+// If message is empty, launches the user's editor via git commit.
+func doCommit(message string) (string, error) {
+	if message != "" {
+		return git.Commit(message)
+	}
+	return git.CommitInteractive()
+}
+
+// applyPrefix prepends the stack prefix to a branch name if set.
+func applyPrefix(cfg *config.Config, prefix, name string) string {
+	if prefix != "" {
+		name = prefix + "/" + name
+		cfg.Infof("Branch name prefixed: %s", name)
+	}
+	return name
 }

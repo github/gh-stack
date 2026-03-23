@@ -54,6 +54,7 @@ type Ops interface {
 	StageTracked() error
 	HasStagedChanges() bool
 	Commit(message string) (string, error)
+	CommitInteractive() (string, error)
 	ValidateRefName(name string) error
 }
 
@@ -476,6 +477,14 @@ func (d *defaultOps) HasStagedChanges() bool {
 
 func (d *defaultOps) Commit(message string) (string, error) {
 	if err := runSilent("commit", "-m", message); err != nil {
+		return "", err
+	}
+	return run("rev-parse", "HEAD")
+}
+
+// CommitInteractive launches the user's editor for the commit message.
+func (d *defaultOps) CommitInteractive() (string, error) {
+	if err := runInteractive("commit"); err != nil {
 		return "", err
 	}
 	return run("rev-parse", "HEAD")
