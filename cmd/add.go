@@ -67,13 +67,13 @@ func runAdd(cfg *config.Config, opts *addOptions, args []string) error {
 
 	if s.IsFullyMerged() {
 		cfg.Warningf("All branches in this stack have been merged")
-		cfg.Printf("Consider creating a new stack with %s", cfg.ColorCyan("gh stack init"))
+		cfg.Printf("Consider creating a new stack with `%s`", cfg.ColorCyan("gh stack init"))
 		return nil
 	}
 
 	idx := s.IndexOf(currentBranch)
 	if idx >= 0 && idx < len(s.Branches)-1 {
-		cfg.Errorf("can only add branches on top of the stack; checkout the top branch %q first", s.Branches[len(s.Branches)-1].Branch)
+		cfg.Errorf("can only add branches on top of the stack; run `%s` to switch to %q", cfg.ColorCyan("gh stack top"), s.Branches[len(s.Branches)-1].Branch)
 		return nil
 	}
 
@@ -111,7 +111,7 @@ func runAdd(cfg *config.Config, opts *addOptions, args []string) error {
 		}
 		cfg.Successf("Created commit %s on %s", cfg.ColorBold(sha), currentBranch)
 		cfg.Warningf("Branch %s has no prior commits — adding your commit here instead of creating a new branch", currentBranch)
-		cfg.Printf("When you're ready for the next layer, run %s again", cfg.ColorCyan("gh stack add"))
+		cfg.Printf("When you're ready for the next layer, run `%s` again", cfg.ColorCyan("gh stack add"))
 		return nil
 	}
 

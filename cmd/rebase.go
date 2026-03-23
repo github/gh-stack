@@ -238,9 +238,9 @@ func runRebase(cfg *config.Config, opts *rebaseOptions) error {
 				printConflictDetails(cfg, newBase)
 				cfg.Printf("")
 
-				cfg.Printf("Resolve conflicts on %s, then run %s",
+				cfg.Printf("Resolve conflicts on %s, then run `%s`",
 					br.Branch, cfg.ColorCyan("gh stack rebase --continue"))
-				cfg.Printf("Or abort this operation with %s",
+				cfg.Printf("Or abort this operation with `%s`",
 					cfg.ColorCyan("gh stack rebase --abort"))
 				return fmt.Errorf("rebase conflict on %s", br.Branch)
 			}
@@ -286,9 +286,9 @@ func runRebase(cfg *config.Config, opts *rebaseOptions) error {
 				printConflictDetails(cfg, base)
 				cfg.Printf("")
 
-				cfg.Printf("Resolve conflicts on %s, then run %s",
+				cfg.Printf("Resolve conflicts on %s, then run `%s`",
 					br.Branch, cfg.ColorCyan("gh stack rebase --continue"))
-				cfg.Printf("Or abort this operation with %s",
+				cfg.Printf("Or abort this operation with `%s`",
 					cfg.ColorCyan("gh stack rebase --abort"))
 				return fmt.Errorf("rebase conflict on %s", br.Branch)
 			}
@@ -322,7 +322,7 @@ func runRebase(cfg *config.Config, opts *rebaseOptions) error {
 	}
 
 	cfg.Printf("%s rebased locally with %s", rangeDesc, s.Trunk.Branch)
-	cfg.Printf("To push up your changes and open/update the stack of PRs, run %s",
+	cfg.Printf("To push up your changes and open/update the stack of PRs, run `%s`",
 		cfg.ColorCyan("gh stack push"))
 
 	return nil
@@ -436,9 +436,9 @@ func continueRebase(cfg *config.Config, gitDir string) error {
 				cfg.Warningf("Rebasing %s onto %s — conflict", branchName, newBase)
 				printConflictDetails(cfg, newBase)
 				cfg.Printf("")
-				cfg.Printf("Resolve conflicts on %s, then run %s",
+				cfg.Printf("Resolve conflicts on %s, then run `%s`",
 					branchName, cfg.ColorCyan("gh stack rebase --continue"))
-				cfg.Printf("Or abort this operation with %s",
+				cfg.Printf("Or abort this operation with `%s`",
 					cfg.ColorCyan("gh stack rebase --abort"))
 				return fmt.Errorf("rebase conflict on %s", branchName)
 			}
@@ -476,9 +476,9 @@ func continueRebase(cfg *config.Config, gitDir string) error {
 				cfg.Warningf("Rebasing %s onto %s — conflict", branchName, base)
 				printConflictDetails(cfg, base)
 				cfg.Printf("")
-				cfg.Printf("Resolve conflicts on %s, then run %s",
+				cfg.Printf("Resolve conflicts on %s, then run `%s`",
 					branchName, cfg.ColorCyan("gh stack rebase --continue"))
-				cfg.Printf("Or abort this operation with %s",
+				cfg.Printf("Or abort this operation with `%s`",
 					cfg.ColorCyan("gh stack rebase --abort"))
 				return fmt.Errorf("rebase conflict on %s", branchName)
 			}
@@ -497,7 +497,7 @@ func continueRebase(cfg *config.Config, gitDir string) error {
 	_ = stack.Save(gitDir, sf)
 
 	cfg.Printf("All branches in stack rebased locally with %s", s.Trunk.Branch)
-	cfg.Printf("To push up your changes and open/update the stack of PRs, run %s",
+	cfg.Printf("To push up your changes and open/update the stack of PRs, run `%s`",
 		cfg.ColorCyan("gh stack push"))
 
 	return nil
@@ -594,6 +594,6 @@ func printConflictDetails(cfg *config.Config, branch string) {
 	cfg.Printf("     %s", cfg.ColorCyan("======="))
 	cfg.Printf("     %s  (changes being rebased)", cfg.ColorCyan(">>>>>>>"))
 	cfg.Printf("  2. Edit the file to keep the desired changes and remove the markers")
-	cfg.Printf("  3. Stage resolved files: %s", cfg.ColorCyan("git add <file>"))
-	cfg.Printf("  4. Continue the rebase:  %s", cfg.ColorCyan("gh stack rebase --continue"))
+	cfg.Printf("  3. Stage resolved files: `%s`", cfg.ColorCyan("git add <file>"))
+	cfg.Printf("  4. Continue the rebase:  `%s`", cfg.ColorCyan("gh stack rebase --continue"))
 }

@@ -26,6 +26,6 @@ func MergeCmd(cfg *config.Config) *cobra.Command {
 // We need a mergeability check for the entire stack
 // and an endpoint for merging an entire stack
 func runMerge(cfg *config.Config, opts struct{}) error {
-	cfg.Warningf("gh stack merge is not yet implemented")
+	cfg.Warningf("`%s` is not yet implemented", cfg.ColorCyan("gh stack merge"))
 	return nil
 }

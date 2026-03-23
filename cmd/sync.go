@@ -169,7 +169,7 @@ func runSync(cfg *config.Config, _ *syncOptions) error {
 
 					cfg.Errorf("Conflict detected rebasing %s onto %s", br.Branch, newBase)
 					reportRestoreStatus(cfg, restoreErrors)
-					cfg.Printf("  Run %s to resolve conflicts interactively.",
+					cfg.Printf("  Run `%s` to resolve conflicts interactively.",
 						cfg.ColorCyan("gh stack rebase"))
 					conflicted = true
 					break
@@ -201,7 +201,7 @@ func runSync(cfg *config.Config, _ *syncOptions) error {
 
 					cfg.Errorf("Conflict detected rebasing %s onto %s", br.Branch, base)
 					reportRestoreStatus(cfg, restoreErrors)
-					cfg.Printf("  Run %s to resolve conflicts interactively.",
+					cfg.Printf("  Run `%s` to resolve conflicts interactively.",
 						cfg.ColorCyan("gh stack rebase"))
 					conflicted = true
 					break
@@ -235,11 +235,11 @@ func runSync(cfg *config.Config, _ *syncOptions) error {
 		if err := git.Push(remote, branches, force, true); err != nil {
 			if !force {
 				cfg.Warningf("Push failed — branches may need force push after rebase")
-				cfg.Printf("  Run %s to push with --force-with-lease.",
+				cfg.Printf("  Run `%s` to push with --force-with-lease.",
 					cfg.ColorCyan("gh stack push"))
 			} else {
 				cfg.Warningf("Push failed: %v", err)
-				cfg.Printf("  Run %s to retry.", cfg.ColorCyan("gh stack push"))
+				cfg.Printf("  Run `%s` to retry.", cfg.ColorCyan("gh stack push"))
 			}
 		} else {
 			cfg.Successf("Pushed %d branches", len(branches))

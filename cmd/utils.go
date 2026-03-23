@@ -78,7 +78,7 @@ func loadStack(cfg *config.Config, branch string) (*loadStackResult, error) {
 		} else {
 			cfg.Errorf("current branch %q is not part of a stack", branch)
 		}
-		cfg.Printf("Checkout an existing stack using %s or create a new stack using %s",
+		cfg.Printf("Checkout an existing stack using `%s` or create a new stack using `%s`",
 			cfg.ColorCyan("gh stack checkout"), cfg.ColorCyan("gh stack init"))
 		return nil, fmt.Errorf("branch %q is not part of a stack", branch)
 	}

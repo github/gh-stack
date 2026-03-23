@@ -145,7 +145,7 @@ func interactiveStackPicker(cfg *config.Config, sf *stack.StackFile) (*stack.Sta
 
 	if len(sf.Stacks) == 0 {
 		cfg.Infof("No locally tracked stacks found")
-		cfg.Printf("Create a stack with %s or check out a specific branch/PR once server-side discovery is available.", cfg.ColorCyan("gh stack init"))
+		cfg.Printf("Create a stack with `%s` or check out a specific branch/PR once server-side discovery is available.", cfg.ColorCyan("gh stack init"))
 		return nil, nil
 	}
 
