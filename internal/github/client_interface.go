@@ -8,7 +8,6 @@ type ClientOps interface {
 	FindAnyPRForBranch(branch string) (*PullRequest, error)
 	FindPRDetailsForBranch(branch string) (*PRDetails, error)
 	CreatePR(base, head, title, body string, draft bool) (*PullRequest, error)
-	UpdatePRBase(prID, newBase string) error
 	DeleteStack() error
 }
 

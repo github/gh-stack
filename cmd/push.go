@@ -152,16 +152,7 @@ func runPush(cfg *config.Config, opts *pushOptions) error {
 				URL:    newPR.URL,
 			}
 		} else {
-			// Update base if needed
-			if pr.BaseRefName != baseBranch {
-				if err := client.UpdatePRBase(pr.ID, baseBranch); err != nil {
-					cfg.Warningf("failed to update PR %s base: %v", cfg.PRLink(pr.Number, pr.URL), err)
-				} else {
-					cfg.Successf("Updated PR %s base to %s", cfg.PRLink(pr.Number, pr.URL), baseBranch)
-				}
-			} else {
-				cfg.Printf("PR %s for %s is up to date", cfg.PRLink(pr.Number, pr.URL), b.Branch)
-			}
+			cfg.Printf("PR %s for %s is up to date", cfg.PRLink(pr.Number, pr.URL), b.Branch)
 			if s.Branches[i].PullRequest == nil {
 				s.Branches[i].PullRequest = &stack.PullRequestRef{
 					Number: pr.Number,

@@ -185,31 +185,6 @@ func (c *Client) CreatePR(base, head, title, body string, draft bool) (*PullRequ
 	}, nil
 }
 
-// UpdatePRBase updates the base branch of a pull request.
-func (c *Client) UpdatePRBase(prID, newBase string) error {
-	var mutation struct {
-		UpdatePullRequest struct {
-			PullRequest struct {
-				ID string
-			}
-		} `graphql:"updatePullRequest(input: $input)"`
-	}
-
-	type UpdatePullRequestInput struct {
-		PullRequestID string `json:"pullRequestId"`
-		BaseRefName   string `json:"baseRefName"`
-	}
-
-	variables := map[string]interface{}{
-		"input": UpdatePullRequestInput{
-			PullRequestID: prID,
-			BaseRefName:   newBase,
-		},
-	}
-
-	return c.gql.Mutate("UpdatePullRequest", &mutation, variables)
-}
-
 // PRDetails holds enriched pull request data for display in the TUI.
 type PRDetails struct {
 	Number        int
