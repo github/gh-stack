@@ -218,6 +218,11 @@ func runSync(cfg *config.Config, opts *syncOptions) error {
 		if !conflicted {
 			rebased = true
 			_ = git.CheckoutBranch(currentBranch)
+		} else {
+			// Persist refreshed PR state even on conflict, then bail out
+			// before pushing or reporting success.
+			_ = stack.Save(gitDir, sf)
+			return ErrConflict
 		}
 	}
 

@@ -368,7 +368,7 @@ func TestSync_RebaseConflict_RestoresAll(t *testing.T) {
 	errOut, _ := io.ReadAll(errR)
 	output := string(errOut)
 
-	assert.NoError(t, err, "sync returns nil (errors printed via cfg)")
+	assert.Error(t, err, "sync returns error on conflict")
 	assert.Contains(t, output, "Conflict detected")
 	assert.Contains(t, output, "gh stack rebase")
 
