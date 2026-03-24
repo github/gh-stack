@@ -265,14 +265,14 @@ Shows all branches in the stack, their ordering, PR links, and the most recent c
 | Flag | Description |
 |------|-------------|
 | `-s, --short` | Compact output (branch names only) |
-| `-w, --web` | Open all associated PRs in the browser |
+| `--json` | Output stack data as JSON |
 
 **Examples:**
 
 ```sh
 gh stack view
 gh stack view --short
-gh stack view --web
+gh stack view --json
 ```
 
 ### `gh stack unstack`

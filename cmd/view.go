@@ -2,6 +2,7 @@ package cmd
 
 import (
 	"bytes"
+	"encoding/json"
 	"fmt"
 	"os"
 	"os/exec"
@@ -9,7 +10,6 @@ import (
 	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
-	"github.com/cli/go-gh/v2/pkg/browser"
 	"github.com/github/gh-stack/internal/config"
 	"github.com/github/gh-stack/internal/git"
 	"github.com/github/gh-stack/internal/stack"
@@ -18,8 +18,8 @@ import (
 )
 
 type viewOptions struct {
-	short bool
-	web   bool
+	short  bool
+	asJSON bool
 }
 
 func ViewCmd(cfg *config.Config) *cobra.Command {
@@ -34,7 +34,7 @@ func ViewCmd(cfg *config.Config) *cobra.Command {
 	}
 
 	cmd.Flags().BoolVarP(&opts.short, "short", "s", false, "Show compact output")
-	cmd.Flags().BoolVarP(&opts.web, "web", "w", false, "Open PRs in the browser")
+	cmd.Flags().BoolVar(&opts.asJSON, "json", false, "Output stack data as JSON")
 
 	return cmd
 }
@@ -53,8 +53,8 @@ func runView(cfg *config.Config, opts *viewOptions) error {
 	syncStackPRs(cfg, s)
 	_ = stack.Save(gitDir, sf)
 
-	if opts.web {
-		return viewWeb(cfg, s)
+	if opts.asJSON {
+		return viewJSON(cfg, s, currentBranch)
 	}
 
 	if opts.short {
@@ -113,6 +113,78 @@ func branchStatusIndicator(cfg *config.Config, s *stack.Stack, b stack.BranchRef
 	}
 
 	return ""
+}
+
+// JSON output types for gh stack view --json.
+type viewJSONOutput struct {
+	Trunk         string           `json:"trunk"`
+	Prefix        string           `json:"prefix,omitempty"`
+	CurrentBranch string           `json:"currentBranch"`
+	Branches      []viewJSONBranch `json:"branches"`
+}
+
+type viewJSONBranch struct {
+	Name        string      `json:"name"`
+	Head        string      `json:"head,omitempty"`
+	Base        string      `json:"base,omitempty"`
+	IsCurrent   bool        `json:"isCurrent"`
+	IsMerged    bool        `json:"isMerged"`
+	NeedsRebase bool        `json:"needsRebase"`
+	PR          *viewJSONPR `json:"pr,omitempty"`
+}
+
+type viewJSONPR struct {
+	Number int    `json:"number"`
+	URL    string `json:"url,omitempty"`
+	State  string `json:"state"`
+}
+
+func viewJSON(cfg *config.Config, s *stack.Stack, currentBranch string) error {
+	out := viewJSONOutput{
+		Trunk:         s.Trunk.Branch,
+		Prefix:        s.Prefix,
+		CurrentBranch: currentBranch,
+		Branches:      make([]viewJSONBranch, 0, len(s.Branches)),
+	}
+
+	for _, b := range s.Branches {
+		jb := viewJSONBranch{
+			Name:      b.Branch,
+			Head:      b.Head,
+			Base:      b.Base,
+			IsCurrent: b.Branch == currentBranch,
+			IsMerged:  b.IsMerged(),
+		}
+
+		// Check if the branch needs rebasing (base not ancestor of branch).
+		if !jb.IsMerged {
+			baseBranch := s.ActiveBaseBranch(b.Branch)
+			if isAnc, err := git.IsAncestor(baseBranch, b.Branch); err == nil && !isAnc {
+				jb.NeedsRebase = true
+			}
+		}
+
+		if b.PullRequest != nil && b.PullRequest.Number != 0 {
+			state := "OPEN"
+			if b.PullRequest.Merged {
+				state = "MERGED"
+			}
+			jb.PR = &viewJSONPR{
+				Number: b.PullRequest.Number,
+				URL:    b.PullRequest.URL,
+				State:  state,
+			}
+		}
+
+		out.Branches = append(out.Branches, jb)
+	}
+
+	data, err := json.MarshalIndent(out, "", "  ")
+	if err != nil {
+		return fmt.Errorf("marshalling JSON: %w", err)
+	}
+	_, err = fmt.Fprintf(cfg.Out, "%s\n", data)
+	return err
 }
 
 func shortPRSuffix(cfg *config.Config, b stack.BranchRef, owner, repo string) string {
@@ -317,52 +389,4 @@ func timeAgo(t time.Time) string {
 		}
 		return fmt.Sprintf("%d months ago", months)
 	}
-}
-
-func viewWeb(cfg *config.Config, s *stack.Stack) error {
-	client, err := cfg.GitHubClient()
-	if err != nil {
-		return err
-	}
-
-	repo, err := cfg.Repo()
-	if err != nil {
-		return err
-	}
-
-	b := browser.New("", cfg.Out, cfg.Err)
-
-	opened := 0
-	for _, br := range s.Branches {
-		if br.IsMerged() {
-			continue
-		}
-		var url string
-		if br.PullRequest != nil && br.PullRequest.URL != "" {
-			url = br.PullRequest.URL
-		} else {
-			pr, err := client.FindPRForBranch(br.Branch)
-			if err != nil || pr == nil {
-				continue
-			}
-			url = fmt.Sprintf("https://github.com/%s/%s/pull/%d", repo.Owner, repo.Name, pr.Number)
-		}
-		if err := b.Browse(url); err != nil {
-			cfg.Warningf("failed to open %s: %v", url, err)
-		} else {
-			opened++
-		}
-	}
-
-	if opened == 0 {
-		cfg.Printf("No PRs found to open in browser.")
-	} else {
-		cfg.Successf("Opened %d PRs in browser", opened)
-	}
-
-	if mergedCount := len(s.MergedBranches()); mergedCount > 0 {
-		cfg.Printf("Skipped %d merged PRs", mergedCount)
-	}
-
-	return nil
 }
