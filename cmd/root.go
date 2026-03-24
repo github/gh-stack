@@ -21,6 +21,8 @@ func RootCmd() *cobra.Command {
 		SilenceErrors: true,
 	}
 
+	root.SetVersionTemplate("gh stack version {{.Version}}\n")
+
 	root.SetOut(cfg.Out)
 	root.SetErr(cfg.Err)
 
