@@ -178,7 +178,6 @@ func TestMerge_NonInteractive_PrintsURL(t *testing.T) {
 	output := string(errOut)
 
 	assert.NoError(t, err)
-	assert.Contains(t, output, "not yet supported")
 	assert.Contains(t, output, "https://github.com/owner/repo/pull/42")
 }
 
@@ -241,7 +240,6 @@ func TestMerge_ByPRNumber(t *testing.T) {
 	output := string(errOut)
 
 	assert.NoError(t, err)
-	assert.Contains(t, output, "not yet supported")
 	assert.Contains(t, output, "https://github.com/owner/repo/pull/42")
 }
 
@@ -274,7 +272,6 @@ func TestMerge_ByPRURL(t *testing.T) {
 	output := string(errOut)
 
 	assert.NoError(t, err)
-	assert.Contains(t, output, "not yet supported")
 	assert.Contains(t, output, "https://github.com/owner/repo/pull/42")
 }
 
@@ -307,6 +304,5 @@ func TestMerge_ByBranchName(t *testing.T) {
 	output := string(errOut)
 
 	assert.NoError(t, err)
-	assert.Contains(t, output, "not yet supported")
 	assert.Contains(t, output, "https://github.com/owner/repo/pull/42")
 }

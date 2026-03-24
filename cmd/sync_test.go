@@ -54,10 +54,10 @@ func TestSync_TrunkAlreadyUpToDate(t *testing.T) {
 	var pushCalls []pushCall
 
 	mock := newSyncMock(tmpDir, "b1")
-	// Same SHA for trunk and origin/trunk → already up to date
+	// Use same explicit SHA for local and remote trunk — already up to date
 	mock.RevParseFn = func(ref string) (string, error) {
-		if ref == "origin/main" {
-			return "sha-main", nil // same as local trunk
+		if ref == "main" || ref == "origin/main" {
+			return "aaa111aaa111", nil
 		}
 		return "sha-" + ref, nil
 	}
@@ -506,4 +506,144 @@ func TestSync_PushForceFlagDependsOnRebase(t *testing.T) {
 				"force flag should be %v when trunkMoved=%v", tt.expectedForce, tt.trunkMoved)
 		})
 	}
+}
+
+// TestSync_SquashMergedBranch_UsesOnto verifies that when a squash-merged
+// branch exists in the stack, sync's cascade rebase correctly uses --onto
+// to skip the merged branch and rebase subsequent branches onto the right base.
+func TestSync_SquashMergedBranch_UsesOnto(t *testing.T) {
+	s := stack.Stack{
+		Trunk: stack.BranchRef{Branch: "main"},
+		Branches: []stack.BranchRef{
+			{Branch: "b1", PullRequest: &stack.PullRequestRef{Number: 1, Merged: true}},
+			{Branch: "b2"},
+			{Branch: "b3"},
+		},
+	}
+
+	tmpDir := t.TempDir()
+	writeStackFile(t, tmpDir, s)
+
+	var rebaseOntoCalls []rebaseCall
+	var pushCalls []pushCall
+
+	// Use explicit SHAs so assertions are self-documenting
+	branchSHAs := map[string]string{
+		"b1": "b1-orig-sha",
+		"b2": "b2-orig-sha",
+		"b3": "b3-orig-sha",
+	}
+
+	mock := newSyncMock(tmpDir, "b2")
+	// Trunk behind remote to trigger rebase
+	mock.RevParseFn = func(ref string) (string, error) {
+		if ref == "main" {
+			return "local-sha", nil
+		}
+		if ref == "origin/main" {
+			return "remote-sha", nil
+		}
+		if sha, ok := branchSHAs[ref]; ok {
+			return sha, nil
+		}
+		return "default-sha", nil
+	}
+	mock.IsAncestorFn = func(a, d string) (bool, error) {
+		return a == "local-sha" && d == "remote-sha", nil
+	}
+	mock.UpdateBranchRefFn = func(string, string) error { return nil }
+	mock.CheckoutBranchFn = func(string) error { return nil }
+	mock.RebaseOntoFn = func(newBase, oldBase, branch string) error {
+		rebaseOntoCalls = append(rebaseOntoCalls, rebaseCall{newBase, oldBase, branch})
+		return nil
+	}
+	mock.PushFn = func(remote string, branches []string, force, atomic bool) error {
+		pushCalls = append(pushCalls, pushCall{remote, branches, force, atomic})
+		return nil
+	}
+
+	restore := git.SetOps(mock)
+	defer restore()
+
+	cfg, _, _ := config.NewTestConfig()
+	cmd := SyncCmd(cfg)
+	cmd.SetOut(io.Discard)
+	cmd.SetErr(io.Discard)
+	err := cmd.Execute()
+
+	cfg.Out.Close()
+	cfg.Err.Close()
+
+	assert.NoError(t, err)
+
+	// b1 is merged → skipped, needsOnto=true, ontoOldBase=b1-orig-sha
+	// b2: first active branch after merged → RebaseOnto(main, b1-orig-sha, b2)
+	// b3: normal --onto → RebaseOnto(b2, b2-orig-sha, b3)
+	require.Len(t, rebaseOntoCalls, 2)
+	assert.Equal(t, rebaseCall{"main", "b1-orig-sha", "b2"}, rebaseOntoCalls[0])
+	assert.Equal(t, rebaseCall{"b2", "b2-orig-sha", "b3"}, rebaseOntoCalls[1])
+
+	// Push should use force (rebase happened)
+	require.Len(t, pushCalls, 1)
+	assert.True(t, pushCalls[0].force)
+}
+
+// TestSync_PushFailureAfterRebase verifies that when push fails after a
+// successful rebase, the command does not return a fatal error — only a
+// warning is printed about the push failure.
+func TestSync_PushFailureAfterRebase(t *testing.T) {
+	s := stack.Stack{
+		Trunk: stack.BranchRef{Branch: "main"},
+		Branches: []stack.BranchRef{
+			{Branch: "b1"},
+			{Branch: "b2"},
+		},
+	}
+
+	tmpDir := t.TempDir()
+	writeStackFile(t, tmpDir, s)
+
+	var pushCalls []pushCall
+
+	mock := newSyncMock(tmpDir, "b1")
+	// Trunk behind remote → triggers rebase
+	mock.RevParseFn = func(ref string) (string, error) {
+		if ref == "main" {
+			return "local-sha", nil
+		}
+		if ref == "origin/main" {
+			return "remote-sha", nil
+		}
+		return "sha-" + ref, nil
+	}
+	mock.IsAncestorFn = func(a, d string) (bool, error) {
+		return a == "local-sha" && d == "remote-sha", nil
+	}
+	mock.UpdateBranchRefFn = func(string, string) error { return nil }
+	mock.CheckoutBranchFn = func(string) error { return nil }
+	mock.RebaseFn = func(string) error { return nil }
+	mock.RebaseOntoFn = func(string, string, string) error { return nil }
+	mock.PushFn = func(remote string, branches []string, force, atomic bool) error {
+		pushCalls = append(pushCalls, pushCall{remote, branches, force, atomic})
+		return fmt.Errorf("network error: connection refused")
+	}
+
+	restore := git.SetOps(mock)
+	defer restore()
+
+	cfg, _, errR := config.NewTestConfig()
+	cmd := SyncCmd(cfg)
+	cmd.SetOut(io.Discard)
+	cmd.SetErr(io.Discard)
+	err := cmd.Execute()
+
+	cfg.Err.Close()
+	errOut, _ := io.ReadAll(errR)
+	output := string(errOut)
+
+	// Push failures are warnings, not fatal errors.
+	assert.NoError(t, err)
+	require.Len(t, pushCalls, 1)
+	assert.True(t, pushCalls[0].force, "push after rebase should use force")
+	assert.Contains(t, output, "Push failed")
 }

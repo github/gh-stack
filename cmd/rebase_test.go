@@ -45,9 +45,6 @@ func newRebaseMock(tmpDir string, currentBranch string) *git.MockOps {
 // TestRebase_CascadeRebase verifies that a stack [b1, b2, b3] with all active
 // branches triggers the correct cascade: b1 rebased onto trunk, b2 onto b1,
 // b3 onto b2.
-//
-// Per the code: branch at index 0 uses git.Rebase(trunk), subsequent branches
-// use git.RebaseOnto(base, originalRefs[base], branch).
 func TestRebase_CascadeRebase(t *testing.T) {
 	s := stack.Stack{
 		Trunk: stack.BranchRef{Branch: "main"},
@@ -61,21 +58,20 @@ func TestRebase_CascadeRebase(t *testing.T) {
 	tmpDir := t.TempDir()
 	writeStackFile(t, tmpDir, s)
 
-	var rebaseCalls []rebaseCall
-	var checkouts []string
-	var plainRebaseCalls []string
+	var allRebaseCalls []rebaseCall
+	var currentCheckedOut string
 
 	mock := newRebaseMock(tmpDir, "b2")
 	mock.CheckoutBranchFn = func(name string) error {
-		checkouts = append(checkouts, name)
+		currentCheckedOut = name
 		return nil
 	}
 	mock.RebaseFn = func(base string) error {
-		plainRebaseCalls = append(plainRebaseCalls, base)
+		allRebaseCalls = append(allRebaseCalls, rebaseCall{newBase: base, oldBase: "", branch: currentCheckedOut})
 		return nil
 	}
 	mock.RebaseOntoFn = func(newBase, oldBase, branch string) error {
-		rebaseCalls = append(rebaseCalls, rebaseCall{newBase, oldBase, branch})
+		allRebaseCalls = append(allRebaseCalls, rebaseCall{newBase, oldBase, branch})
 		return nil
 	}
 
@@ -94,15 +90,11 @@ func TestRebase_CascadeRebase(t *testing.T) {
 
 	assert.NoError(t, err)
 
-	// Branch 0 (b1): checkout b1, then Rebase("main")
-	assert.Contains(t, checkouts, "b1", "b1 should be checked out for plain rebase")
-	require.Len(t, plainRebaseCalls, 1, "exactly one plain rebase call expected (for b1)")
-	assert.Equal(t, "main", plainRebaseCalls[0])
-
-	// Branches 1,2 (b2, b3): RebaseOnto(base, originalRefs[base], branch)
-	require.Len(t, rebaseCalls, 2, "two RebaseOnto calls expected (for b2, b3)")
-	assert.Equal(t, rebaseCall{"b1", "sha-b1", "b2"}, rebaseCalls[0])
-	assert.Equal(t, rebaseCall{"b2", "sha-b2", "b3"}, rebaseCalls[1])
+	// All branches should be rebased in order: b1 onto main, b2 onto b1, b3 onto b2
+	require.Len(t, allRebaseCalls, 3)
+	assert.Equal(t, "main", allRebaseCalls[0].newBase, "b1 should be rebased onto trunk")
+	assert.Equal(t, "b1", allRebaseCalls[1].newBase, "b2 should be rebased onto b1")
+	assert.Equal(t, "b2", allRebaseCalls[2].newBase, "b3 should be rebased onto b2")
 
 	assert.Contains(t, output, "rebased locally")
 }
@@ -125,7 +117,21 @@ func TestRebase_SquashMergedBranch_UsesOnto(t *testing.T) {
 
 	var rebaseCalls []rebaseCall
 
+	// Use explicit SHAs so assertions are self-documenting
+	branchSHAs := map[string]string{
+		"main": "main-sha-aaa",
+		"b1":   "b1-orig-sha",
+		"b2":   "b2-orig-sha",
+		"b3":   "b3-orig-sha",
+	}
+
 	mock := newRebaseMock(tmpDir, "b2")
+	mock.RevParseFn = func(ref string) (string, error) {
+		if sha, ok := branchSHAs[ref]; ok {
+			return sha, nil
+		}
+		return "default-sha", nil
+	}
 	mock.RebaseOntoFn = func(newBase, oldBase, branch string) error {
 		rebaseCalls = append(rebaseCalls, rebaseCall{newBase, oldBase, branch})
 		return nil
@@ -150,9 +156,9 @@ func TestRebase_SquashMergedBranch_UsesOnto(t *testing.T) {
 	// b2: onto trunk, oldBase = b1's original SHA
 	// b3: onto b2, oldBase = b2's original SHA (propagation)
 	require.Len(t, rebaseCalls, 2)
-	assert.Equal(t, rebaseCall{"main", "sha-b1", "b2"}, rebaseCalls[0],
+	assert.Equal(t, rebaseCall{"main", "b1-orig-sha", "b2"}, rebaseCalls[0],
 		"b2 should rebase --onto main using b1's original SHA as oldBase")
-	assert.Equal(t, rebaseCall{"b2", "sha-b2", "b3"}, rebaseCalls[1],
+	assert.Equal(t, rebaseCall{"b2", "b2-orig-sha", "b3"}, rebaseCalls[1],
 		"b3 should propagate --onto mode with b2's original SHA as oldBase")
 }
 
@@ -174,7 +180,22 @@ func TestRebase_OntoPropagatesToSubsequentBranches(t *testing.T) {
 
 	var rebaseCalls []rebaseCall
 
+	// Use explicit SHAs so assertions are self-documenting
+	branchSHAs := map[string]string{
+		"main": "main-sha-aaa",
+		"b1":   "b1-orig-sha",
+		"b2":   "b2-orig-sha",
+		"b3":   "b3-orig-sha",
+		"b4":   "b4-orig-sha",
+	}
+
 	mock := newRebaseMock(tmpDir, "b3")
+	mock.RevParseFn = func(ref string) (string, error) {
+		if sha, ok := branchSHAs[ref]; ok {
+			return sha, nil
+		}
+		return "default-sha", nil
+	}
 	mock.RebaseOntoFn = func(newBase, oldBase, branch string) error {
 		rebaseCalls = append(rebaseCalls, rebaseCall{newBase, oldBase, branch})
 		return nil
@@ -197,16 +218,16 @@ func TestRebase_OntoPropagatesToSubsequentBranches(t *testing.T) {
 	assert.Contains(t, output, "Skipping b1")
 	assert.Contains(t, output, "Skipping b2")
 
-	// b1 merged → ontoOldBase = sha-b1
-	// b2 merged → ontoOldBase = sha-b2
+	// b1 merged → ontoOldBase = b1-orig-sha
+	// b2 merged → ontoOldBase = b2-orig-sha
 	// b3: first non-merged ancestor search finds none → newBase = trunk
-	//   RebaseOnto("main", "sha-b2", "b3")
+	//   RebaseOnto("main", "b2-orig-sha", "b3")
 	// b4: first non-merged ancestor = b3 → newBase = b3
-	//   RebaseOnto("b3", "sha-b3", "b4")
+	//   RebaseOnto("b3", "b3-orig-sha", "b4")
 	require.Len(t, rebaseCalls, 2)
-	assert.Equal(t, rebaseCall{"main", "sha-b2", "b3"}, rebaseCalls[0],
+	assert.Equal(t, rebaseCall{"main", "b2-orig-sha", "b3"}, rebaseCalls[0],
 		"b3 should rebase --onto main with b2's SHA as oldBase")
-	assert.Equal(t, rebaseCall{"b3", "sha-b3", "b4"}, rebaseCalls[1],
+	assert.Equal(t, rebaseCall{"b3", "b3-orig-sha", "b4"}, rebaseCalls[1],
 		"b4 should rebase --onto b3 with b3's original SHA as oldBase")
 }
 
@@ -376,16 +397,20 @@ func TestRebase_DownstackOnly(t *testing.T) {
 	tmpDir := t.TempDir()
 	writeStackFile(t, tmpDir, s)
 
-	var rebasedBranches []string
+	var allRebaseCalls []rebaseCall
+	var currentCheckedOut string
 
 	mock := newRebaseMock(tmpDir, "b2")
-	mock.CheckoutBranchFn = func(string) error { return nil }
+	mock.CheckoutBranchFn = func(name string) error {
+		currentCheckedOut = name
+		return nil
+	}
 	mock.RebaseFn = func(base string) error {
-		// This is called for b1 (index 0)
+		allRebaseCalls = append(allRebaseCalls, rebaseCall{newBase: base, oldBase: "", branch: currentCheckedOut})
 		return nil
 	}
 	mock.RebaseOntoFn = func(newBase, oldBase, branch string) error {
-		rebasedBranches = append(rebasedBranches, branch)
+		allRebaseCalls = append(allRebaseCalls, rebaseCall{newBase, oldBase, branch})
 		return nil
 	}
 
@@ -404,11 +429,9 @@ func TestRebase_DownstackOnly(t *testing.T) {
 
 	assert.NoError(t, err)
 	// b2 is at index 1, so downstack = [b1, b2] (indices 0..1)
-	// b1 uses plain Rebase (not tracked here), b2 uses RebaseOnto
-	assert.Equal(t, []string{"b2"}, rebasedBranches,
-		"only b2 should use RebaseOnto in downstack mode")
-	assert.NotContains(t, rebasedBranches, "b3",
-		"b3 should NOT be rebased in downstack mode")
+	require.Len(t, allRebaseCalls, 2, "downstack should rebase b1 and b2 only")
+	assert.Equal(t, "main", allRebaseCalls[0].newBase, "b1 should be rebased onto trunk")
+	assert.Equal(t, "b1", allRebaseCalls[1].newBase, "b2 should be rebased onto b1")
 }
 
 // TestRebase_UpstackOnly verifies that --upstack only rebases branches
@@ -426,12 +449,20 @@ func TestRebase_UpstackOnly(t *testing.T) {
 	tmpDir := t.TempDir()
 	writeStackFile(t, tmpDir, s)
 
-	var rebasedBranches []string
+	var allRebaseCalls []rebaseCall
+	var currentCheckedOut string
 
 	mock := newRebaseMock(tmpDir, "b2")
-	mock.CheckoutBranchFn = func(string) error { return nil }
+	mock.CheckoutBranchFn = func(name string) error {
+		currentCheckedOut = name
+		return nil
+	}
+	mock.RebaseFn = func(base string) error {
+		allRebaseCalls = append(allRebaseCalls, rebaseCall{newBase: base, oldBase: "", branch: currentCheckedOut})
+		return nil
+	}
 	mock.RebaseOntoFn = func(newBase, oldBase, branch string) error {
-		rebasedBranches = append(rebasedBranches, branch)
+		allRebaseCalls = append(allRebaseCalls, rebaseCall{newBase, oldBase, branch})
 		return nil
 	}
 
@@ -449,10 +480,10 @@ func TestRebase_UpstackOnly(t *testing.T) {
 	cfg.Err.Close()
 
 	assert.NoError(t, err)
-	// b2 is at index 1, upstack starts at index 1.
-	// b2 at absIdx=1 uses RebaseOnto(b1, sha-b1, b2), b3 at absIdx=2 uses RebaseOnto(b2, sha-b2, b3)
-	assert.Equal(t, []string{"b2", "b3"}, rebasedBranches,
-		"upstack should rebase b2 and b3")
+	// b2 is at index 1, upstack = [b2, b3] (indices 1..2)
+	require.Len(t, allRebaseCalls, 2, "upstack should rebase b2 and b3")
+	assert.Equal(t, "b1", allRebaseCalls[0].newBase, "b2 should be rebased onto b1")
+	assert.Equal(t, "b2", allRebaseCalls[1].newBase, "b3 should be rebased onto b2")
 }
 
 // TestRebase_SkipsMergedBranches verifies that merged branches are skipped
@@ -532,4 +563,288 @@ func TestRebase_StateRoundTrip(t *testing.T) {
 	assert.Equal(t, original.OriginalRefs, loaded.OriginalRefs)
 	assert.Equal(t, original.UseOnto, loaded.UseOnto)
 	assert.Equal(t, original.OntoOldBase, loaded.OntoOldBase)
+}
+
+// TestRebase_Continue_RebasesRemainingBranches verifies the --continue success
+// path: RebaseContinue is called, remaining branches are rebased via RebaseOnto,
+// the state file is cleaned up, and the original branch is restored.
+func TestRebase_Continue_RebasesRemainingBranches(t *testing.T) {
+	s := stack.Stack{
+		Trunk: stack.BranchRef{Branch: "main"},
+		Branches: []stack.BranchRef{
+			{Branch: "b1"},
+			{Branch: "b2"},
+			{Branch: "b3"},
+		},
+	}
+
+	tmpDir := t.TempDir()
+	writeStackFile(t, tmpDir, s)
+
+	// State: b2 had a conflict (index 1), b3 remains to be rebased.
+	state := &rebaseState{
+		CurrentBranchIndex: 1,
+		ConflictBranch:     "b2",
+		RemainingBranches:  []string{"b3"},
+		OriginalBranch:     "b1",
+		OriginalRefs: map[string]string{
+			"main": "main-orig-sha",
+			"b1":   "b1-orig-sha",
+			"b2":   "b2-orig-sha",
+			"b3":   "b3-orig-sha",
+		},
+	}
+	stateData, _ := json.MarshalIndent(state, "", "  ")
+	require.NoError(t, os.WriteFile(filepath.Join(tmpDir, "gh-stack-rebase-state"), stateData, 0644))
+
+	var rebaseContinueCalled bool
+	var rebaseCalls []rebaseCall
+	var checkouts []string
+
+	mock := newRebaseMock(tmpDir, "b2")
+	mock.IsRebaseInProgressFn = func() bool { return true }
+	mock.RebaseContinueFn = func() error {
+		rebaseContinueCalled = true
+		return nil
+	}
+	mock.RebaseOntoFn = func(newBase, oldBase, branch string) error {
+		rebaseCalls = append(rebaseCalls, rebaseCall{newBase, oldBase, branch})
+		return nil
+	}
+	mock.CheckoutBranchFn = func(name string) error {
+		checkouts = append(checkouts, name)
+		return nil
+	}
+
+	restore := git.SetOps(mock)
+	defer restore()
+
+	cfg, _, _ := config.NewTestConfig()
+	cmd := RebaseCmd(cfg)
+	cmd.SetArgs([]string{"--continue"})
+	cmd.SetOut(io.Discard)
+	cmd.SetErr(io.Discard)
+	err := cmd.Execute()
+
+	assert.NoError(t, err)
+	assert.True(t, rebaseContinueCalled, "RebaseContinue should be called")
+
+	// b3 is at idx 2 (idx > 0, not UseOnto) → RebaseOnto(base=b2, originalRefs[b2], b3)
+	require.Len(t, rebaseCalls, 1)
+	assert.Equal(t, rebaseCall{"b2", "b2-orig-sha", "b3"}, rebaseCalls[0])
+
+	// State file should be removed after success
+	_, statErr := os.Stat(filepath.Join(tmpDir, "gh-stack-rebase-state"))
+	assert.True(t, os.IsNotExist(statErr), "state file should be removed after success")
+
+	// Original branch should be checked out at the end
+	assert.Contains(t, checkouts, "b1", "should checkout original branch")
+}
+
+// TestRebase_Continue_OntoMode verifies the --continue path when UseOnto is
+// set (squash-merged branches upstream). With no remaining branches, only
+// RebaseContinue runs and the state is cleaned up.
+func TestRebase_Continue_OntoMode(t *testing.T) {
+	s := stack.Stack{
+		Trunk: stack.BranchRef{Branch: "main"},
+		Branches: []stack.BranchRef{
+			{Branch: "b1", PullRequest: &stack.PullRequestRef{Number: 10, Merged: true}},
+			{Branch: "b2", PullRequest: &stack.PullRequestRef{Number: 11, Merged: true}},
+			{Branch: "b3"},
+		},
+	}
+
+	tmpDir := t.TempDir()
+	writeStackFile(t, tmpDir, s)
+
+	// b3 was the conflict branch; no remaining branches after it.
+	state := &rebaseState{
+		CurrentBranchIndex: 2,
+		ConflictBranch:     "b3",
+		RemainingBranches:  []string{},
+		OriginalBranch:     "b1",
+		OriginalRefs: map[string]string{
+			"main": "sha-main",
+			"b1":   "sha-b1",
+			"b2":   "sha-b2",
+			"b3":   "sha-b3",
+		},
+		UseOnto:     true,
+		OntoOldBase: "sha-b2",
+	}
+	stateData, _ := json.MarshalIndent(state, "", "  ")
+	require.NoError(t, os.WriteFile(filepath.Join(tmpDir, "gh-stack-rebase-state"), stateData, 0644))
+
+	var rebaseContinueCalled bool
+
+	mock := newRebaseMock(tmpDir, "b3")
+	mock.IsRebaseInProgressFn = func() bool { return true }
+	mock.RebaseContinueFn = func() error {
+		rebaseContinueCalled = true
+		return nil
+	}
+	mock.CheckoutBranchFn = func(string) error { return nil }
+
+	restore := git.SetOps(mock)
+	defer restore()
+
+	cfg, _, _ := config.NewTestConfig()
+	cmd := RebaseCmd(cfg)
+	cmd.SetArgs([]string{"--continue"})
+	cmd.SetOut(io.Discard)
+	cmd.SetErr(io.Discard)
+	err := cmd.Execute()
+
+	assert.NoError(t, err)
+	assert.True(t, rebaseContinueCalled, "RebaseContinue should be called")
+
+	// State file should be removed after success
+	_, statErr := os.Stat(filepath.Join(tmpDir, "gh-stack-rebase-state"))
+	assert.True(t, os.IsNotExist(statErr), "state file should be removed after success")
+}
+
+// TestRebase_Continue_ConflictOnRemaining verifies that when --continue
+// successfully resolves the first conflict but hits a new conflict on a
+// remaining branch, the state is updated and ErrConflict is returned.
+func TestRebase_Continue_ConflictOnRemaining(t *testing.T) {
+	s := stack.Stack{
+		Trunk: stack.BranchRef{Branch: "main"},
+		Branches: []stack.BranchRef{
+			{Branch: "b1"},
+			{Branch: "b2"},
+			{Branch: "b3"},
+			{Branch: "b4"},
+		},
+	}
+
+	tmpDir := t.TempDir()
+	writeStackFile(t, tmpDir, s)
+
+	state := &rebaseState{
+		CurrentBranchIndex: 1,
+		ConflictBranch:     "b2",
+		RemainingBranches:  []string{"b3", "b4"},
+		OriginalBranch:     "b1",
+		OriginalRefs: map[string]string{
+			"main": "sha-main",
+			"b1":   "sha-b1",
+			"b2":   "sha-b2",
+			"b3":   "sha-b3",
+			"b4":   "sha-b4",
+		},
+	}
+	stateData, _ := json.MarshalIndent(state, "", "  ")
+	require.NoError(t, os.WriteFile(filepath.Join(tmpDir, "gh-stack-rebase-state"), stateData, 0644))
+
+	mock := newRebaseMock(tmpDir, "b2")
+	mock.IsRebaseInProgressFn = func() bool { return true }
+	mock.RebaseContinueFn = func() error { return nil }
+	mock.RebaseOntoFn = func(newBase, oldBase, branch string) error {
+		if branch == "b3" {
+			return assert.AnError // conflict on b3
+		}
+		return nil
+	}
+	mock.ConflictedFilesFn = func() ([]string, error) { return nil, nil }
+	mock.CheckoutBranchFn = func(string) error { return nil }
+
+	restore := git.SetOps(mock)
+	defer restore()
+
+	cfg, _, errR := config.NewTestConfig()
+	cmd := RebaseCmd(cfg)
+	cmd.SetArgs([]string{"--continue"})
+	cmd.SetOut(io.Discard)
+	cmd.SetErr(io.Discard)
+	err := cmd.Execute()
+
+	cfg.Err.Close()
+	errOut, _ := io.ReadAll(errR)
+	output := string(errOut)
+
+	assert.Error(t, err)
+	assert.ErrorIs(t, err, ErrConflict)
+	assert.Contains(t, output, "--continue")
+
+	// State file should still exist with updated conflict info
+	updatedData, readErr := os.ReadFile(filepath.Join(tmpDir, "gh-stack-rebase-state"))
+	require.NoError(t, readErr, "state file should still exist after new conflict")
+
+	var updatedState rebaseState
+	require.NoError(t, json.Unmarshal(updatedData, &updatedState))
+	assert.Equal(t, "b3", updatedState.ConflictBranch)
+	assert.Equal(t, []string{"b4"}, updatedState.RemainingBranches)
+}
+
+// TestRebase_Abort_WithActiveRebase verifies that --abort calls RebaseAbort
+// when a git rebase is in progress, restores branches, and cleans up the state.
+func TestRebase_Abort_WithActiveRebase(t *testing.T) {
+	tmpDir := t.TempDir()
+
+	state := &rebaseState{
+		CurrentBranchIndex: 1,
+		ConflictBranch:     "b2",
+		RemainingBranches:  []string{},
+		OriginalBranch:     "b1",
+		OriginalRefs: map[string]string{
+			"b1": "orig-sha-b1",
+			"b2": "orig-sha-b2",
+		},
+	}
+	stateData, _ := json.MarshalIndent(state, "", "  ")
+	require.NoError(t, os.WriteFile(filepath.Join(tmpDir, "gh-stack-rebase-state"), stateData, 0644))
+
+	var rebaseAbortCalled bool
+	var resets []resetCall
+	var checkouts []string
+	currentBranch := "b2"
+
+	mock := newRebaseMock(tmpDir, currentBranch)
+	mock.IsRebaseInProgressFn = func() bool { return true }
+	mock.RebaseAbortFn = func() error {
+		rebaseAbortCalled = true
+		return nil
+	}
+	mock.CheckoutBranchFn = func(name string) error {
+		checkouts = append(checkouts, name)
+		currentBranch = name
+		return nil
+	}
+	mock.ResetHardFn = func(ref string) error {
+		resets = append(resets, resetCall{currentBranch, ref})
+		return nil
+	}
+
+	restore := git.SetOps(mock)
+	defer restore()
+
+	cfg, _, errR := config.NewTestConfig()
+	cmd := RebaseCmd(cfg)
+	cmd.SetArgs([]string{"--abort"})
+	cmd.SetOut(io.Discard)
+	cmd.SetErr(io.Discard)
+	err := cmd.Execute()
+
+	cfg.Err.Close()
+	errOut, _ := io.ReadAll(errR)
+	output := string(errOut)
+
+	assert.NoError(t, err)
+	assert.True(t, rebaseAbortCalled, "RebaseAbort should be called when rebase is in progress")
+	assert.Contains(t, output, "Rebase aborted and branches restored")
+
+	// Verify branches restored to original SHAs
+	resetMap := make(map[string]string)
+	for _, r := range resets {
+		resetMap[r.branch] = r.sha
+	}
+	assert.Equal(t, "orig-sha-b1", resetMap["b1"])
+	assert.Equal(t, "orig-sha-b2", resetMap["b2"])
+
+	// State file should be removed
+	_, statErr := os.Stat(filepath.Join(tmpDir, "gh-stack-rebase-state"))
+	assert.True(t, os.IsNotExist(statErr), "state file should be removed after abort")
+
+	// Should return to original branch
+	assert.Contains(t, checkouts, "b1", "should checkout original branch at end")
 }

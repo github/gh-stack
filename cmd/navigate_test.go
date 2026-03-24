@@ -363,6 +363,45 @@ func TestNavigate_BottomWithMergedFirst(t *testing.T) {
 	assert.Equal(t, []string{"b2"}, checkedOut, "should skip merged b1")
 }
 
+func TestNavigate_AllMerged_Up(t *testing.T) {
+	s := stack.Stack{
+		Trunk: stack.BranchRef{Branch: "main"},
+		Branches: []stack.BranchRef{
+			{Branch: "b1", PullRequest: &stack.PullRequestRef{Number: 1, Merged: true}},
+			{Branch: "b2", PullRequest: &stack.PullRequestRef{Number: 2, Merged: true}},
+		},
+	}
+
+	var checkedOut []string
+	tmpDir := t.TempDir()
+	writeStackFile(t, tmpDir, s)
+
+	mock := &git.MockOps{
+		GitDirFn:        func() (string, error) { return tmpDir, nil },
+		CurrentBranchFn: func() (string, error) { return "b2", nil },
+		CheckoutBranchFn: func(name string) error {
+			checkedOut = append(checkedOut, name)
+			return nil
+		},
+	}
+	restore := git.SetOps(mock)
+	defer restore()
+
+	cfg, outR, errR := config.NewTestConfig()
+	cmd := UpCmd(cfg)
+	cmd.SetOut(io.Discard)
+	cmd.SetErr(io.Discard)
+	err := cmd.Execute()
+
+	output := readCfgOutput(cfg, outR, errR)
+
+	assert.NoError(t, err)
+	assert.Empty(t, checkedOut, "should not checkout when already at top of all-merged stack")
+	assert.Contains(t, output, "Already at the top")
+	// On a merged branch, navigate prints a warning before the at-top message
+	assert.Contains(t, output, "you are on merged branch")
+}
+
 // writeStackFile is a helper to write a stack file to a temp dir.
 func writeStackFile(t *testing.T, dir string, s stack.Stack) {
 	t.Helper()

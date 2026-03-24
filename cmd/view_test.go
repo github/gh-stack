@@ -204,3 +204,82 @@ func TestViewJSON_BranchFields(t *testing.T) {
 	assert.Equal(t, 43, b1.PR.Number)
 	assert.Equal(t, "OPEN", b1.PR.State)
 }
+
+// TestViewShort_ActiveStack verifies that --short output contains all branch
+// names and the trunk for an active stack.
+func TestViewShort_ActiveStack(t *testing.T) {
+	s := stack.Stack{
+		Trunk: stack.BranchRef{Branch: "main"},
+		Branches: []stack.BranchRef{
+			{Branch: "b1"},
+			{Branch: "b2"},
+			{Branch: "b3"},
+		},
+	}
+
+	tmpDir := t.TempDir()
+	writeStackFile(t, tmpDir, s)
+
+	restore := git.SetOps(&git.MockOps{
+		GitDirFn:        func() (string, error) { return tmpDir, nil },
+		CurrentBranchFn: func() (string, error) { return "b2", nil },
+		IsAncestorFn:    func(string, string) (bool, error) { return true, nil },
+		RevParseFn:      func(ref string) (string, error) { return "sha-" + ref, nil },
+	})
+	defer restore()
+
+	cfg, outR, _ := config.NewTestConfig()
+	cmd := ViewCmd(cfg)
+	cmd.SetArgs([]string{"--short"})
+	cmd.SetOut(io.Discard)
+	cmd.SetErr(io.Discard)
+	err := cmd.Execute()
+
+	cfg.Out.Close()
+	raw, _ := io.ReadAll(outR)
+	output := string(raw)
+
+	assert.NoError(t, err)
+	assert.Contains(t, output, "b1")
+	assert.Contains(t, output, "b2")
+	assert.Contains(t, output, "b3")
+	assert.Contains(t, output, "main")
+}
+
+// TestViewShort_FullyMergedStack verifies that --short output shows merged
+// branches correctly when all branches in the stack are merged.
+func TestViewShort_FullyMergedStack(t *testing.T) {
+	s := stack.Stack{
+		Trunk: stack.BranchRef{Branch: "main"},
+		Branches: []stack.BranchRef{
+			{Branch: "b1", PullRequest: &stack.PullRequestRef{Number: 1, Merged: true}},
+			{Branch: "b2", PullRequest: &stack.PullRequestRef{Number: 2, Merged: true}},
+		},
+	}
+
+	tmpDir := t.TempDir()
+	writeStackFile(t, tmpDir, s)
+
+	restore := git.SetOps(&git.MockOps{
+		GitDirFn:        func() (string, error) { return tmpDir, nil },
+		CurrentBranchFn: func() (string, error) { return "main", nil },
+		IsAncestorFn:    func(string, string) (bool, error) { return true, nil },
+		RevParseFn:      func(ref string) (string, error) { return "sha-" + ref, nil },
+	})
+	defer restore()
+
+	cfg, outR, _ := config.NewTestConfig()
+	cmd := ViewCmd(cfg)
+	cmd.SetArgs([]string{"--short"})
+	cmd.SetOut(io.Discard)
+	cmd.SetErr(io.Discard)
+	err := cmd.Execute()
+
+	cfg.Out.Close()
+	raw, _ := io.ReadAll(outR)
+	output := string(raw)
+
+	assert.NoError(t, err)
+	assert.Contains(t, output, "b1")
+	assert.Contains(t, output, "b2")
+}

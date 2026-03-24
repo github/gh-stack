@@ -3,12 +3,13 @@ package cmd
 import (
 	"io"
 	"os"
-	"strings"
 	"testing"
 
 	"github.com/github/gh-stack/internal/config"
 	"github.com/github/gh-stack/internal/git"
 	"github.com/github/gh-stack/internal/stack"
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 // collectOutput closes the write ends of the test config pipes and returns
@@ -35,25 +36,16 @@ func TestInit_CreatesStackWithCorrectTrunk(t *testing.T) {
 	runInit(cfg, &initOptions{branches: []string{"myBranch"}})
 	output := collectOutput(cfg, outR, errR)
 
-	if strings.Contains(output, "\u2717") {
-		t.Fatalf("unexpected error in output: %s", output)
-	}
+	require.NotContains(t, output, "\u2717", "unexpected error in output")
 
 	sf, err := stack.Load(gitDir)
-	if err != nil {
-		t.Fatalf("loading stack: %v", err)
-	}
-	if len(sf.Stacks) != 1 {
-		t.Fatalf("got %d stacks, want 1", len(sf.Stacks))
-	}
+	require.NoError(t, err, "loading stack")
+	require.Len(t, sf.Stacks, 1)
 	s := sf.Stacks[0]
-	if s.Trunk.Branch != "main" {
-		t.Errorf("trunk = %q, want %q", s.Trunk.Branch, "main")
-	}
+	assert.Equal(t, "main", s.Trunk.Branch)
 	names := s.BranchNames()
-	if len(names) != 1 || names[0] != "myBranch" {
-		t.Errorf("branches = %v, want [myBranch]", names)
-	}
+	require.Len(t, names, 1)
+	assert.Equal(t, "myBranch", names[0])
 }
 
 func TestInit_CustomTrunk(t *testing.T) {
@@ -68,17 +60,11 @@ func TestInit_CustomTrunk(t *testing.T) {
 	runInit(cfg, &initOptions{branches: []string{"myBranch"}, base: "develop"})
 	output := collectOutput(cfg, outR, errR)
 
-	if strings.Contains(output, "\u2717") {
-		t.Fatalf("unexpected error: %s", output)
-	}
+	require.NotContains(t, output, "\u2717", "unexpected error")
 
 	sf, err := stack.Load(gitDir)
-	if err != nil {
-		t.Fatalf("loading stack: %v", err)
-	}
-	if got := sf.Stacks[0].Trunk.Branch; got != "develop" {
-		t.Errorf("trunk = %q, want %q", got, "develop")
-	}
+	require.NoError(t, err, "loading stack")
+	assert.Equal(t, "develop", sf.Stacks[0].Trunk.Branch)
 }
 
 func TestInit_AdoptExistingBranches(t *testing.T) {
@@ -98,24 +84,12 @@ func TestInit_AdoptExistingBranches(t *testing.T) {
 	})
 	output := collectOutput(cfg, outR, errR)
 
-	if strings.Contains(output, "\u2717") {
-		t.Fatalf("unexpected error: %s", output)
-	}
+	require.NotContains(t, output, "\u2717", "unexpected error")
 
 	sf, err := stack.Load(gitDir)
-	if err != nil {
-		t.Fatalf("loading stack: %v", err)
-	}
+	require.NoError(t, err, "loading stack")
 	names := sf.Stacks[0].BranchNames()
-	want := []string{"b1", "b2", "b3"}
-	if len(names) != len(want) {
-		t.Fatalf("branches = %v, want %v", names, want)
-	}
-	for i, name := range names {
-		if name != want[i] {
-			t.Errorf("branch[%d] = %q, want %q", i, name, want[i])
-		}
-	}
+	assert.Equal(t, []string{"b1", "b2", "b3"}, names)
 }
 
 func TestInit_PrefixStoredInStack(t *testing.T) {
@@ -132,12 +106,8 @@ func TestInit_PrefixStoredInStack(t *testing.T) {
 	collectOutput(cfg, outR, errR)
 
 	sf, err := stack.Load(gitDir)
-	if err != nil {
-		t.Fatalf("loading stack: %v", err)
-	}
-	if got := sf.Stacks[0].Prefix; got != "feat" {
-		t.Errorf("prefix = %q, want %q", got, "feat")
-	}
+	require.NoError(t, err, "loading stack")
+	assert.Equal(t, "feat", sf.Stacks[0].Prefix)
 }
 
 func TestInit_RerereAlreadyEnabled(t *testing.T) {
@@ -159,9 +129,7 @@ func TestInit_RerereAlreadyEnabled(t *testing.T) {
 	runInit(cfg, &initOptions{branches: []string{"b1"}})
 	collectOutput(cfg, outR, errR)
 
-	if enableRerereCalled {
-		t.Error("EnableRerere should not be called when rerere is already enabled")
-	}
+	assert.False(t, enableRerereCalled, "EnableRerere should not be called when rerere is already enabled")
 }
 
 func TestInit_RefuseIfBranchAlreadyInStack(t *testing.T) {
@@ -175,9 +143,7 @@ func TestInit_RefuseIfBranchAlreadyInStack(t *testing.T) {
 			Branches: []stack.BranchRef{{Branch: "feature-1"}},
 		}},
 	}
-	if err := stack.Save(gitDir, sf); err != nil {
-		t.Fatalf("saving seed stack: %v", err)
-	}
+	require.NoError(t, stack.Save(gitDir, sf), "saving seed stack")
 
 	restore := git.SetOps(&git.MockOps{
 		GitDirFn:        func() (string, error) { return gitDir, nil },
@@ -190,9 +156,7 @@ func TestInit_RefuseIfBranchAlreadyInStack(t *testing.T) {
 	runInit(cfg, &initOptions{branches: []string{"newBranch"}})
 	output := collectOutput(cfg, outR, errR)
 
-	if !strings.Contains(output, "already part of a stack") {
-		t.Errorf("expected 'already part of a stack' error, got: %s", output)
-	}
+	assert.Contains(t, output, "already part of a stack")
 }
 
 func TestInit_AdoptNonexistentBranch(t *testing.T) {
@@ -209,9 +173,7 @@ func TestInit_AdoptNonexistentBranch(t *testing.T) {
 	runInit(cfg, &initOptions{branches: []string{"nonexistent"}, adopt: true})
 	output := collectOutput(cfg, outR, errR)
 
-	if !strings.Contains(output, "does not exist") {
-		t.Errorf("expected 'does not exist' error, got: %s", output)
-	}
+	assert.Contains(t, output, "does not exist")
 }
 
 func TestInit_MultipleBranches_CreatesAll(t *testing.T) {
@@ -232,21 +194,10 @@ func TestInit_MultipleBranches_CreatesAll(t *testing.T) {
 	runInit(cfg, &initOptions{branches: []string{"b1", "b2", "b3"}})
 	output := collectOutput(cfg, outR, errR)
 
-	if strings.Contains(output, "\u2717") {
-		t.Fatalf("unexpected error: %s", output)
-	}
+	require.NotContains(t, output, "\u2717", "unexpected error")
 
 	sf, err := stack.Load(gitDir)
-	if err != nil {
-		t.Fatalf("loading stack: %v", err)
-	}
+	require.NoError(t, err, "loading stack")
 	names := sf.Stacks[0].BranchNames()
-	if len(names) != 3 {
-		t.Fatalf("got %d branches, want 3: %v", len(names), names)
-	}
-	for i, want := range []string{"b1", "b2", "b3"} {
-		if names[i] != want {
-			t.Errorf("branch[%d] = %q, want %q", i, names[i], want)
-		}
-	}
+	assert.Equal(t, []string{"b1", "b2", "b3"}, names)
 }
