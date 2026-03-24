@@ -28,7 +28,6 @@ func InitCmd(cfg *config.Config) *cobra.Command {
 		Short: "Initialize a new stack",
 		Long: `Initialize a stack object in the local repo.
 
-Creates an entry in .git/gh-stack to track stack state.
 Unless specified, prompts user to create/select branch for first layer of the stack.
 Trunk defaults to default branch, unless specified otherwise.`,
 		Example: `  $ gh stack init

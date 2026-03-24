@@ -12,6 +12,14 @@ gh extension install github/gh-stack
 
 Requires the [GitHub CLI](https://cli.github.com/) (`gh`) v2.0+.
 
+## AI agent integration
+
+Install the gh-stack skill so your AI coding agent knows how to work with stacked PRs and the `gh stack` CLI:
+
+```sh
+npx skills add github/gh-stack
+```
+
 ## Quick start
 
 ```sh
@@ -35,15 +43,19 @@ gh stack view
 
 ## How it works
 
-A **stack** is an ordered list of branches where each branch builds on the one below it. The bottom of the stack is based on a **trunk** branch (typically `main`).
+A **stack** is an ordered list of branches where each branch builds on the one below it. The **bottom** of the stack is based on a **trunk** branch (typically `main`).
 
 ```
+frontend      → PR #3 (base: api-endpoints) ← top
+api-endpoints → PR #2 (base: auth-layer)
+auth-layer    → PR #1 (base: main)          ← bottom
+─────────────
 main (trunk)
- └── auth-layer        → PR #1 (base: main)
-      └── api-endpoints → PR #2 (base: auth-layer)
 ```
 
-When you push, `gh stack` creates one PR per branch. Each PR's base is set to the branch below it in the stack (**branch-chaining**), so reviewers see only the diff for that layer.
+The **bottom** of the stack is the branch closest to the trunk, and the **top** is the branch furthest from it. Each branch inherits from the one below it. Navigation commands (`up`, `down`, `top`, `bottom`) follow this model: `up` moves away from trunk, `down` moves toward it.
+
+When you push, `gh stack` creates one PR per branch. Each PR's base is set to the branch below it in the stack, so reviewers see only the diff for that layer.
 
 ### Local tracking
 
