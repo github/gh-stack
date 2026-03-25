@@ -79,19 +79,24 @@ Prefer initializing stacks with a prefix (`-p`). Prefixes group branches under a
 
 ### Staging changes deliberately
 
-Don't dump all changes into a single commit or branch. Stage changes in batches based on logical grouping:
+The main reason to use `git add` and `git commit` directly is to control **which changes go into which branch**. When you have multiple files in your working tree, you can stage a subset for the current branch, commit them, then create a new branch and stage the rest there:
 
 ```bash
-# Stage only the model files for this branch
+# You're on feat/data-models with several new files in your working tree.
+# Stage only the model files for this branch:
 git add internal/models/user.go internal/models/session.go
 git commit -m "Add user and session models"
 
-# Stage related migration
 git add db/migrations/001_create_users.sql
 git commit -m "Add user table migration"
+
+# Now create a new branch for the API layer and stage the API files there:
+gh stack add api-routes # created & switched to feat/api-routes branch
+git add internal/api/routes.go internal/api/handlers.go
+git commit -m "Add user API routes"
 ```
 
-Multiple commits per branch are fine and encouraged—they make the PR easier to review. The key is that all commits in a branch relate to the same logical concern.
+This keeps each branch focused on one concern. Multiple commits per branch are fine — the key is that all commits in a branch relate to the same logical concern, and changes that belong to a different concern go in a different branch.
 
 ### When to create a new branch
 
