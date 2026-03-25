@@ -22,4 +22,4 @@ jobs:
           generate_attestations: true
           go_version_file: go.mod
           go_build_options: >-
-            -ldflags '-X github.com/github/gh-stack/cmd.Version=${{ steps.version.outputs.version }}'
+            -ldflags=-X=github.com/github/gh-stack/cmd.Version=${{ steps.version.outputs.version }}
