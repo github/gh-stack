@@ -16,9 +16,9 @@ metadata:
 
 ```
 main (trunk)
- └── auth-layer     → PR #1 (base: main)          - bottom (closest to trunk)
-  └── api-endpoints → PR #2 (base: auth-layer)
-   └── frontend     → PR #3 (base: api-endpoints) - top (furthest from trunk)
+ └── feat/auth-layer     → PR #1 (base: main)               - bottom (closest to trunk)
+  └── feat/api-endpoints → PR #2 (base: feat/auth-layer)
+   └── feat/frontend     → PR #3 (base: feat/api-endpoints) - top (furthest from trunk)
 ```
 
 The **bottom** of the stack is the branch closest to the trunk, and the **top** is the branch furthest from the trunk. Each branch inherits from the one below it. Navigation commands (`up`, `down`, `top`, `bottom`) follow this model: `up` moves away from trunk, `down` moves toward it.
@@ -44,13 +44,14 @@ gh extension install github/gh-stack
 ## Agent rules
 
 1. **Always supply branch names as positional arguments** to `init`, `add`, and `checkout`.
-2. **Always use `--auto` when pushing** to skip PR title prompts.
-3. **Always use `--json` when viewing** to get structured output.
-4. **Use `--remote <name>` when multiple remotes are configured**, or set `remote.pushDefault` in git config.
-5. **Avoid branches shared across multiple stacks.** If a branch belongs to multiple stacks, commands exit with code 6. Check out a non-shared branch first.
-6. **Plan your stack layers by dependency order before writing code.** Foundational changes (models, APIs, shared utilities) go in lower branches; dependent changes (UI, consumers) go in higher branches. Think through the dependency chain before running `gh stack init`.
-7. **Use standard `git add` and `git commit` for staging and committing.** This gives you full control over which changes go into each branch. The `-Am` shortcut is available but should not be the default approach—stacked PRs are most effective when each branch contains a deliberate, logical set of changes.
-8. **Navigate down the stack when you need to change a lower layer.** If you're working on a frontend branch and realize you need API changes, don't hack around it at the current layer. Navigate to the appropriate branch (`gh stack down`, `gh stack checkout`, or `gh stack bottom`), make and commit the changes there, run `gh stack rebase --upstack`, then navigate back up to continue.
+2. **When a prefix is set, pass only the suffix to `add`.** `gh stack add auth` with prefix `feat` → `feat/auth`. Passing `feat/auth` creates `feat/feat/auth`.
+3. **Always use `--auto` when pushing** to skip PR title prompts.
+4. **Always use `--json` when viewing** to get structured output.
+5. **Use `--remote <name>` when multiple remotes are configured**, or set `remote.pushDefault` in git config.
+6. **Avoid branches shared across multiple stacks.** If a branch belongs to multiple stacks, commands exit with code 6. Check out a non-shared branch first.
+7. **Plan your stack layers by dependency order before writing code.** Foundational changes (models, APIs, shared utilities) go in lower branches; dependent changes (UI, consumers) go in higher branches. Think through the dependency chain before running `gh stack init`.
+8. **Use standard `git add` and `git commit` for staging and committing.** This gives you full control over which changes go into each branch. The `-Am` shortcut is available but should not be the default approach—stacked PRs are most effective when each branch contains a deliberate, logical set of changes.
+9. **Navigate down the stack when you need to change a lower layer.** If you're working on a frontend branch and realize you need API changes, don't hack around it at the current layer. Navigate to the appropriate branch (`gh stack down`, `gh stack checkout`, or `gh stack bottom`), make and commit the changes there, run `gh stack rebase --upstack`, then navigate back up to continue.
 
 ## Thinking about stack structure
 
@@ -64,29 +65,38 @@ Stacked branches form a dependency chain: each branch builds on the one below it
 
 ```
 main (trunk)
- └── data-models       ← shared types, database schema
-  └── api-endpoints    ← API routes that use the models
-   └── frontend-ui     ← UI components that call the APIs
-    └── integration    ← tests that exercise the full stack
+ └── feat/data-models    ← shared types, database schema
+  └── feat/api-endpoints ← API routes that use the models
+   └── feat/frontend-ui  ← UI components that call the APIs
+    └── feat/integration ← tests that exercise the full stack
 ```
 
 This is illustrative — choose branch names and layer boundaries that reflect the specific work you're doing. The key principle is: if code in one layer depends on code in another, the dependency must be in the same branch or a lower one.
 
+### Branch naming
+
+Prefer initializing stacks with a prefix (`-p`). Prefixes group branches under a namespace (e.g., `feat/auth`, `feat/api`) and keep branch names clean and consistent. When a prefix is set, pass only the suffix to subsequent `add` calls — the prefix is applied automatically. Without a prefix, you'll need to pass the full branch name each time.
+
 ### Staging changes deliberately
 
-Don't dump all changes into a single commit or branch. Stage changes in batches based on logical grouping:
+The main reason to use `git add` and `git commit` directly is to control **which changes go into which branch**. When you have multiple files in your working tree, you can stage a subset for the current branch, commit them, then create a new branch and stage the rest there:
 
 ```bash
-# Stage only the model files for this branch
+# You're on feat/data-models with several new files in your working tree.
+# Stage only the model files for this branch:
 git add internal/models/user.go internal/models/session.go
 git commit -m "Add user and session models"
 
-# Stage related migration
 git add db/migrations/001_create_users.sql
 git commit -m "Add user table migration"
+
+# Now create a new branch for the API layer and stage the API files there:
+gh stack add api-routes # created & switched to feat/api-routes branch
+git add internal/api/routes.go internal/api/handlers.go
+git commit -m "Add user API routes"
 ```
 
-Multiple commits per branch are fine and encouraged—they make the PR easier to review. The key is that all commits in a branch relate to the same logical concern.
+This keeps each branch focused on one concern. Multiple commits per branch are fine — the key is that all commits in a branch relate to the same logical concern, and changes that belong to a different concern go in a different branch.
 
 ### When to create a new branch
 
@@ -111,12 +121,12 @@ Small, incidental fixes (e.g., fixing a typo you noticed) can go in the current 
 
 | Task | Command |
 |------|---------|
-| Create a stack | `gh stack init branch-a` |
-| Create a stack with a prefix | `gh stack init -p feat auth` |
+| Create a stack (recommended) | `gh stack init -p feat auth` |
+| Create a stack without prefix | `gh stack init auth` |
 | Adopt existing branches | `gh stack init --adopt branch-a branch-b` |
 | Set custom trunk | `gh stack init --base develop branch-a` |
-| Add a branch to stack | `gh stack add branch-name` |
-| Add branch + stage all + commit (shortcut) | `gh stack add -Am "message" new-branch` |
+| Add a branch to stack (suffix only if prefix set) | `gh stack add api-routes` |
+| Add branch + stage all + commit | `gh stack add -Am "message" api-routes` |
 | Push + create PRs | `gh stack push --auto` |
 | Push as drafts | `gh stack push --auto --draft` |
 | Push without creating PRs | `gh stack push --skip-prs` |
@@ -174,7 +184,7 @@ git commit -m "Add auth middleware tests"
 
 # 4. When you're ready for a new concern, add the next branch
 gh stack add api-routes
-# → creates feat/api-routes (prefixed), checks it out
+# → creates feat/api-routes (prefix applied automatically — just pass the suffix)
 
 # 5. Write code for the API layer
 cat > api.go << 'EOF'
@@ -189,7 +199,7 @@ git commit -m "Add API routes"
 
 # 6. Add a third layer for frontend
 gh stack add frontend
-# → creates feat/frontend, checks it out
+# → creates feat/frontend (just the suffix — prefix is automatic)
 
 cat > frontend.go << 'EOF'
 package frontend
@@ -286,15 +296,15 @@ When a PR is squash-merged on GitHub, the original branch's commits no longer ex
 # After PR #1 (feat/auth) is squash-merged on GitHub:
 gh stack sync
 # → fetches latest, detects the merge, fast-forwards trunk
-# → rebases feat/api-routes onto updated trunk using --onto (skips merged branch)
-# → rebases feat/api-tests onto feat/api-routes
+# → rebases feat/api-routes onto updated trunk (skips merged branch)
+# → rebases feat/frontend onto feat/api-routes
 # → pushes updated branches
 # → reports: "Merged: #1"
 
 # Verify the result
 gh stack view --json
 # → feat/auth shows "isMerged": true, "state": "MERGED"
-# → feat/api-routes and feat/api-tests show updated heads
+# → feat/api-routes and feat/frontend show updated heads
 ```
 
 If `sync` hits a conflict during this process, it restores all branches to their pre-rebase state and exits with code 3. See [Handle rebase conflicts](#handle-rebase-conflicts-agent-workflow) for the resolution workflow.
@@ -366,7 +376,15 @@ gh stack init [branches...] [flags]
 ```
 
 ```bash
-# Create a stack with new branches (branched from trunk)
+# Set a branch prefix (recommended — subsequent `add` calls only need the suffix)
+gh stack init -p feat auth
+# → creates feat/auth
+
+# Multi-part prefix (slashes are fine — suffix-only rule still applies)
+gh stack init -p monalisa/billing auth
+# → creates monalisa/billing/auth
+
+# Create a stack with new branches (no prefix — use full branch names)
 gh stack init branch-a branch-b branch-c
 
 # Use a different trunk branch
@@ -374,20 +392,17 @@ gh stack init --base develop branch-a branch-b
 
 # Adopt existing branches into a stack
 gh stack init --adopt branch-a branch-b branch-c
-
-# Set a branch prefix (branch names you provide are automatically prefixed)
-gh stack init -p feat auth
-# → creates feat/auth
 ```
 
 | Flag | Description |
 |------|-------------|
 | `-b, --base <branch>` | Trunk branch (defaults to the repo's default branch) |
 | `-a, --adopt` | Adopt existing branches instead of creating new ones |
-| `-p, --prefix <string>` | Set a branch name prefix for auto-generated names |
+| `-p, --prefix <string>` | Branch name prefix. Subsequent `add` calls only need the suffix (e.g., with `-p feat`, `gh stack add auth` creates `feat/auth`) |
 
 **Behavior:**
 
+- Using `-p` is recommended — it simplifies branch naming for subsequent `add` calls
 - Creates any branches that don't already exist (branching from the trunk branch)
 - In `--adopt` mode: validates all branches exist, rejects if any is already in a stack or has an existing PR
 - Checks out the last branch in the list
@@ -406,7 +421,7 @@ gh stack add [branch] [flags]
 **Recommended workflow — create the branch, then use standard git:**
 
 ```bash
-# Create a new branch and switch to it
+# Create a new branch and switch to it (just the suffix — prefix is applied automatically)
 gh stack add api-routes
 
 # Write code, stage deliberately, and commit
@@ -438,7 +453,7 @@ gh stack add -um "Fix auth bug" auth-fix
 
 - `-A` and `-u` are mutually exclusive.
 - When the current branch has no commits (e.g., right after `init`), `add -Am` commits directly on the current branch instead of creating a new one.
-- If a prefix was set during `init`, the prefix is applied to branch names: `prefix/branch-name`.
+- **Prefix handling:** Only pass the suffix when a prefix is set. `gh stack add api` with prefix `todo` → `todo/api`. Passing `todo/api` creates `todo/todo/api`. Without a prefix, pass the full branch name.
 - If called from a branch that is not the topmost in the stack, exits with code 5: `"can only add branches on top of the stack"`. Use `gh stack top` to switch first.
 - **Uncommitted changes:** When using `gh stack add branch-name` without `-Am`, any uncommitted changes (staged or unstaged) in your working tree carry over to the new branch. This is standard git behavior — the working tree is not touched. Commit or stash changes on the current branch before running `add` if you want a clean starting point on the new branch.
 
@@ -505,7 +520,7 @@ gh stack sync [flags]
 
 1. **Fetch** latest changes from the remote
 2. **Fast-forward trunk** to match remote (skips if already up to date, warns if diverged)
-3. **Cascade rebase** all stack branches onto their updated parents (only if trunk moved). Handles squash-merged PRs automatically with `--onto`. If a conflict is detected, **all branches are restored** to their pre-rebase state and the command exits with code 3 — see [Handle rebase conflicts](#handle-rebase-conflicts-agent-workflow) for the resolution workflow
+3. **Cascade rebase** all stack branches onto their updated parents (only if trunk moved). Handles squash-merged PRs automatically. If a conflict is detected, **all branches are restored** to their pre-rebase state and the command exits with code 3 — see [Handle rebase conflicts](#handle-rebase-conflicts-agent-workflow) for the resolution workflow
 4. **Push** all active branches atomically
 5. **Sync PR state** from GitHub and report the status of each PR
 
@@ -560,7 +575,7 @@ gh stack rebase --abort
 
 **Conflict handling:** See [Handle rebase conflicts](#handle-rebase-conflicts-agent-workflow) in the Workflows section for the full resolution workflow.
 
-**Squash-merge detection:** If a branch's PR was squash-merged on GitHub, the rebase automatically uses `git rebase --onto` to correctly replay commits on top of the merge target. This is handled transparently.
+**Squash-merge detection:** If a branch's PR was squash-merged on GitHub, the rebase automatically handles this and correctly replays commits on top of the merge target.
 
 **Rerere (conflict memory):** `git rerere` is enabled by `init` so previously resolved conflicts are auto-resolved in future rebases.
 
