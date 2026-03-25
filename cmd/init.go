@@ -101,11 +101,60 @@ func runInit(cfg *config.Config, opts *initOptions) error {
 
 	var branches []string
 
+	// --adopt takes existing branches as-is; --prefix and --numbered don't apply.
+	if opts.adopt && (opts.prefix != "" || opts.numbered) {
+		cfg.Errorf("--adopt cannot be combined with --prefix or --numbered")
+		return ErrInvalidArgs
+	}
+
 	// Validate --numbered requires a prefix (either from flag or interactive input,
 	// but for non-interactive paths we can check early).
 	if opts.numbered && opts.prefix == "" && !cfg.IsInteractive() {
 		cfg.Errorf("--numbered requires --prefix")
 		return ErrInvalidArgs
+	}
+
+	// Prompt for prefix interactively if not provided via flag and we're
+	// in interactive mode (not adopt, not explicit branches).
+	if opts.prefix == "" && !opts.adopt && len(opts.branches) == 0 && cfg.IsInteractive() {
+		p := prompter.New(cfg.In, cfg.Out, cfg.Err)
+		if opts.numbered {
+			// --numbered requires a prefix; prompt specifically for one
+			prefixInput, err := p.Input("Enter a branch prefix (required for --numbered)", "")
+			if err != nil {
+				if isInterruptError(err) {
+					printInterrupt(cfg)
+					return ErrSilent
+				}
+				cfg.Errorf("failed to read prefix: %s", err)
+				return ErrSilent
+			}
+			opts.prefix = strings.TrimSpace(prefixInput)
+			if opts.prefix == "" {
+				cfg.Errorf("--numbered requires a prefix")
+				return ErrInvalidArgs
+			}
+		} else {
+			prefixInput, err := p.Input("Set a branch prefix? (leave blank to skip)", "")
+			if err != nil {
+				if isInterruptError(err) {
+					printInterrupt(cfg)
+					return ErrSilent
+				}
+				cfg.Errorf("failed to read prefix: %s", err)
+				return ErrSilent
+			}
+			opts.prefix = strings.TrimSpace(prefixInput)
+		}
+	}
+
+	// Validate prefix, after it has been determined (from flag or prompt),
+	// before any branch creation.
+	if opts.prefix != "" {
+		if err := git.ValidateRefName(opts.prefix); err != nil {
+			cfg.Errorf("invalid prefix %q: must be a valid git ref component", opts.prefix)
+			return ErrInvalidArgs
+		}
 	}
 
 	if opts.adopt {
@@ -145,8 +194,12 @@ func runInit(cfg *config.Config, opts *initOptions) error {
 			}
 		}
 	} else if len(opts.branches) > 0 {
-		// Explicit branch names provided — create them
+		// Explicit branch names provided — apply prefix and create them
+		prefixed := make([]string, 0, len(opts.branches))
 		for _, b := range opts.branches {
+			if opts.prefix != "" {
+				b = opts.prefix + "/" + b
+			}
 			if err := sf.ValidateNoDuplicateBranch(b); err != nil {
 				cfg.Errorf("branch %q already exists in a stack", b)
 				return ErrInvalidArgs
@@ -157,49 +210,17 @@ func runInit(cfg *config.Config, opts *initOptions) error {
 					return ErrSilent
 				}
 			}
+			prefixed = append(prefixed, b)
 		}
-		branches = opts.branches
+		branches = prefixed
 	} else {
-		// Interactive mode
+		// Interactive mode — prefix was already prompted for above
 		if !cfg.IsInteractive() {
 			cfg.Errorf("interactive input required; provide branch names or use --adopt")
 			return ErrInvalidArgs
 		}
 		p := prompter.New(cfg.In, cfg.Out, cfg.Err)
 
-		// Step 1: Ask for prefix
-		if opts.prefix == "" {
-			if opts.numbered {
-				// --numbered requires a prefix; prompt specifically for one
-				prefixInput, err := p.Input("Enter a branch prefix (required for --numbered)", "")
-				if err != nil {
-					if isInterruptError(err) {
-						printInterrupt(cfg)
-						return ErrSilent
-					}
-					cfg.Errorf("failed to read prefix: %s", err)
-					return ErrSilent
-				}
-				opts.prefix = strings.TrimSpace(prefixInput)
-				if opts.prefix == "" {
-					cfg.Errorf("--numbered requires a prefix")
-					return ErrInvalidArgs
-				}
-			} else {
-				prefixInput, err := p.Input("Set a branch prefix? (leave blank to skip)", "")
-				if err != nil {
-					if isInterruptError(err) {
-						printInterrupt(cfg)
-						return ErrSilent
-					}
-					cfg.Errorf("failed to read prefix: %s", err)
-					return ErrSilent
-				}
-				opts.prefix = strings.TrimSpace(prefixInput)
-			}
-		}
-
-		// Step 2: Ask for branch name (unless --numbered auto-generates it)
 		if opts.numbered {
 			// Auto-generate numbered branch name
 			branchName := branch.NextNumberedName(opts.prefix, nil)
@@ -275,14 +296,6 @@ func runInit(cfg *config.Config, opts *initOptions) error {
 				}
 				branches = []string{branchName}
 			}
-		}
-	}
-
-	// Validate prefix (from flag or interactive input)
-	if opts.prefix != "" {
-		if err := git.ValidateRefName(opts.prefix); err != nil {
-			cfg.Errorf("invalid prefix %q: must be a valid git ref component", opts.prefix)
-			return ErrInvalidArgs
 		}
 	}
 
