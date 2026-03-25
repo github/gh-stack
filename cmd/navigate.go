@@ -1,7 +1,7 @@
 package cmd
 
 import (
-	"fmt"
+	"strconv"
 
 	"github.com/github/gh-stack/internal/config"
 	"github.com/github/gh-stack/internal/git"
@@ -16,7 +16,12 @@ func UpCmd(cfg *config.Config) *cobra.Command {
 		RunE: func(cmd *cobra.Command, args []string) error {
 			n := 1
 			if len(args) > 0 {
-				fmt.Sscanf(args[0], "%d", &n)
+				var err error
+				n, err = strconv.Atoi(args[0])
+				if err != nil {
+					cfg.Errorf("invalid number %q", args[0])
+					return ErrInvalidArgs
+				}
 			}
 			return runNavigate(cfg, n)
 		},
@@ -31,7 +36,12 @@ func DownCmd(cfg *config.Config) *cobra.Command {
 		RunE: func(cmd *cobra.Command, args []string) error {
 			n := 1
 			if len(args) > 0 {
-				fmt.Sscanf(args[0], "%d", &n)
+				var err error
+				n, err = strconv.Atoi(args[0])
+				if err != nil {
+					cfg.Errorf("invalid number %q", args[0])
+					return ErrInvalidArgs
+				}
 			}
 			return runNavigate(cfg, -n)
 		},
