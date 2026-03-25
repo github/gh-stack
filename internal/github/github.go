@@ -24,28 +24,45 @@ type PullRequest struct {
 type Client struct {
 	gql   *api.GraphQLClient
 	rest  *api.RESTClient
+	host  string
 	owner string
 	repo  string
 	slug  string
 }
 
 // NewClient creates a new GitHub API client for the given repository.
-func NewClient(owner, repo string) (*Client, error) {
-	gql, err := api.DefaultGraphQLClient()
+// The host parameter specifies the GitHub hostname (e.g. "github.com" or a
+// GHES hostname like "github.mycompany.com"). If empty, it defaults to
+// "github.com".
+func NewClient(host, owner, repo string) (*Client, error) {
+	if host == "" {
+		host = "github.com"
+	}
+	opts := api.ClientOptions{Host: host}
+	gql, err := api.NewGraphQLClient(opts)
 	if err != nil {
 		return nil, fmt.Errorf("creating GraphQL client: %w", err)
 	}
-	rest, err := api.DefaultRESTClient()
+	rest, err := api.NewRESTClient(opts)
 	if err != nil {
 		return nil, fmt.Errorf("creating REST client: %w", err)
 	}
 	return &Client{
 		gql:   gql,
 		rest:  rest,
+		host:  host,
 		owner: owner,
 		repo:  repo,
 		slug:  owner + "/" + repo,
 	}, nil
+}
+
+// PRURL constructs the web URL for a pull request on the given host.
+func PRURL(host, owner, repo string, number int) string {
+	if host == "" {
+		host = "github.com"
+	}
+	return fmt.Sprintf("https://%s/%s/%s/pull/%d", host, owner, repo, number)
 }
 
 // FindPRForBranch finds an open PR by head branch name.

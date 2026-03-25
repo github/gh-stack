@@ -249,6 +249,8 @@ func TestParsePRURL(t *testing.T) {
 		{"standard URL", "https://github.com/owner/repo/pull/42", 42, true},
 		{"with trailing slash", "https://github.com/owner/repo/pull/42/", 42, true},
 		{"with files tab", "https://github.com/owner/repo/pull/42/files", 42, true},
+		{"GHES URL", "https://ghes.example.com/owner/repo/pull/99", 99, true},
+		{"GHES URL with trailing slash", "https://ghes.example.com/owner/repo/pull/7/", 7, true},
 		{"not a PR URL", "https://github.com/owner/repo/issues/42", 0, false},
 		{"plain number", "42", 0, false},
 		{"branch name", "feat-1", 0, false},

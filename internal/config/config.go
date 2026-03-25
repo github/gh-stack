@@ -121,5 +121,5 @@ func (c *Config) GitHubClient() (ghapi.ClientOps, error) {
 	if err != nil {
 		return nil, fmt.Errorf("determining repository: %w", err)
 	}
-	return ghapi.NewClient(repo.Owner, repo.Name)
+	return ghapi.NewClient(repo.Host, repo.Owner, repo.Name)
 }

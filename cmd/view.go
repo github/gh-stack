@@ -12,6 +12,7 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/github/gh-stack/internal/config"
 	"github.com/github/gh-stack/internal/git"
+	ghapi "github.com/github/gh-stack/internal/github"
 	"github.com/github/gh-stack/internal/stack"
 	"github.com/github/gh-stack/internal/tui/stackview"
 	"github.com/spf13/cobra"
@@ -65,8 +66,9 @@ func runView(cfg *config.Config, opts *viewOptions) error {
 }
 
 func viewShort(cfg *config.Config, s *stack.Stack, currentBranch string) error {
-	var repoOwner, repoName string
+	var repoHost, repoOwner, repoName string
 	if repo, err := cfg.Repo(); err == nil {
+		repoHost = repo.Host
 		repoOwner = repo.Owner
 		repoName = repo.Name
 	}
@@ -81,7 +83,7 @@ func viewShort(cfg *config.Config, s *stack.Stack, currentBranch string) error {
 		}
 
 		indicator := branchStatusIndicator(cfg, s, b)
-		prSuffix := shortPRSuffix(cfg, b, repoOwner, repoName)
+		prSuffix := shortPRSuffix(cfg, b, repoHost, repoOwner, repoName)
 		if b.Branch == currentBranch {
 			cfg.Outf("» %s%s%s %s\n", cfg.ColorBold(b.Branch), indicator, prSuffix, cfg.ColorCyan("(current)"))
 		} else if merged {
@@ -187,13 +189,13 @@ func viewJSON(cfg *config.Config, s *stack.Stack, currentBranch string) error {
 	return err
 }
 
-func shortPRSuffix(cfg *config.Config, b stack.BranchRef, owner, repo string) string {
+func shortPRSuffix(cfg *config.Config, b stack.BranchRef, host, owner, repo string) string {
 	if b.PullRequest == nil || b.PullRequest.Number == 0 {
 		return ""
 	}
 	url := b.PullRequest.URL
 	if url == "" && owner != "" && repo != "" {
-		url = fmt.Sprintf("https://github.com/%s/%s/pull/%d", owner, repo, b.PullRequest.Number)
+		url = ghapi.PRURL(host, owner, repo, b.PullRequest.Number)
 	}
 	prNum := cfg.PRLink(b.PullRequest.Number, url)
 	colorFn := cfg.ColorSuccess // green for open
@@ -251,9 +253,10 @@ func viewFullTUI(cfg *config.Config, s *stack.Stack, currentBranch string) error
 func viewFullStatic(cfg *config.Config, s *stack.Stack, currentBranch string) error {
 	client, clientErr := cfg.GitHubClient()
 
-	var repoOwner, repoName string
+	var repoHost, repoOwner, repoName string
 	repo, repoErr := cfg.Repo()
 	if repoErr == nil {
+		repoHost = repo.Host
 		repoOwner = repo.Owner
 		repoName = repo.Name
 	}
@@ -285,7 +288,7 @@ func viewFullStatic(cfg *config.Config, s *stack.Stack, currentBranch string) er
 		} else if clientErr == nil && repoErr == nil {
 			pr, err := client.FindPRForBranch(b.Branch)
 			if err == nil && pr != nil {
-				prInfo = fmt.Sprintf("  https://github.com/%s/%s/pull/%d", repoOwner, repoName, pr.Number)
+				prInfo = "  " + ghapi.PRURL(repoHost, repoOwner, repoName, pr.Number)
 			}
 		}
 
