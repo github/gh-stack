@@ -30,6 +30,14 @@
           "type": "string",
           "description": "Identifier for this stack, populated from the API when available."
         },
+        "prefix": {
+          "type": "string",
+          "description": "Branch name prefix for the stack (e.g. 'myfeature')."
+        },
+        "numbered": {
+          "type": "boolean",
+          "description": "Whether to use auto-incrementing numbered branch names."
+        },
         "trunk": {
           "$ref": "#/$defs/branchRef",
           "description": "The trunk (base) branch of the stack."
