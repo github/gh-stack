@@ -126,9 +126,10 @@ func TestInit_PrefixAppliedToExplicitBranches(t *testing.T) {
 	defer restore()
 
 	cfg, outR, errR := config.NewTestConfig()
-	runInit(cfg, &initOptions{branches: []string{"b1", "b2"}, prefix: "feat"})
+	err := runInit(cfg, &initOptions{branches: []string{"b1", "b2"}, prefix: "feat"})
 	output := collectOutput(cfg, outR, errR)
 
+	require.NoError(t, err, "runInit should succeed")
 	require.NotContains(t, output, "\u2717", "unexpected error")
 	assert.Equal(t, []string{"feat/b1", "feat/b2"}, created, "branches should be created with prefix")
 
