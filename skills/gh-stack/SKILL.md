@@ -296,15 +296,15 @@ When a PR is squash-merged on GitHub, the original branch's commits no longer ex
 # After PR #1 (feat/auth) is squash-merged on GitHub:
 gh stack sync
 # → fetches latest, detects the merge, fast-forwards trunk
-# → rebases feat/api-routes onto updated trunk using --onto (skips merged branch)
-# → rebases feat/api-tests onto feat/api-routes
+# → rebases feat/api-routes onto updated trunk (skips merged branch)
+# → rebases feat/frontend onto feat/api-routes
 # → pushes updated branches
 # → reports: "Merged: #1"
 
 # Verify the result
 gh stack view --json
 # → feat/auth shows "isMerged": true, "state": "MERGED"
-# → feat/api-routes and feat/api-tests show updated heads
+# → feat/api-routes and feat/frontend show updated heads
 ```
 
 If `sync` hits a conflict during this process, it restores all branches to their pre-rebase state and exits with code 3. See [Handle rebase conflicts](#handle-rebase-conflicts-agent-workflow) for the resolution workflow.
@@ -520,7 +520,7 @@ gh stack sync [flags]
 
 1. **Fetch** latest changes from the remote
 2. **Fast-forward trunk** to match remote (skips if already up to date, warns if diverged)
-3. **Cascade rebase** all stack branches onto their updated parents (only if trunk moved). Handles squash-merged PRs automatically with `--onto`. If a conflict is detected, **all branches are restored** to their pre-rebase state and the command exits with code 3 — see [Handle rebase conflicts](#handle-rebase-conflicts-agent-workflow) for the resolution workflow
+3. **Cascade rebase** all stack branches onto their updated parents (only if trunk moved). Handles squash-merged PRs automatically. If a conflict is detected, **all branches are restored** to their pre-rebase state and the command exits with code 3 — see [Handle rebase conflicts](#handle-rebase-conflicts-agent-workflow) for the resolution workflow
 4. **Push** all active branches atomically
 5. **Sync PR state** from GitHub and report the status of each PR
 
@@ -575,7 +575,7 @@ gh stack rebase --abort
 
 **Conflict handling:** See [Handle rebase conflicts](#handle-rebase-conflicts-agent-workflow) in the Workflows section for the full resolution workflow.
 
-**Squash-merge detection:** If a branch's PR was squash-merged on GitHub, the rebase automatically uses `git rebase --onto` to correctly replay commits on top of the merge target. This is handled transparently.
+**Squash-merge detection:** If a branch's PR was squash-merged on GitHub, the rebase automatically handles this and correctly replays commits on top of the merge target.
 
 **Rerere (conflict memory):** `git rerere` is enabled by `init` so previously resolved conflicts are auto-resolved in future rebases.
 
