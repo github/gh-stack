@@ -2,6 +2,8 @@ package stack
 
 import (
 	"fmt"
+	"os"
+	"path/filepath"
 	"sync"
 	"testing"
 	"time"
@@ -123,6 +125,9 @@ func TestLock_FileLeftOnDisk(t *testing.T) {
 	lock.Unlock()
 
 	// Lock file should still exist after unlock (no os.Remove race).
+	_, err = os.Stat(filepath.Join(dir, lockFileName))
+	require.NoError(t, err, "lock file should remain on disk after unlock")
+
 	lock2, err := Lock(dir)
 	require.NoError(t, err, "should be able to re-lock after unlock")
 	lock2.Unlock()

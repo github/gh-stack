@@ -21,14 +21,14 @@ func (e *LockError) Unwrap() error { return e.Err }
 
 // LockTimeout is how long Lock() will wait for the exclusive lock before
 // giving up.  With the lock held only during file writes (milliseconds),
-// this timeout primarily guards against stuck or orphaned lock files.
+// this timeout primarily guards against a hung process holding the lock.
 const LockTimeout = 5 * time.Second
 
 // lockRetryInterval is the sleep between non-blocking lock attempts.
 const lockRetryInterval = 100 * time.Millisecond
 
 // FileLock provides an exclusive advisory lock on the stack file to prevent
-// concurrent Load-Modify-Save races between multiple gh-stack processes.
+// concurrent writes between multiple gh-stack processes.
 type FileLock struct {
 	f *os.File
 }
