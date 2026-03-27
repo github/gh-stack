@@ -3,6 +3,7 @@ package cmd
 import (
 	"os"
 	"path/filepath"
+	"runtime"
 	"testing"
 
 	"github.com/github/gh-stack/internal/config"
@@ -34,10 +35,20 @@ func TestAliasCmd_ValidatesName(t *testing.T) {
 	}
 }
 
-// withTmpBinDir overrides localBinDirFunc to use a temp directory and restores
-// it when the test completes.
+// skipWindows skips the current test on Windows since the alias command
+// creates Unix shell scripts.
+func skipWindows(t *testing.T) {
+	t.Helper()
+	if runtime.GOOS == "windows" {
+		t.Skip("alias command uses shell scripts; not supported on Windows")
+	}
+}
+
+// withTmpBinDir skips on Windows, overrides localBinDirFunc to use a temp
+// directory, and restores it when the test completes.
 func withTmpBinDir(t *testing.T) string {
 	t.Helper()
+	skipWindows(t)
 	tmpDir := t.TempDir()
 	orig := localBinDirFunc
 	localBinDirFunc = func() (string, error) { return tmpDir, nil }
@@ -133,7 +144,15 @@ func TestIsOurWrapper(t *testing.T) {
 }
 
 func TestDirInPath(t *testing.T) {
-	assert.True(t, dirInPath("/usr/bin") || dirInPath("/bin"), "expected at least /usr/bin or /bin in PATH")
+	// Use a directory we know is in PATH on any platform.
+	found := false
+	for _, dir := range filepath.SplitList(os.Getenv("PATH")) {
+		if dirInPath(dir) {
+			found = true
+			break
+		}
+	}
+	assert.True(t, found, "expected at least one PATH entry to be found by dirInPath")
 	assert.False(t, dirInPath("/nonexistent/path/that/should/not/exist"))
 }
 
@@ -151,6 +170,18 @@ func TestAliasCmd_RemoveFlagWiring(t *testing.T) {
 	require.NoError(t, cmd.Execute())
 
 	assert.NoFileExists(t, filepath.Join(tmpDir, testAliasName))
+}
+
+func TestAliasCmd_WindowsReturnsError(t *testing.T) {
+	if runtime.GOOS != "windows" {
+		t.Skip("Windows-only test")
+	}
+
+	cfg, _, _ := config.NewTestConfig()
+
+	cmd := AliasCmd(cfg)
+	cmd.SetArgs([]string{testAliasName})
+	assert.Error(t, cmd.Execute())
 }
 
 func TestValidateAliasName(t *testing.T) {

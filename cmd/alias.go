@@ -102,6 +102,13 @@ func runAlias(cfg *config.Config, name string, binDir string) error {
 		return ErrInvalidArgs
 	}
 
+	// Guard against overwriting an existing file that isn't on PATH
+	if _, err := os.Stat(scriptPath); err == nil {
+		cfg.Errorf("a file already exists at %s", scriptPath)
+		cfg.Printf("Choose a different alias name, for example: %s", cfg.ColorCyan("gh stack alias gst"))
+		return ErrInvalidArgs
+	}
+
 	// Ensure the bin directory exists.
 	if err := os.MkdirAll(binDir, 0o755); err != nil {
 		cfg.Errorf("failed to create directory %s: %s", binDir, err)
