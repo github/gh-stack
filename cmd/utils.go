@@ -26,6 +26,7 @@ var (
 	ErrInvalidArgs  = &ExitError{Code: 5} // invalid arguments or flags
 	ErrDisambiguate = &ExitError{Code: 6} // multiple stacks/remotes, can't auto-select
 	ErrRebaseActive = &ExitError{Code: 7} // rebase already in progress
+	ErrLockFailed   = &ExitError{Code: 8} // could not acquire stack file lock
 )
 
 // ExitError is returned by commands to indicate a specific exit code.
@@ -77,6 +78,9 @@ type loadStackResult struct {
 // branch, calls resolveStack (which may prompt for disambiguation), checks for
 // a nil stack, and re-reads the current branch (in case disambiguation caused
 // a checkout).  Errors are printed via cfg and returned.
+//
+// loadStack does NOT acquire the stack file lock.  The lock is acquired
+// automatically by stack.Save() when writing.
 func loadStack(cfg *config.Config, branch string) (*loadStackResult, error) {
 	gitDir, err := git.GitDir()
 	if err != nil {
@@ -131,6 +135,24 @@ func loadStack(cfg *config.Config, branch string) (*loadStackResult, error) {
 		Stack:         s,
 		CurrentBranch: currentBranch,
 	}, nil
+}
+
+// handleSaveError translates a stack.Save error into the appropriate user
+// message and exit error.  Lock contention and stale-file detection both
+// return ErrLockFailed (exit 8); other write failures return ErrSilent (exit 1).
+func handleSaveError(cfg *config.Config, err error) error {
+	var lockErr *stack.LockError
+	if errors.As(err, &lockErr) {
+		cfg.Errorf("another process is currently editing the stack — try again later")
+		return ErrLockFailed
+	}
+	var staleErr *stack.StaleError
+	if errors.As(err, &staleErr) {
+		cfg.Errorf("stack file was modified by another process — please re-run the command")
+		return ErrLockFailed
+	}
+	cfg.Errorf("failed to save stack state: %s", err)
+	return ErrSilent
 }
 
 // resolveStack finds the stack for the given branch, handling ambiguity when

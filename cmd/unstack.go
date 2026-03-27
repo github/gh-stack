@@ -50,8 +50,7 @@ func runUnstack(cfg *config.Config, opts *unstackOptions) error {
 	// Remove from local tracking
 	sf.RemoveStackForBranch(target)
 	if err := stack.Save(gitDir, sf); err != nil {
-		cfg.Errorf("failed to save stack state: %s", err)
-		return ErrSilent
+		return handleSaveError(cfg, err)
 	}
 	cfg.Successf("Stack removed from local tracking")
 

@@ -221,7 +221,7 @@ func runSync(cfg *config.Config, opts *syncOptions) error {
 		} else {
 			// Persist refreshed PR state even on conflict, then bail out
 			// before pushing or reporting success.
-			_ = stack.Save(gitDir, sf)
+			stack.SaveNonBlocking(gitDir, sf)
 			return ErrConflict
 		}
 	}
@@ -288,8 +288,7 @@ func runSync(cfg *config.Config, opts *syncOptions) error {
 	updateBaseSHAs(s)
 
 	if err := stack.Save(gitDir, sf); err != nil {
-		cfg.Errorf("failed to save stack state: %s", err)
-		return ErrSilent
+		return handleSaveError(cfg, err)
 	}
 
 	cfg.Printf("")

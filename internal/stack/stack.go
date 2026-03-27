@@ -1,6 +1,8 @@
 package stack
 
 import (
+	"bytes"
+	"crypto/sha256"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -168,6 +170,11 @@ type StackFile struct {
 	SchemaVersion int     `json:"schemaVersion"`
 	Repository    string  `json:"repository"`
 	Stacks        []Stack `json:"stacks"`
+
+	// loadChecksum is the SHA-256 of the raw file bytes at Load time.
+	// Save uses it to detect concurrent modifications (optimistic concurrency).
+	// nil means the file did not exist when loaded.
+	loadChecksum []byte
 }
 
 // FindAllStacksForBranch returns all stacks that contain the given branch.
@@ -233,11 +240,14 @@ func stackFilePath(gitDir string) string {
 
 // Load reads the stack file from the given git directory.
 // Returns an empty StackFile if the file does not exist.
+// The returned StackFile records a checksum of the on-disk content so that
+// Save can detect concurrent modifications.
 func Load(gitDir string) (*StackFile, error) {
 	path := stackFilePath(gitDir)
 	data, err := os.ReadFile(path)
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
+			// loadChecksum stays nil — sentinel for "file absent at load time".
 			return &StackFile{
 				SchemaVersion: schemaVersion,
 				Stacks:        []Stack{},
@@ -255,11 +265,87 @@ func Load(gitDir string) (*StackFile, error) {
 		return nil, fmt.Errorf("stack file has schema version %d, but this version of gh-stack only supports up to version %d — please upgrade gh-stack", sf.SchemaVersion, schemaVersion)
 	}
 
+	sum := sha256.Sum256(data)
+	sf.loadChecksum = sum[:]
 	return &sf, nil
 }
 
-// Save writes the stack file to the given git directory.
+// Save acquires an exclusive lock on the stack file, verifies the file hasn't
+// been modified since Load (optimistic concurrency), writes sf as JSON, and
+// releases the lock.  The lock is held only for the read-compare-write window.
+// Returns *LockError if the lock times out, or *StaleError if another process
+// modified the file since it was loaded.
 func Save(gitDir string, sf *StackFile) error {
+	lock, err := Lock(gitDir)
+	if err != nil {
+		return err // *LockError for contention, plain error for I/O failures
+	}
+	defer lock.Unlock()
+
+	if err := checkStale(gitDir, sf); err != nil {
+		return err
+	}
+	return writeStackFile(gitDir, sf)
+}
+
+// SaveNonBlocking attempts to save without blocking.  If another process holds
+// the lock or the file was modified since Load, the save is silently skipped.
+// Use this for best-effort metadata persistence (e.g. syncing PR state in view).
+func SaveNonBlocking(gitDir string, sf *StackFile) {
+	path := filepath.Join(gitDir, lockFileName)
+	f, err := os.OpenFile(path, os.O_CREATE|os.O_RDWR, 0644)
+	if err != nil {
+		return
+	}
+	if tryLockFile(f) != nil {
+		f.Close()
+		return
+	}
+	lock := &FileLock{f: f}
+	defer lock.Unlock()
+
+	if checkStale(gitDir, sf) != nil {
+		return
+	}
+	_ = writeStackFile(gitDir, sf)
+}
+
+// checkStale compares the current on-disk content against the checksum
+// captured at Load time.  Returns *StaleError if the file was modified
+// by another process.  The caller must hold the lock.
+func checkStale(gitDir string, sf *StackFile) error {
+	path := stackFilePath(gitDir)
+	data, err := os.ReadFile(path)
+
+	if errors.Is(err, os.ErrNotExist) {
+		// File absent on disk.
+		if sf.loadChecksum == nil {
+			return nil // was absent at Load time too — no conflict
+		}
+		// File existed at Load but is now gone.  Allow the write to
+		// recreate it rather than erroring; this is not a lost-update.
+		return nil
+	}
+	if err != nil {
+		return fmt.Errorf("reading stack file for staleness check: %w", err)
+	}
+
+	// File exists on disk.
+	if sf.loadChecksum == nil {
+		// File was absent at Load but another process created it.
+		return &StaleError{Err: fmt.Errorf(
+			"stack file was created by another process since it was loaded")}
+	}
+
+	sum := sha256.Sum256(data)
+	if !bytes.Equal(sf.loadChecksum, sum[:]) {
+		return &StaleError{Err: fmt.Errorf(
+			"stack file was modified by another process since it was loaded")}
+	}
+	return nil
+}
+
+func writeStackFile(gitDir string, sf *StackFile) error {
 	sf.SchemaVersion = schemaVersion
 	if sf.Stacks == nil {
 		sf.Stacks = []Stack{}
@@ -272,5 +358,9 @@ func Save(gitDir string, sf *StackFile) error {
 	if err := os.WriteFile(path, data, 0644); err != nil {
 		return fmt.Errorf("writing stack file: %w", err)
 	}
+	// Refresh checksum so a second Save on the same StackFile doesn't
+	// spuriously fail the staleness check.
+	sum := sha256.Sum256(data)
+	sf.loadChecksum = sum[:]
 	return nil
 }

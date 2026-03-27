@@ -305,7 +305,7 @@ func runRebase(cfg *config.Config, opts *rebaseOptions) error {
 
 	syncStackPRs(cfg, s)
 
-	_ = stack.Save(gitDir, sf)
+	stack.SaveNonBlocking(gitDir, sf)
 
 	merged := s.MergedBranches()
 	if len(merged) > 0 {
@@ -496,7 +496,7 @@ func continueRebase(cfg *config.Config, gitDir string) error {
 
 	syncStackPRs(cfg, s)
 
-	_ = stack.Save(gitDir, sf)
+	stack.SaveNonBlocking(gitDir, sf)
 
 	cfg.Printf("All branches in stack rebased locally with %s", s.Trunk.Branch)
 	cfg.Printf("To push up your changes and open/update the stack of PRs, run `%s`",

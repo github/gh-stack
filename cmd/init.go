@@ -327,7 +327,7 @@ func runInit(cfg *config.Config, opts *initOptions) error {
 	syncStackPRs(cfg, &sf.Stacks[len(sf.Stacks)-1])
 
 	if err := stack.Save(gitDir, sf); err != nil {
-		return err
+		return handleSaveError(cfg, err)
 	}
 
 	// Print result

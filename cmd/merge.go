@@ -44,7 +44,7 @@ func runMerge(cfg *config.Config, target string) error {
 	syncStackPRs(cfg, s)
 
 	// Persist the refreshed PR state.
-	_ = stack.Save(result.GitDir, result.StackFile)
+	stack.SaveNonBlocking(result.GitDir, result.StackFile)
 
 	// Resolve which branch to operate on.
 	var br *stack.BranchRef

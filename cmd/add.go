@@ -200,8 +200,7 @@ func runAdd(cfg *config.Config, opts *addOptions, args []string) error {
 	}
 
 	if err := stack.Save(gitDir, sf); err != nil {
-		cfg.Errorf("failed to save stack state: %s", err)
-		return ErrSilent
+		return handleSaveError(cfg, err)
 	}
 
 	// Print summary

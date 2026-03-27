@@ -732,6 +732,7 @@ gh stack unstack feature-auth --local
 | 5 | Invalid arguments | Fix the command invocation (check flags and arguments) |
 | 6 | Disambiguation required | A branch belongs to multiple stacks. Run `gh stack checkout <specific-branch>` to switch to a non-shared branch first |
 | 7 | Rebase already in progress | Run `gh stack rebase --continue` (after resolving conflicts) or `gh stack rebase --abort` to start over |
+| 8 | Stack is locked | Another `gh stack` process is writing the stack file. Wait and retry — the lock times out after 5 seconds |
 
 ## Known limitations
 

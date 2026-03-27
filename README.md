@@ -467,3 +467,4 @@ Compared to the typical workflow, there's no need to name branches, run `git add
 | 5 | Invalid arguments or flags |
 | 6 | Disambiguation required (branch belongs to multiple stacks) |
 | 7 | Rebase already in progress |
+| 8 | Stack is locked by another process |

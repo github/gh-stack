@@ -180,8 +180,7 @@ func runPush(cfg *config.Config, opts *pushOptions) error {
 	syncStackPRs(cfg, s)
 
 	if err := stack.Save(gitDir, sf); err != nil {
-		cfg.Errorf("failed to save stack state: %s", err)
-		return ErrSilent
+		return handleSaveError(cfg, err)
 	}
 
 	cfg.Successf("Pushed and synced %d branches", len(s.ActiveBranches()))
