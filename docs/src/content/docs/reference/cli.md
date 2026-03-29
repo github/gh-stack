@@ -343,6 +343,39 @@ gh stack feedback "Support for reordering branches"
 
 ---
 
+## `gh stack alias`
+
+Create a short command alias so you can type less.
+
+```sh
+gh stack alias [name] [flags]
+```
+
+Installs a small wrapper script into `~/.local/bin/` that forwards all arguments to `gh stack`. The default alias name is `gs`, but you can choose any name by passing it as an argument. After setup, you can run `gs push` instead of `gh stack push`.
+
+On Windows, automatic alias creation is not supported — the command prints manual instructions for creating a batch file or PowerShell function.
+
+| Flag | Description |
+|------|-------------|
+| `--remove` | Remove a previously created alias |
+
+**Examples:**
+
+```sh
+# Create the default alias (gs)
+gh stack alias
+#    → now "gs push", "gs view", etc. all work
+
+# Create a custom alias
+gh stack alias gst
+
+# Remove an alias
+gh stack alias --remove
+gh stack alias gst --remove
+```
+
+---
+
 ## Exit Codes
 
 | Code | Meaning |
