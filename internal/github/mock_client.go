@@ -10,6 +10,7 @@ type MockClient struct {
 	FindAnyPRForBranchFn     func(string) (*PullRequest, error)
 	FindPRDetailsForBranchFn func(string) (*PRDetails, error)
 	CreatePRFn    func(string, string, string, string, bool) (*PullRequest, error)
+	CreateStackFn func([]int) (int, error)
 	DeleteStackFn func() error
 }
 
@@ -49,4 +50,11 @@ func (m *MockClient) DeleteStack() error {
 		return m.DeleteStackFn()
 	}
 	return fmt.Errorf("deleting a stack on GitHub is not yet supported by the API")
+}
+
+func (m *MockClient) CreateStack(prNumbers []int) (int, error) {
+	if m.CreateStackFn != nil {
+		return m.CreateStackFn(prNumbers)
+	}
+	return 0, nil
 }

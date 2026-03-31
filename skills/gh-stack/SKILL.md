@@ -489,6 +489,7 @@ gh stack push --skip-prs
 
 - Pushes all active (non-merged) branches atomically (`--force-with-lease --atomic`)
 - Creates a new PR for each branch that doesn't have one (base set to the first non-merged ancestor branch)
+- After creating PRs, links them together as a **Stack** on GitHub (requires the repository to have stacks enabled)
 - Syncs PR metadata for branches that already have PRs
 
 **PR title auto-generation (`--auto`):**

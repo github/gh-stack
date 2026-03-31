@@ -3,8 +3,10 @@ package cmd
 import (
 	"errors"
 	"fmt"
+	"strconv"
 	"strings"
 
+	"github.com/cli/go-gh/v2/pkg/api"
 	"github.com/cli/go-gh/v2/pkg/prompter"
 	"github.com/github/gh-stack/internal/config"
 	"github.com/github/gh-stack/internal/git"
@@ -165,15 +167,8 @@ func runPush(cfg *config.Config, opts *pushOptions) error {
 		}
 	}
 
-	// TODO: Add PRs to a stack
-	//
-	// We can call an API after all the individual PRs are created/updated to create the stack at once,
-	// or we can add a flag to the existing PR API to incrementally build the stack.
-	//
-	// For now, the PRs are pushed and created individually but are NOT linked as a formal stack on GitHub.
-	cfg.Warningf("Stacked PRs is not yet implemented — PRs were created individually.")
-	fmt.Fprintf(cfg.Err, "  Once the GitHub Stacks API is available, PRs will be automatically\n")
-	fmt.Fprintf(cfg.Err, "  grouped into a Stack.\n")
+	// Create or update the stack on GitHub
+	createStack(cfg, client, s)
 
 	// Update base commit hashes and sync PR state
 	updateBaseSHAs(s)
@@ -260,4 +255,56 @@ func pickRemote(cfg *config.Config, branch, remoteOverride string) (string, erro
 		return "", fmt.Errorf("remote selection: %w", promptErr)
 	}
 	return multi.Remotes[selected], nil
+}
+
+// createStack attempts to create a stack on GitHub from the active PRs.
+// It is a best-effort operation: failures are reported as warnings but do
+// not cause the push command to fail (the PRs are already created).
+func createStack(cfg *config.Config, client interface{ CreateStack([]int) (int, error) }, s *stack.Stack) {
+	// Collect PR numbers in stack order (bottom to top).
+	var prNumbers []int
+	for _, b := range s.Branches {
+		if b.IsMerged() {
+			continue
+		}
+		if b.PullRequest != nil {
+			prNumbers = append(prNumbers, b.PullRequest.Number)
+		}
+	}
+
+	// The API requires at least 2 PRs to form a stack.
+	if len(prNumbers) < 2 {
+		return
+	}
+
+	stackID, err := client.CreateStack(prNumbers)
+	if err == nil {
+		s.ID = strconv.Itoa(stackID)
+		cfg.Successf("Stack created on GitHub with %d PRs", len(prNumbers))
+		return
+	}
+
+	cfg.Warningf("Failed to create stack on GitHub: %v", err)
+	var httpErr *api.HTTPError
+	if !errors.As(err, &httpErr) {
+		cfg.Warningf("Failed to create stack on GitHub: %v", err)
+		return
+	}
+
+	cfg.Warningf("error %s with code %s", httpErr.StatusCode, httpErr.Message)
+	switch httpErr.StatusCode {
+	case 422:
+		if s.ID != "" {
+			// Stack was already created in a previous push; the update API
+			// (PUT) is needed to modify it but is not yet available.
+			cfg.Infof("Stack already exists on GitHub")
+		} else {
+			cfg.Warningf("Could not create stack: %s", httpErr.Message)
+			cfg.Printf("  Updating existing stacks will be supported in an upcoming release.")
+		}
+	case 404:
+		cfg.Warningf("Stacked PRs are not enabled for this repository")
+	default:
+		cfg.Warningf("Failed to create stack on GitHub: %s", httpErr.Message)
+	}
 }

@@ -3,8 +3,10 @@ package cmd
 import (
 	"fmt"
 	"io"
+	"net/url"
 	"testing"
 
+	"github.com/cli/go-gh/v2/pkg/api"
 	"github.com/github/gh-stack/internal/config"
 	"github.com/github/gh-stack/internal/git"
 	"github.com/github/gh-stack/internal/github"
@@ -224,4 +226,196 @@ func TestPush_Humanize(t *testing.T) {
 			assert.Equal(t, tt.want, humanize(tt.input))
 		})
 	}
+}
+
+func TestCreateStack_Success(t *testing.T) {
+	s := &stack.Stack{
+		Trunk: stack.BranchRef{Branch: "main"},
+		Branches: []stack.BranchRef{
+			{Branch: "b1", PullRequest: &stack.PullRequestRef{Number: 10}},
+			{Branch: "b2", PullRequest: &stack.PullRequestRef{Number: 11}},
+		},
+	}
+
+	var gotNumbers []int
+	mock := &github.MockClient{
+		CreateStackFn: func(prNumbers []int) (int, error) {
+			gotNumbers = prNumbers
+			return 42, nil
+		},
+	}
+
+	cfg, _, errR := config.NewTestConfig()
+	createStack(cfg, mock, s)
+
+	cfg.Err.Close()
+	errOut, _ := io.ReadAll(errR)
+	output := string(errOut)
+
+	assert.Equal(t, []int{10, 11}, gotNumbers)
+	assert.Equal(t, "42", s.ID)
+	assert.Contains(t, output, "Stack created on GitHub with 2 PRs")
+}
+
+func TestCreateStack_AlreadyExists_WithLocalID(t *testing.T) {
+	s := &stack.Stack{
+		ID:    "99",
+		Trunk: stack.BranchRef{Branch: "main"},
+		Branches: []stack.BranchRef{
+			{Branch: "b1", PullRequest: &stack.PullRequestRef{Number: 10}},
+			{Branch: "b2", PullRequest: &stack.PullRequestRef{Number: 11}},
+		},
+	}
+
+	mock := &github.MockClient{
+		CreateStackFn: func([]int) (int, error) {
+			return 0, &api.HTTPError{
+				StatusCode: 422,
+				Message:    "Pull requests are already in a stack",
+				RequestURL: &url.URL{Path: "/repos/o/r/cli_internal/pulls/stacks"},
+			}
+		},
+	}
+
+	cfg, _, errR := config.NewTestConfig()
+	createStack(cfg, mock, s)
+
+	cfg.Err.Close()
+	errOut, _ := io.ReadAll(errR)
+	output := string(errOut)
+
+	assert.Contains(t, output, "Stack already exists on GitHub")
+	assert.Equal(t, "99", s.ID)
+}
+
+func TestCreateStack_AlreadyExists_NoLocalID(t *testing.T) {
+	s := &stack.Stack{
+		Trunk: stack.BranchRef{Branch: "main"},
+		Branches: []stack.BranchRef{
+			{Branch: "b1", PullRequest: &stack.PullRequestRef{Number: 10}},
+			{Branch: "b2", PullRequest: &stack.PullRequestRef{Number: 11}},
+		},
+	}
+
+	mock := &github.MockClient{
+		CreateStackFn: func([]int) (int, error) {
+			return 0, &api.HTTPError{
+				StatusCode: 422,
+				Message:    "Pull requests are already in a stack",
+				RequestURL: &url.URL{Path: "/repos/o/r/cli_internal/pulls/stacks"},
+			}
+		},
+	}
+
+	cfg, _, errR := config.NewTestConfig()
+	createStack(cfg, mock, s)
+
+	cfg.Err.Close()
+	errOut, _ := io.ReadAll(errR)
+	output := string(errOut)
+
+	assert.Contains(t, output, "Could not create stack")
+	assert.Contains(t, output, "Updating existing stacks will be supported in an upcoming release")
+}
+
+func TestCreateStack_NotAvailable(t *testing.T) {
+	s := &stack.Stack{
+		Trunk: stack.BranchRef{Branch: "main"},
+		Branches: []stack.BranchRef{
+			{Branch: "b1", PullRequest: &stack.PullRequestRef{Number: 10}},
+			{Branch: "b2", PullRequest: &stack.PullRequestRef{Number: 11}},
+		},
+	}
+
+	mock := &github.MockClient{
+		CreateStackFn: func([]int) (int, error) {
+			return 0, &api.HTTPError{
+				StatusCode: 404,
+				Message:    "Not Found",
+				RequestURL: &url.URL{Path: "/repos/o/r/cli_internal/pulls/stacks"},
+			}
+		},
+	}
+
+	cfg, _, errR := config.NewTestConfig()
+	createStack(cfg, mock, s)
+
+	cfg.Err.Close()
+	errOut, _ := io.ReadAll(errR)
+	output := string(errOut)
+
+	assert.Contains(t, output, "not yet available")
+}
+
+func TestCreateStack_SkippedForSinglePR(t *testing.T) {
+	s := &stack.Stack{
+		Trunk: stack.BranchRef{Branch: "main"},
+		Branches: []stack.BranchRef{
+			{Branch: "b1", PullRequest: &stack.PullRequestRef{Number: 10}},
+		},
+	}
+
+	called := false
+	mock := &github.MockClient{
+		CreateStackFn: func([]int) (int, error) {
+			called = true
+			return 42, nil
+		},
+	}
+
+	cfg, _, _ := config.NewTestConfig()
+	createStack(cfg, mock, s)
+	cfg.Err.Close()
+
+	assert.False(t, called, "CreateStack should not be called with fewer than 2 PRs")
+}
+
+func TestCreateStack_SkipsMergedBranches(t *testing.T) {
+	s := &stack.Stack{
+		Trunk: stack.BranchRef{Branch: "main"},
+		Branches: []stack.BranchRef{
+			{Branch: "b1", PullRequest: &stack.PullRequestRef{Number: 10, Merged: true}},
+			{Branch: "b2", PullRequest: &stack.PullRequestRef{Number: 11}},
+			{Branch: "b3", PullRequest: &stack.PullRequestRef{Number: 12}},
+		},
+	}
+
+	var gotNumbers []int
+	mock := &github.MockClient{
+		CreateStackFn: func(prNumbers []int) (int, error) {
+			gotNumbers = prNumbers
+			return 42, nil
+		},
+	}
+
+	cfg, _, _ := config.NewTestConfig()
+	createStack(cfg, mock, s)
+	cfg.Err.Close()
+
+	assert.Equal(t, []int{11, 12}, gotNumbers, "should only include non-merged PRs")
+}
+
+func TestCreateStack_SkipsBranchesWithoutPR(t *testing.T) {
+	s := &stack.Stack{
+		Trunk: stack.BranchRef{Branch: "main"},
+		Branches: []stack.BranchRef{
+			{Branch: "b1", PullRequest: &stack.PullRequestRef{Number: 10}},
+			{Branch: "b2"}, // no PR yet
+			{Branch: "b3", PullRequest: &stack.PullRequestRef{Number: 12}},
+		},
+	}
+
+	var gotNumbers []int
+	mock := &github.MockClient{
+		CreateStackFn: func(prNumbers []int) (int, error) {
+			gotNumbers = prNumbers
+			return 42, nil
+		},
+	}
+
+	cfg, _, _ := config.NewTestConfig()
+	createStack(cfg, mock, s)
+	cfg.Err.Close()
+
+	assert.Equal(t, []int{10, 12}, gotNumbers, "should skip branches without PRs")
 }

@@ -55,7 +55,7 @@ main (trunk)
 
 The **bottom** of the stack is the branch closest to the trunk, and the **top** is the branch furthest from it. Each branch inherits from the one below it. Navigation commands (`up`, `down`, `top`, `bottom`) follow this model: `up` moves away from trunk, `down` moves toward it.
 
-When you push, `gh stack` creates one PR per branch. Each PR's base is set to the branch below it in the stack, so reviewers see only the diff for that layer.
+When you push, `gh stack` creates one PR per branch and links them together as a **Stack** on GitHub. Each PR's base is set to the branch below it in the stack, so reviewers see only the diff for that layer.
 
 ### Local tracking
 
@@ -260,6 +260,8 @@ gh stack push [flags]
 ```
 
 Pushes every branch to the remote, then for each branch either creates a new PR (with the correct base branch) or updates the base of an existing PR if it has changed. Uses `--force-with-lease` by default to safely update rebased branches.
+
+After creating PRs, `push` automatically creates a **Stack** on GitHub to link the PRs together. If the stack already exists on GitHub (e.g., from a previous push), it is left as-is — updating existing stacks will be supported in an upcoming release.
 
 When creating new PRs, you will be prompted to enter a title for each one. Press Enter to accept the default (branch name), or use `--auto` to skip prompting entirely.
 
