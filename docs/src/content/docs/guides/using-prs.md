@@ -84,11 +84,14 @@ When you merge a PR at the bottom of the stack, the remaining branches are **aut
 After making local changes or resolving conflicts, use the CLI to push and sync:
 
 ```sh
-# Push all branches and create/update PRs
+# Push all branches to the remote
 gh stack push
+
+# Create or update PRs and the Stack on GitHub
+gh stack submit
 
 # Or sync everything in one command (fetch, rebase, push, update PRs)
 gh stack sync
 ```
 
-`gh stack push` uses `--force-with-lease` by default to safely update rebased branches.
+`gh stack push` uses `--force-with-lease` to safely update rebased branches. Use `gh stack submit` when you need to create new PRs or update the Stack on GitHub.

@@ -111,13 +111,36 @@ gh stack add -um "Update docs" docs-layer
 
 ## `gh stack push`
 
-Push all branches in the current stack and create or update pull requests.
+Push all branches in the current stack to the remote.
 
 ```sh
 gh stack push [flags]
 ```
 
-Pushes every branch to the remote, then for each branch either creates a new PR (with the correct base branch) or updates the base of an existing PR if it has changed. Uses `--force-with-lease` by default to safely update rebased branches.
+Pushes every branch to the remote using `--force-with-lease --atomic`. This is a lightweight wrapper around `git push` that knows about all branches in the stack. It does not create or update pull requests — use `gh stack submit` for that.
+
+| Flag | Description |
+|------|-------------|
+| `--remote <name>` | Remote to push to (defaults to auto-detected remote) |
+
+**Examples:**
+
+```sh
+gh stack push
+gh stack push --remote upstream
+```
+
+---
+
+## `gh stack submit`
+
+Push all branches and create/update PRs and the stack on GitHub.
+
+```sh
+gh stack submit [flags]
+```
+
+Creates a Stacked PR for every branch in the stack, pushing branches to the remote. After creating PRs, `submit` automatically creates a **Stack** on GitHub to link the PRs together. If the stack already exists on GitHub (e.g., from a previous submit), new PRs are added to the existing stack.
 
 When creating new PRs, you will be prompted to enter a title for each one. Press Enter to accept the default (branch name), or use `--auto` to skip prompting entirely.
 
@@ -125,16 +148,14 @@ When creating new PRs, you will be prompted to enter a title for each one. Press
 |------|-------------|
 | `--auto` | Use auto-generated PR titles without prompting |
 | `--draft` | Create new PRs as drafts |
-| `--skip-prs` | Push branches without creating or updating PRs |
 | `--remote <name>` | Remote to push to (defaults to auto-detected remote) |
 
 **Examples:**
 
 ```sh
-gh stack push
-gh stack push --auto
-gh stack push --draft
-gh stack push --skip-prs
+gh stack submit
+gh stack submit --auto
+gh stack submit --draft
 ```
 
 ---
@@ -264,39 +285,6 @@ gh stack checkout
 
 ---
 
-## `gh stack unstack`
-
-Remove a stack from local tracking and optionally delete it on GitHub.
-
-```sh
-gh stack unstack [branch] [flags]
-```
-
-If no branch is specified, uses the current branch to find the stack. By default, the stack is removed from both local tracking and GitHub. Use `--local` to only remove the local tracking entry.
-
-| Flag | Description |
-|------|-------------|
-| `--local` | Only delete the stack locally (keep it on GitHub) |
-
-| Argument | Description |
-|----------|-------------|
-| `[branch]` | A branch in the stack to delete (defaults to the current branch) |
-
-**Examples:**
-
-```sh
-# Remove the stack from local tracking and GitHub
-gh stack unstack
-
-# Only remove local tracking
-gh stack unstack --local
-
-# Specify a branch to identify the stack
-gh stack unstack feature-auth
-```
-
----
-
 ## Navigation
 
 Move between branches in the current stack without having to remember branch names.
@@ -388,3 +376,4 @@ gh stack alias gst --remove
 | 5 | Invalid arguments or flags |
 | 6 | Disambiguation required (branch belongs to multiple stacks) |
 | 7 | Rebase already in progress |
+| 8 | Stack is locked by another process |

@@ -24,14 +24,14 @@ gh stack add auth-layer
 # ... make commits ...
 gh stack add api-routes
 # ... make commits ...
-gh stack push
+gh stack submit
 ```
 
 Or you can create stacked PRs manually by setting each PR's base branch to the branch of the PR below it.
 
 ### How do I add PRs to my stack?
 
-Use `gh stack add <branch-name>` to add a new branch on top of the current stack. When you run `gh stack push`, a PR is created for each branch.
+Use `gh stack add <branch-name>` to add a new branch on top of the current stack. When you run `gh stack submit`, a PR is created for each branch and they are linked together as a Stack on GitHub.
 
 ### How can I modify my stack?
 
@@ -39,11 +39,9 @@ Reordering or inserting branches into the middle of a stack is not currently sup
 
 ### How do I delete my stack?
 
-Use `gh stack unstack` to remove a stack from both local tracking and GitHub, or `gh stack unstack --local` to only remove the local tracking entry.
+<!-- TODO: Update once stack deletion workflow is finalized -->
 
-### What happens when you unstack?
-
-When you unstack, the local tracking metadata is removed. The branches and PRs on GitHub remain as-is unless you explicitly delete them. Note that auto-merge is disabled on any PR in a stack to avoid changes from one PR getting merged into another out of order.
+You can unstack a stacked of PRs from the PRs UI on the web. Functionality to do this from the CLI will be coming soon.
 
 ### Can stacks be created across forks?
 

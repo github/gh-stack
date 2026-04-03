@@ -59,17 +59,25 @@ git add .
 git commit -m "Add API routes"
 ```
 
-### 4. Push and create PRs
+### 4. Push branches
 
-Push all branches and create pull requests in one command:
+Push all branches to the remote:
 
 ```sh
 gh stack push
 ```
 
-Each PR is created with the correct base branch — `auth-middleware` targets `main`, and `api-routes` targets `auth-middleware` — so reviewers see only the diff for that layer.
+### 5. Create PRs
 
-### 5. View the stack
+Create pull requests and link them as a stack on GitHub:
+
+```sh
+gh stack submit
+```
+
+Each PR is created with the correct base branch — your first branch targets `main`, and `api-routes` targets the first branch — so reviewers see only the diff for that layer. The PRs are automatically linked together as a Stack on GitHub.
+
+### 6. View the stack
 
 See the full state of your stack at any time:
 

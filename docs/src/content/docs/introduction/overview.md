@@ -76,7 +76,8 @@ While the PR UI provides the review and merge experience, the `gh stack` CLI han
 
 - **Creating branches** — `gh stack init` and `gh stack add` create and track branches in the correct dependency order.
 - **Keeping branches rebased** — `gh stack rebase` cascades changes through the stack, handling both regular and squash-merged PRs.
-- **Pushing and creating PRs** — `gh stack push` pushes all branches and creates or updates PRs with the correct base branches.
+- **Pushing branches** — `gh stack push` pushes all branches to the remote.
+- **Creating PRs** — `gh stack submit` pushes branches and creates or updates PRs, linking them as a Stack on GitHub.
 - **Navigating the stack** — `gh stack up`, `down`, `top`, and `bottom` let you move between layers without remembering branch names.
 - **Syncing everything** — `gh stack sync` fetches, rebases, pushes, and updates PR state in one command.
 

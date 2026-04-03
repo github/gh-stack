@@ -20,8 +20,8 @@ gh stack init
 gh stack add api-routes
 # ... write code, make commits ...
 
-# 4. Push everything and create PRs
-gh stack push
+# 4. Push everything and create Stacked PRs
+gh stack submit
 
 # 5. Reviewer requests changes on the first PR
 gh stack bottom
@@ -30,7 +30,7 @@ gh stack bottom
 # 6. Rebase the rest of the stack on top of your fix
 gh stack rebase
 
-# 7. Push the updated stack
+# 7. Push the updated branches
 gh stack push
 
 # 8. When the first PR is merged, sync the stack
@@ -65,8 +65,8 @@ gh stack add -Am "API routes"
 gh stack add -Am "Frontend components"
 #    → creates feat/03
 
-# 7. Push everything
-gh stack push
+# 7. Push everything and create PRs
+gh stack submit
 ```
 
 Each `gh stack add -Am "..."` stages all files, commits, and (if the current branch already has commits) creates a new branch — no separate `git add` or `git commit` needed.
@@ -175,5 +175,5 @@ With the skill installed, your agent can:
 - Plan stack structure based on the work being done
 - Create branches and commit changes in the right layers
 - Navigate between branches to make mid-stack changes
-- Push and create PRs with proper base branches
+- Push branches and create stacked PRs
 - Rebase after making changes to lower layers
