@@ -1,9 +1,9 @@
 ---
 title: Typical Workflows
-description: Common patterns and workflows for using stacked PRs effectively.
+description: Common patterns and workflows for using Stacked PRs effectively.
 ---
 
-This guide covers the most common workflows for day-to-day use of stacked PRs, from the standard flow to advanced patterns.
+This guide covers the most common workflows for day-to-day use of Stacked PRs, from the standard flow to advanced patterns.
 
 ## Standard Workflow
 
@@ -165,7 +165,7 @@ All branches in a stack should be part of the same feature or project. If you ne
 
 ## Using AI Agents with Stacks
 
-AI coding agents (like GitHub Copilot) can create and manage stacked PRs on your behalf. Install the gh-stack skill to give them the context they need:
+AI coding agents (like GitHub Copilot) can create and manage Stacked PRs on your behalf. Install the gh-stack skill to give them the context they need:
 
 ```sh
 npx skills add github/gh-stack
@@ -175,5 +175,5 @@ With the skill installed, your agent can:
 - Plan stack structure based on the work being done
 - Create branches and commit changes in the right layers
 - Navigate between branches to make mid-stack changes
-- Push branches and create stacked PRs
+- Push branches and create Stacked PRs
 - Rebase after making changes to lower layers

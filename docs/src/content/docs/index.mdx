@@ -16,6 +16,9 @@ hero:
 ---
 
 import { Card, CardGrid } from '@astrojs/starlight/components';
+import { Image } from 'astro:assets';
+import stackDiagram from '../../assets/stack-diagram.svg';
+import stackNavigator from '../../assets/screenshots/stack-navigator.png';
 
 <CardGrid>
   <Card title="Stacked PRs, Native in GitHub" icon="github">
@@ -40,13 +43,15 @@ Large pull requests are hard to review, slow to merge, and prone to conflicts. R
 
 A **stack** is a series of pull requests in the same repository where each PR targets the branch of the PR below it, forming an ordered chain that ultimately lands on your main branch.
 
-import stackDiagram from '../../assets/stack-diagram.svg';
-
 <div style="max-width: 420px; margin: 1.5rem auto;">
-  <img src={stackDiagram.src} alt="A stack of pull requests: main at the bottom, with auth-layer (PR #1), api-endpoints (PR #2), and frontend (PR #3) stacked on top" />
+  <Image src={stackDiagram} alt="A stack of pull requests: main at the bottom, with auth-layer (PR #1), api-endpoints (PR #2), and frontend (PR #3) stacked on top" />
 </div>
 
 GitHub understands stacks end-to-end: the pull request UI shows a **stack map** so reviewers can navigate between layers, branch protection rules are enforced against the **final target branch** (not just the direct base), and CI runs for every PR in the stack.
+
+<div style="max-width: 600px; margin: 1.5rem auto;">
+  <Image src={stackNavigator} alt="The stack navigator in a pull request header" />
+</div>
 
 ## How It Works
 

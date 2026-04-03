@@ -13,7 +13,9 @@ Requires the [GitHub CLI](https://cli.github.com/) (`gh`) v2.0+.
 
 ---
 
-## `gh stack init`
+## Stack Management
+
+### `gh stack init`
 
 Initialize a new stack in the current repository.
 
@@ -60,9 +62,7 @@ gh stack init -p feat --numbered
 #    → creates feat/01 automatically
 ```
 
----
-
-## `gh stack add`
+### `gh stack add`
 
 Add a new branch on top of the current stack.
 
@@ -107,32 +107,57 @@ gh stack add -Am "Add tests" test-layer
 gh stack add -um "Update docs" docs-layer
 ```
 
----
+### `gh stack view`
 
-## `gh stack push`
-
-Push all branches in the current stack to the remote.
+View the current stack.
 
 ```sh
-gh stack push [flags]
+gh stack view [flags]
 ```
 
-Pushes every branch to the remote using `--force-with-lease --atomic`. This is a lightweight wrapper around `git push` that knows about all branches in the stack. It does not create or update pull requests — use `gh stack submit` for that.
+Shows all branches in the stack, their ordering, PR links, and the most recent commit with a relative timestamp. Output is piped through a pager (respects `GIT_PAGER`, `PAGER`, or defaults to `less -R`).
 
 | Flag | Description |
 |------|-------------|
-| `--remote <name>` | Remote to push to (defaults to auto-detected remote) |
+| `-s, --short` | Compact output (branch names only) |
+| `--json` | Output stack data as JSON |
 
 **Examples:**
 
 ```sh
-gh stack push
-gh stack push --remote upstream
+gh stack view
+gh stack view --short
+gh stack view --json
+```
+
+### `gh stack checkout`
+
+Check out a locally tracked stack from a pull request number or branch name.
+
+```sh
+gh stack checkout [<pr-or-branch>]
+```
+
+Resolves the target against stacks stored in local tracking (`.git/gh-stack`). Accepts a PR number (e.g. `42`) or a branch name that belongs to a locally tracked stack. When run without arguments in an interactive terminal, shows a menu of all locally available stacks to choose from.
+
+**Examples:**
+
+```sh
+# Check out a stack by PR number
+gh stack checkout 42
+
+# Check out a stack by branch name
+gh stack checkout feature-auth
+
+# Interactive — select from locally tracked stacks
+gh stack checkout
 ```
 
 ---
 
-## `gh stack submit`
+## Remote Operations
+
+### `gh stack submit`
 
 Push all branches and create/update PRs and the stack on GitHub.
 
@@ -158,9 +183,33 @@ gh stack submit --auto
 gh stack submit --draft
 ```
 
----
+### `gh stack sync`
 
-## `gh stack rebase`
+Fetch, rebase, push, and sync PR state in a single command.
+
+```sh
+gh stack sync [flags]
+```
+
+Performs a safe, non-interactive synchronization of the entire stack:
+
+1. **Fetch** — fetches the latest changes from `origin`
+2. **Fast-forward trunk** — fast-forwards the trunk branch to match the remote (skips if diverged)
+3. **Cascade rebase** — rebases all stack branches onto their updated parents (only if trunk moved). If a conflict is detected, all branches are restored to their original state and you are advised to run `gh stack rebase` to resolve conflicts interactively
+4. **Push** — pushes all branches (uses `--force-with-lease` if a rebase occurred)
+5. **Sync PRs** — syncs PR state from GitHub and reports the status of each PR
+
+| Flag | Description |
+|------|-------------|
+| `--remote <name>` | Remote to fetch from and push to (defaults to auto-detected remote) |
+
+**Examples:**
+
+```sh
+gh stack sync
+```
+
+### `gh stack rebase`
 
 Pull from remote and do a cascading rebase across the stack.
 
@@ -201,137 +250,98 @@ gh stack rebase --upstack
 # After resolving a conflict
 gh stack rebase --continue
 
-# Give up and restore everything
+# Abort rebase and restore everything
 gh stack rebase --abort
 ```
 
----
+### `gh stack push`
 
-## `gh stack sync`
-
-Fetch, rebase, push, and sync PR state in a single command.
+Push all branches in the current stack to the remote.
 
 ```sh
-gh stack sync [flags]
+gh stack push [flags]
 ```
 
-Performs a safe, non-interactive synchronization of the entire stack:
-
-1. **Fetch** — fetches the latest changes from `origin`
-2. **Fast-forward trunk** — fast-forwards the trunk branch to match the remote (skips if diverged)
-3. **Cascade rebase** — rebases all stack branches onto their updated parents (only if trunk moved). If a conflict is detected, all branches are restored to their original state and you are advised to run `gh stack rebase` to resolve conflicts interactively
-4. **Push** — pushes all branches (uses `--force-with-lease` if a rebase occurred)
-5. **Sync PRs** — syncs PR state from GitHub and reports the status of each PR
+Pushes every branch to the remote using `--force-with-lease --atomic`. This is a lightweight wrapper around `git push` that knows about all branches in the stack. It does not create or update pull requests — use `gh stack submit` for that.
 
 | Flag | Description |
 |------|-------------|
-| `--remote <name>` | Remote to fetch from and push to (defaults to auto-detected remote) |
+| `--remote <name>` | Remote to push to (defaults to auto-detected remote) |
 
 **Examples:**
 
 ```sh
-gh stack sync
-```
-
----
-
-## `gh stack view`
-
-View the current stack.
-
-```sh
-gh stack view [flags]
-```
-
-Shows all branches in the stack, their ordering, PR links, and the most recent commit with a relative timestamp. Output is piped through a pager (respects `GIT_PAGER`, `PAGER`, or defaults to `less -R`).
-
-| Flag | Description |
-|------|-------------|
-| `-s, --short` | Compact output (branch names only) |
-| `--json` | Output stack data as JSON |
-
-**Examples:**
-
-```sh
-gh stack view
-gh stack view --short
-gh stack view --json
-```
-
----
-
-## `gh stack checkout`
-
-Check out a locally tracked stack from a pull request number or branch name.
-
-```sh
-gh stack checkout [<pr-or-branch>]
-```
-
-Resolves the target against stacks stored in local tracking (`.git/gh-stack`). Accepts a PR number (e.g. `42`) or a branch name that belongs to a locally tracked stack. When run without arguments in an interactive terminal, shows a menu of all locally available stacks to choose from.
-
-**Examples:**
-
-```sh
-# Check out a stack by PR number
-gh stack checkout 42
-
-# Check out a stack by branch name
-gh stack checkout feature-auth
-
-# Interactive — select from locally tracked stacks
-gh stack checkout
+gh stack push
+gh stack push --remote upstream
 ```
 
 ---
 
 ## Navigation
 
-Move between branches in the current stack without having to remember branch names.
+Move between branches in the current stack without having to remember branch names. The **bottom** of the stack is the branch closest to the trunk, and the **top** is furthest from it. `up` moves away from trunk; `down` moves toward it.
+
+All navigation commands clamp to the bounds of the stack — moving up from the top or down from the bottom is a no-op with a message.
+
+### `gh stack up`
+
+Move up toward the top of the stack (away from trunk).
 
 ```sh
-gh stack up [n]      # Move up n branches (default 1)
-gh stack down [n]    # Move down n branches (default 1)
-gh stack top         # Jump to the top of the stack
-gh stack bottom      # Jump to the bottom of the stack
+gh stack up [n]
 ```
 
-Navigation commands clamp to the bounds of the stack — moving up from the top or down from the bottom is a no-op with a message. If you're on the trunk branch, `up` moves to the first stack branch.
-
-The **bottom** of the stack is the branch closest to the trunk, and the **top** is furthest from it. `up` moves away from trunk; `down` moves toward it.
+Moves up `n` branches (default 1). If you're on the trunk branch, `up` moves to the first stack branch.
 
 **Examples:**
 
 ```sh
 gh stack up          # move up one layer
 gh stack up 3        # move up three layers
-gh stack down
-gh stack top
-gh stack bottom
 ```
 
----
+### `gh stack down`
 
-## `gh stack feedback`
-
-Share feedback about gh-stack.
+Move down toward the bottom of the stack (toward trunk).
 
 ```sh
-gh stack feedback [title]
+gh stack down [n]
 ```
 
-Opens a GitHub Discussion in the [gh-stack repository](https://github.com/github/gh-stack) to submit feedback. Optionally provide a title for the discussion post.
+Moves down `n` branches (default 1).
 
 **Examples:**
 
 ```sh
-gh stack feedback
-gh stack feedback "Support for reordering branches"
+gh stack down        # move down one layer
+gh stack down 2      # move down two layers
 ```
+
+### `gh stack top`
+
+Jump to the top of the stack.
+
+```sh
+gh stack top
+```
+
+Checks out the branch furthest from the trunk.
+
+### `gh stack bottom`
+
+Jump to the bottom of the stack.
+
+```sh
+gh stack bottom
+```
+
+Checks out the branch closest to the trunk.
 
 ---
 
-## `gh stack alias`
+## Utilities
+
+### `gh stack alias`
 
 Create a short command alias so you can type less.
 
@@ -360,6 +370,23 @@ gh stack alias gst
 # Remove an alias
 gh stack alias --remove
 gh stack alias gst --remove
+```
+
+### `gh stack feedback`
+
+Share feedback about gh-stack.
+
+```sh
+gh stack feedback [title]
+```
+
+Opens a GitHub Discussion in the [gh-stack repository](https://github.com/github/gh-stack) to submit feedback. Optionally provide a title for the discussion post.
+
+**Examples:**
+
+```sh
+gh stack feedback
+gh stack feedback "Support for reordering branches"
 ```
 
 ---

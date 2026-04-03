@@ -5,7 +5,7 @@ description: What stacked pull requests are, why they matter, and how GitHub sup
 
 ## The Challenge
 
-For developers who want to break large changes into smaller, dependent parts, the experience has traditionally been painful:
+For developers who want to break large changes into smaller, dependent parts, the experience can be painful:
 
 - **Branch management** — Rebasing and keeping branches in sync across dependent PRs is tedious and error-prone.
 - **Rules and CI** — Branch protection rules and CI checks often only trigger for the bottom PR in the chain, making it hard to know the true status of the rest.
@@ -32,13 +32,15 @@ Each pull request in a stack:
 - Is evaluated for rules and protections using its **final target branch** (e.g., `main`), not the branch it directly targets.
 - Can be merged directly or via merge queue, as long as the PRs below it are merged first (or at the same time).
 
-## The GitHub-Native Solution
+## GitHub Stacked PRs
 
-GitHub supports stacked PRs natively, combining a rich pull request UI with the `gh stack` CLI to give both authors and reviewers a seamless experience.
+GitHub supports Stacked PRs natively, combining a rich pull request UI with the `gh stack` CLI to give both authors and reviewers a seamless experience.
 
 ### Stack Map in the PR UI
 
 When a pull request is part of a stack, a **stack map** appears at the top of the PR page. It shows every PR in the stack, their status, and lets you navigate to any layer with one click. This gives reviewers immediate context about where a PR fits in the bigger picture.
+
+![The stack navigator in a pull request header](../../../assets/screenshots/stack-navigator.png)
 
 ### Rules and CI Enforcement
 
@@ -49,6 +51,8 @@ The merge requirements for any PR in the stack are determined by the **bottom PR
 
 This ensures that every layer of the stack meets the same quality bar before it can be merged.
 
+![Merge box for a stacked pull request](../../../assets/screenshots/stack-merge-box.png)
+
 ### Merging Stacks
 
 The entire stack does not need to be merged at once, but PRs must be merged **from the bottom up**. GitHub supports two merge methods:
@@ -58,13 +62,17 @@ The entire stack does not need to be merged at once, but PRs must be merged **fr
 
 The resulting commit history is the same as merging each PR individually, starting from the bottom.
 
-### Squash Merge Support
+### Merge Methods
 
-Stacks support **squash merges** — each PR in the stack produces one clean, squashed commit. When squash merges are used, the rebase engine automatically detects this and uses `--onto` mode to correctly replay commits on top of the squash-merged target.
+Stacks support all three merge methods:
+
+- **Merge commit** — Creates one merge commit for the entire group of changes being merged. The full commit history of each PR is preserved.
+- **Squash merge** — Creates one clean, squashed commit per PR. Each PR's commits are combined into a single commit on the target branch.
+- **Rebase merge** — Replays all commits from each PR onto the base branch, creating a linear history without merge commits.
 
 ### Simplified Rebasing
 
-Rebasing is the trickiest part of working with stacked PRs, and GitHub handles it automatically:
+Rebasing is the trickiest part of working with Stacked PRs, and GitHub handles it automatically:
 
 - **In the PR UI** — A rebase button lets you trigger a cascading rebase across all branches in the stack.
 - **From the CLI** — `gh stack rebase` performs the same cascading rebase locally.
@@ -81,7 +89,7 @@ While the PR UI provides the review and merge experience, the `gh stack` CLI han
 - **Navigating the stack** — `gh stack up`, `down`, `top`, and `bottom` let you move between layers without remembering branch names.
 - **Syncing everything** — `gh stack sync` fetches, rebases, pushes, and updates PR state in one command.
 
-The CLI is not required to use stacked PRs — the underlying git operations are standard. But it makes the workflow dramatically simpler.
+The CLI is not required to use Stacked PRs — the underlying git operations are standard. But it makes the workflow dramatically simpler.
 
 ## Thinking About Stack Structure
 

@@ -4,7 +4,7 @@ description: Frequently asked questions about GitHub Stacked PRs.
 ---
 
 :::note
-This FAQ is a placeholder. Detailed answers will be added soon.
+This FAQ is a work-in-progress. Detailed answers will be added soon.
 :::
 
 ## Creating Stacked PRs
@@ -107,20 +107,20 @@ No. Stacked PRs are built on standard git branches and regular pull requests. Yo
 
 Stacked PRs on GitHub are based on the standard pull request model — any tool that creates PRs with the correct base branches can work with them. The `gh stack` CLI is purpose-built for the GitHub experience, but other tools that manage branch chains should be compatible.
 
-## Miscellaneous
+<!-- ## Miscellaneous -->
 
-### Do you have a VS Code extension?
-
-<!-- TODO: Add answer -->
-
-### Will stacked PRs work with the GitHub mobile app?
+<!-- ### Do you have a VS Code extension? -->
 
 <!-- TODO: Add answer -->
 
-### Will stacked PRs work with the GitHub Desktop app?
+<!-- ### Will stacked PRs work with the GitHub mobile app? -->
 
 <!-- TODO: Add answer -->
 
-### What happens if I merge via the REST or GraphQL APIs?
+<!-- ### Will stacked PRs work with the GitHub Desktop app? -->
+
+<!-- TODO: Add answer -->
+
+<!-- ### What happens if I merge via the REST or GraphQL APIs? -->
 
 <!-- TODO: Add answer -->

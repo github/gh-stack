@@ -50,7 +50,8 @@ export default defineConfig({
 				{
 					label: 'Guides',
 					items: [
-						{ label: 'Working with Stacked PRs', slug: 'guides/using-prs' },
+						{ label: 'Working with Stacked PRs', slug: 'guides/stacked-prs' },
+						{ label: 'Stacked PRs in the GitHub UI', slug: 'guides/ui' },
 						{ label: 'Typical Workflows', slug: 'guides/workflows' },
 					],
 				},

@@ -222,7 +222,7 @@ gh stack rebase --upstack
 # After resolving a conflict
 gh stack rebase --continue
 
-# Give up and restore everything
+# Abort rebase and restore everything
 gh stack rebase --abort
 ```
 
