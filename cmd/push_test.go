@@ -228,7 +228,7 @@ func TestPush_Humanize(t *testing.T) {
 	}
 }
 
-func TestCreateStack_Success(t *testing.T) {
+func TestSyncStack_NewStack_CreateSuccess(t *testing.T) {
 	s := &stack.Stack{
 		Trunk: stack.BranchRef{Branch: "main"},
 		Branches: []stack.BranchRef{
@@ -246,7 +246,7 @@ func TestCreateStack_Success(t *testing.T) {
 	}
 
 	cfg, _, errR := config.NewTestConfig()
-	createStack(cfg, mock, s)
+	syncStack(cfg, mock, s)
 
 	cfg.Err.Close()
 	errOut, _ := io.ReadAll(errR)
@@ -257,7 +257,46 @@ func TestCreateStack_Success(t *testing.T) {
 	assert.Contains(t, output, "Stack created on GitHub with 2 PRs")
 }
 
-func TestCreateStack_AlreadyExists_WithLocalID(t *testing.T) {
+func TestSyncStack_ExistingStack_UpdateSuccess(t *testing.T) {
+	s := &stack.Stack{
+		ID:    "99",
+		Trunk: stack.BranchRef{Branch: "main"},
+		Branches: []stack.BranchRef{
+			{Branch: "b1", PullRequest: &stack.PullRequestRef{Number: 10}},
+			{Branch: "b2", PullRequest: &stack.PullRequestRef{Number: 11}},
+			{Branch: "b3", PullRequest: &stack.PullRequestRef{Number: 12}},
+		},
+	}
+
+	var gotStackID string
+	var gotNumbers []int
+	createCalled := false
+	mock := &github.MockClient{
+		CreateStackFn: func([]int) (int, error) {
+			createCalled = true
+			return 0, nil
+		},
+		UpdateStackFn: func(stackID string, prNumbers []int) error {
+			gotStackID = stackID
+			gotNumbers = prNumbers
+			return nil
+		},
+	}
+
+	cfg, _, errR := config.NewTestConfig()
+	syncStack(cfg, mock, s)
+
+	cfg.Err.Close()
+	errOut, _ := io.ReadAll(errR)
+	output := string(errOut)
+
+	assert.False(t, createCalled, "CreateStack should not be called when s.ID is set")
+	assert.Equal(t, "99", gotStackID)
+	assert.Equal(t, []int{10, 11, 12}, gotNumbers)
+	assert.Contains(t, output, "Stack updated on GitHub with 3 PRs")
+}
+
+func TestSyncStack_ExistingStack_UpdateFails(t *testing.T) {
 	s := &stack.Stack{
 		ID:    "99",
 		Trunk: stack.BranchRef{Branch: "main"},
@@ -268,27 +307,58 @@ func TestCreateStack_AlreadyExists_WithLocalID(t *testing.T) {
 	}
 
 	mock := &github.MockClient{
-		CreateStackFn: func([]int) (int, error) {
-			return 0, &api.HTTPError{
+		UpdateStackFn: func(string, []int) error {
+			return &api.HTTPError{
 				StatusCode: 422,
-				Message:    "Pull requests are already in a stack",
-				RequestURL: &url.URL{Path: "/repos/o/r/cli_internal/pulls/stacks"},
+				Message:    "Validation failed",
+				RequestURL: &url.URL{Path: "/repos/o/r/cli_internal/pulls/stacks/99"},
 			}
 		},
 	}
 
 	cfg, _, errR := config.NewTestConfig()
-	createStack(cfg, mock, s)
+	syncStack(cfg, mock, s)
 
 	cfg.Err.Close()
 	errOut, _ := io.ReadAll(errR)
 	output := string(errOut)
 
-	assert.Contains(t, output, "Stack already exists on GitHub")
-	assert.Equal(t, "99", s.ID)
+	assert.Contains(t, output, "Failed to update stack")
 }
 
-func TestCreateStack_AlreadyExists_NoLocalID(t *testing.T) {
+func TestSyncStack_ExistingStack_Update404(t *testing.T) {
+	s := &stack.Stack{
+		ID:    "99",
+		Trunk: stack.BranchRef{Branch: "main"},
+		Branches: []stack.BranchRef{
+			{Branch: "b1", PullRequest: &stack.PullRequestRef{Number: 10}},
+			{Branch: "b2", PullRequest: &stack.PullRequestRef{Number: 11}},
+		},
+	}
+
+	mock := &github.MockClient{
+		UpdateStackFn: func(string, []int) error {
+			return &api.HTTPError{
+				StatusCode: 404,
+				Message:    "Not Found",
+				RequestURL: &url.URL{Path: "/repos/o/r/cli_internal/pulls/stacks/99"},
+			}
+		},
+	}
+
+	cfg, _, errR := config.NewTestConfig()
+	syncStack(cfg, mock, s)
+
+	cfg.Err.Close()
+	errOut, _ := io.ReadAll(errR)
+	output := string(errOut)
+
+	assert.Contains(t, output, "Stack not found on GitHub")
+	assert.Contains(t, output, "may have been deleted")
+	assert.Equal(t, "", s.ID, "stale ID should be cleared so next push creates a new stack")
+}
+
+func TestSyncStack_AlreadyStacked_422(t *testing.T) {
 	s := &stack.Stack{
 		Trunk: stack.BranchRef{Branch: "main"},
 		Branches: []stack.BranchRef{
@@ -301,24 +371,54 @@ func TestCreateStack_AlreadyExists_NoLocalID(t *testing.T) {
 		CreateStackFn: func([]int) (int, error) {
 			return 0, &api.HTTPError{
 				StatusCode: 422,
-				Message:    "Pull requests are already in a stack",
+				Message:    "Pull requests #10, #11 are already stacked",
 				RequestURL: &url.URL{Path: "/repos/o/r/cli_internal/pulls/stacks"},
 			}
 		},
 	}
 
 	cfg, _, errR := config.NewTestConfig()
-	createStack(cfg, mock, s)
+	syncStack(cfg, mock, s)
 
 	cfg.Err.Close()
 	errOut, _ := io.ReadAll(errR)
 	output := string(errOut)
 
-	assert.Contains(t, output, "Could not create stack")
+	assert.Contains(t, output, "already stacked")
 	assert.Contains(t, output, "Updating existing stacks will be supported in an upcoming release")
 }
 
-func TestCreateStack_NotAvailable(t *testing.T) {
+func TestSyncStack_InvalidChain_422(t *testing.T) {
+	s := &stack.Stack{
+		Trunk: stack.BranchRef{Branch: "main"},
+		Branches: []stack.BranchRef{
+			{Branch: "b1", PullRequest: &stack.PullRequestRef{Number: 10}},
+			{Branch: "b2", PullRequest: &stack.PullRequestRef{Number: 11}},
+		},
+	}
+
+	mock := &github.MockClient{
+		CreateStackFn: func([]int) (int, error) {
+			return 0, &api.HTTPError{
+				StatusCode: 422,
+				Message:    "Pull requests must form a stack, where each PR's base ref is the previous PR's head ref",
+				RequestURL: &url.URL{Path: "/repos/o/r/cli_internal/pulls/stacks"},
+			}
+		},
+	}
+
+	cfg, _, errR := config.NewTestConfig()
+	syncStack(cfg, mock, s)
+
+	cfg.Err.Close()
+	errOut, _ := io.ReadAll(errR)
+	output := string(errOut)
+
+	assert.Contains(t, output, "must form a stack")
+	assert.Contains(t, output, "base branch must match")
+}
+
+func TestSyncStack_NotAvailable(t *testing.T) {
 	s := &stack.Stack{
 		Trunk: stack.BranchRef{Branch: "main"},
 		Branches: []stack.BranchRef{
@@ -338,7 +438,7 @@ func TestCreateStack_NotAvailable(t *testing.T) {
 	}
 
 	cfg, _, errR := config.NewTestConfig()
-	createStack(cfg, mock, s)
+	syncStack(cfg, mock, s)
 
 	cfg.Err.Close()
 	errOut, _ := io.ReadAll(errR)
@@ -347,7 +447,7 @@ func TestCreateStack_NotAvailable(t *testing.T) {
 	assert.Contains(t, output, "not yet available")
 }
 
-func TestCreateStack_SkippedForSinglePR(t *testing.T) {
+func TestSyncStack_SkippedForSinglePR(t *testing.T) {
 	s := &stack.Stack{
 		Trunk: stack.BranchRef{Branch: "main"},
 		Branches: []stack.BranchRef{
@@ -355,22 +455,28 @@ func TestCreateStack_SkippedForSinglePR(t *testing.T) {
 		},
 	}
 
-	called := false
+	createCalled := false
+	updateCalled := false
 	mock := &github.MockClient{
 		CreateStackFn: func([]int) (int, error) {
-			called = true
+			createCalled = true
 			return 42, nil
+		},
+		UpdateStackFn: func(string, []int) error {
+			updateCalled = true
+			return nil
 		},
 	}
 
 	cfg, _, _ := config.NewTestConfig()
-	createStack(cfg, mock, s)
+	syncStack(cfg, mock, s)
 	cfg.Err.Close()
 
-	assert.False(t, called, "CreateStack should not be called with fewer than 2 PRs")
+	assert.False(t, createCalled, "CreateStack should not be called with fewer than 2 PRs")
+	assert.False(t, updateCalled, "UpdateStack should not be called with fewer than 2 PRs")
 }
 
-func TestCreateStack_SkipsMergedBranches(t *testing.T) {
+func TestSyncStack_SkipsMergedBranches(t *testing.T) {
 	s := &stack.Stack{
 		Trunk: stack.BranchRef{Branch: "main"},
 		Branches: []stack.BranchRef{
@@ -389,13 +495,13 @@ func TestCreateStack_SkipsMergedBranches(t *testing.T) {
 	}
 
 	cfg, _, _ := config.NewTestConfig()
-	createStack(cfg, mock, s)
+	syncStack(cfg, mock, s)
 	cfg.Err.Close()
 
 	assert.Equal(t, []int{11, 12}, gotNumbers, "should only include non-merged PRs")
 }
 
-func TestCreateStack_SkipsBranchesWithoutPR(t *testing.T) {
+func TestSyncStack_SkipsBranchesWithoutPR(t *testing.T) {
 	s := &stack.Stack{
 		Trunk: stack.BranchRef{Branch: "main"},
 		Branches: []stack.BranchRef{
@@ -414,7 +520,7 @@ func TestCreateStack_SkipsBranchesWithoutPR(t *testing.T) {
 	}
 
 	cfg, _, _ := config.NewTestConfig()
-	createStack(cfg, mock, s)
+	syncStack(cfg, mock, s)
 	cfg.Err.Close()
 
 	assert.Equal(t, []int{10, 12}, gotNumbers, "should skip branches without PRs")

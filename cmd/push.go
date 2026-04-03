@@ -10,6 +10,7 @@ import (
 	"github.com/cli/go-gh/v2/pkg/prompter"
 	"github.com/github/gh-stack/internal/config"
 	"github.com/github/gh-stack/internal/git"
+	"github.com/github/gh-stack/internal/github"
 	"github.com/github/gh-stack/internal/stack"
 	"github.com/spf13/cobra"
 )
@@ -168,7 +169,7 @@ func runPush(cfg *config.Config, opts *pushOptions) error {
 	}
 
 	// Create or update the stack on GitHub
-	createStack(cfg, client, s)
+	syncStack(cfg, client, s)
 
 	// Update base commit hashes and sync PR state
 	updateBaseSHAs(s)
@@ -257,10 +258,13 @@ func pickRemote(cfg *config.Config, branch, remoteOverride string) (string, erro
 	return multi.Remotes[selected], nil
 }
 
-// createStack attempts to create a stack on GitHub from the active PRs.
-// It is a best-effort operation: failures are reported as warnings but do
+// syncStack creates or updates a stack on GitHub from the active PRs.
+// If the stack already exists (s.ID is set), it calls the PUT endpoint with
+// the full list of PRs to keep the remote stack in sync. If no stack exists
+// yet, it calls POST to create one.
+// This is a best-effort operation: failures are reported as warnings but do
 // not cause the push command to fail (the PRs are already created).
-func createStack(cfg *config.Config, client interface{ CreateStack([]int) (int, error) }, s *stack.Stack) {
+func syncStack(cfg *config.Config, client github.ClientOps, s *stack.Stack) {
 	// Collect PR numbers in stack order (bottom to top).
 	var prNumbers []int
 	for _, b := range s.Branches {
@@ -277,6 +281,38 @@ func createStack(cfg *config.Config, client interface{ CreateStack([]int) (int, 
 		return
 	}
 
+	if s.ID != "" {
+		updateStack(cfg, client, s, prNumbers)
+	} else {
+		createNewStack(cfg, client, s, prNumbers)
+	}
+}
+
+// updateStack calls the PUT endpoint to sync the full PR list for an existing stack.
+func updateStack(cfg *config.Config, client github.ClientOps, s *stack.Stack, prNumbers []int) {
+	if err := client.UpdateStack(s.ID, prNumbers); err != nil {
+		var httpErr *api.HTTPError
+		if errors.As(err, &httpErr) {
+			switch httpErr.StatusCode {
+			case 404:
+				cfg.Warningf("Stack not found on GitHub (ID %s) — it may have been deleted", s.ID)
+				cfg.Printf("  Run %s to re-create the stack on your next push.",
+					cfg.ColorCyan("gh stack push"))
+				s.ID = "" // Clear stale ID so the next push creates a new stack
+			default:
+				cfg.Warningf("Failed to update stack on GitHub: %s", httpErr.Message)
+			}
+		} else {
+			cfg.Warningf("Failed to update stack on GitHub: %v", err)
+		}
+		return
+	}
+	cfg.Successf("Stack updated on GitHub with %d PRs", len(prNumbers))
+}
+
+// createNewStack calls the POST endpoint to create a new stack, handling the
+// three types of 422 errors the API may return.
+func createNewStack(cfg *config.Config, client github.ClientOps, s *stack.Stack, prNumbers []int) {
 	stackID, err := client.CreateStack(prNumbers)
 	if err == nil {
 		s.ID = strconv.Itoa(stackID)
@@ -284,27 +320,42 @@ func createStack(cfg *config.Config, client interface{ CreateStack([]int) (int, 
 		return
 	}
 
-	cfg.Warningf("Failed to create stack on GitHub: %v", err)
 	var httpErr *api.HTTPError
 	if !errors.As(err, &httpErr) {
 		cfg.Warningf("Failed to create stack on GitHub: %v", err)
 		return
 	}
 
-	cfg.Warningf("error %s with code %s", httpErr.StatusCode, httpErr.Message)
 	switch httpErr.StatusCode {
 	case 422:
-		if s.ID != "" {
-			// Stack was already created in a previous push; the update API
-			// (PUT) is needed to modify it but is not yet available.
-			cfg.Infof("Stack already exists on GitHub")
-		} else {
-			cfg.Warningf("Could not create stack: %s", httpErr.Message)
-			cfg.Printf("  Updating existing stacks will be supported in an upcoming release.")
-		}
+		handleCreate422(cfg, httpErr)
 	case 404:
-		cfg.Warningf("Stacked PRs are not enabled for this repository")
+		cfg.Warningf("Stacked PRs are not yet available for this repository")
 	default:
 		cfg.Warningf("Failed to create stack on GitHub: %s", httpErr.Message)
 	}
+}
+
+// handleCreate422 handles 422 errors from the create stack endpoint.
+// The three known error messages are:
+//   - "Stack must contain at least two pull requests"
+//   - "Pull requests must form a stack, where each PR's base ref is the previous PR's head ref"
+//   - "Pull requests #123, #124, #125 are already stacked"
+func handleCreate422(cfg *config.Config, httpErr *api.HTTPError) {
+	msg := httpErr.Message
+
+	if strings.Contains(msg, "already stacked") {
+		cfg.Warningf("%s", msg)
+		cfg.Printf("  The stack already exists on GitHub. Updating existing stacks will be supported in an upcoming release.")
+		return
+	}
+
+	if strings.Contains(msg, "must form a stack") {
+		cfg.Errorf("Cannot create stack: %s", msg)
+		cfg.Printf("  Each PR's base branch must match the previous PR's head branch.")
+		return
+	}
+
+	// "at least two" or any other validation error
+	cfg.Warningf("Could not create stack: %s", msg)
 }

@@ -298,6 +298,29 @@ func (c *Client) CreateStack(prNumbers []int) (int, error) {
 	return response.ID, nil
 }
 
+// UpdateStack adds pull requests to an existing stack on GitHub.
+// The stack is identified by stackID. The full list of PR numbers in the
+// updated stack must be provided, including existing and new PRs, ordered
+// from bottom to top.
+func (c *Client) UpdateStack(stackID string, prNumbers []int) error {
+	type updateStackRequest struct {
+		PullRequestNumbers []int `json:"pull_request_numbers"`
+	}
+
+	body, err := json.Marshal(updateStackRequest{PullRequestNumbers: prNumbers})
+	if err != nil {
+		return fmt.Errorf("marshaling request: %w", err)
+	}
+
+	path := fmt.Sprintf("repos/%s/%s/cli_internal/pulls/stacks/%s", c.owner, c.repo, stackID)
+
+	var response struct {
+		ID int `json:"id"`
+	}
+
+	return c.rest.Put(path, bytes.NewReader(body), &response)
+}
+
 func (c *Client) repositoryID() (string, error) {
 	var query struct {
 		Repository struct {
