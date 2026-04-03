@@ -58,7 +58,7 @@ main (trunk)
 
 The **bottom** of the stack is the branch closest to the trunk, and the **top** is the branch furthest from it. Each branch inherits from the one below it. Navigation commands (`up`, `down`, `top`, `bottom`) follow this model: `up` moves away from trunk, `down` moves toward it.
 
-When you push, `gh stack` creates one PR per branch and links them together as a **Stack** on GitHub. Each PR's base is set to the branch below it in the stack, so reviewers see only the diff for that layer.
+When you submit, `gh stack` creates one PR per branch and links them together as a **Stack** on GitHub. Each PR's base is set to the branch below it in the stack, so reviewers see only the diff for that layer.
 
 ### Local tracking
 

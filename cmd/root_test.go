@@ -8,7 +8,7 @@ import (
 
 func TestRootCmd_SubcommandRegistration(t *testing.T) {
 	root := RootCmd()
-	expected := []string{"init", "add", "checkout", "push", "sync", "merge", "view", "rebase", "up", "down", "top", "bottom", "alias", "feedback"}
+	expected := []string{"init", "add", "checkout", "push", "sync", "merge", "view", "rebase", "up", "down", "top", "bottom", "alias", "feedback", "submit"}
 
 	registered := make(map[string]bool)
 	for _, cmd := range root.Commands() {
