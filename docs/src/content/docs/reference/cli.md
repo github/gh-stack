@@ -20,7 +20,7 @@ Requires the [GitHub CLI](https://cli.github.com/) (`gh`) v2.0+.
 Initialize a new stack in the current repository.
 
 ```sh
-gh stack init [branches...] [flags]
+gh stack init [flags] [branches...]
 ```
 
 Creates an entry in `.git/gh-stack` to track stack state. In interactive mode (no arguments), prompts you to name branches and offers to use the current branch as the first layer. You'll also be prompted to set an optional branch prefix. When a prefix is set, branch names you enter are automatically prefixed.
@@ -67,7 +67,7 @@ gh stack init -p feat --numbered
 Add a new branch on top of the current stack.
 
 ```sh
-gh stack add [branch] [flags]
+gh stack add [flags] [branch]
 ```
 
 Creates a new branch at the current HEAD, adds it to the top of the stack, and checks it out. Must be run while on the topmost branch of a stack. If no branch name is given, prompts for one.
@@ -214,7 +214,7 @@ gh stack sync
 Pull from remote and do a cascading rebase across the stack.
 
 ```sh
-gh stack rebase [branch] [flags]
+gh stack rebase [flags] [branch]
 ```
 
 Fetches the latest changes from `origin`, then ensures each branch in the stack has the tip of the previous layer in its commit history. Rebases branches in order from trunk upward.
@@ -346,7 +346,7 @@ Checks out the branch closest to the trunk.
 Create a short command alias so you can type less.
 
 ```sh
-gh stack alias [name] [flags]
+gh stack alias [flags] [name]
 ```
 
 Installs a small wrapper script into `~/.local/bin/` that forwards all arguments to `gh stack`. The default alias name is `gs`, but you can choose any name by passing it as an argument. After setup, you can run `gs push` instead of `gh stack push`.
@@ -369,7 +369,7 @@ gh stack alias gst
 
 # Remove an alias
 gh stack alias --remove
-gh stack alias gst --remove
+gh stack alias --remove gst
 ```
 
 ### `gh stack feedback`
