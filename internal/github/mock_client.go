@@ -11,6 +11,7 @@ type MockClient struct {
 	UpdatePRBaseFn           func(int, string) error
 	CreateStackFn            func([]int) (int, error)
 	UpdateStackFn            func(string, []int) error
+	DeleteStackFn            func(string) error
 }
 
 // Compile-time check that MockClient satisfies ClientOps.
@@ -61,6 +62,13 @@ func (m *MockClient) CreateStack(prNumbers []int) (int, error) {
 func (m *MockClient) UpdateStack(stackID string, prNumbers []int) error {
 	if m.UpdateStackFn != nil {
 		return m.UpdateStackFn(stackID, prNumbers)
+	}
+	return nil
+}
+
+func (m *MockClient) DeleteStack(stackID string) error {
+	if m.DeleteStackFn != nil {
+		return m.DeleteStackFn(stackID)
 	}
 	return nil
 }

@@ -359,7 +359,7 @@ func TestValidateNoDuplicateBranch(t *testing.T) {
 	})
 }
 
-// --- RemoveStackForBranch ---
+// --- RemoveStackForBranch: used by unstack ---
 
 func TestRemoveStackForBranch(t *testing.T) {
 	t.Run("found and removed", func(t *testing.T) {

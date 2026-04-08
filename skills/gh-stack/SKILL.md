@@ -31,7 +31,7 @@ Use this skill when the user wants to:
 - Create, rebase, push, or sync a stack of dependent branches
 - Navigate between layers of a branch stack
 - View the status of stacked PRs
-- Clean up a stack after PRs are merged
+- Tear down and rebuild a stack to remove, reorder, or rename branches
 
 ## Prerequisites
 
@@ -142,6 +142,7 @@ Small, incidental fixes (e.g., fixing a typo you noticed) can go in the current 
 | Switch to top/bottom branch | `gh stack top` / `gh stack bottom` |
 | Check out by PR | `gh stack checkout 42` |
 | Check out by branch | `gh stack checkout feature-auth` |
+| Tear down a stack to restructure it | `gh stack unstack` |
 
 ---
 
@@ -354,6 +355,21 @@ echo "$output" | jq -r '.currentBranch'
 
 # Check if the stack is fully merged (all branches merged)
 echo "$output" | jq '[.branches[] | .isMerged] | all'
+```
+
+### Restructure a stack (remove a branch, reorder, or rename)
+
+Use `unstack` to tear down the stack, make structural changes, then re-init:
+
+```bash
+# 1. Remove the stack (locally and on GitHub)
+gh stack unstack
+
+# 2. Make structural changes — e.g. delete a branch, reorder, rename
+git branch -m old-branch-1 new-branch-1
+
+# 3. Re-create the stack with the new structure
+gh stack init --base main --adopt new-branch-1 new-branch-2 new-branch-3
 ```
 
 ---
@@ -708,6 +724,34 @@ Resolves the target against locally tracked stacks. Accepts a PR number, PR URL,
 > **Note:** This command only works with stacks that have been created locally (via `gh stack init`). Server-side stack discovery is not yet implemented.
 
 ---
+
+### Remove a stack — `gh stack unstack`
+
+Tear down a stack so you can restructure it — remove a branch, reorder branches, rename branches, or make other large changes. After unstacking, use `gh stack init` to re-create the stack with the desired structure.
+
+```
+gh stack unstack [branch] [flags]
+```
+
+```bash
+# Tear down the stack (locally and on GitHub), then rebuild
+gh stack unstack
+gh stack init --base main --adopt branch-2 branch-1 branch-3 # reordered
+
+# Only remove local tracking (keep the stack on GitHub)
+gh stack unstack --local
+
+# Specify a branch to identify which stack to tear down
+gh stack unstack feature-auth
+```
+
+| Flag | Description |
+|------|-------------|
+| `--local` | Only delete the stack locally (keep it on GitHub) |
+
+| Argument | Description |
+|----------|-------------|
+| `[branch]` | A branch in the stack (defaults to the current branch) |
 
 ---
 

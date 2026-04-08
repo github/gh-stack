@@ -324,6 +324,37 @@ gh stack view --short
 gh stack view --json
 ```
 
+### `gh stack unstack`
+
+Remove a stack from local tracking and delete it on GitHub.
+
+```
+gh stack unstack [branch] [flags]
+```
+
+If no branch is specified, uses the current branch to find the stack. By default, the stack is removed from both local tracking and GitHub. Use `--local` to only remove the local tracking entry.
+
+| Flag | Description |
+|------|-------------|
+| `--local` | Only delete the stack locally (keep it on GitHub) |
+
+| Argument | Description |
+|----------|-------------|
+| `[branch]` | A branch in the stack to delete (defaults to the current branch) |
+
+**Examples:**
+
+```sh
+# Remove the stack from local tracking and GitHub
+gh stack unstack
+
+# Only remove local tracking
+gh stack unstack --local
+
+# Specify a branch to identify the stack
+gh stack unstack feature-auth
+```
+
 ### `gh stack merge`
 
 Merge a stack of PRs.

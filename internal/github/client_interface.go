@@ -11,6 +11,7 @@ type ClientOps interface {
 	UpdatePRBase(number int, base string) error
 	CreateStack(prNumbers []int) (int, error)
 	UpdateStack(stackID string, prNumbers []int) error
+	DeleteStack(stackID string) error
 }
 
 // Compile-time check that Client satisfies ClientOps.

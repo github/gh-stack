@@ -281,6 +281,13 @@ func (c *Client) FindPRDetailsForBranch(branch string) (*PRDetails, error) {
 	}, nil
 }
 
+// DeleteStack deletes a stack on GitHub.
+// The stack is identified by stackID. Returns nil on success (204).
+func (c *Client) DeleteStack(stackID string) error {
+	path := fmt.Sprintf("repos/%s/%s/cli_internal/pulls/stacks/%s", c.owner, c.repo, stackID)
+	return c.rest.Delete(path, nil)
+}
+
 // CreateStack creates a stack on GitHub from an ordered list of PR numbers.
 // The PR numbers must be ordered from bottom to top of the stack and must
 // form a valid base-to-head chain. Returns the server-assigned stack ID.
