@@ -14,11 +14,11 @@ A stacked PR is a pull request that is part of an ordered chain of PRs, where ea
 You can create a stack using the `gh stack` CLI:
 
 ```sh
-gh stack init
+gh stack init auth-layer
 # ... make commits on the first branch ...
-gh stack add auth-layer
-# ... make commits ...
 gh stack add api-routes
+# ... make commits ...
+gh stack add request-validation
 # ... make commits ...
 gh stack submit
 ```

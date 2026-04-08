@@ -89,6 +89,6 @@ This shows all branches, their PR links, statuses, and the most recent commit on
 
 ## What's Next?
 
-- [Working with Stacked PRs](/gh-stack/guides/using-prs/) — Learn about the PR review and merge experience
+- [Working with Stacked PRs](/gh-stack/guides/stacked-prs/) — Learn about the PR review and merge experience
 - [Typical Workflows](/gh-stack/guides/workflows/) — Common patterns for day-to-day use
 - [CLI Reference](/gh-stack/reference/cli/) — Full command documentation

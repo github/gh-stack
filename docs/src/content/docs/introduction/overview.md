@@ -120,6 +120,6 @@ Create a new branch when you're starting a different concern that depends on wha
 ## Next Steps
 
 - [Quick Start](/gh-stack/getting-started/quick-start/) — Install the CLI and create your first stack
-- [Working with Stacked PRs](/gh-stack/guides/using-prs/) — Learn about the PR review and merge experience
+- [Working with Stacked PRs](/gh-stack/guides/stacked-prs/) — Learn about the PR review and merge experience
 - [Typical Workflows](/gh-stack/guides/workflows/) — Common patterns for day-to-day use
 - [CLI Reference](/gh-stack/reference/cli/) — Complete command documentation

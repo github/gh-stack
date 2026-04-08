@@ -66,11 +66,11 @@ When you're ready to merge, you merge from the bottom up. Each PR can be merged 
 gh extension install github/gh-stack
 
 # Create a stack (creates and checks out the first branch)
-gh stack init
-# ... make commits ...
-gh stack add auth-layer
+gh stack init auth-layer
 # ... make commits ...
 gh stack add api-routes
+# ... make commits ...
+gh stack add frontend
 # ... make commits ...
 
 # Push all branches

@@ -5,7 +5,7 @@ description: Practical guide for reviewing, merging, and managing stacked pull r
 
 This guide covers the practical day-to-day experience of working with Stacked PRs — how to review them, how merging works step by step, and how to keep things in sync from the CLI.
 
-For an introduction to what stacks are and how GitHub supports them natively, see the [Overview](/gh-stack/introduction/overview/). For a visual walkthrough of the UI, see [Using Stacks in the GitHub UI](/gh-stack/guides/ui-walkthrough/).
+For an introduction to what stacks are and how GitHub supports them natively, see the [Overview](/gh-stack/introduction/overview/). For a visual walkthrough of the UI, see [Using Stacks in the GitHub UI](/gh-stack/guides/ui/).
 
 ## Reviewing Stacked PRs
 
