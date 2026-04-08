@@ -33,6 +33,11 @@ type BranchRef struct {
 	Head        string          `json:"head,omitempty"`
 	Base        string          `json:"base,omitempty"`
 	PullRequest *PullRequestRef `json:"pullRequest,omitempty"`
+
+	// Queued is a transient (not persisted) flag indicating the branch's
+	// PR is currently in a merge queue. It is populated by syncStackPRs
+	// from the GitHub API on each command run.
+	Queued bool `json:"-"`
 }
 
 // Stack represents a single stack of branches.
@@ -96,11 +101,23 @@ func (b *BranchRef) IsMerged() bool {
 	return b.PullRequest != nil && b.PullRequest.Merged
 }
 
-// ActiveBranches returns only non-merged branches, preserving order.
+// IsQueued returns whether a branch's PR is currently in a merge queue.
+// This is a transient state populated from the GitHub API on each run.
+func (b *BranchRef) IsQueued() bool {
+	return b.Queued
+}
+
+// IsSkipped returns whether a branch should be skipped during push/sync/submit.
+// A branch is skipped if its PR has been merged or is currently queued.
+func (b *BranchRef) IsSkipped() bool {
+	return b.IsMerged() || b.IsQueued()
+}
+
+// ActiveBranches returns only branches that are pushable (not merged, not queued).
 func (s *Stack) ActiveBranches() []BranchRef {
 	var active []BranchRef
 	for _, b := range s.Branches {
-		if !b.IsMerged() {
+		if !b.IsSkipped() {
 			active = append(active, b)
 		}
 	}
@@ -118,21 +135,32 @@ func (s *Stack) MergedBranches() []BranchRef {
 	return merged
 }
 
-// FirstActiveBranchIndex returns the index of the first non-merged branch, or -1.
+// QueuedBranches returns only queued branches, preserving order.
+func (s *Stack) QueuedBranches() []BranchRef {
+	var queued []BranchRef
+	for _, b := range s.Branches {
+		if b.IsQueued() {
+			queued = append(queued, b)
+		}
+	}
+	return queued
+}
+
+// FirstActiveBranchIndex returns the index of the first active (not merged, not queued) branch, or -1.
 func (s *Stack) FirstActiveBranchIndex() int {
 	for i, b := range s.Branches {
-		if !b.IsMerged() {
+		if !b.IsSkipped() {
 			return i
 		}
 	}
 	return -1
 }
 
-// ActiveBranchIndices returns the indices of all non-merged branches.
+// ActiveBranchIndices returns the indices of all active (not merged, not queued) branches.
 func (s *Stack) ActiveBranchIndices() []int {
 	var indices []int
 	for i, b := range s.Branches {
-		if !b.IsMerged() {
+		if !b.IsSkipped() {
 			indices = append(indices, i)
 		}
 	}
@@ -140,15 +168,15 @@ func (s *Stack) ActiveBranchIndices() []int {
 }
 
 // ActiveBaseBranch returns the effective parent for a branch, skipping merged
-// ancestors. For the first active branch (or any branch whose downstack is all
-// merged), this returns the trunk.
+// and queued ancestors. For the first active branch (or any branch whose
+// downstack is all merged/queued), this returns the trunk.
 func (s *Stack) ActiveBaseBranch(branch string) string {
 	idx := s.IndexOf(branch)
 	if idx <= 0 {
 		return s.Trunk.Branch
 	}
 	for j := idx - 1; j >= 0; j-- {
-		if !s.Branches[j].IsMerged() {
+		if !s.Branches[j].IsSkipped() {
 			return s.Branches[j].Branch
 		}
 	}

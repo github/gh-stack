@@ -15,12 +15,14 @@ var (
 	mergedIcon  = lipgloss.NewStyle().Foreground(lipgloss.Color("5")).Render("✓") // magenta
 	warningIcon = lipgloss.NewStyle().Foreground(lipgloss.Color("3")).Render("⚠") // yellow
 	openIcon    = lipgloss.NewStyle().Foreground(lipgloss.Color("2")).Render("○") // green
+	queuedIcon  = lipgloss.NewStyle().Foreground(lipgloss.Color("130")).Render("◎") // brown
 
 	// PR status
 	prOpenStyle   = lipgloss.NewStyle().Foreground(lipgloss.Color("2")) // green
 	prMergedStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("5")) // magenta
 	prClosedStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("1")) // red
 	prDraftStyle  = lipgloss.NewStyle().Foreground(lipgloss.Color("8")) // gray
+	prQueuedStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("130")) // brown
 
 	// Diff stats
 	additionsStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("2")) // green
@@ -37,6 +39,7 @@ var (
 	connectorFocusedStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("15")) // white (focused)
 	connectorCurrentStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("14")) // cyan (current branch focused)
 	connectorMergedStyle  = lipgloss.NewStyle().Foreground(lipgloss.Color("5"))  // magenta (merged branch focused)
+	connectorQueuedStyle  = lipgloss.NewStyle().Foreground(lipgloss.Color("130"))  // brown (queued branch focused)
 
 	// Dim text (separators, secondary labels)
 	dimStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("240"))

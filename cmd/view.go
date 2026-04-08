@@ -76,8 +76,14 @@ func viewShort(cfg *config.Config, s *stack.Stack, currentBranch string) error {
 	for i := len(s.Branches) - 1; i >= 0; i-- {
 		b := s.Branches[i]
 		merged := b.IsMerged()
+		queued := b.IsQueued()
 
-		// Insert separator when transitioning from active to merged section
+		// Insert separator when transitioning from active to queued section
+		if queued && !merged && (i == len(s.Branches)-1 || (!s.Branches[i+1].IsQueued() && !s.Branches[i+1].IsMerged())) {
+			cfg.Outf("├─── %s ────\n", cfg.ColorWarning("queued"))
+		}
+
+		// Insert separator when transitioning from active/queued to merged section
 		if merged && (i == len(s.Branches)-1 || !s.Branches[i+1].IsMerged()) {
 			cfg.Outf("├─── %s ────\n", cfg.ColorMagenta("merged"))
 		}
@@ -88,6 +94,8 @@ func viewShort(cfg *config.Config, s *stack.Stack, currentBranch string) error {
 			cfg.Outf("» %s%s%s %s\n", cfg.ColorBold(b.Branch), indicator, prSuffix, cfg.ColorCyan("(current)"))
 		} else if merged {
 			cfg.Outf("│ %s%s%s\n", cfg.ColorGray(b.Branch), indicator, prSuffix)
+		} else if queued {
+			cfg.Outf("│ %s%s%s\n", cfg.ColorWarning(b.Branch), indicator, prSuffix)
 		} else {
 			cfg.Outf("├ %s%s%s\n", b.Branch, indicator, prSuffix)
 		}
@@ -98,11 +106,16 @@ func viewShort(cfg *config.Config, s *stack.Stack, currentBranch string) error {
 
 // branchStatusIndicator returns a colored status icon for a branch:
 //   - ✓ (purple) if the PR has been merged
+//   - ◎ (yellow) if the PR is queued in a merge queue
 //   - ⚠ (yellow) if the branch needs rebasing (non-linear history)
 //   - ○ (green) if there is an open PR
 func branchStatusIndicator(cfg *config.Config, s *stack.Stack, b stack.BranchRef) string {
 	if b.IsMerged() {
 		return " " + cfg.ColorMagenta("✓")
+	}
+
+	if b.IsQueued() {
+		return " " + cfg.ColorWarning("◎")
 	}
 
 	baseBranch := s.ActiveBaseBranch(b.Branch)
@@ -131,6 +144,7 @@ type viewJSONBranch struct {
 	Base        string      `json:"base,omitempty"`
 	IsCurrent   bool        `json:"isCurrent"`
 	IsMerged    bool        `json:"isMerged"`
+	IsQueued    bool        `json:"isQueued"`
 	NeedsRebase bool        `json:"needsRebase"`
 	PR          *viewJSONPR `json:"pr,omitempty"`
 }
@@ -156,6 +170,7 @@ func viewJSON(cfg *config.Config, s *stack.Stack, currentBranch string) error {
 			Base:      b.Base,
 			IsCurrent: b.Branch == currentBranch,
 			IsMerged:  b.IsMerged(),
+			IsQueued:  b.IsQueued(),
 		}
 
 		// Check if the branch needs rebasing (base not ancestor of branch).
@@ -170,6 +185,8 @@ func viewJSON(cfg *config.Config, s *stack.Stack, currentBranch string) error {
 			state := "OPEN"
 			if b.PullRequest.Merged {
 				state = "MERGED"
+			} else if b.IsQueued() {
+				state = "QUEUED"
 			}
 			jb.PR = &viewJSONPR{
 				Number: b.PullRequest.Number,

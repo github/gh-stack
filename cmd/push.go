@@ -71,13 +71,20 @@ func runPush(cfg *config.Config, opts *pushOptions) error {
 		}
 		return ErrSilent
 	}
+	// Sync PR state to detect merged/queued PRs before pushing.
+	syncStackPRs(cfg, s)
+
 	merged := s.MergedBranches()
 	if len(merged) > 0 {
 		cfg.Printf("Skipping %d merged %s", len(merged), plural(len(merged), "branch", "branches"))
 	}
+	queued := s.QueuedBranches()
+	if len(queued) > 0 {
+		cfg.Printf("Skipping %d queued %s", len(queued), plural(len(queued), "branch", "branches"))
+	}
 	activeBranches := activeBranchNames(s)
 	if len(activeBranches) == 0 {
-		cfg.Printf("No active branches to push (all merged)")
+		cfg.Printf("No active branches to push (all merged or queued)")
 		return nil
 	}
 	cfg.Printf("Pushing %d %s to %s...", len(activeBranches), plural(len(activeBranches), "branch", "branches"), remote)

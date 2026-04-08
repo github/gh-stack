@@ -152,12 +152,20 @@ func runSync(cfg *config.Config, opts *syncOptions) error {
 				continue
 			}
 
+			// Skip branches whose PRs are currently in a merge queue.
+			if br.IsQueued() {
+				ontoOldBase = originalRefs[br.Branch]
+				needsOnto = true
+				cfg.Successf("Skipping %s (PR %s queued)", br.Branch, cfg.PRLink(br.PullRequest.Number, br.PullRequest.URL))
+				continue
+			}
+
 			if needsOnto {
-				// Find --onto target: first non-merged ancestor, or trunk.
+				// Find --onto target: first non-merged/queued ancestor, or trunk.
 				newBase := trunk
 				for j := i - 1; j >= 0; j-- {
 					b := s.Branches[j]
-					if !b.IsMerged() {
+					if !b.IsSkipped() {
 						newBase = b.Branch
 						break
 					}
@@ -233,6 +241,9 @@ func runSync(cfg *config.Config, opts *syncOptions) error {
 	if mergedCount := len(s.MergedBranches()); mergedCount > 0 {
 		cfg.Printf("Skipping %d merged %s", mergedCount, plural(mergedCount, "branch", "branches"))
 	}
+	if queuedCount := len(s.QueuedBranches()); queuedCount > 0 {
+		cfg.Printf("Skipping %d queued %s", queuedCount, plural(queuedCount, "branch", "branches"))
+	}
 
 	if len(branches) == 0 {
 		cfg.Printf("No active branches to push (all merged)")
@@ -263,6 +274,10 @@ func runSync(cfg *config.Config, opts *syncOptions) error {
 	// Report PR status for each branch
 	for _, b := range s.Branches {
 		if b.IsMerged() {
+			continue
+		}
+		if b.IsQueued() {
+			cfg.Successf("PR %s (%s) — Queued", cfg.PRLink(b.PullRequest.Number, b.PullRequest.URL), b.Branch)
 			continue
 		}
 		if b.PullRequest != nil {

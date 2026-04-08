@@ -9,17 +9,29 @@ import (
 	graphql "github.com/cli/shurcooL-graphql"
 )
 
+// MergeQueueEntry represents a merge queue entry. When the GraphQL field
+// mergeQueueEntry is null (PR not queued), the pointer will be nil.
+type MergeQueueEntry struct {
+	ID string `graphql:"id"`
+}
+
 // PullRequest represents a GitHub pull request.
 type PullRequest struct {
-	ID          string `graphql:"id"`
-	Number      int    `graphql:"number"`
-	Title       string `graphql:"title"`
-	State       string `graphql:"state"`
-	URL         string `graphql:"url"`
-	HeadRefName string `graphql:"headRefName"`
-	BaseRefName string `graphql:"baseRefName"`
-	IsDraft     bool   `graphql:"isDraft"`
-	Merged      bool   `graphql:"merged"`
+	ID              string           `graphql:"id"`
+	Number          int              `graphql:"number"`
+	Title           string           `graphql:"title"`
+	State           string           `graphql:"state"`
+	URL             string           `graphql:"url"`
+	HeadRefName     string           `graphql:"headRefName"`
+	BaseRefName     string           `graphql:"baseRefName"`
+	IsDraft         bool             `graphql:"isDraft"`
+	Merged          bool             `graphql:"merged"`
+	MergeQueueEntry *MergeQueueEntry `graphql:"mergeQueueEntry"`
+}
+
+// IsQueued reports whether the pull request is currently in a merge queue.
+func (pr *PullRequest) IsQueued() bool {
+	return pr != nil && pr.MergeQueueEntry != nil && pr.MergeQueueEntry.ID != ""
 }
 
 // Client wraps GitHub API operations.
@@ -94,15 +106,16 @@ func (c *Client) FindPRForBranch(branch string) (*PullRequest, error) {
 
 	n := nodes[0]
 	return &PullRequest{
-		ID:          n.ID,
-		Number:      n.Number,
-		Title:       n.Title,
-		State:       n.State,
-		URL:         n.URL,
-		HeadRefName: n.HeadRefName,
-		BaseRefName: n.BaseRefName,
-		IsDraft:     n.IsDraft,
-		Merged:      n.Merged,
+		ID:              n.ID,
+		Number:          n.Number,
+		Title:           n.Title,
+		State:           n.State,
+		URL:             n.URL,
+		HeadRefName:     n.HeadRefName,
+		BaseRefName:     n.BaseRefName,
+		IsDraft:         n.IsDraft,
+		Merged:          n.Merged,
+		MergeQueueEntry: n.MergeQueueEntry,
 	}, nil
 }
 
@@ -133,15 +146,16 @@ func (c *Client) FindAnyPRForBranch(branch string) (*PullRequest, error) {
 
 	n := nodes[0]
 	return &PullRequest{
-		ID:          n.ID,
-		Number:      n.Number,
-		Title:       n.Title,
-		State:       n.State,
-		URL:         n.URL,
-		HeadRefName: n.HeadRefName,
-		BaseRefName: n.BaseRefName,
-		IsDraft:     n.IsDraft,
-		Merged:      n.Merged,
+		ID:              n.ID,
+		Number:          n.Number,
+		Title:           n.Title,
+		State:           n.State,
+		URL:             n.URL,
+		HeadRefName:     n.HeadRefName,
+		BaseRefName:     n.BaseRefName,
+		IsDraft:         n.IsDraft,
+		Merged:          n.Merged,
+		MergeQueueEntry: n.MergeQueueEntry,
 	}, nil
 }
 
@@ -227,6 +241,7 @@ type PRDetails struct {
 	URL           string
 	IsDraft       bool
 	Merged        bool
+	IsQueued      bool
 	CommentsCount int
 }
 
@@ -237,16 +252,17 @@ func (c *Client) FindPRDetailsForBranch(branch string) (*PRDetails, error) {
 		Repository struct {
 			PullRequests struct {
 				Nodes []struct {
-					ID          string `graphql:"id"`
-					Number      int    `graphql:"number"`
-					Title       string `graphql:"title"`
-					State       string `graphql:"state"`
-					URL         string `graphql:"url"`
-					HeadRefName string `graphql:"headRefName"`
-					BaseRefName string `graphql:"baseRefName"`
-					IsDraft     bool   `graphql:"isDraft"`
-					Merged      bool   `graphql:"merged"`
-					Comments    struct {
+					ID              string           `graphql:"id"`
+					Number          int              `graphql:"number"`
+					Title           string           `graphql:"title"`
+					State           string           `graphql:"state"`
+					URL             string           `graphql:"url"`
+					HeadRefName     string           `graphql:"headRefName"`
+					BaseRefName     string           `graphql:"baseRefName"`
+					IsDraft         bool             `graphql:"isDraft"`
+					Merged          bool             `graphql:"merged"`
+					MergeQueueEntry *MergeQueueEntry `graphql:"mergeQueueEntry"`
+					Comments        struct {
 						TotalCount int `graphql:"totalCount"`
 					} `graphql:"comments"`
 				}
@@ -277,6 +293,7 @@ func (c *Client) FindPRDetailsForBranch(branch string) (*PRDetails, error) {
 		URL:           n.URL,
 		IsDraft:       n.IsDraft,
 		Merged:        n.Merged,
+		IsQueued:      n.MergeQueueEntry != nil && n.MergeQueueEntry.ID != "",
 		CommentsCount: n.Comments.TotalCount,
 	}, nil
 }

@@ -250,15 +250,20 @@ func (m Model) handleMouseClick(screenX, screenY int) (tea.Model, tea.Cmd) {
 	contentLine := (screenY - yOffset) + m.scrollOffset
 
 	// Walk through rendered lines to find which node was clicked.
-	// Account for the merged separator line that may appear between nodes.
+	// Account for the merged/queued separator lines that may appear between nodes.
 	line := 0
 	prevWasMerged := false
+	prevWasQueued := false
 	for i := 0; i < len(m.nodes); i++ {
 		isMerged := m.nodes[i].Ref.IsMerged()
+		isQueued := m.nodes[i].Ref.IsQueued()
 		if isMerged && !prevWasMerged && i > 0 {
+			line++ // separator line
+		} else if isQueued && !prevWasQueued && !prevWasMerged && i > 0 {
 			line++ // separator line
 		}
 		prevWasMerged = isMerged
+		prevWasQueued = isQueued
 
 		nodeStart := line
 		nodeLines := m.nodeLineCount(i)
@@ -359,11 +364,9 @@ func (m Model) prLabelColumns(idx int) (int, int) {
 	node := m.nodes[idx]
 	// Layout: "├ " (2) + optional status icon + " " (2) + "#N..."
 	col := 2 // bullet + space
-	if node.PR != nil && (node.PR.Merged || !node.IsLinear || node.PR.Number != 0) {
-		icon := m.statusIcon(node)
-		if icon != "" {
-			col += 2 // icon (1 visible char) + space
-		}
+	icon := m.statusIcon(node)
+	if icon != "" {
+		col += 2 // icon (1 visible char) + space
 	}
 	prLabel := fmt.Sprintf("#%d", node.PR.Number)
 	return col, col + len(prLabel)
@@ -378,18 +381,26 @@ func (m *Model) ensureVisible() {
 	// Calculate the line range for the cursor node, accounting for separator lines
 	startLine := 0
 	prevWasMerged := false
+	prevWasQueued := false
 	for i := 0; i < m.cursor; i++ {
 		isMerged := m.nodes[i].Ref.IsMerged()
+		isQueued := m.nodes[i].Ref.IsQueued()
 		if isMerged && !prevWasMerged && i > 0 {
+			startLine++ // separator line
+		} else if isQueued && !prevWasQueued && !prevWasMerged && i > 0 {
 			startLine++ // separator line
 		}
 		prevWasMerged = isMerged
+		prevWasQueued = isQueued
 		startLine += m.nodeLineCount(i)
 	}
 	// Check if the cursor node itself is preceded by a separator
 	if m.cursor < len(m.nodes) {
 		isMerged := m.nodes[m.cursor].Ref.IsMerged()
+		isQueued := m.nodes[m.cursor].Ref.IsQueued()
 		if isMerged && !prevWasMerged && m.cursor > 0 {
+			startLine++
+		} else if isQueued && !prevWasQueued && !prevWasMerged && m.cursor > 0 {
 			startLine++
 		}
 	}
@@ -423,12 +434,17 @@ func (m Model) showShortcuts() bool {
 func (m Model) totalContentLines() int {
 	lines := 0
 	prevWasMerged := false
+	prevWasQueued := false
 	for i := 0; i < len(m.nodes); i++ {
 		isMerged := m.nodes[i].Ref.IsMerged()
+		isQueued := m.nodes[i].Ref.IsQueued()
 		if isMerged && !prevWasMerged && i > 0 {
+			lines++ // separator line
+		} else if isQueued && !prevWasQueued && !prevWasMerged && i > 0 {
 			lines++ // separator line
 		}
 		prevWasMerged = isMerged
+		prevWasQueued = isQueued
 		lines += m.nodeLineCount(i)
 	}
 	lines++ // trunk line
@@ -478,13 +494,18 @@ func (m Model) View() string {
 
 	// Render nodes in order (index 0 = top of stack, displayed first)
 	prevWasMerged := false
+	prevWasQueued := false
 	for i := 0; i < len(m.nodes); i++ {
 		isMerged := m.nodes[i].Ref.IsMerged()
+		isQueued := m.nodes[i].Ref.IsQueued()
 		if isMerged && !prevWasMerged && i > 0 {
 			b.WriteString(connectorStyle.Render("────") + dimStyle.Render(" merged ") + connectorStyle.Render("─────") + "\n")
+		} else if isQueued && !prevWasQueued && !prevWasMerged && i > 0 {
+			b.WriteString(connectorStyle.Render("────") + dimStyle.Render(" queued ") + connectorStyle.Render("─────") + "\n")
 		}
 		m.renderNode(&b, i)
 		prevWasMerged = isMerged
+		prevWasQueued = isQueued
 	}
 
 	// Trunk
@@ -535,9 +556,13 @@ func (m Model) renderHeader(b *strings.Builder) {
 
 	// Build info lines (placed to the right of art on specific rows)
 	mergedCount := 0
+	queuedCount := 0
 	for _, n := range m.nodes {
 		if n.Ref.IsMerged() {
 			mergedCount++
+		}
+		if n.Ref.IsQueued() {
+			queuedCount++
 		}
 	}
 	branchCount := len(m.nodes)
@@ -547,6 +572,9 @@ func (m Model) renderHeader(b *strings.Builder) {
 	}
 	if mergedCount > 0 {
 		branchInfo += fmt.Sprintf(" (%d merged)", mergedCount)
+	}
+	if queuedCount > 0 {
+		branchInfo += fmt.Sprintf(" (%d queued)", queuedCount)
 	}
 
 	// Branch progress icon: ○ none merged, ◐ some merged, ● all merged
@@ -682,8 +710,9 @@ func (m Model) renderNode(b *strings.Builder, idx int) {
 	// Determine connector character and style
 	connector := "│"
 	connStyle := connectorStyle
-	isMerged := node.PR != nil && node.PR.Merged
-	if !node.IsLinear && !isMerged {
+	isMerged := node.Ref.IsMerged()
+	isQueued := node.Ref.IsQueued()
+	if !node.IsLinear && !isMerged && !isQueued {
 		connector = "┊"
 		connStyle = connectorDashedStyle
 	}
@@ -693,6 +722,8 @@ func (m Model) renderNode(b *strings.Builder, idx int) {
 			connStyle = connectorCurrentStyle
 		} else if isMerged {
 			connStyle = connectorMergedStyle
+		} else if isQueued {
+			connStyle = connectorQueuedStyle
 		} else {
 			connStyle = connectorFocusedStyle
 		}
@@ -745,6 +776,9 @@ func (m Model) renderPRHeader(b *strings.Builder, node BranchNode, isFocused boo
 	case pr.Merged:
 		stateLabel = " MERGED"
 		style = prMergedStyle
+	case pr.IsQueued:
+		stateLabel = " QUEUED"
+		style = prQueuedStyle
 	case pr.State == "CLOSED":
 		stateLabel = " CLOSED"
 		style = prClosedStyle
@@ -767,8 +801,6 @@ func (m Model) renderBranchLine(b *strings.Builder, node BranchNode, connector s
 	branchName := node.Ref.Branch
 	if node.IsCurrent {
 		b.WriteString(currentBranchStyle.Render(branchName + " (current)"))
-	} else if node.PR != nil && node.PR.Merged {
-		b.WriteString(normalBranchStyle.Render(branchName))
 	} else {
 		b.WriteString(normalBranchStyle.Render(branchName))
 	}
@@ -816,8 +848,11 @@ func (m Model) renderDiffStats(b *strings.Builder, node BranchNode) {
 
 // statusIcon returns the appropriate status icon for a branch.
 func (m Model) statusIcon(node BranchNode) string {
-	if node.PR != nil && node.PR.Merged {
+	if node.Ref.IsMerged() {
 		return mergedIcon
+	}
+	if node.Ref.IsQueued() {
+		return queuedIcon
 	}
 	if !node.IsLinear {
 		return warningIcon

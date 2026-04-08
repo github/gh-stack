@@ -77,6 +77,9 @@ func runSubmit(cfg *config.Config, opts *submitOptions) error {
 		return ErrAPIFailure
 	}
 
+	// Sync PR state to detect merged/queued PRs before pushing.
+	syncStackPRs(cfg, s)
+
 	// Push all active branches atomically
 	remote, err := pickRemote(cfg, currentBranch, opts.remote)
 	if err != nil {
@@ -89,9 +92,13 @@ func runSubmit(cfg *config.Config, opts *submitOptions) error {
 	if len(merged) > 0 {
 		cfg.Printf("Skipping %d merged %s", len(merged), plural(len(merged), "branch", "branches"))
 	}
+	queued := s.QueuedBranches()
+	if len(queued) > 0 {
+		cfg.Printf("Skipping %d queued %s", len(queued), plural(len(queued), "branch", "branches"))
+	}
 	activeBranches := activeBranchNames(s)
 	if len(activeBranches) == 0 {
-		cfg.Printf("All branches are merged, nothing to submit")
+		cfg.Printf("All branches are merged or queued, nothing to submit")
 		return nil
 	}
 	cfg.Printf("Pushing %d %s to %s...", len(activeBranches), plural(len(activeBranches), "branch", "branches"), remote)
@@ -104,7 +111,7 @@ func runSubmit(cfg *config.Config, opts *submitOptions) error {
 	// correct base branch. This makes submit idempotent: running it again
 	// fills gaps and fixes base branches before syncing the stack.
 	for i, b := range s.Branches {
-		if s.Branches[i].IsMerged() {
+		if s.Branches[i].IsMerged() || s.Branches[i].IsQueued() {
 			continue
 		}
 		baseBranch := s.ActiveBaseBranch(b.Branch)

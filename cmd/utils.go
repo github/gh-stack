@@ -214,6 +214,7 @@ func resolveStack(sf *stack.StackFile, branch string, cfg *config.Config) (*stac
 // syncStackPRs discovers and updates pull request metadata for branches in a stack.
 // For each branch, it queries GitHub for the most recent PR and updates the
 // PullRequestRef including merge status. Branches with already-merged PRs are skipped.
+// The transient Queued flag is also populated from the API response.
 func syncStackPRs(cfg *config.Config, s *stack.Stack) {
 	client, err := cfg.GitHubClient()
 	if err != nil {
@@ -238,6 +239,7 @@ func syncStackPRs(cfg *config.Config, s *stack.Stack) {
 			URL:    pr.URL,
 			Merged: pr.Merged,
 		}
+		b.Queued = pr.IsQueued()
 	}
 }
 

@@ -8,6 +8,7 @@ import (
 
 	"github.com/github/gh-stack/internal/config"
 	"github.com/github/gh-stack/internal/git"
+	"github.com/github/gh-stack/internal/github"
 	"github.com/github/gh-stack/internal/stack"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -282,4 +283,136 @@ func TestViewShort_FullyMergedStack(t *testing.T) {
 	assert.NoError(t, err)
 	assert.Contains(t, output, "b1")
 	assert.Contains(t, output, "b2")
+}
+
+// TestViewShort_QueuedStack verifies that --short output shows queued
+// branches with a "queued" separator and the ◎ icon.
+func TestViewShort_QueuedStack(t *testing.T) {
+	s := stack.Stack{
+		Trunk: stack.BranchRef{Branch: "main"},
+		Branches: []stack.BranchRef{
+			{Branch: "b1", PullRequest: &stack.PullRequestRef{Number: 1}},
+			{Branch: "b2", PullRequest: &stack.PullRequestRef{Number: 2}},
+			{Branch: "b3", PullRequest: &stack.PullRequestRef{Number: 3}},
+		},
+	}
+
+	tmpDir := t.TempDir()
+	writeStackFile(t, tmpDir, s)
+
+	restore := git.SetOps(&git.MockOps{
+		GitDirFn:        func() (string, error) { return tmpDir, nil },
+		CurrentBranchFn: func() (string, error) { return "b3", nil },
+		IsAncestorFn:    func(string, string) (bool, error) { return true, nil },
+		RevParseFn:      func(ref string) (string, error) { return "sha-" + ref, nil },
+	})
+	defer restore()
+
+	// Mock GitHub client to return b1 as queued (MergeQueueEntry set)
+	cfg, outR, _ := config.NewTestConfig()
+	cfg.GitHubClientOverride = &github.MockClient{
+		FindAnyPRForBranchFn: func(branch string) (*github.PullRequest, error) {
+			switch branch {
+			case "b1":
+				return &github.PullRequest{
+					Number:          1,
+					ID:              "PR_1",
+					MergeQueueEntry: &github.MergeQueueEntry{ID: "MQE_1"},
+				}, nil
+			case "b2":
+				return &github.PullRequest{Number: 2, ID: "PR_2"}, nil
+			case "b3":
+				return &github.PullRequest{Number: 3, ID: "PR_3"}, nil
+			}
+			return nil, nil
+		},
+	}
+
+	cmd := ViewCmd(cfg)
+	cmd.SetArgs([]string{"--short"})
+	cmd.SetOut(io.Discard)
+	cmd.SetErr(io.Discard)
+	err := cmd.Execute()
+
+	cfg.Out.Close()
+	raw, _ := io.ReadAll(outR)
+	output := string(raw)
+
+	assert.NoError(t, err)
+	assert.Contains(t, output, "b1")
+	assert.Contains(t, output, "b2")
+	assert.Contains(t, output, "b3")
+	assert.Contains(t, output, "queued", "should show queued separator")
+	assert.Contains(t, output, "◎", "should show queued icon for b1")
+}
+
+// TestViewShort_MixedQueuedAndMerged verifies that --short output shows
+// both "queued" and "merged" separators in the correct order.
+func TestViewShort_MixedQueuedAndMerged(t *testing.T) {
+	s := stack.Stack{
+		Trunk: stack.BranchRef{Branch: "main"},
+		Branches: []stack.BranchRef{
+			{Branch: "b1", PullRequest: &stack.PullRequestRef{Number: 1, Merged: true}},
+			{Branch: "b2", PullRequest: &stack.PullRequestRef{Number: 2}},
+			{Branch: "b3", PullRequest: &stack.PullRequestRef{Number: 3}},
+		},
+	}
+
+	tmpDir := t.TempDir()
+	writeStackFile(t, tmpDir, s)
+
+	restore := git.SetOps(&git.MockOps{
+		GitDirFn:        func() (string, error) { return tmpDir, nil },
+		CurrentBranchFn: func() (string, error) { return "b3", nil },
+		IsAncestorFn:    func(string, string) (bool, error) { return true, nil },
+		RevParseFn:      func(ref string) (string, error) { return "sha-" + ref, nil },
+	})
+	defer restore()
+
+	// b1 is merged (persisted), b2 is queued (from API)
+	cfg, outR, _ := config.NewTestConfig()
+	cfg.GitHubClientOverride = &github.MockClient{
+		FindAnyPRForBranchFn: func(branch string) (*github.PullRequest, error) {
+			switch branch {
+			case "b2":
+				return &github.PullRequest{
+					Number:          2,
+					ID:              "PR_2",
+					MergeQueueEntry: &github.MergeQueueEntry{ID: "MQE_2"},
+				}, nil
+			case "b3":
+				return &github.PullRequest{Number: 3, ID: "PR_3"}, nil
+			}
+			return nil, nil
+		},
+	}
+
+	cmd := ViewCmd(cfg)
+	cmd.SetArgs([]string{"--short"})
+	cmd.SetOut(io.Discard)
+	cmd.SetErr(io.Discard)
+	err := cmd.Execute()
+
+	cfg.Out.Close()
+	raw, _ := io.ReadAll(outR)
+	output := string(raw)
+
+	assert.NoError(t, err)
+	assert.Contains(t, output, "queued", "should show queued separator")
+	assert.Contains(t, output, "merged", "should show merged separator")
+
+	// "merged" section (b1) should appear below "queued" section (b2) in output
+	// Since we render top-to-bottom: b3 (active) -> queued separator -> b2 -> merged separator -> b1
+	queuedIdx := indexOf(output, "queued")
+	mergedIdx := indexOf(output, "merged")
+	assert.Less(t, queuedIdx, mergedIdx, "queued separator should appear before merged separator")
+}
+
+func indexOf(s, substr string) int {
+	for i := 0; i <= len(s)-len(substr); i++ {
+		if s[i:i+len(substr)] == substr {
+			return i
+		}
+	}
+	return -1
 }

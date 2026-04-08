@@ -247,6 +247,32 @@ func TestView_HeaderShowsMergedCount(t *testing.T) {
 	assert.Contains(t, view, "3 branches (1 merged)")
 }
 
+func TestView_HeaderShowsQueuedCount(t *testing.T) {
+	nodes := makeNodes("b1", "b2", "b3")
+	nodes[1].Ref.Queued = true
+	nodes[1].Ref.PullRequest = &stack.PullRequestRef{Number: 10}
+	m := New(nodes, testTrunk, "0.0.1")
+
+	updated, _ := m.Update(tea.WindowSizeMsg{Width: 100, Height: 40})
+	m = updated.(Model)
+
+	view := m.View()
+	assert.Contains(t, view, "3 branches (1 queued)")
+}
+
+func TestView_QueuedPRShowsQueuedLabel(t *testing.T) {
+	nodes := makeNodes("b1")
+	nodes[0].PR = &ghapi.PRDetails{Number: 99, IsQueued: true}
+	m := New(nodes, testTrunk, "0.0.1")
+
+	updated, _ := m.Update(tea.WindowSizeMsg{Width: 80, Height: 30})
+	m = updated.(Model)
+
+	view := m.View()
+	assert.Contains(t, view, "QUEUED")
+	assert.Contains(t, view, "#99")
+}
+
 func TestView_BranchProgressIcon(t *testing.T) {
 	tests := []struct {
 		name     string

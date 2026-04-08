@@ -26,3 +26,23 @@ func TestPRURL(t *testing.T) {
 		})
 	}
 }
+
+func TestPullRequest_IsQueued(t *testing.T) {
+	t.Run("not queued when MergeQueueEntry is nil", func(t *testing.T) {
+		pr := &PullRequest{Number: 1}
+		assert.False(t, pr.IsQueued())
+	})
+
+	t.Run("queued when MergeQueueEntry has ID", func(t *testing.T) {
+		pr := &PullRequest{
+			Number:          1,
+			MergeQueueEntry: &MergeQueueEntry{ID: "MQE_123"},
+		}
+		assert.True(t, pr.IsQueued())
+	})
+
+	t.Run("nil receiver is safe", func(t *testing.T) {
+		var pr *PullRequest
+		assert.False(t, pr.IsQueued())
+	})
+}

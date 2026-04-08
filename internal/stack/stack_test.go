@@ -382,3 +382,226 @@ func TestRemoveStackForBranch(t *testing.T) {
 		assert.Len(t, sf.Stacks, 1)
 	})
 }
+
+// --- Queued state: transient merge queue support ---
+
+func makeQueuedBranch(name string, prNum int) BranchRef {
+	return BranchRef{
+		Branch:      name,
+		PullRequest: &PullRequestRef{Number: prNum},
+		Queued:      true,
+	}
+}
+
+func TestIsQueued(t *testing.T) {
+	t.Run("queued branch", func(t *testing.T) {
+		b := makeQueuedBranch("b1", 1)
+		assert.True(t, b.IsQueued())
+		assert.False(t, b.IsMerged())
+		assert.True(t, b.IsSkipped())
+	})
+
+	t.Run("merged branch", func(t *testing.T) {
+		b := makeMergedBranch("b1", 1)
+		assert.False(t, b.IsQueued())
+		assert.True(t, b.IsMerged())
+		assert.True(t, b.IsSkipped())
+	})
+
+	t.Run("active branch", func(t *testing.T) {
+		b := BranchRef{Branch: "b1"}
+		assert.False(t, b.IsQueued())
+		assert.False(t, b.IsMerged())
+		assert.False(t, b.IsSkipped())
+	})
+}
+
+func TestQueuedBranches(t *testing.T) {
+	s := Stack{
+		Trunk: BranchRef{Branch: "main"},
+		Branches: []BranchRef{
+			{Branch: "b1"},
+			makeQueuedBranch("b2", 2),
+			{Branch: "b3"},
+			makeQueuedBranch("b4", 4),
+		},
+	}
+	queued := s.QueuedBranches()
+	assert.Len(t, queued, 2)
+	assert.Equal(t, "b2", queued[0].Branch)
+	assert.Equal(t, "b4", queued[1].Branch)
+}
+
+func TestActiveBranches_ExcludesQueued(t *testing.T) {
+	s := Stack{
+		Trunk: BranchRef{Branch: "main"},
+		Branches: []BranchRef{
+			makeQueuedBranch("b1", 1),
+			{Branch: "b2"},
+			makeMergedBranch("b3", 3),
+			{Branch: "b4"},
+		},
+	}
+	active := s.ActiveBranches()
+	assert.Len(t, active, 2)
+	assert.Equal(t, "b2", active[0].Branch)
+	assert.Equal(t, "b4", active[1].Branch)
+}
+
+func TestFirstActiveBranchIndex_SkipsQueued(t *testing.T) {
+	t.Run("queued first, then active", func(t *testing.T) {
+		s := Stack{
+			Trunk: BranchRef{Branch: "main"},
+			Branches: []BranchRef{
+				makeQueuedBranch("b1", 1),
+				{Branch: "b2"},
+			},
+		}
+		assert.Equal(t, 1, s.FirstActiveBranchIndex())
+	})
+
+	t.Run("all queued", func(t *testing.T) {
+		s := Stack{
+			Trunk: BranchRef{Branch: "main"},
+			Branches: []BranchRef{
+				makeQueuedBranch("b1", 1),
+				makeQueuedBranch("b2", 2),
+			},
+		}
+		assert.Equal(t, -1, s.FirstActiveBranchIndex())
+	})
+
+	t.Run("merged then queued then active", func(t *testing.T) {
+		s := Stack{
+			Trunk: BranchRef{Branch: "main"},
+			Branches: []BranchRef{
+				makeMergedBranch("b1", 1),
+				makeQueuedBranch("b2", 2),
+				{Branch: "b3"},
+			},
+		}
+		assert.Equal(t, 2, s.FirstActiveBranchIndex())
+	})
+}
+
+func TestActiveBranchIndices_SkipsQueued(t *testing.T) {
+	s := Stack{
+		Trunk: BranchRef{Branch: "main"},
+		Branches: []BranchRef{
+			makeQueuedBranch("b1", 1),
+			{Branch: "b2"},
+			makeMergedBranch("b3", 3),
+			{Branch: "b4"},
+			makeQueuedBranch("b5", 5),
+		},
+	}
+	assert.Equal(t, []int{1, 3}, s.ActiveBranchIndices())
+}
+
+func TestActiveBaseBranch_SkipsQueued(t *testing.T) {
+	tests := []struct {
+		name     string
+		stack    Stack
+		branch   string
+		expected string
+	}{
+		{
+			name: "queued ancestor skipped to trunk",
+			stack: Stack{
+				Trunk: BranchRef{Branch: "main"},
+				Branches: []BranchRef{
+					makeQueuedBranch("b1", 1),
+					{Branch: "b2"},
+				},
+			},
+			branch:   "b2",
+			expected: "main",
+		},
+		{
+			name: "queued ancestor skipped to active sibling",
+			stack: Stack{
+				Trunk: BranchRef{Branch: "main"},
+				Branches: []BranchRef{
+					{Branch: "b1"},
+					makeQueuedBranch("b2", 2),
+					{Branch: "b3"},
+				},
+			},
+			branch:   "b3",
+			expected: "b1",
+		},
+		{
+			name: "mixed merged and queued ancestors skip to trunk",
+			stack: Stack{
+				Trunk: BranchRef{Branch: "main"},
+				Branches: []BranchRef{
+					makeMergedBranch("b1", 1),
+					makeQueuedBranch("b2", 2),
+					{Branch: "b3"},
+				},
+			},
+			branch:   "b3",
+			expected: "main",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			assert.Equal(t, tt.expected, tt.stack.ActiveBaseBranch(tt.branch))
+		})
+	}
+}
+
+func TestQueuedState_NotPersisted(t *testing.T) {
+	dir := t.TempDir()
+	original := &StackFile{
+		Repository: "owner/repo",
+		Stacks: []Stack{
+			{
+				Trunk: BranchRef{Branch: "main"},
+				Branches: []BranchRef{
+					{
+						Branch:      "b1",
+						PullRequest: &PullRequestRef{Number: 1},
+						Queued:      true, // set transient state
+					},
+				},
+			},
+		},
+	}
+
+	require.NoError(t, Save(dir, original))
+
+	loaded, err := Load(dir)
+	require.NoError(t, err)
+	require.Len(t, loaded.Stacks, 1)
+	require.Len(t, loaded.Stacks[0].Branches, 1)
+
+	// Queued state should NOT be persisted (json:"-")
+	assert.False(t, loaded.Stacks[0].Branches[0].Queued)
+	assert.False(t, loaded.Stacks[0].Branches[0].IsQueued())
+}
+
+func TestIsFullyMerged_NotAffectedByQueued(t *testing.T) {
+	t.Run("all queued is not fully merged", func(t *testing.T) {
+		s := Stack{
+			Trunk: BranchRef{Branch: "main"},
+			Branches: []BranchRef{
+				makeQueuedBranch("b1", 1),
+				makeQueuedBranch("b2", 2),
+			},
+		}
+		assert.False(t, s.IsFullyMerged())
+	})
+
+	t.Run("merged and queued is not fully merged", func(t *testing.T) {
+		s := Stack{
+			Trunk: BranchRef{Branch: "main"},
+			Branches: []BranchRef{
+				makeMergedBranch("b1", 1),
+				makeQueuedBranch("b2", 2),
+			},
+		}
+		assert.False(t, s.IsFullyMerged())
+	})
+}
