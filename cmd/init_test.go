@@ -8,6 +8,7 @@ import (
 
 	"github.com/github/gh-stack/internal/config"
 	"github.com/github/gh-stack/internal/git"
+	"github.com/github/gh-stack/internal/github"
 	"github.com/github/gh-stack/internal/stack"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -289,4 +290,92 @@ func TestInit_MultipleBranches_CreatesAll(t *testing.T) {
 	require.NoError(t, err, "loading stack")
 	names := sf.Stacks[0].BranchNames()
 	assert.Equal(t, []string{"b1", "b2", "b3"}, names)
+}
+
+func TestInit_AdoptWithExistingOpenPR(t *testing.T) {
+	gitDir := t.TempDir()
+	restore := git.SetOps(&git.MockOps{
+		GitDirFn:        func() (string, error) { return gitDir, nil },
+		DefaultBranchFn: func() (string, error) { return "main", nil },
+		CurrentBranchFn: func() (string, error) { return "main", nil },
+		BranchExistsFn:  func(string) bool { return true },
+	})
+	defer restore()
+
+	cfg, outR, errR := config.NewTestConfig()
+	cfg.GitHubClientOverride = &github.MockClient{
+		FindPRForBranchFn: func(branch string) (*github.PullRequest, error) {
+			if branch == "b1" {
+				return &github.PullRequest{
+					Number:      42,
+					ID:          "PR_42",
+					URL:         "https://github.com/owner/repo/pull/42",
+					State:       "OPEN",
+					HeadRefName: "b1",
+				}, nil
+			}
+			return nil, nil
+		},
+	}
+
+	err := runInit(cfg, &initOptions{
+		branches: []string{"b1", "b2"},
+		adopt:    true,
+	})
+	output := collectOutput(cfg, outR, errR)
+
+	require.NoError(t, err, "adopt should succeed even when branch has an open PR")
+	require.NotContains(t, output, "\u2717", "unexpected error in output")
+
+	sf, err := stack.Load(gitDir)
+	require.NoError(t, err, "loading stack")
+	require.Len(t, sf.Stacks, 1)
+
+	// b1 should have the open PR recorded
+	b1 := sf.Stacks[0].Branches[0]
+	require.NotNil(t, b1.PullRequest, "open PR should be recorded")
+	assert.Equal(t, 42, b1.PullRequest.Number)
+	assert.Equal(t, "https://github.com/owner/repo/pull/42", b1.PullRequest.URL)
+
+	// b2 should have no PR
+	b2 := sf.Stacks[0].Branches[1]
+	assert.Nil(t, b2.PullRequest, "branch without PR should have nil PullRequest")
+}
+
+func TestInit_AdoptIgnoresClosedAndMergedPRs(t *testing.T) {
+	gitDir := t.TempDir()
+	restore := git.SetOps(&git.MockOps{
+		GitDirFn:        func() (string, error) { return gitDir, nil },
+		DefaultBranchFn: func() (string, error) { return "main", nil },
+		CurrentBranchFn: func() (string, error) { return "main", nil },
+		BranchExistsFn:  func(string) bool { return true },
+	})
+	defer restore()
+
+	cfg, outR, errR := config.NewTestConfig()
+	// FindPRForBranch only returns OPEN PRs — closed/merged PRs won't be
+	// returned by the API, so the mock returns nil for all branches.
+	cfg.GitHubClientOverride = &github.MockClient{
+		FindPRForBranchFn: func(branch string) (*github.PullRequest, error) {
+			return nil, nil
+		},
+	}
+
+	err := runInit(cfg, &initOptions{
+		branches: []string{"b1", "b2"},
+		adopt:    true,
+	})
+	output := collectOutput(cfg, outR, errR)
+
+	require.NoError(t, err, "adopt should succeed when branches have closed/merged PRs")
+	require.NotContains(t, output, "\u2717", "unexpected error in output")
+
+	sf, err := stack.Load(gitDir)
+	require.NoError(t, err, "loading stack")
+	require.Len(t, sf.Stacks, 1)
+
+	// Neither branch should have a PR recorded (closed/merged are filtered out)
+	for _, b := range sf.Stacks[0].Branches {
+		assert.Nil(t, b.PullRequest, "closed/merged PRs should not be recorded for branch %s", b.Branch)
+	}
 }

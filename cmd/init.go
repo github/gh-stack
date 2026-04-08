@@ -174,25 +174,6 @@ func runInit(cfg *config.Config, opts *initOptions) error {
 			}
 		}
 		branches = opts.branches
-
-		// Check if any adopted branches already have PRs on GitHub.
-		// If offline or unable to create client, skip silently.
-		if client, clientErr := cfg.GitHubClient(); clientErr == nil {
-			for _, b := range branches {
-				pr, err := client.FindAnyPRForBranch(b)
-				if err != nil {
-					continue
-				}
-				if pr != nil {
-					state := "open"
-					if pr.Merged {
-						state = "merged"
-					}
-					cfg.Errorf("branch %q already has a %s PR (#%d: %s)", b, state, pr.Number, pr.URL)
-					return ErrInvalidArgs
-				}
-			}
-		}
 	} else if len(opts.branches) > 0 {
 		// Explicit branch names provided — apply prefix and create them
 		prefixed := make([]string, 0, len(opts.branches))
@@ -323,8 +304,28 @@ func runInit(cfg *config.Config, opts *initOptions) error {
 
 	sf.AddStack(newStack)
 
-	// Sync PR state for adopted branches
-	syncStackPRs(cfg, &sf.Stacks[len(sf.Stacks)-1])
+	// Discover existing PRs for the new stack's branches.
+	// For adopt, only record open/draft PRs (ignore closed/merged).
+	// For non-adopt, use the standard sync which also detects merges.
+	newStack_ := &sf.Stacks[len(sf.Stacks)-1]
+	if opts.adopt {
+		if client, clientErr := cfg.GitHubClient(); clientErr == nil {
+			for i := range newStack_.Branches {
+				b := &newStack_.Branches[i]
+				pr, err := client.FindPRForBranch(b.Branch)
+				if err != nil || pr == nil {
+					continue
+				}
+				b.PullRequest = &stack.PullRequestRef{
+					Number: pr.Number,
+					ID:     pr.ID,
+					URL:    pr.URL,
+				}
+			}
+		}
+	} else {
+		syncStackPRs(cfg, newStack_)
+	}
 
 	if err := stack.Save(gitDir, sf); err != nil {
 		return handleSaveError(cfg, err)
