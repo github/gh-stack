@@ -44,12 +44,6 @@ func runUnstack(cfg *config.Config, opts *unstackOptions) error {
 	gitDir := result.GitDir
 	sf := result.StackFile
 	s := result.Stack
-	target := opts.target
-	if target == "" {
-		target = result.CurrentBranch
-	}
-
-	cfg.Printf("Stack branches: %v", s.BranchNames())
 
 	// Delete the stack on GitHub first (unless --local).
 	// Only proceed with local deletion after the remote operation succeeds.
@@ -65,18 +59,33 @@ func runUnstack(cfg *config.Config, opts *unstackOptions) error {
 			if err := client.DeleteStack(s.ID); err != nil {
 				var httpErr *api.HTTPError
 				if errors.As(err, &httpErr) {
-					cfg.Errorf("Failed to delete stack on GitHub (HTTP %d): %s", httpErr.StatusCode, httpErr.Message)
+					switch httpErr.StatusCode {
+					case 404:
+						// Stack already deleted on GitHub — treat as success.
+						cfg.Warningf("Stack not found on GitHub — continuing with local unstack")
+					default:
+						cfg.Errorf("Failed to delete stack on GitHub (HTTP %d): %s", httpErr.StatusCode, httpErr.Message)
+						return ErrAPIFailure
+					}
 				} else {
 					cfg.Errorf("Failed to delete stack on GitHub: %v", err)
+					return ErrAPIFailure
 				}
-				return ErrAPIFailure
+			} else {
+				cfg.Successf("Stack deleted on GitHub")
 			}
-			cfg.Successf("Stack deleted on GitHub")
 		}
 	}
 
-	// Remove from local tracking
-	sf.RemoveStackForBranch(target)
+	// Remove the exact resolved stack from local tracking by pointer identity,
+	// not by branch name — avoids removing the wrong stack when a trunk
+	// branch is shared across multiple stacks.
+	for i := range sf.Stacks {
+		if &sf.Stacks[i] == s {
+			sf.RemoveStack(i)
+			break
+		}
+	}
 	if err := stack.Save(gitDir, sf); err != nil {
 		return handleSaveError(cfg, err)
 	}

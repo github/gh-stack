@@ -307,11 +307,11 @@ func runInit(cfg *config.Config, opts *initOptions) error {
 	// Discover existing PRs for the new stack's branches.
 	// For adopt, only record open/draft PRs (ignore closed/merged).
 	// For non-adopt, use the standard sync which also detects merges.
-	newStack_ := &sf.Stacks[len(sf.Stacks)-1]
+	latestStack := &sf.Stacks[len(sf.Stacks)-1]
 	if opts.adopt {
 		if client, clientErr := cfg.GitHubClient(); clientErr == nil {
-			for i := range newStack_.Branches {
-				b := &newStack_.Branches[i]
+			for i := range latestStack.Branches {
+				b := &latestStack.Branches[i]
 				pr, err := client.FindPRForBranch(b.Branch)
 				if err != nil || pr == nil {
 					continue
@@ -324,7 +324,7 @@ func runInit(cfg *config.Config, opts *initOptions) error {
 			}
 		}
 	} else {
-		syncStackPRs(cfg, newStack_)
+		syncStackPRs(cfg, latestStack)
 	}
 
 	if err := stack.Save(gitDir, sf); err != nil {
