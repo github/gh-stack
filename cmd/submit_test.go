@@ -516,7 +516,7 @@ func TestSyncStack_NotAvailable(t *testing.T) {
 	errOut, _ := io.ReadAll(errR)
 	output := string(errOut)
 
-	assert.Contains(t, output, "not yet available")
+	assert.Contains(t, output, "not enabled")
 }
 
 func TestSyncStack_SkippedForSinglePR(t *testing.T) {

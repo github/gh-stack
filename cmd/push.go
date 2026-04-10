@@ -145,6 +145,7 @@ func pickRemote(cfg *config.Config, branch, remoteOverride string) (string, erro
 	selected, promptErr := p.Select("Multiple remotes found. Which remote should be used?", "", multi.Remotes)
 	if promptErr != nil {
 		if isInterruptError(promptErr) {
+			clearSelectPrompt(cfg, len(multi.Remotes))
 			printInterrupt(cfg)
 			return "", errInterrupt
 		}

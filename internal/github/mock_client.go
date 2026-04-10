@@ -6,9 +6,11 @@ package github
 type MockClient struct {
 	FindPRForBranchFn        func(string) (*PullRequest, error)
 	FindAnyPRForBranchFn     func(string) (*PullRequest, error)
+	FindPRByNumberFn         func(int) (*PullRequest, error)
 	FindPRDetailsForBranchFn func(string) (*PRDetails, error)
 	CreatePRFn               func(string, string, string, string, bool) (*PullRequest, error)
 	UpdatePRBaseFn           func(int, string) error
+	ListStacksFn             func() ([]RemoteStack, error)
 	CreateStackFn            func([]int) (int, error)
 	UpdateStackFn            func(string, []int) error
 	DeleteStackFn            func(string) error
@@ -27,6 +29,13 @@ func (m *MockClient) FindPRForBranch(branch string) (*PullRequest, error) {
 func (m *MockClient) FindAnyPRForBranch(branch string) (*PullRequest, error) {
 	if m.FindAnyPRForBranchFn != nil {
 		return m.FindAnyPRForBranchFn(branch)
+	}
+	return nil, nil
+}
+
+func (m *MockClient) FindPRByNumber(number int) (*PullRequest, error) {
+	if m.FindPRByNumberFn != nil {
+		return m.FindPRByNumberFn(number)
 	}
 	return nil, nil
 }
@@ -50,6 +59,13 @@ func (m *MockClient) UpdatePRBase(number int, base string) error {
 		return m.UpdatePRBaseFn(number, base)
 	}
 	return nil
+}
+
+func (m *MockClient) ListStacks() ([]RemoteStack, error) {
+	if m.ListStacksFn != nil {
+		return m.ListStacksFn()
+	}
+	return nil, nil
 }
 
 func (m *MockClient) CreateStack(prNumbers []int) (int, error) {

@@ -31,10 +31,6 @@ func InitCmd(cfg *config.Config) *cobra.Command {
 
 Unless specified, prompts user to create/select branch for first layer of the stack.
 Trunk defaults to default branch, unless specified otherwise.`,
-		Example: `  $ gh stack init
-  $ gh stack init myBranch
-  $ gh stack init --adopt branch1 branch2 branch3
-  $ gh stack init --base integrationBranch firstBranch`,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			opts.branches = args
 			return runInit(cfg, opts)

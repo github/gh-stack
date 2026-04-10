@@ -65,6 +65,23 @@ func printInterrupt(cfg *config.Config) {
 	cfg.Infof("Received interrupt, aborting operation")
 }
 
+// selectPromptPageSize matches the PageSize used by the go-gh prompter.
+const selectPromptPageSize = 20
+
+// clearSelectPrompt erases the rendered Select prompt from the terminal.
+// survey/v2 does not call Cleanup on interrupt, leaving the question and
+// option lines visible. This function moves the cursor up past those lines
+// and clears to the end of the screen.
+func clearSelectPrompt(cfg *config.Config, numOptions int) {
+	visible := numOptions
+	if visible > selectPromptPageSize {
+		visible = selectPromptPageSize
+	}
+	// 1 line for the question/filter + visible option lines
+	lines := 1 + visible
+	fmt.Fprintf(cfg.Out, "\033[%dA\033[J", lines)
+}
+
 // loadStackResult holds everything returned by loadStack.
 type loadStackResult struct {
 	GitDir        string
@@ -186,6 +203,7 @@ func resolveStack(sf *stack.StackFile, branch string, cfg *config.Config) (*stac
 	selected, err := p.Select("Which stack would you like to use?", "", options)
 	if err != nil {
 		if isInterruptError(err) {
+			clearSelectPrompt(cfg, len(options))
 			printInterrupt(cfg)
 			return nil, errInterrupt
 		}

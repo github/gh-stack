@@ -141,7 +141,7 @@ Small, incidental fixes (e.g., fixing a typo you noticed) can go in the current 
 | Switch branches up/down in stack | `gh stack up [n]` / `gh stack down [n]` |
 | Switch to top/bottom branch | `gh stack top` / `gh stack bottom` |
 | Check out by PR | `gh stack checkout 42` |
-| Check out by branch | `gh stack checkout feature-auth` |
+| Check out by branch (local only) | `gh stack checkout feature-auth` |
 | Tear down a stack to restructure it | `gh stack unstack` |
 
 ---
@@ -705,23 +705,23 @@ Navigation clamps to stack bounds. Merged branches are skipped when navigating f
 
 ### Check out a stack — `gh stack checkout`
 
-Check out a locally tracked stack by PR number or branch name. Always provide the target as an argument.
+Check out a stack from a pull request number or branch name.
 
 ```
-gh stack checkout <pr-or-branch>
+gh stack checkout <pr-number | branch>
 ```
 
 ```bash
-# By PR number
+# By PR number (pulls from GitHub)
 gh stack checkout 42
 
-# By branch name
+# By branch name (local only)
 gh stack checkout feature-auth
 ```
 
-Resolves the target against locally tracked stacks. Accepts a PR number, PR URL, or branch name. Checks out the matching branch.
+When a PR number is provided (e.g. `123`), the command fetches the stack on GitHub, pulls the branches, and sets up the stack locally. If the stack already exists locally and matches, it switches to the branch. If the local and remote stacks have different compositions, you'll be prompted to resolve the conflict by deciding whether to replace the local stack with the remote version or delete the remote stack and keep the local version.
 
-> **Note:** This command only works with stacks that have been created locally (via `gh stack init`). Server-side stack discovery is not yet implemented.
+When a branch name is provided, the command resolves it against locally tracked stacks only.
 
 ---
 
@@ -781,5 +781,5 @@ gh stack unstack feature-auth
 2. **Stack disambiguation cannot be bypassed.** If the current branch is the trunk of multiple stacks, commands error with code 6. Check out a non-shared branch first.
 3. **Multiple remotes require `--remote` or config.** If more than one remote is configured, pass `--remote <name>` or set `remote.pushDefault` in git config before running `push`, `sync`, or `rebase`.
 4. **Merging PRs:** Merging Stacked PRs from the CLI is not supported yet. Direct users to open the PR URL in a browser to merge PRs.
-5. **Server-side stack discovery is not supported.** `checkout` only works with locally tracked stacks.
+5. **Remote stack checkout requires a PR number.** `checkout` with a branch name only works with locally tracked stacks. Use a PR number (e.g. `gh stack checkout 123`) to pull stacks from GitHub.
 6. **PR title and body are auto-generated.** There is no flag to set a custom PR title or body during `submit`. The title and body are generated from commit messages plus a footer. Use `gh pr edit` to modify PR title and body after creation.
