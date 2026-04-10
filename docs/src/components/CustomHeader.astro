@@ -1,5 +1,4 @@
 ---
-import type { Props } from '@astrojs/starlight/props';
 import Default from '@astrojs/starlight/components/SocialIcons.astro';
 const base = import.meta.env.BASE_URL;
 ---
@@ -129,7 +128,13 @@ const base = import.meta.env.BASE_URL;
 </style>
 
 <script>
+	let hamburgerAbort: AbortController | undefined;
+
 	function initHamburgerMenu() {
+		hamburgerAbort?.abort();
+		hamburgerAbort = new AbortController();
+		const { signal } = hamburgerAbort;
+
 		const hamburgerBtn = document.querySelector<HTMLButtonElement>('.hamburger-btn');
 		const tabletDropdown = document.querySelector<HTMLElement>('.tablet-dropdown');
 
@@ -144,14 +149,14 @@ const base = import.meta.env.BASE_URL;
 				const firstLink = tabletDropdown.querySelector<HTMLAnchorElement>('.dropdown-link');
 				firstLink?.focus();
 			}
-		});
+		}, { signal });
 
 		document.addEventListener('click', (e) => {
 			if (!hamburgerBtn.contains(e.target as Node) && !tabletDropdown.contains(e.target as Node)) {
 				hamburgerBtn.setAttribute('aria-expanded', 'false');
 				tabletDropdown.hidden = true;
 			}
-		});
+		}, { signal });
 
 		document.addEventListener('keydown', (e) => {
 			if (e.key === 'Escape' && hamburgerBtn.getAttribute('aria-expanded') === 'true') {
@@ -159,7 +164,7 @@ const base = import.meta.env.BASE_URL;
 				tabletDropdown.hidden = true;
 				hamburgerBtn.focus();
 			}
-		});
+		}, { signal });
 	}
 
 	initHamburgerMenu();
