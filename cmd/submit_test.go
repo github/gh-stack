@@ -26,7 +26,7 @@ func TestGeneratePRBody(t *testing.T) {
 			commitBody: "",
 			wantContains: []string{
 				"GitHub Stacks CLI",
-				feedbackBaseURL,
+				feedbackURL,
 				"<sub>",
 			},
 		},

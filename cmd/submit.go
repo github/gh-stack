@@ -230,7 +230,7 @@ func generatePRBody(commitBody string) string {
 
 	footer := fmt.Sprintf(
 		"<sub>Stack created with <a href=\"https://github.com/github/gh-stack\">GitHub Stacks CLI</a> • <a href=\"%s\">Give Feedback 💬</a></sub>",
-		feedbackBaseURL,
+		feedbackURL,
 	)
 	parts = append(parts, footer)
 
