@@ -79,7 +79,7 @@ func clearSelectPrompt(cfg *config.Config, numOptions int) {
 	}
 	// 1 line for the question/filter + visible option lines
 	lines := 1 + visible
-	fmt.Fprintf(cfg.Err, "\033[%dA\033[J", lines)
+	fmt.Fprintf(cfg.Out, "\033[%dA\033[J", lines)
 }
 
 // loadStackResult holds everything returned by loadStack.

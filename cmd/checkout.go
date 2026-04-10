@@ -211,10 +211,13 @@ func checkoutRemoteStack(cfg *config.Config, sf *stack.StackFile, gitDir string,
 	localStack := findLocalStackForRemotePRs(sf, prs)
 
 	if localStack != nil {
+		// Sync remote PR metadata before comparing composition so locally
+		// tracked stacks with incomplete PR refs don't appear to conflict.
+		syncRemotePRState(localStack, prs)
+
 		// Case A: branch is in a local stack — check composition
 		if stackCompositionMatches(localStack, remoteStack.PullRequests) {
-			// Composition matches — sync PR state and checkout
-			syncRemotePRState(localStack, prs)
+			// Composition matches — checkout
 			if localStack.ID == "" {
 				localStack.ID = remoteStackID
 			}
@@ -279,6 +282,9 @@ func fetchStackPRDetails(client github.ClientOps, prNumbers []int) ([]*github.Pu
 		pr, err := client.FindPRByNumber(n)
 		if err != nil {
 			return nil, fmt.Errorf("fetching PR #%d: %w", n, err)
+		}
+		if pr == nil {
+			return nil, fmt.Errorf("PR #%d not found", n)
 		}
 		prs = append(prs, pr)
 	}
@@ -450,7 +456,8 @@ func importRemoteStack(
 	if !git.BranchExists(trunk) {
 		remoteTrunk := remote + "/" + trunk
 		if err := git.CreateBranch(trunk, remoteTrunk); err != nil {
-			cfg.Warningf("could not pull trunk branch %s: %v", trunk, err)
+			cfg.Errorf("could not create trunk branch %s from %s: %v", trunk, remoteTrunk, err)
+			return nil, ErrSilent
 		}
 	}
 
