@@ -233,6 +233,25 @@ func (c *Client) UpdatePRBase(number int, base string) error {
 	return c.rest.Patch(path, bytes.NewReader(body), nil)
 }
 
+func (c *Client) repositoryID() (string, error) {
+	var query struct {
+		Repository struct {
+			ID string
+		} `graphql:"repository(owner: $owner, name: $name)"`
+	}
+
+	variables := map[string]interface{}{
+		"owner": graphql.String(c.owner),
+		"name":  graphql.String(c.repo),
+	}
+
+	if err := c.gql.Query("RepositoryID", &query, variables); err != nil {
+		return "", fmt.Errorf("fetching repository ID: %w", err)
+	}
+
+	return query.Repository.ID, nil
+}
+
 // PRDetails holds enriched pull request data for display in the TUI.
 type PRDetails struct {
 	Number        int
@@ -298,11 +317,68 @@ func (c *Client) FindPRDetailsForBranch(branch string) (*PRDetails, error) {
 	}, nil
 }
 
-// DeleteStack deletes a stack on GitHub.
-// The stack is identified by stackID. Returns nil on success (204).
-func (c *Client) DeleteStack(stackID string) error {
-	path := fmt.Sprintf("repos/%s/%s/cli_internal/pulls/stacks/%s", c.owner, c.repo, stackID)
-	return c.rest.Delete(path, nil)
+// FindPRByNumber fetches a pull request by its number.
+func (c *Client) FindPRByNumber(number int) (*PullRequest, error) {
+	var query struct {
+		Repository struct {
+			PullRequest struct {
+				ID              string           `graphql:"id"`
+				Number          int              `graphql:"number"`
+				Title           string           `graphql:"title"`
+				State           string           `graphql:"state"`
+				URL             string           `graphql:"url"`
+				HeadRefName     string           `graphql:"headRefName"`
+				BaseRefName     string           `graphql:"baseRefName"`
+				IsDraft         bool             `graphql:"isDraft"`
+				Merged          bool             `graphql:"merged"`
+				MergeQueueEntry *MergeQueueEntry `graphql:"mergeQueueEntry"`
+			} `graphql:"pullRequest(number: $number)"`
+		} `graphql:"repository(owner: $owner, name: $name)"`
+	}
+
+	variables := map[string]interface{}{
+		"owner":  graphql.String(c.owner),
+		"name":   graphql.String(c.repo),
+		"number": graphql.Int(number),
+	}
+
+	if err := c.gql.Query("FindPRByNumber", &query, variables); err != nil {
+		return nil, fmt.Errorf("querying PR #%d: %w", number, err)
+	}
+
+	n := query.Repository.PullRequest
+	return &PullRequest{
+		ID:              n.ID,
+		Number:          n.Number,
+		Title:           n.Title,
+		State:           n.State,
+		URL:             n.URL,
+		HeadRefName:     n.HeadRefName,
+		BaseRefName:     n.BaseRefName,
+		IsDraft:         n.IsDraft,
+		Merged:          n.Merged,
+		MergeQueueEntry: n.MergeQueueEntry,
+	}, nil
+}
+
+type RemoteStack struct {
+	ID           int   `json:"id"`
+	PullRequests []int `json:"pull_requests"`
+}
+
+// ListStacks returns all stacks in the repository.
+// Returns an empty slice if no stacks exist.
+// A 404 response indicates stacked PRs are not enabled for this repository.
+func (c *Client) ListStacks() ([]RemoteStack, error) {
+	path := fmt.Sprintf("repos/%s/%s/cli_internal/pulls/stacks", c.owner, c.repo)
+	var stacks []RemoteStack
+	if err := c.rest.Get(path, &stacks); err != nil {
+		return nil, err
+	}
+	if stacks == nil {
+		stacks = []RemoteStack{}
+	}
+	return stacks, nil
 }
 
 // CreateStack creates a stack on GitHub from an ordered list of PR numbers.
@@ -354,21 +430,9 @@ func (c *Client) UpdateStack(stackID string, prNumbers []int) error {
 	return c.rest.Put(path, bytes.NewReader(body), &response)
 }
 
-func (c *Client) repositoryID() (string, error) {
-	var query struct {
-		Repository struct {
-			ID string
-		} `graphql:"repository(owner: $owner, name: $name)"`
-	}
-
-	variables := map[string]interface{}{
-		"owner": graphql.String(c.owner),
-		"name":  graphql.String(c.repo),
-	}
-
-	if err := c.gql.Query("RepositoryID", &query, variables); err != nil {
-		return "", fmt.Errorf("fetching repository ID: %w", err)
-	}
-
-	return query.Repository.ID, nil
+// DeleteStack deletes a stack on GitHub.
+// The stack is identified by stackID. Returns nil on success (204).
+func (c *Client) DeleteStack(stackID string) error {
+	path := fmt.Sprintf("repos/%s/%s/cli_internal/pulls/stacks/%s", c.owner, c.repo, stackID)
+	return c.rest.Delete(path, nil)
 }

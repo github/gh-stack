@@ -132,13 +132,17 @@ gh stack view --json
 
 ### `gh stack checkout`
 
-Check out a locally tracked stack from a pull request number or branch name.
+Check out a stack from a pull request number or branch name.
 
 ```sh
-gh stack checkout [<pr-or-branch>]
+gh stack checkout [<pr-number> | <branch>]
 ```
 
-Resolves the target against stacks stored in local tracking (`.git/gh-stack`). Accepts a PR number (e.g. `42`) or a branch name that belongs to a locally tracked stack. When run without arguments in an interactive terminal, shows a menu of all locally available stacks to choose from.
+When a PR number is provided (e.g. `123`), the command fetches the stack on GitHub, pulls the branches, and sets up the stack locally. If the stack already exists locally and matches, it switches to the branch. If the local and remote stacks have different compositions, you'll be prompted to resolve the conflict.
+
+When a branch name is provided, the command resolves it against locally tracked stacks only.
+
+When run without arguments in an interactive terminal, shows a menu of all locally available stacks to choose from.
 
 **Examples:**
 
@@ -146,7 +150,7 @@ Resolves the target against stacks stored in local tracking (`.git/gh-stack`). A
 # Check out a stack by PR number
 gh stack checkout 42
 
-# Check out a stack by branch name
+# Check out a stack by branch name (local only)
 gh stack checkout feature-auth
 
 # Interactive — select from locally tracked stacks

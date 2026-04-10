@@ -1,4 +1,4 @@
-# gh-stack
+# GitHub Stacked PRs
 
 A GitHub CLI extension for managing stacked branches and pull requests.
 
@@ -160,15 +160,17 @@ gh stack add -m "Refactor utils" cleanup-layer
 
 ### `gh stack checkout`
 
-Check out a locally tracked stack from a pull request number or branch name.
+Check out a stack from a pull request number or branch name.
 
 ```
-gh stack checkout [<pr-or-branch>]
+gh stack checkout [<pr-number> | <branch>]
 ```
 
-Resolves the target against stacks stored in local tracking (`.git/gh-stack`). Accepts a PR number (e.g. `42`) or a branch name that belongs to a locally tracked stack. When run without arguments in an interactive terminal, shows a menu of all locally available stacks to choose from.
+When a PR number is provided (e.g. `123`), the command fetches the stack on GitHub, pulls the branches, and sets up the stack locally. If the stack already exists locally and matches, it switches to the branch. If the local and remote stacks have different compositions, you'll be prompted to resolve the conflict.
 
-> **Note:** Server-side stack discovery is not yet implemented. This command currently only works with stacks that have been created locally (via `gh stack init`). Checking out a stack that is not tracked locally will require passing in an explicit branch name or PR number once the server API is available.
+When a branch name is provided, the command resolves it against locally tracked stacks only.
+
+When run without arguments in an interactive terminal, shows a menu of all locally available stacks to choose from.
 
 **Examples:**
 
@@ -176,7 +178,7 @@ Resolves the target against stacks stored in local tracking (`.git/gh-stack`). A
 # Check out a stack by PR number
 gh stack checkout 42
 
-# Check out a stack by branch name
+# Check out a stack by branch name (local only)
 gh stack checkout feature-auth
 
 # Interactive — select from locally tracked stacks

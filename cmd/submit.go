@@ -321,7 +321,7 @@ func createNewStack(cfg *config.Config, client github.ClientOps, s *stack.Stack,
 	case 422:
 		handleCreate422(cfg, httpErr, prNumbers)
 	case 404:
-		cfg.Warningf("Stacked PRs are not yet available for this repository")
+		cfg.Warningf("Stacked PRs are not enabled for this repository")
 	default:
 		cfg.Warningf("Failed to create stack on GitHub: %s", httpErr.Message)
 	}
