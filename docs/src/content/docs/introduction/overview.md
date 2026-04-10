@@ -3,7 +3,7 @@ title: Overview
 description: What stacked pull requests are, why they matter, and how GitHub supports them natively.
 ---
 
-## The Challenge
+## Why Stacks?
 
 For developers who want to break large changes into smaller, dependent parts, the experience can be painful:
 
@@ -89,8 +89,9 @@ While the PR UI provides the review and merge experience, the `gh stack` CLI han
 - **Navigating the stack** — `gh stack up`, `down`, `top`, and `bottom` let you move between layers without remembering branch names.
 - **Syncing everything** — `gh stack sync` fetches, rebases, pushes, and updates PR state in one command.
 - **Tearing down stacks** — `gh stack unstack` removes a stack from GitHub and local tracking if you need to restructure it.
+- **Checking out a stack** — `gh stack checkout <pr-number>` pulls down a stack, with all its branches, from GitHub to your local machine.
 
-The CLI is not required to use Stacked PRs — the underlying git operations are standard. But it makes the workflow dramatically simpler.
+The CLI is not required to use Stacked PRs — the underlying git operations are standard. But it makes the workflow simpler, and you can create Stacked PRs from the CLI instead of the UI.
 
 ## Thinking About Stack Structure
 

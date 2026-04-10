@@ -47,7 +47,7 @@ A **stack** is a series of pull requests in the same repository where each PR ta
   <Image src={stackDiagram} alt="A stack of pull requests: main at the bottom, with auth-layer (PR #1), api-endpoints (PR #2), and frontend (PR #3) stacked on top" />
 </div>
 
-GitHub understands stacks end-to-end: the pull request UI shows a **stack map** so reviewers can navigate between layers, branch protection rules are enforced against the **final target branch** (not just the direct base), and CI runs for every PR in the stack.
+GitHub understands stacks end-to-end: the pull request UI shows a **stack map** so reviewers can navigate between layers, branch protection rules are enforced against the **final target branch** (not just the direct base), and CI runs for every PR in the stack as if they were targeting the final branch.
 
 <div style="max-width: 600px; margin: 1.5rem auto;">
   <Image src={stackNavigator} alt="The stack navigator in a pull request header" />
@@ -55,9 +55,9 @@ GitHub understands stacks end-to-end: the pull request UI shows a **stack map** 
 
 ## How It Works
 
-The `gh stack` CLI handles the local workflow: creating branches, keeping them rebased, pushing to GitHub, and creating PRs with the correct base branches. On GitHub, the PR UI gives reviewers the context they need — a stack map for navigation, focused diffs for each layer, and proper rules enforcement.
+The `gh stack` CLI handles the local workflow: creating branches, managing rebases, pushing to GitHub, and creating PRs with the correct base branches. On GitHub, the PR UI gives reviewers the context they need — a stack map for navigation, focused diffs for each layer, and proper rules enforcement.
 
-When you're ready to merge, you merge from the bottom up. Each PR can be merged directly or through the merge queue. When a PR at the bottom is merged, the remaining stack is automatically rebased so the next PR targets `main` and is ready for its own merge.
+When you're ready to merge, you can merge all or a part of the stack. Each PR can be merged directly or through the merge queue. After a merge, the remaining PRs in the stack are automatically rebased so the lowest unmerged PR targets the base branch.
 
 ## Get Started
 
@@ -65,19 +65,24 @@ When you're ready to merge, you merge from the bottom up. Each PR can be merged 
 # Install the CLI extension
 gh extension install github/gh-stack
 
-# Create a stack (creates and checks out the first branch)
-gh stack init auth-layer
+# Alias `gh stack` as `gs` for easier use (optional)
+gh stack alias
+
+# Start a stack (creates and checks out the first branch)
+gs init auth-layer
 # ... make commits ...
-gh stack add api-routes
+
+# Create new layers in the stack (creates and checks out each new branch)
+gs add api-routes
 # ... make commits ...
-gh stack add frontend
+gs add frontend
 # ... make commits ...
 
 # Push all branches
-gh stack push
+gs push
 
 # Open a stack of PRs
-gh stack submit
+gs submit
 ```
 
 Ready to dive in? Start with the [Quick Start guide](/gh-stack/getting-started/quick-start/) or read the [full overview](/gh-stack/introduction/overview/).

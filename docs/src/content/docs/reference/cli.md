@@ -138,7 +138,7 @@ Check out a stack from a pull request number or branch name.
 gh stack checkout [<pr-number> | <branch>]
 ```
 
-When a PR number is provided (e.g. `123`), the command fetches the stack on GitHub, pulls the branches, and sets up the stack locally. If the stack already exists locally and matches, it switches to the branch. If the local and remote stacks have different compositions, you'll be prompted to resolve the conflict.
+When a PR number is provided (e.g., `123`), the command fetches the stack on GitHub, pulls the branches, and sets up the stack locally. If the stack already exists locally and matches, it switches to the branch. If the local and remote stacks have different compositions, you'll be prompted to resolve the conflict.
 
 When a branch name is provided, the command resolves it against locally tracked stacks only.
 
@@ -197,11 +197,11 @@ gh stack sync [flags]
 
 Performs a safe, non-interactive synchronization of the entire stack:
 
-1. **Fetch** — fetches the latest changes from `origin`
-2. **Fast-forward trunk** — fast-forwards the trunk branch to match the remote (skips if diverged)
-3. **Cascade rebase** — rebases all stack branches onto their updated parents (only if trunk moved). If a conflict is detected, all branches are restored to their original state and you are advised to run `gh stack rebase` to resolve conflicts interactively
-4. **Push** — pushes all branches (uses `--force-with-lease` if a rebase occurred)
-5. **Sync PRs** — syncs PR state from GitHub and reports the status of each PR
+1. **Fetch** — fetches the latest changes from `origin`.
+2. **Fast-forward trunk** — fast-forwards the trunk branch to match the remote (skips if diverged).
+3. **Cascade rebase** — rebases all stack branches onto their updated parents (only if trunk moved). If a conflict is detected, all branches are restored to their original state, and you are advised to run `gh stack rebase` to resolve conflicts interactively.
+4. **Push** — pushes all branches (uses `--force-with-lease` if a rebase occurred).
+5. **Sync PRs** — syncs PR state from GitHub and reports the status of each PR.
 
 | Flag | Description |
 |------|-------------|

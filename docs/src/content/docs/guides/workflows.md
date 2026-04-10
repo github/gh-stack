@@ -33,7 +33,7 @@ gh stack rebase
 # 7. Push the updated branches
 gh stack push
 
-# 8. When the first PR is merged, sync the stack
+# 8. Sync upstream changes as PRs get merged
 gh stack sync
 ```
 
@@ -42,34 +42,37 @@ gh stack sync
 For speed, use a branch prefix with `--numbered` and the `-Am` flags to fold staging, committing, and branch creation into a single command. Branch names are auto-generated as `prefix/01`, `prefix/02`, etc.
 
 ```sh
+# Alias `gh stack` as `gs` for easier use
+gh stack alias
+
 # 1. Start a stack with numbered branches
-gh stack init -p feat --numbered
+gs init -p feat --numbered
 #    → creates feat/01 and checks it out
 
 # 2. Write code for the first layer
 # ... write code ...
 
 # 3. Stage and commit on the current branch
-gh stack add -Am "Auth middleware"
+gs add -Am "Auth middleware"
 #    → feat/01 has no commits yet, so the commit lands here
 
 # 4. Write code for the next layer
 # ... write code ...
 
 # 5. Create the next branch and commit
-gh stack add -Am "API routes"
+gs add -Am "API routes"
 #    → feat/01 already has commits, so feat/02 is created
 
 # 6. Keep going
 # ... write code ...
-gh stack add -Am "Frontend components"
+gs add -Am "Frontend components"
 #    → creates feat/03
 
 # 7. Push everything and create PRs
-gh stack submit
+gs submit
 ```
 
-Each `gh stack add -Am "..."` stages all files, commits, and (if the current branch already has commits) creates a new branch — no separate `git add` or `git commit` needed.
+Each `gs add -Am "..."` stages all files, commits, and (if the current branch already has commits) creates a new branch — no separate `git add` or `git commit` needed.
 
 ## Making Mid-Stack Changes
 
@@ -132,7 +135,7 @@ This command:
 4. Pushes the updated branches
 5. Syncs PR state from GitHub
 
-If a conflict is detected during the rebase, all branches are restored to their original state and you're advised to run `gh stack rebase` to resolve conflicts interactively.
+If a conflict is detected during the rebase, all branches are restored to their original state, and you're advised to run `gh stack rebase` to resolve conflicts interactively.
 
 ## Structuring Your Stack
 

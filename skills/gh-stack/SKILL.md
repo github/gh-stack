@@ -41,17 +41,34 @@ The GitHub CLI (`gh`) v2.0+ must be installed and authenticated. Install the ext
 gh extension install github/gh-stack
 ```
 
+Before using `gh stack`, configure git to prevent interactive prompts:
+
+```bash
+git config rerere.enabled true           # remember conflict resolutions (skips prompt on init)
+git config remote.pushDefault origin     # if multiple remotes exist (skips remote picker)
+```
+
 ## Agent rules
 
-1. **Always supply branch names as positional arguments** to `init`, `add`, and `checkout`.
+**All `gh stack` commands must be run non-interactively.** Every command invocation must include the flags and positional arguments needed to avoid prompts, TUIs, and interactive menus. If a command would prompt for input, it will hang indefinitely.
+
+1. **Always supply branch names as positional arguments** to `init`, `add`, and `checkout`. Running these commands without arguments triggers interactive prompts.
 2. **When a prefix is set, pass only the suffix to `add`.** `gh stack add auth` with prefix `feat` → `feat/auth`. Passing `feat/auth` creates `feat/feat/auth`.
-3. **Always use `--auto` when pushing** to skip PR title prompts.
-4. **Always use `--json` when viewing** to get structured output.
-5. **Use `--remote <name>` when multiple remotes are configured**, or set `remote.pushDefault` in git config.
+3. **Always use `--auto` with `gh stack submit`** to auto-generate PR titles. Without `--auto`, `submit` prompts for a title for each new PR.
+4. **Always use `--json` with `gh stack view`.** Without `--json`, the command launches an interactive TUI that cannot be operated by agents. There is no other appropriate flag — always pass `--json`.
+5. **Use `--remote <name>` when multiple remotes are configured**, or pre-configure `git config remote.pushDefault origin`. Without this, `push`, `submit`, `sync`, and `checkout` trigger an interactive remote picker.
 6. **Avoid branches shared across multiple stacks.** If a branch belongs to multiple stacks, commands exit with code 6. Check out a non-shared branch first.
 7. **Plan your stack layers by dependency order before writing code.** Foundational changes (models, APIs, shared utilities) go in lower branches; dependent changes (UI, consumers) go in higher branches. Think through the dependency chain before running `gh stack init`.
 8. **Use standard `git add` and `git commit` for staging and committing.** This gives you full control over which changes go into each branch. The `-Am` shortcut is available but should not be the default approach—stacked PRs are most effective when each branch contains a deliberate, logical set of changes.
 9. **Navigate down the stack when you need to change a lower layer.** If you're working on a frontend branch and realize you need API changes, don't hack around it at the current layer. Navigate to the appropriate branch (`gh stack down`, `gh stack checkout`, or `gh stack bottom`), make and commit the changes there, run `gh stack rebase --upstack`, then navigate back up to continue.
+
+**Never do any of the following — each triggers an interactive prompt or TUI that will hang:**
+- ❌ `gh stack view` or `gh stack view --short` — always use `gh stack view --json`
+- ❌ `gh stack submit` without `--auto` — always use `gh stack submit --auto`
+- ❌ `gh stack init` without branch arguments — always provide branch names
+- ❌ `gh stack add` without a branch name — always provide a branch name
+- ❌ `gh stack checkout` without an argument — always provide a PR number or branch name
+- ❌ `gh stack checkout <pr-number>` when a different local stack already exists on those branches — this triggers an unbypassable conflict resolution prompt; use `gh stack unstack` first to remove the local stack, then retry the checkout
 
 ## Thinking about stack structure
 
@@ -378,10 +395,10 @@ gh stack init --base main --adopt new-branch-1 new-branch-2 new-branch-3
 
 ### Initialize a stack — `gh stack init`
 
-Creates a new stack. Provide branch names as positional arguments.
+Creates a new stack. **Always provide at least one branch name as a positional argument** — running without branch arguments triggers interactive prompts that agents cannot use.
 
 ```
-gh stack init [branches...] [flags]
+gh stack init [flags] <branches...>
 ```
 
 ```bash
@@ -415,16 +432,16 @@ gh stack init --adopt branch-a branch-b branch-c
 - Creates any branches that don't already exist (branching from the trunk branch)
 - In `--adopt` mode: validates all branches exist, rejects if any is already in a stack or has an existing PR
 - Checks out the last branch in the list
-- Enables `git rerere` so conflict resolutions are remembered across rebases
+- Enables `git rerere` so conflict resolutions are remembered across rebases. On first run in a repo, this may trigger a confirmation prompt — pre-configure with `git config rerere.enabled true` to avoid it
 
 ---
 
 ### Add a branch — `gh stack add`
 
-Add a new branch on top of the current stack. Must be run while on the topmost branch (or the trunk if the stack has no branches yet). Always provide an explicit branch name.
+Add a new branch on top of the current stack. Must be run while on the topmost branch (or the trunk if the stack has no branches yet). **Always provide a branch name** — running without one triggers an interactive prompt.
 
 ```
-gh stack add [branch] [flags]
+gh stack add [flags] <branch>
 ```
 
 **Recommended workflow — create the branch, then use standard git:**
@@ -501,14 +518,10 @@ gh stack push --remote upstream
 
 ### Submit branches and create PRs — `gh stack submit`
 
-Push all stack branches and create PRs on GitHub.
-
-```
-gh stack submit [flags]
-```
+Push all stack branches and create PRs on GitHub. **Always pass `--auto`** — without it, `submit` prompts for a PR title for each new branch.
 
 ```bash
-# Submit and auto-title new PRs
+# Submit and auto-title new PRs (required for non-interactive use)
 gh stack submit --auto
 
 # Submit and create PRs as drafts
@@ -517,7 +530,7 @@ gh stack submit --auto --draft
 
 | Flag | Description |
 |------|-------------|
-| `--auto` | Auto-generate PR titles without prompting |
+| `--auto` | Auto-generate PR titles without prompting (**required** for non-interactive use) |
 | `--draft` | Create new PRs as drafts |
 | `--remote <name>` | Remote to push to (use if multiple remotes exist) |
 
@@ -578,7 +591,7 @@ gh stack sync [flags]
 Pull from remote and cascade-rebase stack branches. Use this when `sync` reports a conflict or when you need finer control (e.g., rebase only part of the stack).
 
 ```
-gh stack rebase [branch] [flags]
+gh stack rebase [flags] [branch]
 ```
 
 ```bash
@@ -620,20 +633,16 @@ gh stack rebase --abort
 
 ### View the stack — `gh stack view`
 
-Display the current stack's branches, PR status, and recent commits. Use `--json` for structured output.
-
-```
-gh stack view [flags]
-```
+Display the current stack's branches, PR status, and recent commits. **Always pass `--json`** — without it, this command launches an interactive TUI that agents cannot operate.
 
 ```bash
-# Structured JSON output (recommended)
+# Always use --json
 gh stack view --json
 ```
 
 | Flag | Description |
 |------|-------------|
-| `--json` | Output stack data as JSON to stdout |
+| `--json` | Output stack data as JSON to stdout (**required** for non-interactive use) |
 
 **`--json` output format:**
 
@@ -682,8 +691,6 @@ Fields per branch:
 - `needsRebase` — whether the base branch is not an ancestor (non-linear history)
 - `pr` — PR metadata (omitted if no PR exists). `state` is `"OPEN"` or `"MERGED"`.
 
-> **Note:** `--short` outputs a compact text view with box-drawing characters and status icons. Prefer `--json` for programmatic use.
-
 ---
 
 ### Navigate the stack
@@ -705,7 +712,7 @@ Navigation clamps to stack bounds. Merged branches are skipped when navigating f
 
 ### Check out a stack — `gh stack checkout`
 
-Check out a stack from a pull request number or branch name.
+Check out a stack from a pull request number or branch name. **Always provide an argument** — running `gh stack checkout` without arguments triggers an interactive selection menu.
 
 ```
 gh stack checkout <pr-number | branch>
@@ -719,9 +726,11 @@ gh stack checkout 42
 gh stack checkout feature-auth
 ```
 
-When a PR number is provided (e.g. `123`), the command fetches the stack on GitHub, pulls the branches, and sets up the stack locally. If the stack already exists locally and matches, it switches to the branch. If the local and remote stacks have different compositions, you'll be prompted to resolve the conflict by deciding whether to replace the local stack with the remote version or delete the remote stack and keep the local version.
+When a PR number is provided (e.g. `123`), the command fetches the stack on GitHub, pulls the branches, and sets up the stack locally. If the stack already exists locally and matches, it switches to the branch.
 
-When a branch name is provided, the command resolves it against locally tracked stacks only.
+> **⚠️ Agent warning:** If the local and remote stacks have different branch compositions, this command triggers an interactive conflict-resolution prompt that cannot be bypassed with a flag. To avoid this: run `gh stack unstack` first to remove the conflicting local stack, then retry `gh stack checkout <pr-number>`.
+
+When a branch name is provided, the command resolves it against locally tracked stacks only. This is always safe for non-interactive use.
 
 ---
 
@@ -730,7 +739,7 @@ When a branch name is provided, the command resolves it against locally tracked 
 Tear down a stack so you can restructure it — remove a branch, reorder branches, rename branches, or make other large changes. After unstacking, use `gh stack init` to re-create the stack with the desired structure.
 
 ```
-gh stack unstack [branch] [flags]
+gh stack unstack [flags] [branch]
 ```
 
 ```bash

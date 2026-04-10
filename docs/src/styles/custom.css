@@ -11,3 +11,19 @@
 	--sl-color-accent: #4f46e5;
 	--sl-color-accent-high: #312e81;
 }
+
+/* Show full nav by default, switch to hamburger on narrow viewports */
+@media (max-width: 900px) {
+	.custom-header-links {
+		display: none !important;
+	}
+	.tablet-nav-wrapper {
+		display: block !important;
+	}
+}
+
+@media (min-width: 901px) {
+	.tablet-nav-wrapper {
+		display: none !important;
+	}
+}

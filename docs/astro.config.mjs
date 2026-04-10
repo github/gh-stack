@@ -18,6 +18,9 @@ export default defineConfig({
 			head: [
 				{ tag: 'meta', attrs: { name: 'robots', content: 'noindex, nofollow' } },
 			],
+			components: {
+				SocialIcons: './src/components/CustomHeader.astro',
+			},
 			customCss: [
 				'./src/styles/custom.css',
 			],

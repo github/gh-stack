@@ -9,7 +9,10 @@ import (
 	"github.com/spf13/cobra"
 )
 
-const feedbackBaseURL = "https://github.com/github/gh-stack/discussions/new?category=feedback"
+const (
+	feedbackURL     = "https://gh.io/stacks-feedback"
+	feedbackFormURL = "https://gh.io/stacks-feedback-form"
+)
 
 func FeedbackCmd(cfg *config.Config) *cobra.Command {
 	cmd := &cobra.Command{
@@ -25,15 +28,15 @@ func FeedbackCmd(cfg *config.Config) *cobra.Command {
 }
 
 func runFeedback(cfg *config.Config, args []string) error {
-	feedbackURL := feedbackBaseURL
+	targetURL := feedbackURL
 
 	if len(args) > 0 {
 		title := strings.Join(args, " ")
-		feedbackURL += "&title=" + url.QueryEscape(title)
+		targetURL = feedbackFormURL + "?title=" + url.QueryEscape(title)
 	}
 
 	b := browser.New("", cfg.Out, cfg.Err)
-	if err := b.Browse(feedbackURL); err != nil {
+	if err := b.Browse(targetURL); err != nil {
 		return err
 	}
 

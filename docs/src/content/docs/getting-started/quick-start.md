@@ -1,6 +1,6 @@
 ---
 title: Quick Start
-description: Install the gh stack CLI and create your first stacked PR in minutes.
+description: Install the gh stack CLI and create your first Stacked PR in minutes.
 ---
 
 ## Prerequisites

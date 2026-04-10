@@ -1,6 +1,6 @@
 ---
 title: Stacked PRs in the GitHub UI
-description: A visual walkthrough of creating, navigating, merging, and managing stacked PRs directly in the GitHub pull request UI.
+description: A visual walkthrough of creating, navigating, merging, and managing Stacked PRs directly in the GitHub pull request UI.
 ---
 
 This guide walks through the key UI components and workflows for working with Stacked PRs on GitHub.
@@ -51,7 +51,7 @@ If a stack already exists and you want to add a new PR to it:
 
 ![Adding a new PR to an existing stack](../../../assets/screenshots/add-to-existing-stack.png)
 
-2. On the following page, the base branch is automatically set to the head of the top-most PR. Select the head branch for your new PR and click **Create pull request**.
+2. On the following page, the base branch is automatically set to the head of the topmost PR. Select the head branch for your new PR and click **Create pull request**.
 
 ![Selecting branch to add to stack](../../../assets/screenshots/selecting-branch-to-add.png)
 
@@ -75,11 +75,11 @@ Before a PR in the stack can be merged, the following conditions must be met:
 - **The stack must be fully rebased** with a linear history
 - **The current PR itself** must meet all branch protection requirements for the stack base
 
-![Merge box showing failing stack requirements](../../../assets/screenshots/merge-box-failing-stack-requirements.png)
+![Merge box for a stacked pull request](../../../assets/screenshots/stack-merge-box.png)
 
 ## Unstacking
 
-If you want to reorder or reorganize the PRs in a stack, you must first dissolve the stack and then recreate it. You can unstack PRs from the UI.
+If you want to reorder or reorganize the PRs in a stack, you must first dissolve the stack and then re-create it. You can unstack PRs from the UI.
 
 ### Dissolving the Entire Stack
 

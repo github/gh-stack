@@ -69,7 +69,7 @@ Stack metadata is stored in `.git/gh-stack` (a JSON file, not committed to the r
 Initialize a new stack in the current repository.
 
 ```
-gh stack init [branches...] [flags]
+gh stack init [flags] [branches...]
 ```
 
 Creates an entry in `.git/gh-stack` to track stack state. In interactive mode (no arguments), prompts you to name branches and offers to use the current branch as the first layer. In interactive mode, you'll also be prompted to set an optional branch prefix (unless adopting existing branches). When a prefix is set, branch names you enter are automatically prefixed. When explicit branch names are given, creates any that don't already exist (branching from the trunk). The trunk defaults to the repository's default branch unless overridden with `--base`.
@@ -115,7 +115,7 @@ gh stack init -p feat --numbered
 Add a new branch on top of the current stack.
 
 ```
-gh stack add [branch] [flags]
+gh stack add [flags] [branch]
 ```
 
 Creates a new branch at the current HEAD, adds it to the top of the stack, and checks it out. Must be run while on the topmost branch of a stack. If no branch name is given, prompts for one.
@@ -190,7 +190,7 @@ gh stack checkout
 Pull from remote and do a cascading rebase across the stack.
 
 ```
-gh stack rebase [branch] [flags]
+gh stack rebase [flags] [branch]
 ```
 
 Fetches the latest changes from `origin`, then ensures each branch in the stack has the tip of the previous layer in its commit history. Rebases branches in order from trunk upward. If a branch's PR has been squash-merged, the rebase automatically switches to `--onto` mode to correctly replay commits on top of the merge target.
@@ -331,7 +331,7 @@ gh stack view --json
 Remove a stack from local tracking and delete it on GitHub. Also available as `gh stack delete`.
 
 ```
-gh stack unstack [branch] [flags]
+gh stack unstack [flags] [branch]
 ```
 
 If no branch is specified, uses the current branch to find the stack. Deletes the stack on GitHub first, then removes local tracking. Use `--local` to only remove the local tracking entry.
@@ -414,7 +414,7 @@ gh stack feedback "Support for reordering branches"
 Create a short command alias so you can type less.
 
 ```
-gh stack alias [name] [flags]
+gh stack alias [flags] [name]
 ```
 
 Installs a small wrapper script into `~/.local/bin/` that forwards all arguments to `gh stack`. The default alias name is `gs`, but you can choose any name by passing it as an argument. After setup, you can run `gs push` instead of `gh stack push`.
