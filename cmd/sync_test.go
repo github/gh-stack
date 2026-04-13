@@ -549,6 +549,7 @@ func TestSync_SquashMergedBranch_UsesOnto(t *testing.T) {
 	}
 
 	mock := newSyncMock(tmpDir, "b2")
+	mock.BranchExistsFn = func(name string) bool { return true }
 	// Trunk behind remote to trigger rebase
 	mock.RevParseFn = func(ref string) (string, error) {
 		if ref == "main" {
@@ -765,8 +766,8 @@ func TestSync_BranchFastForward_WithTrunkUpdate(t *testing.T) {
 	writeStackFile(t, tmpDir, s)
 
 	var updateBranchRefCalls []struct{ branch, sha string }
-	var rebaseCalls []rebaseCall
-	var pushCalls []pushCall
+	var rebaseCalls2 []rebaseCall
+	var pushCalls2 []pushCall
 
 	mock := newSyncMock(tmpDir, "b1")
 	// Trunk and b2 both behind remote
@@ -803,15 +804,15 @@ func TestSync_BranchFastForward_WithTrunkUpdate(t *testing.T) {
 	}
 	mock.CheckoutBranchFn = func(string) error { return nil }
 	mock.RebaseFn = func(base string) error {
-		rebaseCalls = append(rebaseCalls, rebaseCall{branch: "(rebase)" + base})
+		rebaseCalls2 = append(rebaseCalls2, rebaseCall{branch: "(rebase)" + base})
 		return nil
 	}
 	mock.RebaseOntoFn = func(newBase, oldBase, branch string) error {
-		rebaseCalls = append(rebaseCalls, rebaseCall{newBase, oldBase, branch})
+		rebaseCalls2 = append(rebaseCalls2, rebaseCall{newBase, oldBase, branch})
 		return nil
 	}
 	mock.PushFn = func(remote string, branches []string, force, atomic bool) error {
-		pushCalls = append(pushCalls, pushCall{remote, branches, force, atomic})
+		pushCalls2 = append(pushCalls2, pushCall{remote, branches, force, atomic})
 		return nil
 	}
 
@@ -829,7 +830,6 @@ func TestSync_BranchFastForward_WithTrunkUpdate(t *testing.T) {
 	output := string(errOut)
 
 	assert.NoError(t, err)
-
 	// Both trunk and b2 should be updated
 	branchUpdates := make(map[string]string)
 	for _, c := range updateBranchRefCalls {
@@ -839,7 +839,83 @@ func TestSync_BranchFastForward_WithTrunkUpdate(t *testing.T) {
 	assert.Equal(t, "b2-remote", branchUpdates["b2"], "b2 should be fast-forwarded")
 
 	assert.Contains(t, output, "fast-forwarded")
-	assert.NotEmpty(t, rebaseCalls, "rebase should occur")
-	require.Len(t, pushCalls, 1)
-	assert.True(t, pushCalls[0].force, "push should use force after rebase")
+	assert.NotEmpty(t, rebaseCalls2, "rebase should occur")
+	require.Len(t, pushCalls2, 1)
+	assert.True(t, pushCalls2[0].force, "push should use force after rebase")
+}
+
+func TestSync_MergedBranchDeletedFromRemote(t *testing.T) {
+	s := stack.Stack{
+		Trunk: stack.BranchRef{Branch: "main"},
+		Branches: []stack.BranchRef{
+			{Branch: "b1", PullRequest: &stack.PullRequestRef{Number: 1, Merged: true}},
+			{Branch: "b2"},
+		},
+	}
+
+	tmpDir := t.TempDir()
+	writeStackFile(t, tmpDir, s)
+
+	var rebaseOntoCalls []rebaseCall
+
+	mock := newSyncMock(tmpDir, "b2")
+	mock.BranchExistsFn = func(name string) bool {
+		// b1 does not exist locally (deleted from remote after merge)
+		return name != "b1"
+	}
+	mock.RevParseMultiFn = func(refs []string) ([]string, error) {
+		shas := make([]string, len(refs))
+		for i, r := range refs {
+			if r == "b1" {
+				t.Fatalf("RevParseMulti should not be called with non-existent branch b1")
+			}
+			if r == "main" {
+				shas[i] = "local-sha"
+			} else if r == "origin/main" {
+				shas[i] = "remote-sha"
+			} else {
+				shas[i] = "sha-" + r
+			}
+		}
+		return shas, nil
+	}
+	// Trunk behind remote to trigger rebase
+	mock.RevParseFn = func(ref string) (string, error) {
+		if ref == "main" {
+			return "local-sha", nil
+		}
+		if ref == "origin/main" {
+			return "remote-sha", nil
+		}
+		return "sha-" + ref, nil
+	}
+	mock.IsAncestorFn = func(a, d string) (bool, error) {
+		return a == "local-sha" && d == "remote-sha", nil
+	}
+	mock.UpdateBranchRefFn = func(string, string) error { return nil }
+	mock.CheckoutBranchFn = func(string) error { return nil }
+	mock.RebaseOntoFn = func(newBase, oldBase, branch string) error {
+		rebaseOntoCalls = append(rebaseOntoCalls, rebaseCall{newBase, oldBase, branch})
+		return nil
+	}
+
+	restore := git.SetOps(mock)
+	defer restore()
+
+	cfg, _, errR := config.NewTestConfig()
+	cmd := SyncCmd(cfg)
+	cmd.SetOut(io.Discard)
+	cmd.SetErr(io.Discard)
+	err := cmd.Execute()
+
+	cfg.Err.Close()
+	errOut, _ := io.ReadAll(errR)
+	output := string(errOut)
+
+	assert.NoError(t, err)
+	assert.Contains(t, output, "Skipping b1")
+
+	// Only b2 should be rebased
+	require.Len(t, rebaseOntoCalls, 1)
+	assert.Equal(t, "b2", rebaseOntoCalls[0].branch)
 }
