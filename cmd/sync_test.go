@@ -535,6 +535,7 @@ func TestSync_SquashMergedBranch_UsesOnto(t *testing.T) {
 	}
 
 	mock := newSyncMock(tmpDir, "b2")
+	mock.BranchExistsFn = func(name string) bool { return true }
 	// Trunk behind remote to trigger rebase
 	mock.RevParseFn = func(ref string) (string, error) {
 		if ref == "main" {
@@ -646,4 +647,80 @@ func TestSync_PushFailureAfterRebase(t *testing.T) {
 	require.Len(t, pushCalls, 1)
 	assert.True(t, pushCalls[0].force, "push after rebase should use force")
 	assert.Contains(t, output, "Push failed")
+}
+
+func TestSync_MergedBranchDeletedFromRemote(t *testing.T) {
+	s := stack.Stack{
+		Trunk: stack.BranchRef{Branch: "main"},
+		Branches: []stack.BranchRef{
+			{Branch: "b1", PullRequest: &stack.PullRequestRef{Number: 1, Merged: true}},
+			{Branch: "b2"},
+		},
+	}
+
+	tmpDir := t.TempDir()
+	writeStackFile(t, tmpDir, s)
+
+	var rebaseOntoCalls []rebaseCall
+
+	mock := newSyncMock(tmpDir, "b2")
+	mock.BranchExistsFn = func(name string) bool {
+		// b1 does not exist locally (deleted from remote after merge)
+		return name != "b1"
+	}
+	mock.RevParseMultiFn = func(refs []string) ([]string, error) {
+		shas := make([]string, len(refs))
+		for i, r := range refs {
+			if r == "b1" {
+				t.Fatalf("RevParseMulti should not be called with non-existent branch b1")
+			}
+			if r == "main" {
+				shas[i] = "local-sha"
+			} else if r == "origin/main" {
+				shas[i] = "remote-sha"
+			} else {
+				shas[i] = "sha-" + r
+			}
+		}
+		return shas, nil
+	}
+	// Trunk behind remote to trigger rebase
+	mock.RevParseFn = func(ref string) (string, error) {
+		if ref == "main" {
+			return "local-sha", nil
+		}
+		if ref == "origin/main" {
+			return "remote-sha", nil
+		}
+		return "sha-" + ref, nil
+	}
+	mock.IsAncestorFn = func(a, d string) (bool, error) {
+		return a == "local-sha" && d == "remote-sha", nil
+	}
+	mock.UpdateBranchRefFn = func(string, string) error { return nil }
+	mock.CheckoutBranchFn = func(string) error { return nil }
+	mock.RebaseOntoFn = func(newBase, oldBase, branch string) error {
+		rebaseOntoCalls = append(rebaseOntoCalls, rebaseCall{newBase, oldBase, branch})
+		return nil
+	}
+
+	restore := git.SetOps(mock)
+	defer restore()
+
+	cfg, _, errR := config.NewTestConfig()
+	cmd := SyncCmd(cfg)
+	cmd.SetOut(io.Discard)
+	cmd.SetErr(io.Discard)
+	err := cmd.Execute()
+
+	cfg.Err.Close()
+	errOut, _ := io.ReadAll(errR)
+	output := string(errOut)
+
+	assert.NoError(t, err)
+	assert.Contains(t, output, "Skipping b1")
+
+	// Only b2 should be rebased
+	require.Len(t, rebaseOntoCalls, 1)
+	assert.Equal(t, "b2", rebaseOntoCalls[0].branch)
 }
