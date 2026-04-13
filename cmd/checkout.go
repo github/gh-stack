@@ -194,15 +194,24 @@ func checkoutRemoteStack(cfg *config.Config, sf *stack.StackFile, gitDir string,
 	// Determine trunk (base branch of the first PR) and the target branch
 	trunk := prs[0].BaseRefName
 	var targetBranch string
+	allMerged := true
 	for _, pr := range prs {
 		if pr.Number == prNumber {
 			targetBranch = pr.HeadRefName
-			break
+		}
+		if !pr.Merged {
+			allMerged = false
 		}
 	}
 	if targetBranch == "" {
 		cfg.Errorf("could not determine branch for PR #%d", prNumber)
 		return nil, "", ErrAPIFailure
+	}
+
+	if allMerged {
+		cfg.Infof("All PRs in this stack have been merged")
+		cfg.Printf("To start a new stack, use `%s`", cfg.ColorCyan("gh stack init"))
+		return nil, "", ErrSilent
 	}
 
 	remoteStackID := strconv.Itoa(remoteStack.ID)

@@ -684,6 +684,41 @@ func TestCheckout_NumericTarget_MergedBranchDeletedFromRemote(t *testing.T) {
 	assert.Contains(t, output, "Imported stack with 2 branches")
 }
 
+func TestCheckout_NumericTarget_AllPRsMerged(t *testing.T) {
+	gitDir := t.TempDir()
+
+	restore := git.SetOps(&git.MockOps{
+		GitDirFn:        func() (string, error) { return gitDir, nil },
+		CurrentBranchFn: func() (string, error) { return "main", nil },
+	})
+	defer restore()
+
+	require.NoError(t, stack.Save(gitDir, &stack.StackFile{SchemaVersion: 1, Stacks: []stack.Stack{}}))
+
+	cfg, outR, errR := config.NewTestConfig()
+	cfg.GitHubClientOverride = &github.MockClient{
+		ListStacksFn: func() ([]github.RemoteStack, error) {
+			return []github.RemoteStack{
+				{ID: 70, PullRequests: []int{10, 11}},
+			}, nil
+		},
+		FindPRByNumberFn: func(number int) (*github.PullRequest, error) {
+			prs := map[int]*github.PullRequest{
+				10: {ID: "PR_10", Number: 10, HeadRefName: "feat-1", BaseRefName: "main", Merged: true, State: "MERGED", URL: "https://github.com/o/r/pull/10"},
+				11: {ID: "PR_11", Number: 11, HeadRefName: "feat-2", BaseRefName: "feat-1", Merged: true, State: "MERGED", URL: "https://github.com/o/r/pull/11"},
+			}
+			return prs[number], nil
+		},
+	}
+
+	err := runCheckout(cfg, &checkoutOptions{target: "11"})
+	output := collectOutput(cfg, outR, errR)
+
+	assert.ErrorIs(t, err, ErrSilent)
+	assert.Contains(t, output, "All PRs in this stack have been merged")
+	assert.Contains(t, output, "gh stack init")
+}
+
 func TestCheckout_NumericTarget_APIError(t *testing.T) {
 	gitDir := t.TempDir()
 	restore := git.SetOps(&git.MockOps{
