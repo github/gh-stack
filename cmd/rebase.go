@@ -169,9 +169,15 @@ func runRebase(cfg *config.Config, opts *rebaseOptions) error {
 	// Sync PR state before rebase so we can detect merged PRs.
 	syncStackPRs(cfg, s)
 
-	branchNames := make([]string, len(s.Branches))
-	for i, b := range s.Branches {
-		branchNames[i] = b.Branch
+	branchNames := make([]string, 0, len(s.Branches))
+	for _, b := range s.Branches {
+		// Merged branches that no longer exist locally have no ref to
+		// resolve. They are always skipped during rebase, but we must
+		// also exclude them here to avoid a rev-parse error.
+		if b.IsMerged() && !git.BranchExists(b.Branch) {
+			continue
+		}
+		branchNames = append(branchNames, b.Branch)
 	}
 	originalRefs, err := git.RevParseMap(branchNames)
 	if err != nil {

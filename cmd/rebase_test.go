@@ -126,6 +126,7 @@ func TestRebase_SquashMergedBranch_UsesOnto(t *testing.T) {
 	}
 
 	mock := newRebaseMock(tmpDir, "b2")
+	mock.BranchExistsFn = func(name string) bool { return true }
 	mock.RevParseFn = func(ref string) (string, error) {
 		if sha, ok := branchSHAs[ref]; ok {
 			return sha, nil
@@ -190,6 +191,7 @@ func TestRebase_OntoPropagatesToSubsequentBranches(t *testing.T) {
 	}
 
 	mock := newRebaseMock(tmpDir, "b3")
+	mock.BranchExistsFn = func(name string) bool { return true }
 	mock.RevParseFn = func(ref string) (string, error) {
 		if sha, ok := branchSHAs[ref]; ok {
 			return sha, nil
@@ -847,4 +849,62 @@ func TestRebase_Abort_WithActiveRebase(t *testing.T) {
 
 	// Should return to original branch
 	assert.Contains(t, checkouts, "b1", "should checkout original branch at end")
+}
+
+func TestRebase_SkipsMergedBranchesNotExistingLocally(t *testing.T) {
+	// Simulates a stack where b1 is merged and its branch was auto-deleted
+	// from the remote, so it doesn't exist locally.
+	s := stack.Stack{
+		Trunk: stack.BranchRef{Branch: "main"},
+		Branches: []stack.BranchRef{
+			{Branch: "b1", PullRequest: &stack.PullRequestRef{Number: 42, Merged: true}},
+			{Branch: "b2"},
+		},
+	}
+
+	tmpDir := t.TempDir()
+	writeStackFile(t, tmpDir, s)
+
+	var rebaseCalls []rebaseCall
+
+	mock := newRebaseMock(tmpDir, "b2")
+	mock.BranchExistsFn = func(name string) bool {
+		// b1 does not exist locally (deleted from remote after merge)
+		return name != "b1"
+	}
+	mock.RevParseMultiFn = func(refs []string) ([]string, error) {
+		// Only resolve refs that exist — b1 should not be in the list
+		shas := make([]string, len(refs))
+		for i, r := range refs {
+			if r == "b1" {
+				t.Fatalf("RevParseMulti should not be called with non-existent branch b1")
+			}
+			shas[i] = "sha-" + r
+		}
+		return shas, nil
+	}
+	mock.RebaseOntoFn = func(newBase, oldBase, branch string) error {
+		rebaseCalls = append(rebaseCalls, rebaseCall{newBase, oldBase, branch})
+		return nil
+	}
+
+	restore := git.SetOps(mock)
+	defer restore()
+
+	cfg, _, errR := config.NewTestConfig()
+	cmd := RebaseCmd(cfg)
+	cmd.SetOut(io.Discard)
+	cmd.SetErr(io.Discard)
+	err := cmd.Execute()
+
+	cfg.Err.Close()
+	errOut, _ := io.ReadAll(errR)
+	output := string(errOut)
+
+	assert.NoError(t, err)
+	assert.Contains(t, output, "Skipping b1")
+
+	// Only b2 should be rebased
+	require.Len(t, rebaseCalls, 1)
+	assert.Equal(t, "b2", rebaseCalls[0].branch)
 }
