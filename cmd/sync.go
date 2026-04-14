@@ -116,9 +116,13 @@ func runSync(cfg *config.Config, opts *syncOptions) error {
 		}
 	}
 
-	// --- Step 3: Cascade rebase (only if trunk moved) ---
+	// --- Step 2b: Fast-forward stack branches behind their remote tracking branch ---
+	updatedBranches := fastForwardBranches(cfg, s, remote, currentBranch)
+	branchesUpdated := len(updatedBranches) > 0
+
+	// --- Step 3: Cascade rebase (if trunk or any branch moved) ---
 	rebased := false
-	if trunkUpdated {
+	if trunkUpdated || branchesUpdated {
 		cfg.Printf("")
 		cfg.Printf("Rebasing stack ...")
 

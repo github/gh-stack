@@ -317,6 +317,55 @@ func activeBranchNames(s *stack.Stack) []string {
 	return names
 }
 
+// fastForwardBranches fast-forwards each active stack branch to its remote
+// tracking branch when the local branch is strictly behind. Returns the names
+// of branches that were updated. Branches that are up-to-date, diverged, or
+// have no remote tracking branch are silently skipped.
+func fastForwardBranches(cfg *config.Config, s *stack.Stack, remote, currentBranch string) []string {
+	var updated []string
+	for _, br := range s.Branches {
+		if br.IsSkipped() {
+			continue
+		}
+
+		remoteRef := remote + "/" + br.Branch
+		refs, err := git.RevParseMulti([]string{br.Branch, remoteRef})
+		if err != nil {
+			// Remote tracking branch doesn't exist — skip.
+			continue
+		}
+		localSHA, remoteSHA := refs[0], refs[1]
+
+		if localSHA == remoteSHA {
+			continue
+		}
+
+		isAncestor, err := git.IsAncestor(localSHA, remoteSHA)
+		if err != nil || !isAncestor {
+			// Diverged or error — skip. This commonly happens after a
+			// local rebase and is handled by the push step.
+			continue
+		}
+
+		// Local is behind remote — fast-forward.
+		if currentBranch == br.Branch {
+			if err := git.MergeFF(remoteRef); err != nil {
+				cfg.Warningf("Failed to fast-forward %s from remote: %v", br.Branch, err)
+				continue
+			}
+		} else {
+			if err := git.UpdateBranchRef(br.Branch, remoteSHA); err != nil {
+				cfg.Warningf("Failed to fast-forward %s from remote: %v", br.Branch, err)
+				continue
+			}
+		}
+
+		cfg.Successf("Fast-forwarded %s to %s", br.Branch, short(remoteSHA))
+		updated = append(updated, br.Branch)
+	}
+	return updated
+}
+
 // resolvePR resolves a user-provided target to a stack and branch using
 // waterfall logic: PR URL → PR number → branch name.
 func resolvePR(cfg *config.Config, sf *stack.StackFile, target string) (*stack.Stack, *stack.BranchRef, error) {
