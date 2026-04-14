@@ -1,5 +1,4 @@
 ---
-import Default from '@astrojs/starlight/components/SocialIcons.astro';
 const base = import.meta.env.BASE_URL;
 ---
 
@@ -11,162 +10,150 @@ const base = import.meta.env.BASE_URL;
 	<a href={`${base}faq/`} class="header-link">FAQ</a>
 </nav>
 
-<!-- Hamburger menu for narrow viewports where full nav would overflow -->
-<div class="tablet-nav-wrapper">
-	<button class="hamburger-btn" aria-label="Toggle navigation menu" aria-expanded="false" aria-controls="tablet-nav-dropdown">
-		<span class="hamburger-icon" aria-hidden="true"></span>
+<!-- Hamburger for splash/homepage on mobile (content pages use Starlight's built-in) -->
+<div class="splash-nav-wrapper">
+	<button class="splash-hamburger-btn" aria-label="Menu" aria-expanded="false" aria-controls="splash-nav-dropdown">
+		<svg width="16" height="16" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true">
+			<path d="M1 2.75A.75.75 0 0 1 1.75 2h12.5a.75.75 0 0 1 0 1.5H1.75A.75.75 0 0 1 1 2.75Zm0 5A.75.75 0 0 1 1.75 7h12.5a.75.75 0 0 1 0 1.5H1.75A.75.75 0 0 1 1 7.75ZM1.75 12h12.5a.75.75 0 0 1 0 1.5H1.75a.75.75 0 0 1 0-1.5Z"/>
+		</svg>
 	</button>
-	<nav class="tablet-dropdown" id="tablet-nav-dropdown" aria-label="Primary navigation" hidden>
-		<a href={`${base}introduction/overview/`} class="dropdown-link">Overview</a>
-		<a href={`${base}getting-started/quick-start/`} class="dropdown-link">Quick Start</a>
-		<a href={`${base}reference/cli/`} class="dropdown-link">CLI</a>
-		<a href={`${base}guides/ui/`} class="dropdown-link">UI</a>
-		<a href={`${base}faq/`} class="dropdown-link">FAQ</a>
+	<nav class="splash-dropdown" id="splash-nav-dropdown" hidden>
+		<a href={`${base}introduction/overview/`} class="splash-dropdown-link">Overview</a>
+		<a href={`${base}getting-started/quick-start/`} class="splash-dropdown-link">Quick Start</a>
+		<a href={`${base}reference/cli/`} class="splash-dropdown-link">CLI</a>
+		<a href={`${base}guides/ui/`} class="splash-dropdown-link">UI</a>
+		<a href={`${base}faq/`} class="splash-dropdown-link">FAQ</a>
 	</nav>
 </div>
-
-<Default {...Astro.props} />
 
 <style>
 	.custom-header-links {
 		display: flex;
 		align-items: center;
-		gap: 1rem;
-		margin-right: 1rem;
+		gap: 0.25rem;
 	}
 
 	.header-link {
 		color: var(--sl-color-text);
 		text-decoration: none;
 		font-size: 0.875rem;
-		font-weight: 500;
-		padding: 0.25rem 0.75rem;
-		border-radius: 4px;
+		font-weight: 400;
+		padding: 6px 10px;
+		border-radius: 6px;
 		transition: color 0.15s ease, background-color 0.15s ease;
 		white-space: nowrap;
+		opacity: 0.8;
 	}
 
 	.header-link:hover {
-		color: var(--sl-color-text-accent);
-		background-color: rgba(110, 118, 129, 0.1);
+		opacity: 1;
+		background-color: rgba(110, 118, 129, 0.15);
 	}
 
-	/* Tablet navigation — hidden by default; shown via global CSS at narrow widths */
-	.tablet-nav-wrapper {
-		display: none;
-		position: relative;
-		margin-right: 0.5rem;
-	}
-
-	.hamburger-btn {
+	/* Splash-only hamburger: hidden by default, shown only on mobile splash pages */
+	.splash-hamburger-btn {
+		margin-top: -3px;
 		background: none;
 		border: none;
 		cursor: pointer;
 		padding: 0.5rem;
 		color: var(--sl-color-text);
-		border-radius: 4px;
-		min-height: 44px;
-		min-width: 44px;
+		border-radius: 6px;
 		display: inline-flex;
 		align-items: center;
 		justify-content: center;
 	}
 
-	.hamburger-btn:hover {
-		background-color: rgba(110, 118, 129, 0.1);
+	.splash-hamburger-btn:hover {
+		background-color: rgba(110, 118, 129, 0.15);
 	}
 
-	.hamburger-icon {
-		display: block;
-		width: 20px;
-		height: 2px;
-		background: currentColor;
-		position: relative;
-	}
-
-	.hamburger-icon::before,
-	.hamburger-icon::after {
-		content: '';
-		display: block;
-		width: 20px;
-		height: 2px;
-		background: currentColor;
-		position: absolute;
-		left: 0;
-	}
-
-	.hamburger-icon::before { top: -6px; }
-	.hamburger-icon::after  { top:  6px; }
-
-	.tablet-dropdown {
+	.splash-dropdown {
 		position: absolute;
 		top: calc(100% + 0.5rem);
 		right: 0;
-		background: var(--sl-color-bg-nav, #161b22);
-		border: 1px solid rgba(48, 54, 61, 0.8);
-		border-radius: 8px;
-		padding: 0.5rem 0;
-		min-width: 180px;
+		background: #000000;
+		border: 1px solid #191f1b;
+		border-radius: 16px;
+		padding: 12px;
+		min-width: 200px;
 		z-index: 100;
-		box-shadow: 0 8px 24px rgba(0, 0, 0, 0.4);
+		box-shadow:
+			rgba(0, 0, 0, 0.01) 0px 100px 80px,
+			rgba(0, 0, 0, 0.02) 0px 41px 33px,
+			rgba(0, 0, 0, 0.02) 0px 22px 17px,
+			rgba(0, 0, 0, 0.3) 0px 6px 12px;
 	}
 
-	.dropdown-link {
+	:global(:root[data-theme='light']) .splash-dropdown {
+		background: #ffffff;
+		border: 1px solid #d1d9e0;
+		box-shadow:
+			rgba(31, 35, 40, 0.04) 0px 100px 80px,
+			rgba(31, 35, 40, 0.06) 0px 41px 33px,
+			rgba(31, 35, 40, 0.12) 0px 6px 12px;
+	}
+
+	.splash-dropdown-link {
 		display: block;
-		padding: 0.625rem 1rem;
-		color: var(--sl-color-text);
+		padding: 6px 16px;
+		color: #ffffff;
 		text-decoration: none;
 		font-size: 0.875rem;
-		font-weight: 500;
+		font-weight: 400;
+		line-height: 24px;
+		border-radius: 8px;
 		transition: background-color 0.15s ease;
 	}
 
-	.dropdown-link:hover {
-		background-color: rgba(110, 118, 129, 0.1);
-		color: var(--sl-color-text-accent);
+	.splash-dropdown-link:hover {
+		background-color: rgba(110, 118, 129, 0.2);
+	}
+
+	:global(:root[data-theme='light']) .splash-dropdown-link {
+		color: #1f2328;
+	}
+
+	:global(:root[data-theme='light']) .splash-dropdown-link:hover {
+		background-color: rgba(175, 184, 193, 0.2);
 	}
 </style>
 
 <script>
-	let hamburgerAbort: AbortController | undefined;
+	let splashAbort: AbortController | undefined;
 
-	function initHamburgerMenu() {
-		hamburgerAbort?.abort();
-		hamburgerAbort = new AbortController();
-		const { signal } = hamburgerAbort;
+	function initSplashMenu() {
+		splashAbort?.abort();
+		splashAbort = new AbortController();
+		const { signal } = splashAbort;
 
-		const hamburgerBtn = document.querySelector<HTMLButtonElement>('.hamburger-btn');
-		const tabletDropdown = document.querySelector<HTMLElement>('.tablet-dropdown');
+		const btn = document.querySelector<HTMLButtonElement>('.splash-hamburger-btn');
+		const dropdown = document.querySelector<HTMLElement>('.splash-dropdown');
+		if (!btn || !dropdown) return;
 
-		if (!hamburgerBtn || !tabletDropdown) return;
-
-		hamburgerBtn.addEventListener('click', (e) => {
+		btn.addEventListener('click', (e) => {
 			e.stopPropagation();
-			const isOpen = hamburgerBtn.getAttribute('aria-expanded') === 'true';
-			hamburgerBtn.setAttribute('aria-expanded', String(!isOpen));
-			tabletDropdown.hidden = isOpen;
-			if (!isOpen) {
-				const firstLink = tabletDropdown.querySelector<HTMLAnchorElement>('.dropdown-link');
-				firstLink?.focus();
-			}
+			const isOpen = btn.getAttribute('aria-expanded') === 'true';
+			btn.setAttribute('aria-expanded', String(!isOpen));
+			dropdown.hidden = isOpen;
 		}, { signal });
 
 		document.addEventListener('click', (e) => {
-			if (!hamburgerBtn.contains(e.target as Node) && !tabletDropdown.contains(e.target as Node)) {
-				hamburgerBtn.setAttribute('aria-expanded', 'false');
-				tabletDropdown.hidden = true;
+			if (!btn.contains(e.target as Node) && !dropdown.contains(e.target as Node)) {
+				btn.setAttribute('aria-expanded', 'false');
+				dropdown.hidden = true;
 			}
 		}, { signal });
 
 		document.addEventListener('keydown', (e) => {
-			if (e.key === 'Escape' && hamburgerBtn.getAttribute('aria-expanded') === 'true') {
-				hamburgerBtn.setAttribute('aria-expanded', 'false');
-				tabletDropdown.hidden = true;
-				hamburgerBtn.focus();
+			if (e.key === 'Escape' && btn.getAttribute('aria-expanded') === 'true') {
+				btn.setAttribute('aria-expanded', 'false');
+				dropdown.hidden = true;
+				btn.focus();
 			}
 		}, { signal });
 	}
 
-	initHamburgerMenu();
-	document.addEventListener('astro:page-load', initHamburgerMenu);
+	initSplashMenu();
+	document.addEventListener('astro:page-load', initSplashMenu);
 </script>

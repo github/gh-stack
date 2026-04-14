@@ -115,7 +115,7 @@ body:has(.hero)::before {
 }
 
 /* ============================================================
-   4. Header — glass-morphism with Primer colors
+   4. Header — Primer SubdomainNavBar style
    ============================================================ */
 header {
 	background: rgba(13, 17, 23, 0.95) !important;
@@ -129,13 +129,84 @@ header {
 	border-bottom: 1px solid #d1d9e0 !important;
 }
 
-/* Site title — white/black, not accent green */
+/* Override Starlight grid to flex for reordering */
+header .header {
+	display: flex !important;
+	align-items: center;
+	gap: 1rem;
+	padding: 0 1rem;
+}
+
+/* Even padding on outer header container */
+header {
+	padding: 0.75rem 0.25rem !important;
+}
+
+/* Flatten right-group so its children join the header flex container */
+header .right-group {
+	display: contents !important;
+}
+
+/* Reorder header children: title(1) → links(2) → search(3) → theme(4) */
+header .title-wrapper {
+	order: 1;
+	flex: 0 0 auto;
+}
+
+header .social-icons {
+	order: 2;
+	display: flex !important;
+	align-items: center;
+	gap: 0;
+	flex: 1 1 auto;
+	justify-content: flex-end;
+}
+
+header .social-icons::after {
+	display: none !important;
+}
+
+header div:has(> site-search) {
+	order: 3;
+	flex: 0 0 auto;
+	margin: 0 0.5rem;
+}
+
+header site-search button {
+	border: 1px solid #3d444d !important;
+	border-radius: 6px;
+}
+
+:root[data-theme='light'] header site-search button {
+	border-color: #d1d9e0 !important;
+}
+
+header starlight-theme-select {
+	order: 4;
+	flex: 0 0 auto;
+	margin-top: 1px;
+}
+
+/* Site title styling */
 .site-title {
 	color: #f0f6fc !important;
+	font-size: 1rem !important;
+	font-weight: 600 !important;
+	gap: 0.5rem !important;
+}
+
+.site-title img {
+	width: 24px !important;
+	height: 24px !important;
+	filter: invert(1);
 }
 
 :root[data-theme='light'] .site-title {
 	color: #1f2328 !important;
+}
+
+:root[data-theme='light'] .site-title img {
+	filter: brightness(0);
 }
 
 /* Announcement banner — Primer attention yellow */
@@ -167,6 +238,7 @@ header {
 
 .hero h1 {
 	text-align: center !important;
+	margin: 0 auto;
 }
 
 .hero .tagline {
@@ -736,15 +808,6 @@ nav a[aria-current='page'] {
 	color: #1f2328;
 }
 
-/* Social / GitHub icon */
-.social-icons a[href*='github.com'] {
-	color: #fff !important;
-}
-
-:root[data-theme='light'] .social-icons a[href*='github.com'] {
-	color: #1f2328 !important;
-}
-
 /* ============================================================
    13. Scrollbars
    ============================================================ */
@@ -786,17 +849,60 @@ nav a[aria-current='page'] {
 /* ============================================================
    14. Responsive header nav (custom component)
    ============================================================ */
+
+/* Always hide splash hamburger by default */
+.splash-nav-wrapper {
+	display: none !important;
+}
+
 @media (max-width: 900px) {
 	.custom-header-links {
 		display: none !important;
 	}
-	.tablet-nav-wrapper {
+	header div:has(> site-search) {
+		margin: 0;
+	}
+	body:has(.hero) .splash-nav-wrapper {
 		display: block !important;
+		position: fixed;
+		top: 16px;
+		right: 16px;
+		z-index: 10;
+	}
+	body:has(.hero) header starlight-theme-select label svg.caret {
+		display: none;
 	}
 }
 
-@media (min-width: 901px) {
-	.tablet-nav-wrapper {
+@media (max-width: 800px) {
+	header div:has(> site-search) {
+		margin: 0 2.5rem 0 0;
+	}
+	header site-search button {
+		border: none !important;
+	}
+	header starlight-theme-select {
 		display: none !important;
+	}
+	/* Keep theme toggle visible on homepage (splash), compact icon-only */
+	body:has(.hero) header starlight-theme-select {
+		display: block !important;
+		margin-right: 1.25em;
+	}
+	body:has(.hero) header starlight-theme-select label {
+		--sl-select-width: 1em !important;
+		overflow: hidden;
+	}
+	body:has(.hero) header starlight-theme-select label svg.icon {
+		width: 1.25em;
+		height: 1.25em;
+	}
+	body:has(.hero) header starlight-theme-select select {
+		color: transparent;
+		width: 1.25rem;
+	}
+	/* On homepage, make room for theme toggle + hamburger to the right */
+	body:has(.hero) header div:has(> site-search) {
+		margin-right: 0;
 	}
 }

@@ -15,6 +15,10 @@ export default defineConfig({
 			title: 'GitHub Stacked PRs',
 			description: 'Manage stacked branches and pull requests with the gh stack CLI extension.',
 			favicon: '/favicon.svg',
+			logo: {
+				src: './src/assets/github-invertocat.svg',
+				alt: 'GitHub',
+			},
 			head: [
 				{ tag: 'meta', attrs: { name: 'robots', content: 'noindex, nofollow' } },
 			],
@@ -23,9 +27,6 @@ export default defineConfig({
 			},
 			customCss: [
 				'./src/styles/custom.css',
-			],
-			social: [
-				{ icon: 'github', label: 'GitHub', href: 'https://github.com/github/gh-stack' },
 			],
 			tableOfContents: {
 				minHeadingLevel: 2,
