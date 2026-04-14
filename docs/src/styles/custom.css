@@ -251,18 +251,40 @@ header starlight-theme-select {
 /* Center the action button group */
 .hero .sl-flex .sl-flex {
 	justify-content: center !important;
+	align-items: center !important;
+	gap: 0.75rem !important;
+	width: 100% !important;
 }
 
-/* Primary CTA button — GitHub green */
+/* Primer ButtonBase shared styles (large size) */
+.hero .sl-link-button {
+	align-items: center !important;
+	appearance: none !important;
+	border: 0.0625rem solid !important;
+	border-radius: 0.375rem !important;
+	cursor: pointer !important;
+	display: inline-flex !important;
+	font-family: inherit !important;
+	font-size: 0.875rem !important;
+	font-weight: 500 !important;
+	gap: 0.5rem !important;
+	height: 2.5rem !important;
+	justify-content: center !important;
+	min-width: 10rem !important;
+	padding: 0 1rem !important;
+	text-align: center !important;
+	text-decoration: none !important;
+	transition: 80ms cubic-bezier(0.33, 1, 0.68, 1) !important;
+}
+
+/* Primary CTA button — Primer primary variant */
 .hero .sl-link-button:first-of-type,
 a.sl-link-button[data-variant='primary'],
 .sl-link-button.primary {
 	background-color: #238636 !important;
+	border-color: rgba(240, 246, 252, 0.1) !important;
+	box-shadow: 0 1px 0 rgba(27, 31, 36, 0.1), inset 0 1px 0 rgba(255, 255, 255, 0.03) !important;
 	color: #ffffff !important;
-	border: 2px solid transparent !important;
-	border-radius: 8px !important;
-	font-weight: 500;
-	transition: background-color 0.15s ease;
 }
 
 .hero .sl-link-button:first-of-type:hover,
@@ -271,18 +293,16 @@ a.sl-link-button[data-variant='primary']:hover,
 	background-color: #2ea043 !important;
 }
 
-/* Secondary CTA button — translucent like github.com */
+/* Secondary CTA button — Primer default variant */
 .hero .sl-link-button:not(:first-of-type) {
-	background-color: rgba(255, 255, 255, 0.07) !important;
+	background-color: #21262d !important;
+	border-color: #3d444d !important;
+	box-shadow: 0 1px 0 rgba(27, 31, 36, 0.04) !important;
 	color: #f0f6fc !important;
-	border: 1px solid #3d444d !important;
-	border-radius: 8px !important;
-	font-weight: 500;
-	transition: background-color 0.15s ease, border-color 0.15s ease;
 }
 
 .hero .sl-link-button:not(:first-of-type):hover {
-	background-color: rgba(255, 255, 255, 0.12) !important;
+	background-color: #30363d !important;
 	border-color: #656d76 !important;
 }
 
@@ -290,6 +310,8 @@ a.sl-link-button[data-variant='primary']:hover,
 :root[data-theme='light'] a.sl-link-button[data-variant='primary'],
 :root[data-theme='light'] .sl-link-button.primary {
 	background-color: #1f883d !important;
+	border-color: rgba(27, 31, 36, 0.15) !important;
+	box-shadow: 0 1px 0 rgba(27, 31, 36, 0.1), inset 0 1px 0 rgba(255, 255, 255, 0.03) !important;
 	color: #ffffff !important;
 }
 
@@ -300,13 +322,14 @@ a.sl-link-button[data-variant='primary']:hover,
 
 :root[data-theme='light'] .hero .sl-link-button:not(:first-of-type) {
 	background-color: #f6f8fa !important;
+	border-color: rgba(27, 31, 36, 0.15) !important;
+	box-shadow: 0 1px 0 rgba(27, 31, 36, 0.04) !important;
 	color: #1f2328 !important;
-	border: 1px solid #d1d9e0 !important;
 }
 
 :root[data-theme='light'] .hero .sl-link-button:not(:first-of-type):hover {
 	background-color: #eaeef2 !important;
-	border-color: #afb8c1 !important;
+	border-color: rgba(27, 31, 36, 0.25) !important;
 }
 
 :root[data-theme='light'] .hero h1 {
@@ -880,6 +903,11 @@ nav a[aria-current='page'] {
 	}
 	header site-search button {
 		border: none !important;
+		font-size: 1rem !important;
+		color: var(--sl-color-gray-3) !important;
+	}
+	header site-search button:hover {
+		color: var(--sl-color-text) !important;
 	}
 	header starlight-theme-select {
 		display: none !important;
@@ -905,4 +933,17 @@ nav a[aria-current='page'] {
 	body:has(.hero) header div:has(> site-search) {
 		margin-right: 0;
 	}
+}
+
+/* ============================================================
+   Search dialog — collapse empty results area
+   ============================================================ */
+[data-pagefind-ui] .pagefind-ui__results-area:empty,
+dialog .results-inner:empty,
+dialog [data-search-results]:empty {
+	display: none !important;
+}
+
+dialog.search-dialog .dialog-frame {
+	max-height: fit-content !important;
 }
