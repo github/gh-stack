@@ -9,6 +9,10 @@ description: Install the gh stack CLI and create your first Stacked PR in minute
 - Git 2.20 or later
 - A GitHub repository you can push to
 
+:::caution[Private Preview]
+Stacked PRs is currently in private preview. This feature will **not work** unless enabled for your repository. [Sign up for the waitlist →](https://gh.io/stacksbeta)
+:::
+
 ## Install the CLI Extension
 
 ```sh

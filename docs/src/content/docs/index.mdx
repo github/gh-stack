@@ -15,7 +15,7 @@ hero:
       icon: right-arrow
 ---
 
-import { Card, CardGrid } from '@astrojs/starlight/components';
+import { Card, CardGrid, Aside } from '@astrojs/starlight/components';
 import { Image } from 'astro:assets';
 import stackDiagram from '../../assets/stack-diagram.svg';
 import stackNavigator from '../../assets/screenshots/stack-navigator.png';
@@ -60,6 +60,10 @@ The `gh stack` CLI handles the local workflow: creating branches, managing rebas
 When you're ready to merge, you can merge all or a part of the stack. Each PR can be merged directly or through the merge queue. After a merge, the remaining PRs in the stack are automatically rebased so the lowest unmerged PR targets the base branch.
 
 ## Get Started
+
+<Aside type="caution" title="Private Preview">
+Stacked PRs is currently in private preview. This feature will **not work** unless enabled for your repository. [Sign up for the waitlist →](https://gh.io/stacksbeta)
+</Aside>
 
 ```sh
 # Install the CLI extension
