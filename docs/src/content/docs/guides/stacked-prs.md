@@ -21,13 +21,13 @@ Each PR in a stack shows only the diff for its layer — the changes between its
 - **Review individual PRs** when you're focusing on a specific concern (e.g., reviewing only the API layer).
 - **Use the stack map** to navigate between PRs without going back to the PR list.
 
-## Merging Step by Step
+## Merging from the Bottom Up
 
-Stacks are merged **from the bottom up**. You cannot merge a PR in the middle of the stack before the PRs below it are merged.
+Stacks are merged **from the bottom up** — you can merge any number of PRs at once, as long as they form a contiguous group starting from the lowest unmerged PR. For example, in a stack of four PRs, you can merge just the bottom one, or the bottom three together, but you cannot merge only the second and third PRs while leaving the first unmerged. Mid-stack merges are not allowed.
 
-1. When the bottom PR meets all merge requirements, merge it.
-2. After the bottom PR is merged, the remaining stack is **automatically rebased** — the next PR's base is updated to target `main` directly.
-3. The next PR is now at the bottom and can be reviewed, approved, and merged.
+1. When the lowest unmerged PR (and any PRs above it that you want to include) meet all merge requirements, merge them.
+2. After the merge, the remaining stack is **automatically rebased** — the next unmerged PR's base is updated to target `main` directly.
+3. The next unmerged PR is now at the bottom and can be reviewed, approved, and merged.
 4. Repeat until the entire stack is landed.
 
 For details on merge methods (squash, merge commit, rebase) and merge requirements, see [Merging Stacks](/gh-stack/introduction/overview/#merging-stacks) in the Overview.

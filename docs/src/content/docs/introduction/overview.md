@@ -94,6 +94,8 @@ While the PR UI provides the review and merge experience, the `gh stack` CLI han
 
 The CLI is not required to use Stacked PRs — the underlying git operations are standard. But it makes the workflow simpler, and you can create Stacked PRs from the CLI instead of the UI.
 
+**Bring Your Own Tools:** You don't need to use the `gh stack` CLI for your local workflow. If you use tools like Jujutsu, Sapling, or custom tools to manage and push your local branches, you can then use the CLI or the GitHub UI to open a stack of PRs from those branches. See the [FAQ](/gh-stack/faq/#will-this-work-with-a-different-tool-for-stacking) for examples.
+
 ## Thinking About Stack Structure
 
 Each branch in a stack should represent a **discrete, logical unit of work** that can be reviewed independently. Think of a stack from the reviewer's perspective: the PRs should tell a cohesive story, where each one is a small, logical piece of the whole.
