@@ -5,6 +5,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/github/gh-stack/internal/config"
@@ -34,7 +35,13 @@ func newRebaseMock(tmpDir string, currentBranch string) *git.MockOps {
 	return &git.MockOps{
 		GitDirFn:        func() (string, error) { return tmpDir, nil },
 		CurrentBranchFn: func() (string, error) { return currentBranch, nil },
-		RevParseFn:       func(ref string) (string, error) { return "sha-" + ref, nil },
+		RevParseFn: func(ref string) (string, error) {
+			// Default: origin/<branch> returns same SHA as <branch> (no FF needed)
+			if strings.HasPrefix(ref, "origin/") {
+				return "sha-" + strings.TrimPrefix(ref, "origin/"), nil
+			}
+			return "sha-" + ref, nil
+		},
 		IsAncestorFn:    func(a, d string) (bool, error) { return true, nil },
 		FetchFn:         func(string) error { return nil },
 		EnableRerereFn:  func() error { return nil },
@@ -847,4 +854,189 @@ func TestRebase_Abort_WithActiveRebase(t *testing.T) {
 
 	// Should return to original branch
 	assert.Contains(t, checkouts, "b1", "should checkout original branch at end")
+}
+
+// TestRebase_FastForwardsBranchFromRemote verifies that when origin/b1 is ahead
+// of local b1 (someone pushed a new commit), the branch is fast-forwarded before
+// the cascade rebase so downstream branches include the new commits.
+func TestRebase_FastForwardsBranchFromRemote(t *testing.T) {
+	s := stack.Stack{
+		Trunk: stack.BranchRef{Branch: "main"},
+		Branches: []stack.BranchRef{
+			{Branch: "b1"},
+			{Branch: "b2"},
+		},
+	}
+
+	tmpDir := t.TempDir()
+	writeStackFile(t, tmpDir, s)
+
+	var allRebaseCalls []rebaseCall
+	var updateBranchRefCalls []struct{ branch, sha string }
+
+	mock := newRebaseMock(tmpDir, "b2")
+	// b1 is behind origin/b1 (remote has new commit)
+	mock.RevParseFn = func(ref string) (string, error) {
+		if ref == "b1" {
+			return "b1-local-sha", nil
+		}
+		if ref == "origin/b1" {
+			return "b1-remote-sha", nil
+		}
+		// trunk and origin/trunk same — trunk already up to date
+		if ref == "main" || ref == "origin/main" {
+			return "main-sha", nil
+		}
+		if strings.HasPrefix(ref, "origin/") {
+			return "sha-" + strings.TrimPrefix(ref, "origin/"), nil
+		}
+		return "sha-" + ref, nil
+	}
+	mock.IsAncestorFn = func(a, d string) (bool, error) {
+		// b1-local is ancestor of b1-remote → can fast-forward
+		if a == "b1-local-sha" && d == "b1-remote-sha" {
+			return true, nil
+		}
+		return false, nil
+	}
+	mock.UpdateBranchRefFn = func(branch, sha string) error {
+		updateBranchRefCalls = append(updateBranchRefCalls, struct{ branch, sha string }{branch, sha})
+		return nil
+	}
+	mock.CheckoutBranchFn = func(string) error { return nil }
+	mock.RebaseFn = func(base string) error {
+		allRebaseCalls = append(allRebaseCalls, rebaseCall{newBase: base})
+		return nil
+	}
+	mock.RebaseOntoFn = func(newBase, oldBase, branch string) error {
+		allRebaseCalls = append(allRebaseCalls, rebaseCall{newBase, oldBase, branch})
+		return nil
+	}
+
+	restore := git.SetOps(mock)
+	defer restore()
+
+	cfg, _, errR := config.NewTestConfig()
+	cmd := RebaseCmd(cfg)
+	cmd.SetOut(io.Discard)
+	cmd.SetErr(io.Discard)
+	err := cmd.Execute()
+
+	cfg.Err.Close()
+	errOut, _ := io.ReadAll(errR)
+	output := string(errOut)
+
+	assert.NoError(t, err)
+
+	// b1 should be fast-forwarded to remote SHA
+	require.Len(t, updateBranchRefCalls, 1, "should fast-forward b1 via UpdateBranchRef")
+	assert.Equal(t, "b1", updateBranchRefCalls[0].branch)
+	assert.Equal(t, "b1-remote-sha", updateBranchRefCalls[0].sha)
+
+	assert.Contains(t, output, "Fast-forwarded b1")
+
+	// Cascade rebase should still occur
+	assert.NotEmpty(t, allRebaseCalls, "cascade rebase should still happen")
+}
+
+// TestRebase_BranchAlreadyUpToDate_NoFF verifies that when a branch's local
+// and remote SHAs match, no fast-forward occurs.
+func TestRebase_BranchAlreadyUpToDate_NoFF(t *testing.T) {
+	s := stack.Stack{
+		Trunk: stack.BranchRef{Branch: "main"},
+		Branches: []stack.BranchRef{
+			{Branch: "b1"},
+		},
+	}
+
+	tmpDir := t.TempDir()
+	writeStackFile(t, tmpDir, s)
+
+	var updateBranchRefCalls int
+	var mergeFFCalls int
+
+	mock := newRebaseMock(tmpDir, "b1")
+	// Same SHA for b1 and origin/b1 — already up to date (default mock handles this)
+	mock.UpdateBranchRefFn = func(string, string) error {
+		updateBranchRefCalls++
+		return nil
+	}
+	mock.MergeFFFn = func(string) error {
+		mergeFFCalls++
+		return nil
+	}
+	mock.CheckoutBranchFn = func(string) error { return nil }
+	mock.RebaseFn = func(string) error { return nil }
+
+	restore := git.SetOps(mock)
+	defer restore()
+
+	cfg, _, _ := config.NewTestConfig()
+	cmd := RebaseCmd(cfg)
+	cmd.SetOut(io.Discard)
+	cmd.SetErr(io.Discard)
+	err := cmd.Execute()
+
+	cfg.Out.Close()
+	cfg.Err.Close()
+
+	assert.NoError(t, err)
+	assert.Equal(t, 0, updateBranchRefCalls, "no UpdateBranchRef for branches already up to date")
+	assert.Equal(t, 0, mergeFFCalls, "no MergeFF for branches already up to date")
+}
+
+// TestRebase_BranchDiverged_NoFF verifies that when local and remote branches
+// have diverged (e.g., after a previous local rebase), no fast-forward occurs.
+func TestRebase_BranchDiverged_NoFF(t *testing.T) {
+	s := stack.Stack{
+		Trunk: stack.BranchRef{Branch: "main"},
+		Branches: []stack.BranchRef{
+			{Branch: "b1"},
+		},
+	}
+
+	tmpDir := t.TempDir()
+	writeStackFile(t, tmpDir, s)
+
+	var updateBranchRefCalls int
+
+	mock := newRebaseMock(tmpDir, "b1")
+	// Different SHAs for b1 and origin/b1
+	mock.RevParseFn = func(ref string) (string, error) {
+		if ref == "b1" {
+			return "b1-local-sha", nil
+		}
+		if ref == "origin/b1" {
+			return "b1-remote-sha", nil
+		}
+		if ref == "main" || ref == "origin/main" {
+			return "main-sha", nil
+		}
+		return "sha-" + ref, nil
+	}
+	// Neither is ancestor of the other — diverged
+	mock.IsAncestorFn = func(a, d string) (bool, error) {
+		return false, nil
+	}
+	mock.UpdateBranchRefFn = func(string, string) error {
+		updateBranchRefCalls++
+		return nil
+	}
+	mock.CheckoutBranchFn = func(string) error { return nil }
+	mock.RebaseFn = func(string) error { return nil }
+
+	restore := git.SetOps(mock)
+	defer restore()
+
+	cfg, _, _ := config.NewTestConfig()
+	cmd := RebaseCmd(cfg)
+	cmd.SetOut(io.Discard)
+	cmd.SetErr(io.Discard)
+	err := cmd.Execute()
+
+	cfg.Out.Close()
+	cfg.Err.Close()
+
+	assert.NoError(t, err)
+	assert.Equal(t, 0, updateBranchRefCalls, "no FF when branches have diverged")
 }
