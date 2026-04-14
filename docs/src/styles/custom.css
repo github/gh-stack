@@ -883,22 +883,6 @@ nav a[aria-current='page'] {
 		display: none !important;
 	}
 	header div:has(> site-search) {
-		margin: 0;
-	}
-	body:has(.hero) .splash-nav-wrapper {
-		display: block !important;
-		position: fixed;
-		top: 16px;
-		right: 16px;
-		z-index: 10;
-	}
-	body:has(.hero) header starlight-theme-select label svg.caret {
-		display: none;
-	}
-}
-
-@media (max-width: 800px) {
-	header div:has(> site-search) {
 		margin: 0 2.5rem 0 0;
 	}
 	header site-search button {
@@ -906,12 +890,32 @@ nav a[aria-current='page'] {
 		font-size: 1rem !important;
 		color: var(--sl-color-gray-3) !important;
 	}
+	header site-search button span,
+	header site-search button kbd {
+		display: none !important;
+	}
 	header site-search button:hover {
 		color: var(--sl-color-text) !important;
 	}
 	header starlight-theme-select {
 		display: none !important;
 	}
+
+	/* Show our custom hamburger only on splash (homepage), fixed to top-right */
+	body:has(.hero) .splash-nav-wrapper {
+		display: block !important;
+		position: fixed;
+		top: 16px;
+		right: 16px;
+		z-index: 10;
+	}
+	body:has(.hero) .splash-hamburger-btn {
+		margin: 0 !important;
+	}
+	body:has(.hero) header starlight-theme-select label svg.caret {
+		display: none;
+	}
+
 	/* Keep theme toggle visible on homepage (splash), compact icon-only */
 	body:has(.hero) header starlight-theme-select {
 		display: block !important;
@@ -932,6 +936,12 @@ nav a[aria-current='page'] {
 	/* On homepage, make room for theme toggle + hamburger to the right */
 	body:has(.hero) header div:has(> site-search) {
 		margin-right: 0;
+	}
+}
+
+@media (max-width: 800px) {
+	body:has(.hero) .splash-nav-wrapper {
+		top: 12px;
 	}
 }
 
