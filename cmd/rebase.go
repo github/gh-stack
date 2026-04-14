@@ -135,6 +135,9 @@ func runRebase(cfg *config.Config, opts *rebaseOptions) error {
 		}
 	}
 
+	// Fast-forward stack branches that are behind their remote tracking branch.
+	fastForwardBranches(cfg, s, remote, currentBranch)
+
 	cfg.Printf("Stack detected: %s", s.DisplayChain())
 
 	currentIdx := s.IndexOf(currentBranch)
