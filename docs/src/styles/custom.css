@@ -248,6 +248,16 @@ header starlight-theme-select {
 	margin-right: auto;
 }
 
+.hero .tagline code {
+	font-size: 0.9em;
+	letter-spacing: -0.02em;
+	word-spacing: -0.1em;
+	padding: 0.15em 0.4em;
+	border-radius: 6px;
+	background: rgba(110, 118, 129, 0.15);
+	font-weight: 500;
+}
+
 /* Center the action button group */
 .hero .sl-flex .sl-flex {
 	justify-content: center !important;
@@ -595,6 +605,14 @@ a.sl-link-button[data-variant='primary']:hover,
 
 /* Code blocks and tables — let Starlight/ExpressiveCode handle layout.
    Colors flow through the --sl-color-* variables set above. */
+
+/* Light mode copy button: make icon visible on light code blocks */
+:root[data-theme='light'] .expressive-code .copy button {
+	background-color: rgba(175, 184, 193, 0.3) !important;
+}
+:root[data-theme='light'] .expressive-code .copy button::after {
+	background-color: #1f2328 !important;
+}
 
 /* Blockquotes — light color adjustments only */
 .sl-markdown-content blockquote {

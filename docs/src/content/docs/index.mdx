@@ -53,11 +53,11 @@ GitHub understands stacks end-to-end: the pull request UI shows a **stack map** 
   <Image src={stackNavigator} alt="The stack navigator in a pull request header" />
 </div>
 
-## How It Works
+## Working with Stacks
 
-The `gh stack` CLI handles the local workflow: creating branches, managing rebases, pushing to GitHub, and creating PRs with the correct base branches. On GitHub, the PR UI gives reviewers the context they need — a stack map for navigation, focused diffs for each layer, and proper rules enforcement.
+**While the `gh stack` CLI makes the local workflow seamless, it is entirely optional.** You can create and manage Stacked PRs directly via the GitHub UI, the API, or your standard Git workflow. If you choose to use the CLI, it handles creating branches, managing rebases, pushing to GitHub, and creating PRs with the correct base branches. On GitHub, the PR UI gives reviewers the context they need — a stack map for navigation, focused diffs for each layer, and proper rules enforcement.
 
-When you're ready to merge, you can merge all or a part of the stack. Each PR can be merged directly or through the merge queue. After a merge, the remaining PRs in the stack are automatically rebased so the lowest unmerged PR targets the base branch.
+When you're ready to merge, you can merge all or a part of the stack. Each PR can be merged directly or through the merge queue. **If you want to merge multiple PRs at once (e.g., the bottom two PRs in a stack), simply wait for CI to pass on those specific layers, and you can merge them in a single step.** After a merge, the remaining PRs in the stack are automatically rebased so the lowest unmerged PR targets the updated base branch.
 
 ## Get Started
 
