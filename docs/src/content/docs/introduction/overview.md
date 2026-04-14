@@ -77,6 +77,7 @@ Rebasing is the trickiest part of working with Stacked PRs, and GitHub handles i
 - **In the PR UI** — A rebase button lets you trigger a cascading rebase across all branches in the stack.
 - **From the CLI** — `gh stack rebase` performs the same cascading rebase locally.
 - **After partial merges** — When you merge a PR at the bottom of the stack, the remaining branches are automatically rebased so the next PR targets `main` and is ready for review and merge.
+- **Safe squash-merge handling** — Squash merges are fully supported. The rebase engine safely replays your unique commits on top of the squashed base, avoiding artificial merge conflicts. See the [FAQ](/gh-stack/faq/#how-does-squash-merge-work) for a detailed description of how this works.
 
 ## The CLI: `gh stack`
 

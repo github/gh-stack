@@ -100,7 +100,41 @@ You cannot merge a PR in the middle of the stack before the PRs below it are mer
 
 ### How does squash merge work?
 
-Squash merges are fully supported. Each PR in the stack produces one clean, squashed commit when merged. The rebase engine automatically detects squash-merged PRs and replays commits from the remaining branches onto the squashed result.
+Squash merges are fully supported. Each PR in the stack produces one clean, squashed commit when merged. Merging `n` PRs will create `n` squashed commits on the base.
+
+When a PR is squash-merged, the original commits disappear from the history, which can cause artificial merge conflicts during rebasing. Both the CLI and the server handle this using `git rebase --onto`:
+
+```
+git rebase --onto <new_commit_sha_generated_by_squash> <original_commit_sha_from_tip_of_merged_branch> <branch_name>
+```
+
+**Example:** Consider a stack with three PRs:
+
+```
+PR1: main ← A, B              (branch1)
+PR2: main ← A, B, C, D        (branch2)
+PR3: main ← A, B, C, D, E, F  (branch3)
+```
+
+When PR1 and PR2 are squash-merged, `main` now looks like:
+
+```
+S1 (squash of A+B), S2 (squash of C+D)
+```
+
+Then the following rebase is run:
+
+```
+git rebase --onto S2 D branch3
+```
+
+Which rewrites `branch3` to:
+
+```
+S1, S2, E, F
+```
+
+This moves the unique commits from the unmerged branch and replays them on top of the newly squashed commits on the base branch, avoiding any merge conflicts.
 
 ### How does merge commit work?
 
