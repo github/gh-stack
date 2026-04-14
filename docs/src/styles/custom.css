@@ -1,18 +1,791 @@
-/* Custom styles for gh-stack docs */
+/* ============================================================
+   gh-stack docs — GitHub Primer Brand theme
+   Colors: https://primer.style/brand/primitives/color/
+   Reference: github.com dark/light themes
+   ============================================================ */
 
+/* --- Mona Sans (GitHub typeface) --- */
+@font-face {
+	font-family: 'Mona Sans';
+	src: url('/gh-stack/fonts/MonaSans-Regular.woff2') format('woff2');
+	font-style: normal;
+	font-weight: 400;
+	font-display: swap;
+}
+@font-face {
+	font-family: 'Mona Sans';
+	src: url('/gh-stack/fonts/MonaSans-Bold.woff2') format('woff2');
+	font-style: normal;
+	font-weight: 700;
+	font-display: swap;
+}
+
+/* ============================================================
+   1. Color palette — Dark mode (default)
+   Values from github.com CSS custom properties
+   ============================================================ */
 :root {
-	--sl-color-accent-low: #3730a3;
-	--sl-color-accent: #6366f1;
-	--sl-color-accent-high: #c7d2fe;
+	--sl-font: 'Mona Sans', -apple-system, BlinkMacSystemFont, 'Segoe UI',
+		'Noto Sans', Helvetica, Arial, sans-serif, 'Apple Color Emoji',
+		'Segoe UI Emoji';
+	--sl-font-mono: ui-monospace, SFMono-Regular, 'SF Mono', Menlo, Consolas,
+		'Liberation Mono', monospace;
+
+	/* GitHub green accent */
+	--sl-color-accent-low: #0e4a2e;
+	--sl-color-accent: #3fb950;
+	--sl-color-accent-high: #a7f3d0;
+	--sl-color-text-accent: #3fb950;
+
+	--sl-color-white: #ffffff;
+	--sl-color-gray-1: #f0f6fc;
+	--sl-color-gray-2: #c9d1d9;
+	--sl-color-gray-3: #9198a1;
+	--sl-color-gray-4: #656d76;
+	--sl-color-gray-5: #3d444d;
+	--sl-color-gray-6: #2d333b;
+	--sl-color-black: #0d1117;
+
+	--sl-color-hairline: #3d444d;
+	--sl-color-hairline-light: rgba(240, 246, 252, 0.1);
+	--sl-color-text: #f0f6fc;
+	--sl-color-text-invert: #0d1117;
 }
 
+/* ============================================================
+   2. Color palette — Light mode
+   ============================================================ */
 :root[data-theme='light'] {
-	--sl-color-accent-low: #c7d2fe;
-	--sl-color-accent: #4f46e5;
-	--sl-color-accent-high: #312e81;
+	--sl-color-accent-low: #dafbe1;
+	--sl-color-accent: #1a7f37;
+	--sl-color-accent-high: #0e4a2e;
+	--sl-color-text-accent: #1a7f37;
+
+	--sl-color-white: #1f2328;
+	--sl-color-gray-1: #1f2328;
+	--sl-color-gray-2: #656d76;
+	--sl-color-gray-3: #656d76;
+	--sl-color-gray-4: #9198a1;
+	--sl-color-gray-5: #d1d9e0;
+	--sl-color-gray-6: #eaeef2;
+	--sl-color-black: #ffffff;
+
+	--sl-color-hairline: #d1d9e0;
+	--sl-color-hairline-light: rgba(31, 35, 40, 0.1);
+	--sl-color-text: #1f2328;
+	--sl-color-text-invert: #ffffff;
 }
 
-/* Show full nav by default, switch to hamburger on narrow viewports */
+/* ============================================================
+   3. Body backgrounds
+   Clean flat backgrounds matching github.com
+   ============================================================ */
+body {
+	background: #0d1117 !important;
+	font-family: var(--sl-font) !important;
+}
+
+:root[data-theme='light'] body {
+	background: #ffffff !important;
+}
+
+/* Hero gradient glow — matches github.com/features/copilot green→purple pattern */
+body::before {
+	content: '';
+	position: fixed;
+	inset: 0;
+	background:
+		radial-gradient(ellipse 90% 80% at 50% -5%, rgba(95, 237, 131, 0.18) 0%, rgba(131, 66, 250, 0.08) 30%, transparent 70%),
+		radial-gradient(ellipse 600px 600px at 15% 20%, rgba(131, 66, 250, 0.1), transparent),
+		radial-gradient(ellipse 500px 500px at 85% 60%, rgba(68, 147, 248, 0.06), transparent);
+	z-index: 0;
+	pointer-events: none;
+	display: none;
+}
+
+body:has(.hero)::before {
+	display: block;
+}
+
+:root[data-theme='light'] body::before {
+	background:
+		radial-gradient(ellipse 110% 50% at 50% 0%, rgba(15, 191, 62, 0.26) 0%, rgba(48, 148, 255, 0.18) 30%, transparent 60%),
+		radial-gradient(ellipse 500px 500px at 0% 15%, rgba(48, 148, 255, 0.22), transparent),
+		radial-gradient(ellipse 500px 500px at 100% 30%, rgba(15, 191, 62, 0.20), transparent);
+}
+
+/* ============================================================
+   4. Header — glass-morphism with Primer colors
+   ============================================================ */
+header {
+	background: rgba(13, 17, 23, 0.95) !important;
+	border-bottom: 1px solid #3d444d !important;
+	backdrop-filter: blur(12px);
+	-webkit-backdrop-filter: blur(12px);
+}
+
+:root[data-theme='light'] header {
+	background: rgba(255, 255, 255, 0.95) !important;
+	border-bottom: 1px solid #d1d9e0 !important;
+}
+
+/* Site title — white/black, not accent green */
+.site-title {
+	color: #f0f6fc !important;
+}
+
+:root[data-theme='light'] .site-title {
+	color: #1f2328 !important;
+}
+
+/* Announcement banner — Primer attention yellow */
+.sl-banner {
+	background-color: #FABF21 !important;
+	color: #1f2328 !important;
+}
+
+.sl-banner a {
+	color: #1f2328 !important;
+	font-weight: 600;
+}
+
+/* ============================================================
+   5. Hero section — Primer CTA Banner style (centered)
+   ============================================================ */
+.hero {
+	text-align: center;
+	display: flex !important;
+	flex-direction: column !important;
+	align-items: center !important;
+}
+
+.hero > .sl-flex {
+	align-items: center !important;
+	width: 100%;
+	max-width: 720px;
+}
+
+.hero h1 {
+	text-align: center !important;
+}
+
+.hero .tagline {
+	text-align: center !important;
+	max-width: 640px;
+	margin-left: auto;
+	margin-right: auto;
+}
+
+/* Center the action button group */
+.hero .sl-flex .sl-flex {
+	justify-content: center !important;
+}
+
+/* Primary CTA button — GitHub green */
+.hero .sl-link-button:first-of-type,
+a.sl-link-button[data-variant='primary'],
+.sl-link-button.primary {
+	background-color: #238636 !important;
+	color: #ffffff !important;
+	border: 2px solid transparent !important;
+	border-radius: 8px !important;
+	font-weight: 500;
+	transition: background-color 0.15s ease;
+}
+
+.hero .sl-link-button:first-of-type:hover,
+a.sl-link-button[data-variant='primary']:hover,
+.sl-link-button.primary:hover {
+	background-color: #2ea043 !important;
+}
+
+/* Secondary CTA button — translucent like github.com */
+.hero .sl-link-button:not(:first-of-type) {
+	background-color: rgba(255, 255, 255, 0.07) !important;
+	color: #f0f6fc !important;
+	border: 1px solid #3d444d !important;
+	border-radius: 8px !important;
+	font-weight: 500;
+	transition: background-color 0.15s ease, border-color 0.15s ease;
+}
+
+.hero .sl-link-button:not(:first-of-type):hover {
+	background-color: rgba(255, 255, 255, 0.12) !important;
+	border-color: #656d76 !important;
+}
+
+:root[data-theme='light'] .hero .sl-link-button:first-of-type,
+:root[data-theme='light'] a.sl-link-button[data-variant='primary'],
+:root[data-theme='light'] .sl-link-button.primary {
+	background-color: #1f883d !important;
+	color: #ffffff !important;
+}
+
+:root[data-theme='light'] .hero .sl-link-button:first-of-type:hover,
+:root[data-theme='light'] a.sl-link-button[data-variant='primary']:hover {
+	background-color: #1a7f37 !important;
+}
+
+:root[data-theme='light'] .hero .sl-link-button:not(:first-of-type) {
+	background-color: #f6f8fa !important;
+	color: #1f2328 !important;
+	border: 1px solid #d1d9e0 !important;
+}
+
+:root[data-theme='light'] .hero .sl-link-button:not(:first-of-type):hover {
+	background-color: #eaeef2 !important;
+	border-color: #afb8c1 !important;
+}
+
+:root[data-theme='light'] .hero h1 {
+	color: #1f2328;
+}
+
+:root[data-theme='light'] .hero .tagline {
+	color: #656d76;
+}
+
+/* ============================================================
+   6. Sidebar
+   ============================================================ */
+#starlight__sidebar,
+.sidebar {
+	border-right: 1px solid #3d444d;
+}
+
+:root[data-theme='light'] #starlight__sidebar,
+:root[data-theme='light'] .sidebar {
+	border-right-color: #d1d9e0;
+}
+
+@media (min-width: 769px) {
+	#starlight__sidebar,
+	.sidebar {
+		background-color: transparent !important;
+	}
+	.sidebar-content,
+	.sidebar-pane {
+		background: transparent !important;
+	}
+}
+
+/* Remove default nesting indentation and gray vertical line on sub-items */
+.sidebar ul ul li {
+	margin-inline-start: 0 !important;
+	border-inline-start: none !important;
+	padding-inline-start: 0 !important;
+}
+
+/* Sub-page links get extra internal left padding for indent */
+.sidebar ul ul li a {
+	padding-inline-start: 1.25rem !important;
+}
+
+/* Uniform font size and weight — override Starlight .large class on top-level items */
+.sidebar .large {
+	font-size: 0.875rem !important;
+	font-weight: 400 !important;
+	color: inherit !important;
+}
+
+/* All sidebar links — uniform styling, no weight changes */
+.sidebar .top-level > li > details > summary,
+.sidebar .top-level > li > a,
+.sidebar nav li li a {
+	font-weight: 400;
+	font-size: 0.875rem;
+	color: #e6edf3;
+	text-transform: none;
+	letter-spacing: normal;
+	background: none !important;
+	border-left: none !important;
+	border-radius: 8px !important;
+	transition: color 0.15s ease, background-color 0.15s ease;
+	line-height: 1.5;
+	padding-block: 0.4em !important;
+}
+
+.sidebar .top-level > li > details > summary:hover,
+.sidebar .top-level > li > a:hover,
+.sidebar nav li li a:hover {
+	color: #e6edf3;
+	background: rgba(177, 186, 196, 0.08) !important;
+}
+
+:root[data-theme='light'] .sidebar .top-level > li > details > summary,
+:root[data-theme='light'] .sidebar .top-level > li > a,
+:root[data-theme='light'] .sidebar nav li li a {
+	color: #1f2328;
+}
+
+:root[data-theme='light'] .sidebar .top-level > li > details > summary:hover,
+:root[data-theme='light'] .sidebar .top-level > li > a:hover,
+:root[data-theme='light'] .sidebar nav li li a:hover {
+	color: #1f2328;
+	background: rgba(209, 217, 224, 0.3) !important;
+}
+
+/* Active state — GitHub Docs: subtle gray bg + blue left indicator */
+/* No font-weight change, no margin shift — only background + blue line */
+.sidebar a[aria-current='page'],
+.sidebar .top-level > li > a[aria-current='page'],
+.sidebar-pane a[aria-current='page'] {
+	color: #e6edf3 !important;
+	background: rgba(177, 186, 196, 0.08) !important;
+	font-weight: 400 !important;
+	border-left: none !important;
+	border-radius: 8px !important;
+	position: relative;
+}
+
+.sidebar a[aria-current='page']::before,
+.sidebar .top-level > li > a[aria-current='page']::before,
+.sidebar-pane a[aria-current='page']::before {
+	content: '';
+	position: absolute;
+	left: calc(-1 * var(--sl-sidebar-pad-x, 1rem));
+	top: 50%;
+	transform: translateY(-50%);
+	width: 3px;
+	height: 60%;
+	background: #4493f8;
+	border-radius: 2px;
+}
+
+.sidebar a[aria-current='page']:hover,
+.sidebar .top-level > li > a[aria-current='page']:hover,
+.sidebar a[aria-current='page']:focus,
+.sidebar-pane a[aria-current='page']:hover {
+	background: rgba(177, 186, 196, 0.15) !important;
+}
+
+/* Light mode active state */
+:root[data-theme='light'] .sidebar a[aria-current='page'],
+:root[data-theme='light'] .sidebar .top-level > li > a[aria-current='page'],
+:root[data-theme='light'] .sidebar-pane a[aria-current='page'] {
+	color: #1f2328 !important;
+	background: rgba(209, 217, 224, 0.4) !important;
+	font-weight: 400 !important;
+	border-left: none !important;
+	border-radius: 8px !important;
+	position: relative;
+}
+
+:root[data-theme='light'] .sidebar a[aria-current='page']::before,
+:root[data-theme='light'] .sidebar .top-level > li > a[aria-current='page']::before,
+:root[data-theme='light'] .sidebar-pane a[aria-current='page']::before {
+	content: '';
+	position: absolute;
+	left: calc(-1 * var(--sl-sidebar-pad-x, 1rem));
+	top: 50%;
+	transform: translateY(-50%);
+	width: 3px;
+	height: 60%;
+	background: #0969da;
+	border-radius: 2px;
+}
+
+:root[data-theme='light'] .sidebar a[aria-current='page']:hover,
+:root[data-theme='light'] .sidebar .top-level > li > a[aria-current='page']:hover,
+:root[data-theme='light'] .sidebar a[aria-current='page']:focus,
+:root[data-theme='light'] .sidebar-pane a[aria-current='page']:hover {
+	background: rgba(209, 217, 224, 0.5) !important;
+}
+
+/* ============================================================
+   7. Content typography
+   ============================================================ */
+.sl-markdown-content {
+	color: #f0f6fc;
+	font-family: var(--sl-font) !important;
+	overflow-wrap: break-word;
+	word-wrap: break-word;
+}
+
+:root[data-theme='light'] .sl-markdown-content {
+	color: #1f2328;
+}
+
+.sl-markdown-content p {
+	line-height: 1.65;
+	color: #c9d1d9;
+}
+
+.sl-markdown-content li {
+	color: #c9d1d9;
+}
+
+:root[data-theme='light'] .sl-markdown-content p,
+:root[data-theme='light'] .sl-markdown-content li,
+:root[data-theme='light'] .sl-markdown-content td,
+:root[data-theme='light'] .sl-markdown-content th {
+	color: #1f2328;
+}
+
+/* Headings — medium weight like github.com (font-weight: 440–600) */
+.sl-markdown-content h1 {
+	font-size: 2rem;
+	font-weight: 600;
+	line-height: 1.25;
+	color: #f0f6fc;
+	border-bottom: none;
+}
+
+.sl-markdown-content h2 {
+	font-size: 1.75rem;
+	font-weight: 600;
+	border-bottom: none;
+	color: #f0f6fc;
+}
+
+.sl-markdown-content h3 {
+	font-size: 1.25rem;
+	font-weight: 600;
+	border-bottom: none;
+	color: #f0f6fc;
+}
+
+.sl-markdown-content h4,
+.sl-markdown-content h5,
+.sl-markdown-content h6 {
+	font-size: 1rem;
+	font-weight: 600;
+	border-bottom: none;
+	color: #f0f6fc;
+}
+
+:root[data-theme='light'] .sl-markdown-content h1,
+:root[data-theme='light'] .sl-markdown-content h2,
+:root[data-theme='light'] .sl-markdown-content h3,
+:root[data-theme='light'] .sl-markdown-content h4,
+:root[data-theme='light'] .sl-markdown-content h5,
+:root[data-theme='light'] .sl-markdown-content h6 {
+	color: #1f2328;
+}
+
+
+/* Heading anchor links */
+.sl-markdown-content h1 a.header-anchor,
+.sl-markdown-content h2 a.header-anchor,
+.sl-markdown-content h3 a.header-anchor,
+.sl-markdown-content h4 a.header-anchor,
+.sl-markdown-content :is(h1, h2, h3, h4, h5, h6) a[aria-label^='Permalink'] {
+	font-size: 0.2em;
+	opacity: 0;
+	transition: opacity 0.2s ease;
+}
+
+.sl-markdown-content :is(h1, h2, h3, h4, h5, h6):hover a[aria-label^='Permalink'] {
+	opacity: 0.2;
+}
+
+/* Links — Primer accent blue */
+.sl-markdown-content a:not(.sl-link-button) {
+	color: #4493f8;
+	text-decoration: underline;
+	transition: color 0.15s ease;
+}
+
+.sl-markdown-content a:hover {
+	color: #79c0ff;
+}
+
+:root[data-theme='light'] .sl-markdown-content a:not(.sl-link-button) {
+	color: #0969da;
+}
+
+:root[data-theme='light'] .sl-markdown-content a:hover {
+	color: #0550ae;
+}
+
+/* Code blocks and tables — let Starlight/ExpressiveCode handle layout.
+   Colors flow through the --sl-color-* variables set above. */
+
+/* Blockquotes — light color adjustments only */
+.sl-markdown-content blockquote {
+	color: #9198a1;
+}
+
+:root[data-theme='light'] .sl-markdown-content blockquote {
+	color: #656d76;
+}
+
+/* ============================================================
+   8. Feature cards — Primer Brand Card style
+   ============================================================ */
+.card {
+	border: 1px solid #3d444d !important;
+	border-radius: 24px !important;
+	background: #0f1511 !important;
+	padding: 2rem !important;
+	position: relative;
+	overflow: hidden;
+}
+
+.card .card-title {
+	color: #ffffff !important;
+	font-size: 1.25rem !important;
+	font-weight: 500 !important;
+}
+
+.card .card-body {
+	color: #a4aea6;
+	font-size: 1rem;
+	line-height: 1.5;
+}
+
+.card .card-icon {
+	color: #3fb950;
+}
+
+:root[data-theme='light'] .card {
+	background: #ffffff !important;
+	border: 1px solid #d1d9e0 !important;
+}
+
+:root[data-theme='light'] .card .card-title {
+	color: #1f2328 !important;
+}
+
+:root[data-theme='light'] .card .card-body {
+	color: #656d76;
+}
+
+:root[data-theme='light'] .card .card-icon {
+	color: #1a7f37;
+}
+
+/* ============================================================
+   9. Right sidebar / Table of Contents
+   ============================================================ */
+@media (min-width: 769px) {
+	.right-sidebar,
+	.right-sidebar[class*='astro-'] {
+		border-left: 1px solid #3d444d;
+	}
+	:root[data-theme='light'] .right-sidebar,
+	:root[data-theme='light'] .right-sidebar[class*='astro-'] {
+		border-left-color: #d1d9e0;
+	}
+}
+
+starlight-toc nav {
+	font-size: 0.875rem;
+}
+
+starlight-toc a {
+	color: #656d76;
+	text-decoration: none;
+	border-left: none;
+	line-height: 1.4;
+	font-weight: 400;
+	transition: color 0.15s ease;
+}
+
+starlight-toc a:hover {
+	color: #ffffff;
+	background: none !important;
+}
+
+starlight-toc a[aria-current='true'] {
+	color: #ffffff;
+	font-weight: 500;
+	background: none !important;
+}
+
+starlight-toc h2 {
+	font-size: 0.6875rem;
+	font-weight: 600;
+	color: #656d76;
+	text-transform: uppercase;
+	letter-spacing: 0.05em;
+}
+
+:root[data-theme='light'] starlight-toc a {
+	color: #656d76;
+}
+
+:root[data-theme='light'] starlight-toc a:hover {
+	color: #1f2328;
+	background: none !important;
+}
+
+:root[data-theme='light'] starlight-toc a[aria-current='true'] {
+	color: #1f2328;
+	font-weight: 500;
+	background: none !important;
+}
+
+:root[data-theme='light'] starlight-toc h2 {
+	color: #656d76;
+}
+
+/* ============================================================
+   10. Pagination links
+   ============================================================ */
+.pagination-links {
+	border-top: none;
+}
+
+/* Remove the horizontal line above the pagination area */
+.content-panel {
+	border-top: none !important;
+}
+
+.pagination-links a {
+	border: 1px solid #3d444d;
+	border-radius: 6px;
+	background: #161b22;
+	transition: all 0.2s ease;
+	text-decoration: none;
+}
+
+.pagination-links a:hover {
+	border-color: #3fb950;
+	transform: translateY(-1px);
+	box-shadow: 0 2px 8px rgba(63, 185, 80, 0.08);
+}
+
+.pagination-links a .meta {
+	font-size: 0.6875rem;
+	font-weight: 600;
+	text-transform: uppercase;
+	letter-spacing: 0.05em;
+	color: #9198a1;
+}
+
+.pagination-links .link-title {
+	font-weight: 600;
+	font-size: 0.9375rem;
+	color: #f0f6fc;
+}
+
+.pagination-links a:hover .link-title {
+	color: #3fb950;
+}
+
+:root[data-theme='light'] .pagination-links {
+	border-top: none;
+}
+
+:root[data-theme='light'] .pagination-links a {
+	border-color: #d1d9e0;
+	background: #ffffff;
+}
+
+:root[data-theme='light'] .pagination-links a:hover {
+	border-color: #1a7f37;
+	box-shadow: 0 2px 8px rgba(26, 127, 55, 0.08);
+}
+
+:root[data-theme='light'] .pagination-links .link-title {
+	color: #1f2328;
+}
+
+:root[data-theme='light'] .pagination-links a:hover .link-title {
+	color: #1a7f37;
+}
+
+/* ============================================================
+   11. Buttons
+   ============================================================ */
+.sl-markdown-content button,
+.sl-markdown-content .button,
+a.button {
+	background-color: #21262d;
+	border: 1px solid #3d444d;
+	color: #f0f6fc;
+	border-radius: 6px;
+	font-weight: 500;
+	transition: all 0.15s ease;
+}
+
+.sl-markdown-content button:hover,
+.sl-markdown-content .button:hover,
+a.button:hover {
+	background-color: #30363d;
+	border-color: #656d76;
+}
+
+/* ============================================================
+   12. Nav links
+   ============================================================ */
+nav a {
+	color: #c9d1d9;
+	transition: color 0.15s ease;
+}
+
+nav a:hover {
+	color: #f0f6fc;
+}
+
+nav a[aria-current='page'] {
+	color: #f0f6fc;
+	font-weight: 400;
+}
+
+:root[data-theme='light'] nav a {
+	color: #656d76;
+}
+
+:root[data-theme='light'] nav a:hover {
+	color: #1f2328;
+}
+
+:root[data-theme='light'] nav a[aria-current='page'] {
+	color: #1f2328;
+}
+
+/* Social / GitHub icon */
+.social-icons a[href*='github.com'] {
+	color: #fff !important;
+}
+
+:root[data-theme='light'] .social-icons a[href*='github.com'] {
+	color: #1f2328 !important;
+}
+
+/* ============================================================
+   13. Scrollbars
+   ============================================================ */
+::-webkit-scrollbar {
+	width: 8px;
+	height: 8px;
+}
+
+::-webkit-scrollbar-track {
+	background: transparent;
+}
+
+::-webkit-scrollbar-thumb {
+	background: rgba(61, 68, 77, 0.5);
+	border-radius: 4px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+	background: rgba(101, 109, 118, 0.6);
+}
+
+* {
+	scrollbar-width: thin;
+	scrollbar-color: rgba(61, 68, 77, 0.5) transparent;
+}
+
+:root[data-theme='light'] ::-webkit-scrollbar-track {
+	background: transparent;
+}
+
+:root[data-theme='light'] ::-webkit-scrollbar-thumb {
+	background: rgba(209, 217, 224, 0.6);
+}
+
+:root[data-theme='light'] ::-webkit-scrollbar-thumb:hover {
+	background: rgba(175, 184, 193, 0.8);
+}
+
+/* ============================================================
+   14. Responsive header nav (custom component)
+   ============================================================ */
 @media (max-width: 900px) {
 	.custom-header-links {
 		display: none !important;
