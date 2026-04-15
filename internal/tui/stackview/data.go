@@ -45,15 +45,13 @@ func LoadBranchNodes(cfg *config.Config, s *stack.Stack, currentBranch string) [
 			node.IsLinear = isAncestor
 		}
 
-		// For merged branches, use the merge-base (fork point) as the diff
-		// anchor since the base branch has moved past the merge point and
-		// a two-dot diff would show nothing after a squash merge.
-		isMerged := b.IsMerged()
+		// Use the merge-base (fork point) as the diff anchor so that we
+		// only show changes introduced on this branch. Without this, a
+		// diverged base (e.g. local main ahead of the branch's fork point)
+		// would inflate the diff with unrelated files.
 		diffBase := baseBranch
-		if isMerged {
-			if mb, err := git.MergeBase(baseBranch, b.Branch); err == nil {
-				diffBase = mb
-			}
+		if mb, err := git.MergeBase(baseBranch, b.Branch); err == nil {
+			diffBase = mb
 		}
 
 		// Fetch commit range
