@@ -495,6 +495,67 @@ func TestRebase_UpstackOnly(t *testing.T) {
 	assert.Equal(t, "b2", allRebaseCalls[1].newBase, "b3 should be rebased onto b2")
 }
 
+// TestRebase_UpstackWithMergedBranchBelow verifies that --upstack pre-seeds
+// --onto state when a merged branch exists immediately below the rebase range.
+func TestRebase_UpstackWithMergedBranchBelow(t *testing.T) {
+	s := stack.Stack{
+		Trunk: stack.BranchRef{Branch: "main"},
+		Branches: []stack.BranchRef{
+			{Branch: "b1", PullRequest: &stack.PullRequestRef{Number: 10, Merged: true}},
+			{Branch: "b2"},
+			{Branch: "b3"},
+		},
+	}
+
+	tmpDir := t.TempDir()
+	writeStackFile(t, tmpDir, s)
+
+	var allRebaseCalls []rebaseCall
+	var currentCheckedOut string
+
+	mock := newRebaseMock(tmpDir, "b2")
+	mock.CheckoutBranchFn = func(name string) error {
+		currentCheckedOut = name
+		return nil
+	}
+	mock.BranchExistsFn = func(name string) bool { return true }
+	mock.RebaseFn = func(base string) error {
+		allRebaseCalls = append(allRebaseCalls, rebaseCall{newBase: base, oldBase: "", branch: currentCheckedOut})
+		return nil
+	}
+	mock.RebaseOntoFn = func(newBase, oldBase, branch string) error {
+		allRebaseCalls = append(allRebaseCalls, rebaseCall{newBase, oldBase, branch})
+		return nil
+	}
+
+	restore := git.SetOps(mock)
+	defer restore()
+
+	cfg, _, _ := config.NewTestConfig()
+	cmd := RebaseCmd(cfg)
+	cmd.SetArgs([]string{"--upstack"})
+	cmd.SetOut(io.Discard)
+	cmd.SetErr(io.Discard)
+	err := cmd.Execute()
+
+	cfg.Out.Close()
+	cfg.Err.Close()
+
+	assert.NoError(t, err)
+	// b2 is at index 1, upstack = [b2, b3]. b1 is merged below.
+	// b2 should use --onto because b1 was merged.
+	require.Len(t, allRebaseCalls, 2, "upstack should rebase b2 and b3")
+
+	// b2: --onto rebase with b1's old SHA as old base
+	assert.Equal(t, "main", allRebaseCalls[0].newBase, "b2 should be rebased onto main (first non-merged ancestor)")
+	assert.Equal(t, "sha-b1", allRebaseCalls[0].oldBase, "b2 should use b1's original SHA as old base")
+	assert.Equal(t, "b2", allRebaseCalls[0].branch, "b2 should be the branch being rebased")
+
+	// b3: --onto continues to propagate
+	assert.Equal(t, "b2", allRebaseCalls[1].newBase, "b3 should be rebased onto b2")
+	assert.NotEmpty(t, allRebaseCalls[1].oldBase, "b3 should also use --onto")
+}
+
 // TestRebase_SkipsMergedBranches verifies that merged branches are skipped
 // with an appropriate message.
 func TestRebase_SkipsMergedBranches(t *testing.T) {

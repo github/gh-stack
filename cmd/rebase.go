@@ -203,6 +203,19 @@ func runRebase(cfg *config.Config, opts *rebaseOptions) error {
 	needsOnto := false
 	var ontoOldBase string
 
+	// Get --onto state from merged branches below the rebase range.
+	// Ensures that when --upstack excludes merged branches, we still check
+	// the immediate predecessor for a merged PR and use --onto if needed.
+	if startIdx > 0 {
+		prev := s.Branches[startIdx-1]
+		if prev.IsMerged() {
+			if sha, ok := originalRefs[prev.Branch]; ok {
+				needsOnto = true
+				ontoOldBase = sha
+			}
+		}
+	}
+
 	for i, br := range branchesToRebase {
 		var base string
 		absIdx := startIdx + i
