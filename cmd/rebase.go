@@ -188,7 +188,7 @@ func runRebase(cfg *config.Config, opts *rebaseOptions) error {
 		return ErrSilent
 	}
 
-	// Track --onto rebase state for squash-merged branches.
+	// Track --onto rebase state for merged branches.
 	needsOnto := false
 	var ontoOldBase string
 
@@ -201,7 +201,7 @@ func runRebase(cfg *config.Config, opts *rebaseOptions) error {
 			base = s.Branches[absIdx-1].Branch
 		}
 
-		// Skip branches whose PRs have already been merged (e.g. via squash).
+		// Skip branches whose PRs have already been merged.
 		// Record state so subsequent branches can use --onto rebase.
 		if br.IsMerged() {
 			ontoOldBase = originalRefs[br.Branch]
@@ -252,7 +252,7 @@ func runRebase(cfg *config.Config, opts *rebaseOptions) error {
 				return ErrConflict
 			}
 
-			cfg.Successf("Rebased %s onto %s (squash-merge detected)", br.Branch, newBase)
+			cfg.Successf("Rebased %s onto %s (adjusted for merged PR)", br.Branch, newBase)
 			// Keep --onto mode; update old base for the next branch.
 			ontoOldBase = originalRefs[br.Branch]
 		} else {
@@ -450,7 +450,7 @@ func continueRebase(cfg *config.Config, gitDir string) error {
 				return ErrConflict
 			}
 
-			cfg.Successf("Rebased %s onto %s (squash-merge detected)", branchName, newBase)
+			cfg.Successf("Rebased %s onto %s (adjusted for merged PR)", branchName, newBase)
 			state.OntoOldBase = state.OriginalRefs[branchName]
 		} else {
 			var rebaseErr error

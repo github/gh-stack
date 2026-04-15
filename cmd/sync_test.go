@@ -522,10 +522,10 @@ func TestSync_PushForceFlagDependsOnRebase(t *testing.T) {
 	}
 }
 
-// TestSync_SquashMergedBranch_UsesOnto verifies that when a squash-merged
+// TestSync_MergedBranch_UsesOnto verifies that when a merged
 // branch exists in the stack, sync's cascade rebase correctly uses --onto
 // to skip the merged branch and rebase subsequent branches onto the right base.
-func TestSync_SquashMergedBranch_UsesOnto(t *testing.T) {
+func TestSync_MergedBranch_UsesOnto(t *testing.T) {
 	s := stack.Stack{
 		Trunk: stack.BranchRef{Branch: "main"},
 		Branches: []stack.BranchRef{

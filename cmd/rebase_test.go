@@ -106,10 +106,10 @@ func TestRebase_CascadeRebase(t *testing.T) {
 	assert.Contains(t, output, "rebased locally")
 }
 
-// TestRebase_SquashMergedBranch_UsesOnto verifies that when b1 has a merged PR,
+// TestRebase_MergedBranch_UsesOnto verifies that when b1 has a merged PR,
 // it is skipped and b2 uses RebaseOnto with trunk as newBase and b1's original
 // SHA as oldBase. b3 also uses --onto (propagation).
-func TestRebase_SquashMergedBranch_UsesOnto(t *testing.T) {
+func TestRebase_MergedBranch_UsesOnto(t *testing.T) {
 	s := stack.Stack{
 		Trunk: stack.BranchRef{Branch: "main"},
 		Branches: []stack.BranchRef{
@@ -171,7 +171,7 @@ func TestRebase_SquashMergedBranch_UsesOnto(t *testing.T) {
 }
 
 // TestRebase_OntoPropagatesToSubsequentBranches verifies that when multiple
-// branches are squash-merged, --onto propagates correctly through the chain.
+// branches are merged, --onto propagates correctly through the chain.
 func TestRebase_OntoPropagatesToSubsequentBranches(t *testing.T) {
 	s := stack.Stack{
 		Trunk: stack.BranchRef{Branch: "main"},
@@ -651,7 +651,7 @@ func TestRebase_Continue_RebasesRemainingBranches(t *testing.T) {
 }
 
 // TestRebase_Continue_OntoMode verifies the --continue path when UseOnto is
-// set (squash-merged branches upstream). With no remaining branches, only
+// set (merged branches upstream). With no remaining branches, only
 // RebaseContinue runs and the state is cleaned up.
 func TestRebase_Continue_OntoMode(t *testing.T) {
 	s := stack.Stack{

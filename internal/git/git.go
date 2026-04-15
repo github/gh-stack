@@ -179,7 +179,7 @@ func SaveRerereDeclined() error {
 //	git rebase --onto <newBase> <oldBase> <branch>
 //
 // This replays commits after oldBase from branch onto newBase. It is used
-// when a prior branch was squash-merged and the normal rebase cannot detect
+// when a prior branch was merged and the normal rebase cannot detect
 // which commits have already been applied.
 // If rerere resolves all conflicts automatically, the rebase continues
 // without user intervention.

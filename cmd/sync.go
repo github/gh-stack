@@ -197,7 +197,7 @@ func runSync(cfg *config.Config, opts *syncOptions) error {
 					break
 				}
 
-				cfg.Successf("Rebased %s onto %s (squash-merge detected)", br.Branch, newBase)
+				cfg.Successf("Rebased %s onto %s (adjusted for merged PR)", br.Branch, newBase)
 				ontoOldBase = originalRefs[br.Branch]
 			} else {
 				var rebaseErr error
