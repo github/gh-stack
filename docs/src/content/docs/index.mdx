@@ -17,7 +17,7 @@ hero:
 
 import { Card, CardGrid, Aside } from '@astrojs/starlight/components';
 import { Image } from 'astro:assets';
-import stackDiagram from '../../assets/stack-diagram.svg';
+import StackDiagram from '../../components/StackDiagram.astro';
 import stackNavigator from '../../assets/screenshots/stack-navigator.png';
 
 <CardGrid>
@@ -43,9 +43,7 @@ Large pull requests are hard to review, slow to merge, and prone to conflicts. R
 
 A **stack** is a series of pull requests in the same repository where each PR targets the branch of the PR below it, forming an ordered chain that ultimately lands on your main branch.
 
-<div style="max-width: 420px; margin: 1.5rem auto;">
-  <Image src={stackDiagram} alt="A stack of pull requests: main at the bottom, with auth-layer (PR #1), api-endpoints (PR #2), and frontend (PR #3) stacked on top" />
-</div>
+<StackDiagram />
 
 GitHub understands stacks end-to-end: the pull request UI shows a **stack map** so reviewers can navigate between layers, branch protection rules are enforced against the **final target branch** (not just the direct base), and CI runs for every PR in the stack as if they were targeting the final branch.
 
