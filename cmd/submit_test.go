@@ -901,6 +901,7 @@ func TestSubmit_PreflightCheck_404_Interactive_UserDeclinesAborts(t *testing.T) 
 	// which is treated as a decline — same as user saying "no".
 	inR, inW, _ := os.Pipe()
 	inW.Close()
+	defer inR.Close()
 
 	cfg, _, errR := config.NewTestConfig()
 	cfg.In = inR
