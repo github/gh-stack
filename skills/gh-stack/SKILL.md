@@ -539,6 +539,7 @@ gh stack submit --auto --draft
 - Pushes all active (non-merged) branches atomically (`--force-with-lease --atomic`)
 - Creates a new PR for each branch that doesn't have one (base set to the first non-merged ancestor branch)
 - After creating PRs, links them together as a **Stack** on GitHub (requires the repository to have stacks enabled)
+- If stacks are not available (exit code 9), the repository does not have stacked PRs enabled. In interactive mode, `submit` offers to create regular (unstacked) PRs instead. In non-interactive mode, it exits with code 9.
 - Syncs PR metadata for branches that already have PRs
 
 **PR title auto-generation (`--auto`):**
@@ -783,6 +784,7 @@ gh stack unstack feature-auth
 | 6 | Disambiguation required | A branch belongs to multiple stacks. Run `gh stack checkout <specific-branch>` to switch to a non-shared branch first |
 | 7 | Rebase already in progress | Run `gh stack rebase --continue` (after resolving conflicts) or `gh stack rebase --abort` to start over |
 | 8 | Stack is locked | Another `gh stack` process is writing the stack file. Wait and retry — the lock times out after 5 seconds |
+| 9 | Stacked PRs unavailable | The repository does not have stacked PRs enabled. `submit` will offer to create regular (unstacked) PRs in interactive mode |
 
 ## Known limitations
 

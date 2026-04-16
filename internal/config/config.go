@@ -30,6 +30,10 @@ type Config struct {
 	// GitHubClientOverride, when non-nil, is returned by GitHubClient()
 	// instead of creating a real client. Used in tests to inject a MockClient.
 	GitHubClientOverride ghapi.ClientOps
+
+	// ForceInteractive, when true, makes IsInteractive() return true
+	// regardless of the terminal state. Used in tests.
+	ForceInteractive bool
 }
 
 // New creates a new Config with terminal-aware output and color support.
@@ -106,7 +110,7 @@ func (c *Config) PRLink(number int, url string) string {
 }
 
 func (c *Config) IsInteractive() bool {
-	return c.Terminal.IsTerminalOutput()
+	return c.ForceInteractive || c.Terminal.IsTerminalOutput()
 }
 
 func (c *Config) Repo() (repository.Repository, error) {

@@ -77,6 +77,32 @@ func runSubmit(cfg *config.Config, opts *submitOptions) error {
 		return ErrAPIFailure
 	}
 
+	// Verify that the repository has stacked PRs enabled.
+	stacksAvailable := s.ID != ""
+	if s.ID == "" {
+		if _, err := client.ListStacks(); err != nil {
+			cfg.Warningf("Stacked PRs are not enabled for this repository")
+			if cfg.IsInteractive() {
+				p := prompter.New(cfg.In, cfg.Out, cfg.Err)
+				proceed, promptErr := p.Confirm("Would you still like to create regular PRs?", false)
+				if promptErr != nil {
+					if isInterruptError(promptErr) {
+						printInterrupt(cfg)
+						return ErrSilent
+					}
+					return ErrStacksUnavailable
+				}
+				if !proceed {
+					return ErrStacksUnavailable
+				}
+			} else {
+				return ErrStacksUnavailable
+			}
+		} else {
+			stacksAvailable = true
+		}
+	}
+
 	// Sync PR state to detect merged/queued PRs before pushing.
 	syncStackPRs(cfg, s)
 
@@ -194,7 +220,9 @@ func runSubmit(cfg *config.Config, opts *submitOptions) error {
 	}
 
 	// Create or update the stack on GitHub
-	syncStack(cfg, client, s)
+	if stacksAvailable {
+		syncStack(cfg, client, s)
+	}
 
 	// Update base commit hashes and sync PR state
 	updateBaseSHAs(s)

@@ -20,13 +20,14 @@ var ErrSilent = &ExitError{Code: 1}
 
 // Typed exit errors for programmatic detection by scripts and agents.
 var (
-	ErrNotInStack   = &ExitError{Code: 2} // branch/stack not found
-	ErrConflict     = &ExitError{Code: 3} // rebase conflict
-	ErrAPIFailure   = &ExitError{Code: 4} // GitHub API error
-	ErrInvalidArgs  = &ExitError{Code: 5} // invalid arguments or flags
-	ErrDisambiguate = &ExitError{Code: 6} // multiple stacks/remotes, can't auto-select
-	ErrRebaseActive = &ExitError{Code: 7} // rebase already in progress
-	ErrLockFailed   = &ExitError{Code: 8} // could not acquire stack file lock
+	ErrNotInStack        = &ExitError{Code: 2} // branch/stack not found
+	ErrConflict          = &ExitError{Code: 3} // rebase conflict
+	ErrAPIFailure        = &ExitError{Code: 4} // GitHub API error
+	ErrInvalidArgs       = &ExitError{Code: 5} // invalid arguments or flags
+	ErrDisambiguate      = &ExitError{Code: 6} // multiple stacks/remotes, can't auto-select
+	ErrRebaseActive      = &ExitError{Code: 7} // rebase already in progress
+	ErrLockFailed        = &ExitError{Code: 8} // could not acquire stack file lock
+	ErrStacksUnavailable = &ExitError{Code: 9} // stacked PRs not available for this repository
 )
 
 // ExitError is returned by commands to indicate a specific exit code.
