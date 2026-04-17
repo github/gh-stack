@@ -24,6 +24,12 @@ gh extension install github/gh-stack
 If you use AI coding agents (like GitHub Copilot), install the gh-stack skill so they know how to work with Stacked PRs:
 
 ```sh
+gh skill install github/gh-stack
+```
+
+Or if you prefer to use `npx skills`:
+
+```sh
 npx skills add github/gh-stack
 ```
 
