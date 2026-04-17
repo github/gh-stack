@@ -7,10 +7,26 @@ import (
 
 	"github.com/cli/go-gh/v2/pkg/api"
 	"github.com/github/gh-stack/internal/config"
+	"github.com/github/gh-stack/internal/git"
 	"github.com/github/gh-stack/internal/github"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
+
+// newLinkGitMock creates a MockOps for link tests that involve branch args.
+// BranchExists returns true for the given branches, Push is a no-op,
+// and ResolveRemote returns "origin".
+func newLinkGitMock(branches ...string) *git.MockOps {
+	branchSet := make(map[string]bool, len(branches))
+	for _, b := range branches {
+		branchSet[b] = true
+	}
+	return &git.MockOps{
+		BranchExistsFn:  func(name string) bool { return branchSet[name] },
+		PushFn:          func(string, []string, bool, bool) error { return nil },
+		ResolveRemoteFn: func(string) (string, error) { return "origin", nil },
+	}
+}
 
 // --- PR-number tests ---
 
@@ -283,6 +299,9 @@ func TestLink_Create422(t *testing.T) {
 // --- Branch name tests ---
 
 func TestLink_BranchNames_AllHavePRs(t *testing.T) {
+	restore := git.SetOps(newLinkGitMock("feature-a", "feature-b"))
+	defer restore()
+
 	var stackedPRs []int
 	prMap := map[string]*github.PullRequest{
 		"feature-a": {Number: 10, HeadRefName: "feature-a", BaseRefName: "main", URL: "https://github.com/o/r/pull/10"},
@@ -327,6 +346,9 @@ func TestLink_BranchNames_AllHavePRs(t *testing.T) {
 }
 
 func TestLink_BranchNames_CreatesMissingPRs(t *testing.T) {
+	restore := git.SetOps(newLinkGitMock("feature-a", "feature-b"))
+	defer restore()
+
 	var createdPRs []struct{ base, head string }
 	var stackedPRs []int
 
@@ -392,6 +414,9 @@ func TestLink_BranchNames_CreatesMissingPRs(t *testing.T) {
 }
 
 func TestLink_BranchNames_AllNeedPRs(t *testing.T) {
+	restore := git.SetOps(newLinkGitMock("feat-a", "feat-b", "feat-c"))
+	defer restore()
+
 	prCounter := 0
 	var createdPRs []struct{ base, head string }
 
@@ -453,6 +478,9 @@ func TestLink_BranchNames_AllNeedPRs(t *testing.T) {
 }
 
 func TestLink_BranchNames_DraftFlag(t *testing.T) {
+	restore := git.SetOps(newLinkGitMock("feat-a", "feat-b"))
+	defer restore()
+
 	var createdDraft bool
 	prCounter := 0
 
@@ -494,6 +522,9 @@ func TestLink_BranchNames_DraftFlag(t *testing.T) {
 }
 
 func TestLink_MixedArgs_PRNumberAndBranch(t *testing.T) {
+	restore := git.SetOps(newLinkGitMock("new-feature"))
+	defer restore()
+
 	var stackedPRs []int
 
 	cfg, _, errR := config.NewTestConfig()
@@ -541,6 +572,10 @@ func TestLink_MixedArgs_PRNumberAndBranch(t *testing.T) {
 }
 
 func TestLink_NumericArg_PRNotFound_TreatedAsBranch(t *testing.T) {
+	// Numeric branches "123" and "456" exist locally
+	restore := git.SetOps(newLinkGitMock("123", "456"))
+	defer restore()
+
 	var stackedPRs []int
 
 	cfg, _, _ := config.NewTestConfig()
@@ -584,6 +619,9 @@ func TestLink_NumericArg_PRNotFound_TreatedAsBranch(t *testing.T) {
 }
 
 func TestLink_FixesBaseBranches(t *testing.T) {
+	restore := git.SetOps(newLinkGitMock("feat-a", "feat-b"))
+	defer restore()
+
 	var baseUpdates []struct {
 		number int
 		base   string
@@ -712,6 +750,172 @@ func TestLink_UpdateDeletedStack_FallsBackToCreate(t *testing.T) {
 	assert.Contains(t, output, "Created stack with 2 PRs")
 }
 
+func TestLink_PushesBranchesBeforeResolution(t *testing.T) {
+	var pushedBranches []string
+	var pushedRemote string
+
+	restore := git.SetOps(&git.MockOps{
+		BranchExistsFn:  func(name string) bool { return name == "feat-a" || name == "feat-b" },
+		ResolveRemoteFn: func(string) (string, error) { return "origin", nil },
+		PushFn: func(remote string, branches []string, force, atomic bool) error {
+			pushedRemote = remote
+			pushedBranches = branches
+			return nil
+		},
+	})
+	defer restore()
+
+	prCounter := 0
+	cfg, _, errR := config.NewTestConfig()
+	cfg.GitHubClientOverride = &github.MockClient{
+		FindPRForBranchFn: func(branch string) (*github.PullRequest, error) {
+			prCounter++
+			return &github.PullRequest{
+				Number: prCounter, HeadRefName: branch, BaseRefName: "main",
+				URL: fmt.Sprintf("https://github.com/o/r/pull/%d", prCounter),
+			}, nil
+		},
+		FindPRByNumberFn: func(n int) (*github.PullRequest, error) {
+			return &github.PullRequest{Number: n, HeadRefName: fmt.Sprintf("b%d", n), BaseRefName: "main"}, nil
+		},
+		ListStacksFn:  func() ([]github.RemoteStack, error) { return []github.RemoteStack{}, nil },
+		CreateStackFn: func([]int) (int, error) { return 1, nil },
+	}
+
+	cmd := LinkCmd(cfg)
+	cmd.SetArgs([]string{"feat-a", "feat-b"})
+	cmd.SetOut(io.Discard)
+	cmd.SetErr(io.Discard)
+	err := cmd.Execute()
+
+	cfg.Err.Close()
+	errOut, _ := io.ReadAll(errR)
+	output := string(errOut)
+
+	assert.NoError(t, err)
+	assert.Equal(t, "origin", pushedRemote)
+	assert.Equal(t, []string{"feat-a", "feat-b"}, pushedBranches)
+	assert.Contains(t, output, "Pushing 2 branches")
+}
+
+func TestLink_RemoteFlag(t *testing.T) {
+	var pushedRemote string
+
+	restore := git.SetOps(&git.MockOps{
+		BranchExistsFn: func(string) bool { return true },
+		PushFn: func(remote string, branches []string, force, atomic bool) error {
+			pushedRemote = remote
+			return nil
+		},
+	})
+	defer restore()
+
+	prCounter := 0
+	cfg, _, _ := config.NewTestConfig()
+	cfg.GitHubClientOverride = &github.MockClient{
+		FindPRForBranchFn: func(branch string) (*github.PullRequest, error) {
+			prCounter++
+			return &github.PullRequest{
+				Number: prCounter, HeadRefName: branch, BaseRefName: "main",
+				URL: fmt.Sprintf("https://github.com/o/r/pull/%d", prCounter),
+			}, nil
+		},
+		FindPRByNumberFn: func(n int) (*github.PullRequest, error) {
+			return &github.PullRequest{Number: n, HeadRefName: fmt.Sprintf("b%d", n), BaseRefName: "main"}, nil
+		},
+		ListStacksFn:  func() ([]github.RemoteStack, error) { return []github.RemoteStack{}, nil },
+		CreateStackFn: func([]int) (int, error) { return 1, nil },
+	}
+
+	cmd := LinkCmd(cfg)
+	cmd.SetArgs([]string{"--remote", "upstream", "feat-a", "feat-b"})
+	cmd.SetOut(io.Discard)
+	cmd.SetErr(io.Discard)
+	err := cmd.Execute()
+
+	assert.NoError(t, err)
+	assert.Equal(t, "upstream", pushedRemote)
+}
+
+func TestLink_SkipsPushForPRNumbersOnly(t *testing.T) {
+	pushCalled := false
+
+	restore := git.SetOps(&git.MockOps{
+		BranchExistsFn: func(string) bool { return false }, // PR numbers aren't local branches
+		PushFn: func(string, []string, bool, bool) error {
+			pushCalled = true
+			return nil
+		},
+	})
+	defer restore()
+
+	cfg, _, _ := config.NewTestConfig()
+	cfg.GitHubClientOverride = &github.MockClient{
+		FindPRByNumberFn: func(n int) (*github.PullRequest, error) {
+			return &github.PullRequest{Number: n, HeadRefName: "b", BaseRefName: "main"}, nil
+		},
+		ListStacksFn:  func() ([]github.RemoteStack, error) { return []github.RemoteStack{}, nil },
+		CreateStackFn: func([]int) (int, error) { return 1, nil },
+	}
+
+	cmd := LinkCmd(cfg)
+	cmd.SetArgs([]string{"10", "20"})
+	cmd.SetOut(io.Discard)
+	cmd.SetErr(io.Discard)
+	err := cmd.Execute()
+
+	assert.NoError(t, err)
+	assert.False(t, pushCalled, "push should not be called when all args are PR numbers")
+}
+
+func TestLink_PrevalidatesBeforeCreatingPRs(t *testing.T) {
+	// Scenario: branch feat-b has an existing PR #106 in a stack with [104, 105, 106].
+	// User runs: gh stack link feat-a feat-b
+	// feat-a has no PR yet, but the stack pre-validation should catch that
+	// #104 and #105 would be dropped — and fail BEFORE creating a PR for feat-a.
+	restore := git.SetOps(newLinkGitMock("feat-a", "feat-b"))
+	defer restore()
+
+	prCreated := false
+	cfg, _, errR := config.NewTestConfig()
+	cfg.GitHubClientOverride = &github.MockClient{
+		FindPRForBranchFn: func(branch string) (*github.PullRequest, error) {
+			if branch == "feat-b" {
+				return &github.PullRequest{
+					Number: 106, HeadRefName: "feat-b", BaseRefName: "main",
+					URL: "https://github.com/o/r/pull/106",
+				}, nil
+			}
+			return nil, nil // feat-a has no PR
+		},
+		CreatePRFn: func(base, head, title, body string, draft bool) (*github.PullRequest, error) {
+			prCreated = true
+			return &github.PullRequest{Number: 200, HeadRefName: head}, nil
+		},
+		ListStacksFn: func() ([]github.RemoteStack, error) {
+			return []github.RemoteStack{
+				{ID: 7, PullRequests: []int{104, 105, 106}},
+			}, nil
+		},
+	}
+
+	cmd := LinkCmd(cfg)
+	cmd.SetArgs([]string{"feat-a", "feat-b"})
+	cmd.SetOut(io.Discard)
+	cmd.SetErr(io.Discard)
+	err := cmd.Execute()
+
+	cfg.Err.Close()
+	errOut, _ := io.ReadAll(errR)
+	output := string(errOut)
+
+	assert.ErrorIs(t, err, ErrInvalidArgs)
+	assert.False(t, prCreated, "should NOT create PRs before validating stack")
+	assert.Contains(t, output, "would remove")
+	assert.Contains(t, output, "#104")
+	assert.Contains(t, output, "#105")
+}
+
 // --- Unit tests for helpers ---
 
 func TestFindMatchingStack(t *testing.T) {
@@ -791,6 +995,103 @@ func TestValidateArgs(t *testing.T) {
 	assert.NoError(t, validateArgs([]string{"10", "20"}))
 	assert.Error(t, validateArgs([]string{"a", "a"}))
 	assert.Error(t, validateArgs([]string{"10", "10"}))
+}
+
+func TestFormatAPIError(t *testing.T) {
+	tests := []struct {
+		name string
+		err  error
+		want string
+	}{
+		{
+			name: "HTTP error with message",
+			err:  &api.HTTPError{StatusCode: 422, Message: "Validation Failed"},
+			want: "HTTP 422: Validation Failed",
+		},
+		{
+			name: "HTTP error without message",
+			err:  &api.HTTPError{StatusCode: 500},
+			want: "HTTP 500",
+		},
+		{
+			name: "non-HTTP error",
+			err:  fmt.Errorf("network timeout"),
+			want: "network timeout",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			assert.Equal(t, tt.want, formatAPIError(tt.err))
+		})
+	}
+}
+
+func TestLink_FindPRByNumber_ErrorIsFatal(t *testing.T) {
+	// When FindPRByNumber returns an error (not just nil), it should NOT
+	// silently fall through to branch-name lookup.
+	cfg, _, errR := config.NewTestConfig()
+	cfg.GitHubClientOverride = &github.MockClient{
+		FindPRByNumberFn: func(n int) (*github.PullRequest, error) {
+			return nil, fmt.Errorf("network error")
+		},
+		FindPRForBranchFn: func(branch string) (*github.PullRequest, error) {
+			t.Fatal("FindPRForBranch should NOT be called when FindPRByNumber errors")
+			return nil, nil
+		},
+	}
+
+	cmd := LinkCmd(cfg)
+	cmd.SetArgs([]string{"42", "43"})
+	cmd.SetOut(io.Discard)
+	cmd.SetErr(io.Discard)
+	err := cmd.Execute()
+
+	cfg.Err.Close()
+	errOut, _ := io.ReadAll(errR)
+	output := string(errOut)
+
+	assert.ErrorIs(t, err, ErrAPIFailure)
+	assert.Contains(t, output, "failed to look up PR #42")
+}
+
+func TestLink_SkipsBaseFix_ForNewlyCreatedPRs(t *testing.T) {
+	// When PRs are created by the command, fixBaseBranches should skip them
+	// (no re-fetch needed since they already have the correct base).
+	restore := git.SetOps(newLinkGitMock("feat-a", "feat-b"))
+	defer restore()
+
+	findByNumberCalls := 0
+	cfg, _, _ := config.NewTestConfig()
+	cfg.GitHubClientOverride = &github.MockClient{
+		FindPRForBranchFn: func(branch string) (*github.PullRequest, error) {
+			return nil, nil // no existing PRs
+		},
+		FindPRByNumberFn: func(n int) (*github.PullRequest, error) {
+			findByNumberCalls++
+			return nil, nil
+		},
+		CreatePRFn: func(base, head, title, body string, draft bool) (*github.PullRequest, error) {
+			return &github.PullRequest{
+				Number: 100, HeadRefName: head, BaseRefName: base,
+				URL: "https://github.com/o/r/pull/100",
+			}, nil
+		},
+		ListStacksFn:  func() ([]github.RemoteStack, error) { return []github.RemoteStack{}, nil },
+		CreateStackFn: func([]int) (int, error) { return 1, nil },
+	}
+
+	cmd := LinkCmd(cfg)
+	cmd.SetArgs([]string{"feat-a", "feat-b"})
+	cmd.SetOut(io.Discard)
+	cmd.SetErr(io.Discard)
+	err := cmd.Execute()
+
+	assert.NoError(t, err)
+	// FindPRByNumber is called during findExistingPRs (phase 2) for numeric
+	// args only, but NOT during fixBaseBranches for newly created PRs.
+	// Since "feat-a" and "feat-b" are not numeric, FindPRByNumber should
+	// not be called at all.
+	assert.Equal(t, 0, findByNumberCalls, "FindPRByNumber should not be called for newly created PRs")
 }
 
 // Silence "imported and not used" for fmt in case test helpers use it.
