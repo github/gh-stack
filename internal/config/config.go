@@ -34,6 +34,10 @@ type Config struct {
 	// ForceInteractive, when true, makes IsInteractive() return true
 	// regardless of the terminal state. Used in tests.
 	ForceInteractive bool
+
+	// SelectFn, when non-nil, is called instead of prompting via the
+	// terminal. Used in tests to simulate interactive selection.
+	SelectFn func(prompt, defaultValue string, options []string) (int, error)
 }
 
 // New creates a new Config with terminal-aware output and color support.

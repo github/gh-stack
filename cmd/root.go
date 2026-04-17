@@ -48,6 +48,7 @@ func RootCmd() *cobra.Command {
 	root.AddCommand(DownCmd(cfg))
 	root.AddCommand(TopCmd(cfg))
 	root.AddCommand(BottomCmd(cfg))
+	root.AddCommand(SwitchCmd(cfg))
 
 	// Alias
 	root.AddCommand(AliasCmd(cfg))
