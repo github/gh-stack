@@ -50,12 +50,14 @@ func runSwitch(cfg *config.Config) error {
 		options[i] = fmt.Sprintf("%d. %s", branchIdx+1, s.Branches[branchIdx].Branch)
 	}
 
-	p := prompter.New(cfg.In, cfg.Out, cfg.Err)
-	selectFn := func(prompt, def string, opts []string) (int, error) {
-		return p.Select(prompt, def, opts)
-	}
+	var selectFn func(prompt, def string, opts []string) (int, error)
 	if cfg.SelectFn != nil {
 		selectFn = cfg.SelectFn
+	} else {
+		p := prompter.New(cfg.In, cfg.Out, cfg.Err)
+		selectFn = func(prompt, def string, opts []string) (int, error) {
+			return p.Select(prompt, def, opts)
+		}
 	}
 
 	selected, err := selectFn("Select a branch in the stack to switch to:", "", options)
@@ -65,6 +67,12 @@ func runSwitch(cfg *config.Config) error {
 			printInterrupt(cfg)
 			return errInterrupt
 		}
+		cfg.Errorf("failed to select branch: %v", err)
+		return ErrSilent
+	}
+
+	if selected < 0 || selected >= n {
+		cfg.Errorf("invalid selection")
 		return ErrSilent
 	}
 
