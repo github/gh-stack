@@ -311,18 +311,19 @@ func TestViewShort_QueuedStack(t *testing.T) {
 	// Mock GitHub client to return b1 as queued (MergeQueueEntry set)
 	cfg, outR, _ := config.NewTestConfig()
 	cfg.GitHubClientOverride = &github.MockClient{
-		FindAnyPRForBranchFn: func(branch string) (*github.PullRequest, error) {
-			switch branch {
-			case "b1":
+		FindPRByNumberFn: func(number int) (*github.PullRequest, error) {
+			switch number {
+			case 1:
 				return &github.PullRequest{
 					Number:          1,
 					ID:              "PR_1",
+					State:           "OPEN",
 					MergeQueueEntry: &github.MergeQueueEntry{ID: "MQE_1"},
 				}, nil
-			case "b2":
-				return &github.PullRequest{Number: 2, ID: "PR_2"}, nil
-			case "b3":
-				return &github.PullRequest{Number: 3, ID: "PR_3"}, nil
+			case 2:
+				return &github.PullRequest{Number: 2, ID: "PR_2", State: "OPEN"}, nil
+			case 3:
+				return &github.PullRequest{Number: 3, ID: "PR_3", State: "OPEN"}, nil
 			}
 			return nil, nil
 		},
@@ -372,16 +373,17 @@ func TestViewShort_MixedQueuedAndMerged(t *testing.T) {
 	// b1 is merged (persisted), b2 is queued (from API)
 	cfg, outR, _ := config.NewTestConfig()
 	cfg.GitHubClientOverride = &github.MockClient{
-		FindAnyPRForBranchFn: func(branch string) (*github.PullRequest, error) {
-			switch branch {
-			case "b2":
+		FindPRByNumberFn: func(number int) (*github.PullRequest, error) {
+			switch number {
+			case 2:
 				return &github.PullRequest{
 					Number:          2,
 					ID:              "PR_2",
+					State:           "OPEN",
 					MergeQueueEntry: &github.MergeQueueEntry{ID: "MQE_2"},
 				}, nil
-			case "b3":
-				return &github.PullRequest{Number: 3, ID: "PR_3"}, nil
+			case 3:
+				return &github.PullRequest{Number: 3, ID: "PR_3", State: "OPEN"}, nil
 			}
 			return nil, nil
 		},

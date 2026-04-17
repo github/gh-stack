@@ -196,7 +196,12 @@ func TestSubmit_SkipsMergedBranches(t *testing.T) {
 	cfg, _, errR := config.NewTestConfig()
 	cfg.GitHubClientOverride = &github.MockClient{
 		FindPRForBranchFn: func(branch string) (*github.PullRequest, error) {
-			return &github.PullRequest{Number: 2, URL: "https://github.com/owner/repo/pull/2"}, nil
+			// Only return an OPEN PR for the active branch (b2).
+			// Merged branches (b1, b3) should have no open PR.
+			if branch == "b2" {
+				return &github.PullRequest{Number: 2, URL: "https://github.com/owner/repo/pull/2", State: "OPEN"}, nil
+			}
+			return nil, nil
 		},
 	}
 	cmd := SubmitCmd(cfg)
@@ -1026,7 +1031,7 @@ func TestSubmit_PreflightCheck_SkippedWhenStackIDSet(t *testing.T) {
 	tmpDir := t.TempDir()
 	writeStackFile(t, tmpDir, s)
 
-	listStacksCalled := false
+	listStacksCallCount := 0
 	mock := newSubmitMock(tmpDir, "b1")
 	mock.PushFn = func(string, []string, bool, bool) error { return nil }
 	restore := git.SetOps(mock)
@@ -1035,8 +1040,17 @@ func TestSubmit_PreflightCheck_SkippedWhenStackIDSet(t *testing.T) {
 	cfg, _, errR := config.NewTestConfig()
 	cfg.GitHubClientOverride = &github.MockClient{
 		ListStacksFn: func() ([]github.RemoteStack, error) {
-			listStacksCalled = true
-			return nil, &api.HTTPError{StatusCode: 404, Message: "Not Found"}
+			listStacksCallCount++
+			return []github.RemoteStack{{ID: 42, PullRequests: []int{10, 11}}}, nil
+		},
+		FindPRByNumberFn: func(number int) (*github.PullRequest, error) {
+			switch number {
+			case 10:
+				return &github.PullRequest{Number: 10, URL: "https://github.com/o/r/pull/10", HeadRefName: "b1", State: "OPEN"}, nil
+			case 11:
+				return &github.PullRequest{Number: 11, URL: "https://github.com/o/r/pull/11", HeadRefName: "b2", State: "OPEN"}, nil
+			}
+			return nil, nil
 		},
 		FindPRForBranchFn: func(string) (*github.PullRequest, error) {
 			return &github.PullRequest{Number: 10, URL: "https://github.com/o/r/pull/10"}, nil
@@ -1054,5 +1068,8 @@ func TestSubmit_PreflightCheck_SkippedWhenStackIDSet(t *testing.T) {
 	_, _ = io.ReadAll(errR)
 
 	assert.NoError(t, err)
-	assert.False(t, listStacksCalled, "ListStacks should not be called when stack ID already exists")
+	// ListStacks is called by syncStackPRs (remote sync), but NOT by the
+	// preflight check. Two syncStackPRs calls happen in submit (before and
+	// after PR creation), so expect exactly 2 ListStacks calls.
+	assert.Equal(t, 2, listStacksCallCount, "ListStacks should only be called by syncStackPRs, not by the preflight check")
 }

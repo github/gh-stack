@@ -11,6 +11,7 @@ import (
 	"github.com/cli/go-gh/v2/pkg/prompter"
 	"github.com/github/gh-stack/internal/config"
 	"github.com/github/gh-stack/internal/git"
+	"github.com/github/gh-stack/internal/github"
 	"github.com/github/gh-stack/internal/stack"
 )
 
@@ -231,8 +232,18 @@ func resolveStack(sf *stack.StackFile, branch string, cfg *config.Config) (*stac
 }
 
 // syncStackPRs discovers and updates pull request metadata for branches in a stack.
-// For each branch, it queries GitHub for the most recent PR and updates the
-// PullRequestRef including merge status. Branches with already-merged PRs are skipped.
+//
+// When the stack has a remote ID, the stack API is the source of truth: the
+// authoritative PR list is fetched from the server and matched to local
+// branches by head branch name. PRs remain associated even if closed.
+//
+// When no remote stack exists, branch-name-based discovery is used:
+//
+//  1. No tracked PR — look for an OPEN PR by head branch name.
+//  2. Tracked PR (not merged) — refresh status by number; if closed,
+//     clear the association and fall through to path 1.
+//  3. Tracked PR (merged) — skip; the merged state is final.
+//
 // The transient Queued flag is also populated from the API response.
 func syncStackPRs(cfg *config.Config, s *stack.Stack) {
 	client, err := cfg.GitHubClient()
@@ -240,6 +251,14 @@ func syncStackPRs(cfg *config.Config, s *stack.Stack) {
 		return
 	}
 
+	// When the stack has a remote ID, the stack API is the source of truth.
+	if s.ID != "" {
+		if syncStackPRsFromRemote(client, s) {
+			return
+		}
+	}
+
+	// No remote stack (or remote sync failed) — local discovery.
 	for i := range s.Branches {
 		b := &s.Branches[i]
 
@@ -247,11 +266,85 @@ func syncStackPRs(cfg *config.Config, s *stack.Stack) {
 			continue
 		}
 
-		pr, err := client.FindAnyPRForBranch(b.Branch)
+		if b.PullRequest != nil && b.PullRequest.Number != 0 {
+			// Tracked PR — refresh its state.
+			pr, err := client.FindPRByNumber(b.PullRequest.Number)
+			if err != nil || pr == nil {
+				continue
+			}
+			b.PullRequest = &stack.PullRequestRef{
+				Number: pr.Number,
+				ID:     pr.ID,
+				URL:    pr.URL,
+				Merged: pr.Merged,
+			}
+			b.Queued = pr.IsQueued()
+
+			// If the PR was closed (not merged), remove the association
+			// so we fall through to the open-PR lookup below.
+			if pr.State == "CLOSED" {
+				b.PullRequest = nil
+				b.Queued = false
+			} else {
+				continue
+			}
+		}
+
+		// No tracked PR (or just cleared) — only adopt OPEN PRs to avoid
+		// picking up stale merged/closed PRs from a previous use of this
+		// branch name.
+		pr, err := client.FindPRForBranch(b.Branch)
 		if err != nil || pr == nil {
 			continue
 		}
+		b.PullRequest = &stack.PullRequestRef{
+			Number: pr.Number,
+			ID:     pr.ID,
+			URL:    pr.URL,
+		}
+		b.Queued = pr.IsQueued()
+	}
+}
 
+// syncStackPRsFromRemote uses the stack API to sync PR state. The remote
+// stack's PR list is the source of truth — PRs stay associated even if
+// closed. Returns true if the sync succeeded, false if we should fall
+// back to local discovery (e.g. stack not found remotely, API error).
+func syncStackPRsFromRemote(client github.ClientOps, s *stack.Stack) bool {
+	stacks, err := client.ListStacks()
+	if err != nil {
+		return false
+	}
+
+	// Find our stack in the remote list.
+	var remotePRNumbers []int
+	for _, rs := range stacks {
+		if strconv.Itoa(rs.ID) == s.ID {
+			remotePRNumbers = rs.PullRequests
+			break
+		}
+	}
+	if remotePRNumbers == nil {
+		return false
+	}
+
+	// Fetch each remote PR's details and index by head branch name.
+	prByBranch := make(map[string]*github.PullRequest, len(remotePRNumbers))
+	for _, num := range remotePRNumbers {
+		pr, err := client.FindPRByNumber(num)
+		if err != nil || pr == nil {
+			continue
+		}
+		prByBranch[pr.HeadRefName] = pr
+	}
+
+	// Match remote PRs to local branches.
+	for i := range s.Branches {
+		b := &s.Branches[i]
+		pr, ok := prByBranch[b.Branch]
+		if !ok {
+			continue
+		}
 		b.PullRequest = &stack.PullRequestRef{
 			Number: pr.Number,
 			ID:     pr.ID,
@@ -260,6 +353,8 @@ func syncStackPRs(cfg *config.Config, s *stack.Stack) {
 		}
 		b.Queued = pr.IsQueued()
 	}
+
+	return true
 }
 
 // updateBaseSHAs refreshes the Base and Head SHAs for all active branches

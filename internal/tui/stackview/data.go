@@ -68,10 +68,16 @@ func LoadBranchNodes(cfg *config.Config, s *stack.Stack, currentBranch string) [
 			}
 		}
 
-		// Fetch enriched PR details
+		// Fetch enriched PR details.
+		// Only adopt the result if it matches our tracked PR or is OPEN.
+		// This prevents showing stale merged/closed PR details when a
+		// branch name was reused from a previously merged PR.
 		if clientErr == nil {
 			if pr, err := client.FindPRDetailsForBranch(b.Branch); err == nil && pr != nil {
-				node.PR = pr
+				tracked := b.PullRequest != nil && b.PullRequest.Number == pr.Number
+				if tracked || pr.State == "OPEN" {
+					node.PR = pr
+				}
 			}
 		}
 
