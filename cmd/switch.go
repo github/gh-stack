@@ -45,9 +45,14 @@ func runSwitch(cfg *config.Config) error {
 	// Build options in reverse order (top of stack first) with 1-based numbering.
 	n := len(s.Branches)
 	options := make([]string, n)
+	currentBranch := result.CurrentBranch
+	var defaultOpt string
 	for i := 0; i < n; i++ {
 		branchIdx := n - 1 - i
 		options[i] = fmt.Sprintf("%d. %s", branchIdx+1, s.Branches[branchIdx].Branch)
+		if s.Branches[branchIdx].Branch == currentBranch {
+			defaultOpt = options[i]
+		}
 	}
 
 	var selectFn func(prompt, def string, opts []string) (int, error)
@@ -60,7 +65,7 @@ func runSwitch(cfg *config.Config) error {
 		}
 	}
 
-	selected, err := selectFn("Select a branch in the stack to switch to:", "", options)
+	selected, err := selectFn("Select a branch in the stack to switch to:", defaultOpt, options)
 	if err != nil {
 		if isInterruptError(err) {
 			clearSelectPrompt(cfg, len(options))
@@ -79,8 +84,6 @@ func runSwitch(cfg *config.Config) error {
 	// Map selection back: index 0 in options = branch at n-1, etc.
 	branchIdx := n - 1 - selected
 	targetBranch := s.Branches[branchIdx].Branch
-
-	currentBranch := result.CurrentBranch
 	if targetBranch == currentBranch {
 		cfg.Infof("Already on %s", targetBranch)
 		return nil
