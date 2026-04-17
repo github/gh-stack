@@ -269,24 +269,31 @@ func syncStackPRs(cfg *config.Config, s *stack.Stack) {
 		if b.PullRequest != nil && b.PullRequest.Number != 0 {
 			// Tracked PR — refresh its state.
 			pr, err := client.FindPRByNumber(b.PullRequest.Number)
-			if err != nil || pr == nil {
-				continue
+			if err != nil {
+				continue // API error — keep existing tracked PR
 			}
-			b.PullRequest = &stack.PullRequestRef{
-				Number: pr.Number,
-				ID:     pr.ID,
-				URL:    pr.URL,
-				Merged: pr.Merged,
-			}
-			b.Queued = pr.IsQueued()
-
-			// If the PR was closed (not merged), remove the association
-			// so we fall through to the open-PR lookup below.
-			if pr.State == "CLOSED" {
+			if pr == nil {
+				// PR not found — clear stale ref and fall through
+				// to the open-PR lookup below.
 				b.PullRequest = nil
 				b.Queued = false
 			} else {
-				continue
+				b.PullRequest = &stack.PullRequestRef{
+					Number: pr.Number,
+					ID:     pr.ID,
+					URL:    pr.URL,
+					Merged: pr.Merged,
+				}
+				b.Queued = pr.IsQueued()
+
+				// If the PR was closed (not merged), remove the association
+				// so we fall through to the open-PR lookup below.
+				if pr.State == "CLOSED" {
+					b.PullRequest = nil
+					b.Queued = false
+				} else {
+					continue
+				}
 			}
 		}
 
