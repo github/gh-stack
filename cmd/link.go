@@ -26,10 +26,10 @@ func LinkCmd(cfg *config.Config) *cobra.Command {
 		Short: "Link PRs into a stack on GitHub without local tracking",
 		Long: `Create or update a stack on GitHub from branch names or PR numbers.
 
-This command works entirely via the GitHub API and does not modify
-any local state. It is designed for users who manage branches with
-external tools (e.g. jj) and want to use GitHub stacked PRs without
-adopting local stack tracking.
+This command does not rely on gh-stack local tracking state. It is
+designed for users who manage branches with external tools (e.g. jj)
+and want to use GitHub stacked PRs without adopting local stack
+tracking.
 
 Arguments are provided in stack order (bottom to top). Each argument
 can be a branch name or a PR number. For numeric arguments, the
