@@ -418,6 +418,7 @@ gh stack up [n]      # Move up n branches (default 1)
 gh stack down [n]    # Move down n branches (default 1)
 gh stack top         # Jump to the top of the stack
 gh stack bottom      # Jump to the bottom of the stack
+gh stack switch      # Interactively pick a branch to switch to
 ```
 
 Navigation commands clamp to the bounds of the stack — moving up from the top or down from the bottom is a no-op with a message. If you're on the trunk branch, `up` moves to the first stack branch.
@@ -430,6 +431,7 @@ gh stack up 3        # move up three layers
 gh stack down
 gh stack top
 gh stack bottom
+gh stack switch      # shows an interactive picker
 ```
 
 ### `gh stack feedback`
