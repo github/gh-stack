@@ -79,7 +79,7 @@ func runSubmit(cfg *config.Config, opts *submitOptions) error {
 
 	// Verify that the repository has stacked PRs enabled.
 	stacksAvailable := s.ID != ""
-	if s.ID == "" {
+	if !stacksAvailable {
 		if _, err := client.ListStacks(); err != nil {
 			cfg.Warningf("Stacked PRs are not enabled for this repository")
 			if cfg.IsInteractive() {
