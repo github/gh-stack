@@ -27,9 +27,9 @@ func LinkCmd(cfg *config.Config) *cobra.Command {
 		Long: `Create or update a stack on GitHub from branch names or PR numbers.
 
 This command does not rely on gh-stack local tracking state. It is
-designed for users who manage branches with external tools (e.g. jj)
-and want to use GitHub stacked PRs without adopting local stack
-tracking.
+designed for users who manage branches with external tools (e.g. jj,
+Sapling, ghstack, git-town, etc...) and want to use GitHub stacked
+PRs without adopting local stack tracking.
 
 Arguments are provided in stack order (bottom to top). Each argument
 can be a branch name or a PR number. For numeric arguments, the
@@ -83,6 +83,7 @@ func runLink(cfg *config.Config, opts *linkOptions, args []string) error {
 	}
 
 	// Phase 2: Find existing PRs for all args (don't create yet)
+	cfg.Printf("Looking up PRs for %d %s...", len(args), plural(len(args), "branch", "branches"))
 	found, err := findExistingPRs(cfg, client, args)
 	if err != nil {
 		return err
@@ -97,6 +98,7 @@ func runLink(cfg *config.Config, opts *linkOptions, args []string) error {
 			knownPRNumbers = append(knownPRNumbers, r.prNumber)
 		}
 	}
+	cfg.Printf("Checking existing stacks...")
 	stacks, err := listStacksSafe(cfg, client)
 	if err != nil {
 		return err
@@ -108,6 +110,15 @@ func runLink(cfg *config.Config, opts *linkOptions, args []string) error {
 	}
 
 	// Phase 4: Create PRs for branches that don't have one yet
+	needsCreation := 0
+	for _, r := range found {
+		if r == nil {
+			needsCreation++
+		}
+	}
+	if needsCreation > 0 {
+		cfg.Printf("Creating %d %s...", needsCreation, plural(needsCreation, "PR", "PRs"))
+	}
 	resolved, err := createMissingPRs(cfg, client, opts, args, found)
 	if err != nil {
 		return err
@@ -290,8 +301,8 @@ func prevalidateStack(cfg *config.Config, stacks []github.RemoteStack, knownPRNu
 	return nil
 }
 
-// createMissingPRs creates PRs for args that don't have one yet.
-// Returns the fully resolved list with all args mapped to PRs.
+// createMissingPRs creates PRs for branches that don't have one yet.
+// Returns the fully resolved list with all branches mapped to PRs.
 func createMissingPRs(cfg *config.Config, client github.ClientOps, opts *linkOptions, args []string, found []*resolvedArg) ([]resolvedArg, error) {
 	resolved := make([]resolvedArg, len(args))
 
