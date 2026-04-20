@@ -570,7 +570,7 @@ gh stack sync [flags]
 
 1. **Fetch** latest changes from the remote
 2. **Fast-forward trunk** to match remote (skips if already up to date, warns if diverged)
-3. **Cascade rebase** all stack branches onto their updated parents (only if trunk moved). Handles squash-merged PRs automatically. If a conflict is detected, **all branches are restored** to their pre-rebase state and the command exits with code 3 — see [Handle rebase conflicts](#handle-rebase-conflicts-agent-workflow) for the resolution workflow
+3. **Cascade rebase** all stack branches onto their updated parents (only if trunk moved). Handles merged PRs automatically. If a conflict is detected, **all branches are restored** to their pre-rebase state and the command exits with code 3 — see [Handle rebase conflicts](#handle-rebase-conflicts-agent-workflow) for the resolution workflow
 4. **Push** all active branches atomically
 5. **Sync PR state** from GitHub and report the status of each PR
 
@@ -625,7 +625,7 @@ gh stack rebase --abort
 
 **Conflict handling:** See [Handle rebase conflicts](#handle-rebase-conflicts-agent-workflow) in the Workflows section for the full resolution workflow.
 
-**Squash-merge detection:** If a branch's PR was squash-merged on GitHub, the rebase automatically handles this and correctly replays commits on top of the merge target.
+**Merged PR detection:** If a branch's PR was merged on GitHub, the rebase automatically handles this using `--onto` mode and correctly replays commits on top of the merge target.
 
 **Rerere (conflict memory):** `git rerere` is enabled by `init` so previously resolved conflicts are auto-resolved in future rebases.
 

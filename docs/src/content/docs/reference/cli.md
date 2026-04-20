@@ -223,7 +223,7 @@ gh stack rebase [flags] [branch]
 
 Fetches the latest changes from `origin`, then ensures each branch in the stack has the tip of the previous layer in its commit history. Rebases branches in order from trunk upward.
 
-If a branch's PR has been squash-merged, the rebase automatically switches to `--onto` mode to correctly replay commits on top of the merge target.
+If a branch's PR has been merged, the rebase automatically switches to `--onto` mode to correctly replay commits on top of the merge target.
 
 If a rebase conflict occurs, the operation pauses and prints the conflicted files with line numbers. Resolve the conflicts, stage with `git add`, and continue with `--continue`. To undo the entire rebase, use `--abort` to restore all branches to their pre-rebase state.
 

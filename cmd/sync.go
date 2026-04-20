@@ -129,10 +129,16 @@ func runSync(cfg *config.Config, opts *syncOptions) error {
 		// Sync PR state to detect merged PRs before rebasing.
 		syncStackPRs(cfg, s)
 
-		// Save original refs so we can restore on conflict
-		branchNames := make([]string, len(s.Branches))
-		for i, b := range s.Branches {
-			branchNames[i] = b.Branch
+		// Save original refs so we can restore on conflict.
+		// Merged branches that no longer exist locally have no ref to
+		// resolve. They are always skipped during rebase but we must
+		// also exclude them here to avoid a rev-parse error.
+		branchNames := make([]string, 0, len(s.Branches))
+		for _, b := range s.Branches {
+			if b.IsMerged() && !git.BranchExists(b.Branch) {
+				continue
+			}
+			branchNames = append(branchNames, b.Branch)
 		}
 		originalRefs, _ := git.RevParseMap(branchNames)
 
@@ -191,7 +197,7 @@ func runSync(cfg *config.Config, opts *syncOptions) error {
 					break
 				}
 
-				cfg.Successf("Rebased %s onto %s (squash-merge detected)", br.Branch, newBase)
+				cfg.Successf("Rebased %s onto %s (adjusted for merged PR)", br.Branch, newBase)
 				ontoOldBase = originalRefs[br.Branch]
 			} else {
 				var rebaseErr error
