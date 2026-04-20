@@ -441,3 +441,4 @@ gh stack feedback "Support for reordering branches"
 | 6 | Disambiguation required (branch belongs to multiple stacks) |
 | 7 | Rebase already in progress |
 | 8 | Stack is locked by another process |
+| 9 | Stacked PRs not enabled for this repository |
