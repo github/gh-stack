@@ -347,6 +347,9 @@ func (c *Client) FindPRByNumber(number int) (*PullRequest, error) {
 	}
 
 	n := query.Repository.PullRequest
+	if n.Number == 0 && n.ID == "" {
+		return nil, nil
+	}
 	return &PullRequest{
 		ID:              n.ID,
 		Number:          n.Number,

@@ -84,7 +84,17 @@ func TestPush_NoSubmitHintWhenPRsExist(t *testing.T) {
 	defer restore()
 
 	cfg, _, errR := config.NewTestConfig()
-	cfg.GitHubClientOverride = &github.MockClient{}
+	cfg.GitHubClientOverride = &github.MockClient{
+		FindPRByNumberFn: func(number int) (*github.PullRequest, error) {
+			switch number {
+			case 10:
+				return &github.PullRequest{Number: 10, State: "OPEN", HeadRefName: "b1"}, nil
+			case 11:
+				return &github.PullRequest{Number: 11, State: "OPEN", HeadRefName: "b2"}, nil
+			}
+			return nil, nil
+		},
+	}
 	cmd := PushCmd(cfg)
 	cmd.SetOut(io.Discard)
 	cmd.SetErr(io.Discard)

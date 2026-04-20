@@ -6,6 +6,7 @@ import (
 
 	"github.com/github/gh-stack/internal/config"
 	"github.com/github/gh-stack/internal/git"
+	"github.com/github/gh-stack/internal/github"
 	"github.com/github/gh-stack/internal/stack"
 	"github.com/stretchr/testify/assert"
 )
@@ -32,6 +33,7 @@ func TestMerge_NoPullRequest(t *testing.T) {
 	defer restore()
 
 	cfg, _, errR := config.NewTestConfig()
+	cfg.GitHubClientOverride = &github.MockClient{}
 	cmd := MergeCmd(cfg)
 	cmd.SetOut(io.Discard)
 	cmd.SetErr(io.Discard)
@@ -65,6 +67,7 @@ func TestMerge_AlreadyMerged(t *testing.T) {
 	defer restore()
 
 	cfg, _, errR := config.NewTestConfig()
+	cfg.GitHubClientOverride = &github.MockClient{}
 	cmd := MergeCmd(cfg)
 	cmd.SetOut(io.Discard)
 	cmd.SetErr(io.Discard)
@@ -104,6 +107,7 @@ func TestMerge_FullyMergedStack(t *testing.T) {
 	defer restore()
 
 	cfg, _, errR := config.NewTestConfig()
+	cfg.GitHubClientOverride = &github.MockClient{}
 	cmd := MergeCmd(cfg)
 	cmd.SetOut(io.Discard)
 	cmd.SetErr(io.Discard)
@@ -136,6 +140,7 @@ func TestMerge_OnTrunk(t *testing.T) {
 	defer restore()
 
 	cfg, _, errR := config.NewTestConfig()
+	cfg.GitHubClientOverride = &github.MockClient{}
 	cmd := MergeCmd(cfg)
 	cmd.SetOut(io.Discard)
 	cmd.SetErr(io.Discard)
@@ -168,6 +173,19 @@ func TestMerge_NonInteractive_PrintsURL(t *testing.T) {
 
 	// NewTestConfig is non-interactive (piped output), so no confirm prompt.
 	cfg, _, errR := config.NewTestConfig()
+	cfg.GitHubClientOverride = &github.MockClient{
+		FindPRByNumberFn: func(number int) (*github.PullRequest, error) {
+			if number == 42 {
+				return &github.PullRequest{
+					Number: 42,
+					ID:     "PR_42",
+					URL:    "https://github.com/owner/repo/pull/42",
+					State:  "OPEN",
+				}, nil
+			}
+			return nil, nil
+		},
+	}
 	cmd := MergeCmd(cfg)
 	cmd.SetOut(io.Discard)
 	cmd.SetErr(io.Discard)
@@ -196,6 +214,7 @@ func TestMerge_NoArgs(t *testing.T) {
 	defer restore()
 
 	cfg, _, _ := config.NewTestConfig()
+	cfg.GitHubClientOverride = &github.MockClient{}
 	cmd := MergeCmd(cfg)
 	cmd.SetOut(io.Discard)
 	cmd.SetErr(io.Discard)
@@ -229,6 +248,17 @@ func TestMerge_ByPRNumber(t *testing.T) {
 	defer restore()
 
 	cfg, _, errR := config.NewTestConfig()
+	cfg.GitHubClientOverride = &github.MockClient{
+		FindPRByNumberFn: func(number int) (*github.PullRequest, error) {
+			switch number {
+			case 42:
+				return &github.PullRequest{Number: 42, URL: "https://github.com/owner/repo/pull/42", State: "OPEN"}, nil
+			case 43:
+				return &github.PullRequest{Number: 43, URL: "https://github.com/owner/repo/pull/43", State: "OPEN"}, nil
+			}
+			return nil, nil
+		},
+	}
 	cmd := MergeCmd(cfg)
 	cmd.SetOut(io.Discard)
 	cmd.SetErr(io.Discard)
@@ -261,6 +291,14 @@ func TestMerge_ByPRURL(t *testing.T) {
 	defer restore()
 
 	cfg, _, errR := config.NewTestConfig()
+	cfg.GitHubClientOverride = &github.MockClient{
+		FindPRByNumberFn: func(number int) (*github.PullRequest, error) {
+			if number == 42 {
+				return &github.PullRequest{Number: 42, URL: "https://github.com/owner/repo/pull/42", State: "OPEN"}, nil
+			}
+			return nil, nil
+		},
+	}
 	cmd := MergeCmd(cfg)
 	cmd.SetOut(io.Discard)
 	cmd.SetErr(io.Discard)
@@ -293,6 +331,14 @@ func TestMerge_ByBranchName(t *testing.T) {
 	defer restore()
 
 	cfg, _, errR := config.NewTestConfig()
+	cfg.GitHubClientOverride = &github.MockClient{
+		FindPRByNumberFn: func(number int) (*github.PullRequest, error) {
+			if number == 42 {
+				return &github.PullRequest{Number: 42, URL: "https://github.com/owner/repo/pull/42", State: "OPEN"}, nil
+			}
+			return nil, nil
+		},
+	}
 	cmd := MergeCmd(cfg)
 	cmd.SetOut(io.Discard)
 	cmd.SetErr(io.Discard)

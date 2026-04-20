@@ -100,3 +100,129 @@ func TestLoadBranchNodes_LinearBranchStillUsesMergeBase(t *testing.T) {
 	assert.Len(t, nodes[0].FilesChanged, 1)
 	assert.True(t, nodes[0].IsLinear)
 }
+
+func TestLoadBranchNodes_IgnoresStaleMergedPRDetails(t *testing.T) {
+	// When FindPRDetailsForBranch returns a merged PR that doesn't match
+	// the branch's tracked PR, it should be ignored (stale from branch reuse).
+	s := &stack.Stack{
+		Trunk: stack.BranchRef{Branch: "main"},
+		Branches: []stack.BranchRef{
+			{Branch: "reused-branch"}, // no tracked PR
+		},
+	}
+
+	restore := git.SetOps(&git.MockOps{
+		IsAncestorFn: func(a, b string) (bool, error) { return true, nil },
+		MergeBaseFn:  func(a, b string) (string, error) { return "abc", nil },
+		LogRangeFn:   func(a, b string) ([]git.CommitInfo, error) { return nil, nil },
+		DiffStatFilesFn: func(a, b string) ([]git.FileDiffStat, error) {
+			return nil, nil
+		},
+	})
+	defer restore()
+
+	cfg, outW, errW := config.NewTestConfig()
+	defer outW.Close()
+	defer errW.Close()
+	cfg.GitHubClientOverride = &ghapi.MockClient{
+		FindPRDetailsForBranchFn: func(branch string) (*ghapi.PRDetails, error) {
+			return &ghapi.PRDetails{
+				Number: 20,
+				Title:  "Old merged PR",
+				State:  "MERGED",
+				Merged: true,
+			}, nil
+		},
+	}
+
+	nodes := LoadBranchNodes(cfg, s, "other")
+
+	require.Len(t, nodes, 1)
+	assert.Nil(t, nodes[0].PR, "stale merged PR should not be adopted")
+}
+
+func TestLoadBranchNodes_ShowsTrackedMergedPRDetails(t *testing.T) {
+	// When FindPRDetailsForBranch returns a merged PR that matches the
+	// branch's tracked PR number, it should be shown (legitimately merged).
+	s := &stack.Stack{
+		Trunk: stack.BranchRef{Branch: "main"},
+		Branches: []stack.BranchRef{
+			{
+				Branch: "merged-branch",
+				PullRequest: &stack.PullRequestRef{
+					Number: 20,
+					Merged: true,
+				},
+			},
+		},
+	}
+
+	restore := git.SetOps(&git.MockOps{
+		IsAncestorFn: func(a, b string) (bool, error) { return true, nil },
+		MergeBaseFn:  func(a, b string) (string, error) { return "abc", nil },
+		LogRangeFn:   func(a, b string) ([]git.CommitInfo, error) { return nil, nil },
+		DiffStatFilesFn: func(a, b string) ([]git.FileDiffStat, error) {
+			return nil, nil
+		},
+	})
+	defer restore()
+
+	cfg, outW, errW := config.NewTestConfig()
+	defer outW.Close()
+	defer errW.Close()
+	cfg.GitHubClientOverride = &ghapi.MockClient{
+		FindPRDetailsForBranchFn: func(branch string) (*ghapi.PRDetails, error) {
+			return &ghapi.PRDetails{
+				Number: 20,
+				Title:  "Legitimately merged PR",
+				State:  "MERGED",
+				Merged: true,
+			}, nil
+		},
+	}
+
+	nodes := LoadBranchNodes(cfg, s, "other")
+
+	require.Len(t, nodes, 1)
+	require.NotNil(t, nodes[0].PR, "tracked merged PR should be shown")
+	assert.Equal(t, 20, nodes[0].PR.Number)
+}
+
+func TestLoadBranchNodes_ShowsOpenPRDetails(t *testing.T) {
+	// An OPEN PR should always be shown, even without a tracked PR.
+	s := &stack.Stack{
+		Trunk: stack.BranchRef{Branch: "main"},
+		Branches: []stack.BranchRef{
+			{Branch: "feature"}, // no tracked PR
+		},
+	}
+
+	restore := git.SetOps(&git.MockOps{
+		IsAncestorFn: func(a, b string) (bool, error) { return true, nil },
+		MergeBaseFn:  func(a, b string) (string, error) { return "abc", nil },
+		LogRangeFn:   func(a, b string) ([]git.CommitInfo, error) { return nil, nil },
+		DiffStatFilesFn: func(a, b string) ([]git.FileDiffStat, error) {
+			return nil, nil
+		},
+	})
+	defer restore()
+
+	cfg, outW, errW := config.NewTestConfig()
+	defer outW.Close()
+	defer errW.Close()
+	cfg.GitHubClientOverride = &ghapi.MockClient{
+		FindPRDetailsForBranchFn: func(branch string) (*ghapi.PRDetails, error) {
+			return &ghapi.PRDetails{
+				Number: 50,
+				Title:  "Active PR",
+				State:  "OPEN",
+			}, nil
+		},
+	}
+
+	nodes := LoadBranchNodes(cfg, s, "other")
+
+	require.Len(t, nodes, 1)
+	require.NotNil(t, nodes[0].PR, "OPEN PR should be shown")
+	assert.Equal(t, 50, nodes[0].PR.Number)
+}
