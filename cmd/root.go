@@ -37,6 +37,7 @@ func RootCmd() *cobra.Command {
 	root.AddCommand(SyncCmd(cfg))
 	root.AddCommand(UnstackCmd(cfg))
 	root.AddCommand(MergeCmd(cfg))
+	root.AddCommand(LinkCmd(cfg))
 
 	// Helper commands
 	root.AddCommand(ViewCmd(cfg))

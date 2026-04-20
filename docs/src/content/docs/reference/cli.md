@@ -312,6 +312,42 @@ gh stack unstack --local
 gh stack unstack feature-auth
 ```
 
+### `gh stack link`
+
+Link PRs into a stack on GitHub without local tracking.
+
+```sh
+gh stack link [flags] <branch-or-pr> <branch-or-pr> [...]
+```
+
+Creates or updates a stack on GitHub from branch names or PR numbers. This command does not create or modify any `gh-stack` local tracking state. It is designed for users who manage branches with other tools locally (e.g., jj, Sapling, git-town) and want to simply open a stack of PRs.
+
+Arguments are provided in stack order (bottom to top). Branch arguments are automatically pushed to the remote before creating or looking up PRs. For branches that already have open PRs, those PRs are used. For branches without PRs, new PRs are created automatically with the correct base branch chaining. Existing PRs whose base branch doesn't match the expected chain are corrected automatically.
+
+If the PRs are not yet in a stack, a new stack is created. If some of the PRs are already in a stack, the existing stack is updated to include the new PRs. Existing PRs are never removed from a stack — the update is additive only.
+
+| Flag | Description |
+|------|-------------|
+| `--base <branch>` | Base branch for the bottom of the stack (default: `main`) |
+| `--draft` | Create new PRs as drafts |
+| `--remote <name>` | Remote to push to (defaults to auto-detected remote) |
+
+**Examples:**
+
+```sh
+# Link branches into a stack (pushes, creates PRs, creates stack)
+gh stack link feature-auth feature-api feature-ui
+
+# Link existing PRs by number
+gh stack link 10 20 30
+
+# Add branches to an existing stack of PRs
+gh stack link 42 43 feature-auth feature-ui
+
+# Use a different base branch and create PRs as drafts
+gh stack link --base develop --draft feat-a feat-b feat-c
+```
+
 ---
 
 ## Navigation

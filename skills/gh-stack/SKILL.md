@@ -56,11 +56,12 @@ git config remote.pushDefault origin     # if multiple remotes exist (skips remo
 2. **When a prefix is set, pass only the suffix to `add`.** `gh stack add auth` with prefix `feat` → `feat/auth`. Passing `feat/auth` creates `feat/feat/auth`.
 3. **Always use `--auto` with `gh stack submit`** to auto-generate PR titles. Without `--auto`, `submit` prompts for a title for each new PR.
 4. **Always use `--json` with `gh stack view`.** Without `--json`, the command launches an interactive TUI that cannot be operated by agents. There is no other appropriate flag — always pass `--json`.
-5. **Use `--remote <name>` when multiple remotes are configured**, or pre-configure `git config remote.pushDefault origin`. Without this, `push`, `submit`, `sync`, and `checkout` trigger an interactive remote picker.
+5. **Use `--remote <name>` when multiple remotes are configured**, or pre-configure `git config remote.pushDefault origin`. Without this, `push`, `submit`, `sync`, `link`, and `checkout` trigger an interactive remote picker.
 6. **Avoid branches shared across multiple stacks.** If a branch belongs to multiple stacks, commands exit with code 6. Check out a non-shared branch first.
 7. **Plan your stack layers by dependency order before writing code.** Foundational changes (models, APIs, shared utilities) go in lower branches; dependent changes (UI, consumers) go in higher branches. Think through the dependency chain before running `gh stack init`.
 8. **Use standard `git add` and `git commit` for staging and committing.** This gives you full control over which changes go into each branch. The `-Am` shortcut is available but should not be the default approach—stacked PRs are most effective when each branch contains a deliberate, logical set of changes.
 9. **Navigate down the stack when you need to change a lower layer.** If you're working on a frontend branch and realize you need API changes, don't hack around it at the current layer. Navigate to the appropriate branch (`gh stack down`, `gh stack checkout`, or `gh stack bottom`), make and commit the changes there, run `gh stack rebase --upstack`, then navigate back up to continue.
+10. **Use `gh stack link` for external tool workflows.** When branches are managed by an external tool (jj, Sapling, etc.), use `gh stack link branch-a branch-b`. `link` does not rely on local tracking state and is intended for API-driven PR and stack management. Always provide at least 2 branch names or PR numbers.
 
 **Never do any of the following — each triggers an interactive prompt or TUI that will hang:**
 - ❌ `gh stack view` or `gh stack view --short` — always use `gh stack view --json`
@@ -552,6 +553,54 @@ gh stack submit --auto --draft
 - `Created PR #N for <branch>` for each newly created PR
 - `PR #N for <branch> is up to date` for existing PRs
 - `Pushed and synced N branches` summary
+
+---
+
+### Link branches as a stack (no local tracking) — `gh stack link`
+
+Link PRs into a stack on GitHub without creating any local tracking state. This is the recommended approach if you are managing stacked branches with other tools (jj, Sapling, git-town) and want to simply create GitHub Stacked PRs via an API.
+
+```
+gh stack link [flags] <branch-or-pr> <branch-or-pr> [...]
+```
+
+```bash
+# Link branches into a stack (pushes, creates PRs, creates stack)
+gh stack link branch-a branch-b branch-c
+
+# Use a different base branch and create PRs as drafts
+gh stack link --base develop --draft branch-a branch-b branch-c
+
+# Link existing PRs by number
+gh stack link 10 20 30
+
+# Add branches to an existing stack of PRs
+gh stack link 42 43 feature-auth feature-ui
+```
+
+| Flag | Description |
+|------|---------|
+| `--base <branch>` | Base branch for the bottom of the stack (default: `main`) |
+| `--draft` | Create new PRs as drafts |
+| `--remote <name>` | Remote to push to (use if multiple remotes exist) |
+
+**Behavior:**
+
+- Arguments are provided in stack order (bottom to top)
+- Each argument can be a branch name or a PR number. Numeric arguments are tried as PR numbers first; if no PR with that number exists, the argument is treated as a branch name
+- Branch arguments are pushed to the remote automatically (non-force, atomic)
+- For branches without open PRs, new PRs are created with auto-generated titles and the correct base branch chaining (first branch uses `--base`, subsequent branches use the previous branch)
+- Existing PRs whose base branch doesn't match the expected chain are corrected automatically
+- If the PRs are not yet in a stack, a new stack is created. If some PRs are already in a stack, the stack is updated (additive only — existing PRs are never removed)
+- Does **not** create or modify any local state
+
+**Output (stderr):**
+
+- `Pushing N branches to <remote>...`
+- `Found PR #N for branch <name>` for branches with existing PRs
+- `Created PR #N for <branch> (base: <base>)` for newly created PRs
+- `Updated base branch for PR #N to <base>` when base branches are corrected
+- `Created stack with N PRs` or `Updated stack to N PRs`
 
 ---
 

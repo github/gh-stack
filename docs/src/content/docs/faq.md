@@ -188,11 +188,12 @@ No. Stacked PRs are built on standard git branches and regular pull requests. Yo
 
 ### Will this work with a different tool for stacking?
 
-Yes, you can continue to use your tool of choice (e.g., jj, Sapling, ghstack, git-town, etc.) to manage stacks locally and push up your branches to GitHub.
+Yes, you can continue to use your tool of choice (e.g., jj, Sapling, git-town, etc.) to manage stacks locally and push up your branches to GitHub.
 
 Stacked PRs on GitHub are based on the standard pull request model — any tool that creates PRs with the correct base branches can work with them. The `gh stack` CLI is purpose-built for the GitHub experience, but other tools that manage branch chains should be compatible.
 
-You can also use the GitHub CLI in conjunction with other tools to open your PRs as a stack:
+You can also use the `gh stack link` command in conjunction with other tools to open your PRs as a stack:
+
 
 ```bash
 # Create a stack of branches locally using jj
@@ -208,7 +209,30 @@ jj new -m "third change"
 jj bookmark create change3 --revision @
 # ...
 
-# Use gh stack to submit a stack of PRs
+# Push branches and link them as a stack on GitHub
+# (creates PRs automatically if they don't exist)
+gh stack link change1 change2 change3
+```
+
+This doesn't create any local tracking and only hits the APIs to create Stacked PRs.
+
+If the provided branches already have open PRs, `link` will use them. If not, it creates PRs with the correct base branch chaining.
+
+To add more to the stack, run `link` again, but be sure to include the full list of PRs/branches in the stack:
+
+```bash
+gh stack link 123 124 125 change4 change5
+```
+
+You can also use `--base` to specify a different trunk branch and `--draft` to create PRs as drafts:
+
+```bash
+gh stack link --base develop --draft change1 change2 change3
+```
+
+Alternatively, if you want full local stack tracking (for commands like `rebase`, `sync`, and navigation), you can adopt existing branches to local tracking with `gh stack`:
+
+```bash
 gh stack init --adopt change1 change2 change3
 gh stack submit
 ```
