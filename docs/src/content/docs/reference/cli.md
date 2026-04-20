@@ -410,6 +410,30 @@ gh stack bottom
 
 Checks out the branch closest to the trunk.
 
+### `gh stack switch`
+
+Interactively switch to another branch in the stack.
+
+```sh
+gh stack switch
+```
+
+Shows an interactive picker listing all branches in the current stack, ordered from top (furthest from trunk) to bottom (closest to trunk) with their position number. Select a branch to check it out.
+
+Requires an interactive terminal.
+
+**Examples:**
+
+```sh
+gh stack switch
+#    → Select a branch in the stack to switch to
+#      5. frontend
+#      4. api-endpoints
+#      3. auth-layer
+#      2. db-schema
+#      1. config-setup
+```
+
 ---
 
 ## Utilities

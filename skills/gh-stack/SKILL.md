@@ -7,7 +7,7 @@ description: >
   branch chains, or incremental code review workflows.
 metadata:
   author: github
-  version: "0.0.1"
+  version: "0.0.2"
 ---
 
 # gh-stack
