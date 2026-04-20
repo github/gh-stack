@@ -564,7 +564,12 @@ func TestSync_MergedBranch_UsesOnto(t *testing.T) {
 		return "default-sha", nil
 	}
 	mock.IsAncestorFn = func(a, d string) (bool, error) {
-		return a == "local-sha" && d == "remote-sha", nil
+		// Trunk: local is behind remote → triggers fast-forward
+		if a == "local-sha" && d == "remote-sha" {
+			return true, nil
+		}
+		// For --onto stale-check: old bases are valid ancestors (first-run)
+		return true, nil
 	}
 	mock.UpdateBranchRefFn = func(string, string) error { return nil }
 	mock.CheckoutBranchFn = func(string) error { return nil }
@@ -601,6 +606,93 @@ func TestSync_MergedBranch_UsesOnto(t *testing.T) {
 	// Push should use force (rebase happened)
 	require.Len(t, pushCalls, 1)
 	assert.True(t, pushCalls[0].force)
+}
+
+// TestSync_StaleOntoOldBase_FallsBackToMergeBase verifies that when a branch
+// was already rebased past the merged branch's tip, sync detects the stale
+// ontoOldBase and falls back to merge-base for the correct divergence point.
+func TestSync_StaleOntoOldBase_FallsBackToMergeBase(t *testing.T) {
+	s := stack.Stack{
+		Trunk: stack.BranchRef{Branch: "main"},
+		Branches: []stack.BranchRef{
+			{Branch: "b1", PullRequest: &stack.PullRequestRef{Number: 1, Merged: true}},
+			{Branch: "b2"},
+			{Branch: "b3"},
+		},
+	}
+
+	tmpDir := t.TempDir()
+	writeStackFile(t, tmpDir, s)
+
+	var rebaseOntoCalls []rebaseCall
+
+	branchSHAs := map[string]string{
+		"b1": "b1-stale-presquash-sha",
+		"b2": "b2-on-main-sha",
+		"b3": "b3-on-b2-sha",
+	}
+
+	mock := newSyncMock(tmpDir, "b2")
+	mock.BranchExistsFn = func(name string) bool { return true }
+	mock.RevParseFn = func(ref string) (string, error) {
+		if ref == "main" {
+			return "local-sha", nil
+		}
+		if ref == "origin/main" {
+			return "remote-sha", nil
+		}
+		if sha, ok := branchSHAs[ref]; ok {
+			return sha, nil
+		}
+		return "default-sha", nil
+	}
+	mock.IsAncestorFn = func(a, d string) (bool, error) {
+		// Trunk: local is behind remote
+		if a == "local-sha" && d == "remote-sha" {
+			return true, nil
+		}
+		// b1's stale SHA is NOT an ancestor of b2 (already rebased)
+		if a == "b1-stale-presquash-sha" {
+			return false, nil
+		}
+		return true, nil
+	}
+	mock.MergeBaseFn = func(a, b string) (string, error) {
+		if a == "main" && b == "b2" {
+			return "main-b2-mergebase", nil
+		}
+		return "default-mergebase", nil
+	}
+	mock.UpdateBranchRefFn = func(string, string) error { return nil }
+	mock.CheckoutBranchFn = func(string) error { return nil }
+	mock.RebaseOntoFn = func(newBase, oldBase, branch string) error {
+		rebaseOntoCalls = append(rebaseOntoCalls, rebaseCall{newBase, oldBase, branch})
+		return nil
+	}
+	mock.PushFn = func(string, []string, bool, bool) error { return nil }
+
+	restore := git.SetOps(mock)
+	defer restore()
+
+	cfg, _, _ := config.NewTestConfig()
+	cmd := SyncCmd(cfg)
+	cmd.SetOut(io.Discard)
+	cmd.SetErr(io.Discard)
+	err := cmd.Execute()
+
+	cfg.Out.Close()
+	cfg.Err.Close()
+
+	assert.NoError(t, err)
+	require.Len(t, rebaseOntoCalls, 2)
+
+	// b2: stale ontoOldBase → falls back to merge-base(main, b2)
+	assert.Equal(t, rebaseCall{"main", "main-b2-mergebase", "b2"}, rebaseOntoCalls[0],
+		"b2 should use merge-base as oldBase when ontoOldBase is stale")
+
+	// b3: b2's SHA is a valid ancestor → uses it directly
+	assert.Equal(t, rebaseCall{"b2", "b2-on-main-sha", "b3"}, rebaseOntoCalls[1],
+		"b3 should use b2's original SHA as oldBase")
 }
 
 // TestSync_PushFailureAfterRebase verifies that when push fails after a
@@ -848,7 +940,7 @@ func TestSync_MergedBranchDeletedFromRemote(t *testing.T) {
 	s := stack.Stack{
 		Trunk: stack.BranchRef{Branch: "main"},
 		Branches: []stack.BranchRef{
-			{Branch: "b1", PullRequest: &stack.PullRequestRef{Number: 1, Merged: true}},
+			{Branch: "b1", Head: "b1-stored-head-sha", PullRequest: &stack.PullRequestRef{Number: 1, Merged: true}},
 			{Branch: "b2"},
 		},
 	}
@@ -890,7 +982,12 @@ func TestSync_MergedBranchDeletedFromRemote(t *testing.T) {
 		return "sha-" + ref, nil
 	}
 	mock.IsAncestorFn = func(a, d string) (bool, error) {
-		return a == "local-sha" && d == "remote-sha", nil
+		// Trunk FF check
+		if a == "local-sha" && d == "remote-sha" {
+			return true, nil
+		}
+		// For --onto stale-check: old bases are valid ancestors (first-run)
+		return true, nil
 	}
 	mock.UpdateBranchRefFn = func(string, string) error { return nil }
 	mock.CheckoutBranchFn = func(string) error { return nil }
@@ -915,7 +1012,10 @@ func TestSync_MergedBranchDeletedFromRemote(t *testing.T) {
 	assert.NoError(t, err)
 	assert.Contains(t, output, "Skipping b1")
 
-	// Only b2 should be rebased
+	// Only b2 should be rebased, and the rebase should use b1's stored
+	// Head SHA as oldBase so `git rebase --onto` receives valid arguments.
 	require.Len(t, rebaseOntoCalls, 1)
 	assert.Equal(t, "b2", rebaseOntoCalls[0].branch)
+	assert.Equal(t, "main", rebaseOntoCalls[0].newBase)
+	assert.Equal(t, "b1-stored-head-sha", rebaseOntoCalls[0].oldBase)
 }

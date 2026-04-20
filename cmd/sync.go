@@ -142,6 +142,20 @@ func runSync(cfg *config.Config, opts *syncOptions) error {
 		}
 		originalRefs, _ := git.RevParseMap(branchNames)
 
+		// Backfill originalRefs for merged branches that were deleted locally.
+		// The rebase loop uses originalRefs[br.Branch] as ontoOldBase; without
+		// a valid entry the subsequent --onto rebase would receive an empty ref.
+		for _, b := range s.Branches {
+			if b.IsMerged() && !git.BranchExists(b.Branch) {
+				if b.Head != "" {
+					if originalRefs == nil {
+						originalRefs = make(map[string]string)
+					}
+					originalRefs[b.Branch] = b.Head
+				}
+			}
+		}
+
 		needsOnto := false
 		var ontoOldBase string
 
@@ -181,7 +195,18 @@ func runSync(cfg *config.Config, opts *syncOptions) error {
 					}
 				}
 
-				if err := git.RebaseOnto(newBase, ontoOldBase, br.Branch); err != nil {
+				// If ontoOldBase is stale (not an ancestor of the branch), the
+				// branch was already rebased past it (e.g. by a previous run).
+				// Fall back to merge-base(newBase, branch) to avoid replaying
+				// already-applied commits.
+				actualOldBase := ontoOldBase
+				if isAnc, err := git.IsAncestor(ontoOldBase, br.Branch); err == nil && !isAnc {
+					if mb, err := git.MergeBase(newBase, br.Branch); err == nil {
+						actualOldBase = mb
+					}
+				}
+
+				if err := git.RebaseOnto(newBase, actualOldBase, br.Branch); err != nil {
 					// Conflict detected — abort and restore everything
 					if git.IsRebaseInProgress() {
 						_ = git.RebaseAbort()

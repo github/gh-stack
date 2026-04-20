@@ -188,9 +188,33 @@ func runRebase(cfg *config.Config, opts *rebaseOptions) error {
 		return ErrSilent
 	}
 
+	// Backfill originalRefs for merged branches that were deleted locally.
+	// The rebase loop uses originalRefs[br.Branch] as ontoOldBase; without
+	// a valid entry the subsequent --onto rebase would receive an empty ref.
+	for _, b := range s.Branches {
+		if b.IsMerged() && !git.BranchExists(b.Branch) {
+			if b.Head != "" {
+				originalRefs[b.Branch] = b.Head
+			}
+		}
+	}
+
 	// Track --onto rebase state for merged branches.
 	needsOnto := false
 	var ontoOldBase string
+
+	// Get --onto state from merged branches below the rebase range.
+	// Ensures that when --upstack excludes merged branches, we still check
+	// the immediate predecessor for a merged PR and use --onto if needed.
+	if startIdx > 0 {
+		prev := s.Branches[startIdx-1]
+		if prev.IsMerged() {
+			if sha, ok := originalRefs[prev.Branch]; ok {
+				needsOnto = true
+				ontoOldBase = sha
+			}
+		}
+	}
 
 	for i, br := range branchesToRebase {
 		var base string
@@ -221,7 +245,18 @@ func runRebase(cfg *config.Config, opts *rebaseOptions) error {
 				}
 			}
 
-			if err := git.RebaseOnto(newBase, ontoOldBase, br.Branch); err != nil {
+			// If ontoOldBase is stale (not an ancestor of the branch), the
+			// branch was already rebased past it (e.g. by a previous run).
+			// Fall back to merge-base(newBase, branch) which gives the correct
+			// divergence point and avoids replaying already-applied commits.
+			actualOldBase := ontoOldBase
+			if isAnc, err := git.IsAncestor(ontoOldBase, br.Branch); err == nil && !isAnc {
+				if mb, err := git.MergeBase(newBase, br.Branch); err == nil {
+					actualOldBase = mb
+				}
+			}
+
+			if err := git.RebaseOnto(newBase, actualOldBase, br.Branch); err != nil {
 				cfg.Warningf("Rebasing %s onto %s — conflict", br.Branch, newBase)
 
 				remaining := make([]string, 0)
