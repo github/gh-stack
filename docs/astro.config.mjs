@@ -13,14 +13,22 @@ export default defineConfig({
 	integrations: [
 		starlight({
 			title: 'GitHub Stacked PRs',
-			description: 'Manage stacked branches and pull requests with the gh stack CLI extension.',
+			description: 'Break large changes into small, reviewable pull requests that build on each other — with native GitHub support and the gh stack CLI.',
 			favicon: '/favicon.svg',
 			logo: {
 				src: './src/assets/github-invertocat.svg',
 				alt: 'GitHub',
 			},
 			head: [
-				{ tag: 'meta', attrs: { name: 'robots', content: 'noindex, nofollow' } },
+				{ tag: 'meta', attrs: { property: 'og:type', content: 'website' } },
+				{ tag: 'meta', attrs: { property: 'og:site_name', content: 'GitHub Stacked PRs' } },
+				{ tag: 'meta', attrs: { property: 'og:image', content: 'https://github.github.com/gh-stack/github-social-card.jpg' } },
+				{ tag: 'meta', attrs: { property: 'og:image:alt', content: 'GitHub Stacked PRs — Break large changes into small, reviewable pull requests' } },
+				{ tag: 'meta', attrs: { property: 'og:image:width', content: '1200' } },
+				{ tag: 'meta', attrs: { property: 'og:image:height', content: '630' } },
+				{ tag: 'meta', attrs: { name: 'twitter:card', content: 'summary_large_image' } },
+				{ tag: 'meta', attrs: { name: 'twitter:site', content: '@github' } },
+				{ tag: 'meta', attrs: { name: 'twitter:image', content: 'https://github.github.com/gh-stack/github-social-card.jpg' } },
 			],
 			components: {
 				SocialIcons: './src/components/CustomHeader.astro',

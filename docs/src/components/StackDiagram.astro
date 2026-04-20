@@ -1,0 +1,62 @@
+---
+/**
+ * Inline SVG stack diagram — uses currentColor to inherit text color from the
+ * parent element, which is styled via external CSS. This avoids Safari bugs
+ * where @media (prefers-color-scheme) doesn't work inside SVG elements.
+ */
+---
+<div class="stack-diagram-wrapper" style="max-width: 520px; margin: 1.5rem auto;">
+  <svg width="100%" viewBox="-100 0 580 340" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="A stack of pull requests: main at the bottom, with auth-layer (PR #1), api-endpoints (PR #2), and frontend (PR #3) stacked on top">
+    <style>
+      text { font-family: 'Mona Sans', -apple-system, "system-ui", "Segoe UI", sans-serif; }
+      .trunk-box { fill: rgba(128,128,128,0.1); stroke: rgba(128,128,128,0.4); stroke-width: 1; }
+      .trunk-text { fill: currentColor; font-size: 14px; font-weight: 600; }
+      .branch-box { fill: rgba(9,105,218,0.12); stroke: #0969da; stroke-width: 1; }
+      .branch-text { fill: currentColor; font-size: 14px; font-weight: 600; }
+      .arrow-line { stroke: currentColor; stroke-width: 1.5; opacity: 0.4; }
+      .arrow-marker { stroke: currentColor; stroke-opacity: 0.9; }
+      .annotation { fill: currentColor; font-size: 14px; font-style: italic; opacity: 0.6; font-weight: 600; }
+    </style>
+    <defs>
+      <marker id="arrow" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+        <path d="M2 1L8 5L2 9" fill="none" class="arrow-marker" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
+      </marker>
+    </defs>
+
+    <g>
+      <rect x="80" y="262" width="220" height="44" rx="8" class="trunk-box"/>
+      <text x="190" y="284" text-anchor="middle" dominant-baseline="central" class="trunk-text">main</text>
+    </g>
+
+    <g>
+      <rect x="80" y="188" width="220" height="44" rx="8" class="branch-box"/>
+      <text x="190" y="210" text-anchor="middle" dominant-baseline="central" class="branch-text">PR #1 · auth-layer</text>
+    </g>
+
+    <g>
+      <rect x="80" y="114" width="220" height="44" rx="8" class="branch-box"/>
+      <text x="190" y="136" text-anchor="middle" dominant-baseline="central" class="branch-text">PR #2 · api-endpoints</text>
+    </g>
+
+    <g>
+      <rect x="80" y="40" width="220" height="44" rx="8" class="branch-box"/>
+      <text x="190" y="62" text-anchor="middle" dominant-baseline="central" class="branch-text">PR #3 · frontend</text>
+    </g>
+
+    <line x1="190" y1="262" x2="190" y2="232" marker-end="url(#arrow)" class="arrow-line"/>
+    <line x1="190" y1="188" x2="190" y2="158" marker-end="url(#arrow)" class="arrow-line"/>
+    <line x1="190" y1="114" x2="190" y2="84" marker-end="url(#arrow)" class="arrow-line"/>
+
+    <text x="320" y="210" dominant-baseline="central" class="annotation">← bottom</text>
+    <text x="320" y="62" dominant-baseline="central" class="annotation">← top</text>
+  </svg>
+</div>
+
+<style>
+  .stack-diagram-wrapper {
+    color: #1f1f1f;
+  }
+  :root[data-theme='dark'] .stack-diagram-wrapper {
+    color: #ffffff;
+  }
+</style>

@@ -21,7 +21,7 @@ Requires the [GitHub CLI](https://cli.github.com/) (`gh`) v2.0+.
 Install the gh-stack skill so your AI coding agent knows how to work with stacked PRs and the `gh stack` CLI:
 
 ```sh
-npx skills add github/gh-stack
+gh skill install github/gh-stack
 ```
 
 ## Quick start
