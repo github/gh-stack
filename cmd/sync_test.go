@@ -3,6 +3,7 @@ package cmd
 import (
 	"fmt"
 	"io"
+	"strings"
 	"testing"
 
 	"github.com/github/gh-stack/internal/config"
@@ -27,7 +28,13 @@ func newSyncMock(tmpDir string, currentBranch string) *git.MockOps {
 	return &git.MockOps{
 		GitDirFn:        func() (string, error) { return tmpDir, nil },
 		CurrentBranchFn: func() (string, error) { return currentBranch, nil },
-		RevParseFn:       func(ref string) (string, error) { return "sha-" + ref, nil },
+		RevParseFn: func(ref string) (string, error) {
+			// Default: origin/<branch> returns same SHA as <branch> (no FF needed)
+			if strings.HasPrefix(ref, "origin/") {
+				return "sha-" + strings.TrimPrefix(ref, "origin/"), nil
+			}
+			return "sha-" + ref, nil
+		},
 		IsAncestorFn:    func(a, d string) (bool, error) { return true, nil },
 		FetchFn:         func(string) error { return nil },
 		EnableRerereFn:  func() error { return nil },
@@ -58,6 +65,9 @@ func TestSync_TrunkAlreadyUpToDate(t *testing.T) {
 	mock.RevParseFn = func(ref string) (string, error) {
 		if ref == "main" || ref == "origin/main" {
 			return "aaa111aaa111", nil
+		}
+		if strings.HasPrefix(ref, "origin/") {
+			return "sha-" + strings.TrimPrefix(ref, "origin/"), nil
 		}
 		return "sha-" + ref, nil
 	}
@@ -122,6 +132,10 @@ func TestSync_TrunkFastForward_TriggersRebase(t *testing.T) {
 		}
 		if ref == "origin/main" {
 			return "remote-sha", nil
+		}
+		// Default: origin/<branch> same as <branch> — no branch FF
+		if strings.HasPrefix(ref, "origin/") {
+			return "sha-" + strings.TrimPrefix(ref, "origin/"), nil
 		}
 		return "sha-" + ref, nil
 	}
@@ -646,4 +660,186 @@ func TestSync_PushFailureAfterRebase(t *testing.T) {
 	require.Len(t, pushCalls, 1)
 	assert.True(t, pushCalls[0].force, "push after rebase should use force")
 	assert.Contains(t, output, "Push failed")
+}
+
+// TestSync_BranchFastForward_TriggersRebase verifies that when trunk hasn't
+// moved but a stack branch has new remote commits, the branch is fast-forwarded,
+// downstream branches are cascade-rebased, and force push is used.
+func TestSync_BranchFastForward_TriggersRebase(t *testing.T) {
+	s := stack.Stack{
+		Trunk: stack.BranchRef{Branch: "main"},
+		Branches: []stack.BranchRef{
+			{Branch: "b1"},
+			{Branch: "b2"},
+		},
+	}
+
+	tmpDir := t.TempDir()
+	writeStackFile(t, tmpDir, s)
+
+	var rebaseCalls []rebaseCall
+	var pushCalls []pushCall
+	var mergeFFCalls []string
+
+	mock := newSyncMock(tmpDir, "b1")
+	// Trunk is up to date (same SHA), but b1 is behind origin/b1
+	mock.RevParseFn = func(ref string) (string, error) {
+		if ref == "main" || ref == "origin/main" {
+			return "trunk-sha", nil
+		}
+		if ref == "b1" {
+			return "b1-local-sha", nil
+		}
+		if ref == "origin/b1" {
+			return "b1-remote-sha", nil
+		}
+		if strings.HasPrefix(ref, "origin/") {
+			return "sha-" + strings.TrimPrefix(ref, "origin/"), nil
+		}
+		return "sha-" + ref, nil
+	}
+	mock.IsAncestorFn = func(a, d string) (bool, error) {
+		if a == "b1-local-sha" && d == "b1-remote-sha" {
+			return true, nil
+		}
+		return false, nil
+	}
+	mock.MergeFFFn = func(target string) error {
+		mergeFFCalls = append(mergeFFCalls, target)
+		return nil
+	}
+	mock.CheckoutBranchFn = func(string) error { return nil }
+	mock.RebaseFn = func(base string) error {
+		rebaseCalls = append(rebaseCalls, rebaseCall{branch: "(rebase)" + base})
+		return nil
+	}
+	mock.RebaseOntoFn = func(newBase, oldBase, branch string) error {
+		rebaseCalls = append(rebaseCalls, rebaseCall{newBase, oldBase, branch})
+		return nil
+	}
+	mock.PushFn = func(remote string, branches []string, force, atomic bool) error {
+		pushCalls = append(pushCalls, pushCall{remote, branches, force, atomic})
+		return nil
+	}
+
+	restore := git.SetOps(mock)
+	defer restore()
+
+	cfg, _, errR := config.NewTestConfig()
+	cmd := SyncCmd(cfg)
+	cmd.SetOut(io.Discard)
+	cmd.SetErr(io.Discard)
+	err := cmd.Execute()
+
+	cfg.Err.Close()
+	errOut, _ := io.ReadAll(errR)
+	output := string(errOut)
+
+	assert.NoError(t, err)
+
+	// b1 should be fast-forwarded via MergeFF (since we're on b1)
+	require.Len(t, mergeFFCalls, 1, "should fast-forward b1 via MergeFF")
+	assert.Equal(t, "origin/b1", mergeFFCalls[0])
+	assert.Contains(t, output, "Fast-forwarded b1")
+
+	// Cascade rebase should be triggered (even though trunk didn't move)
+	assert.NotEmpty(t, rebaseCalls, "rebase should occur when branch was fast-forwarded")
+
+	// Push should use force-with-lease after rebase
+	require.Len(t, pushCalls, 1)
+	assert.True(t, pushCalls[0].force, "push should use force when rebase occurred after branch FF")
+}
+
+// TestSync_BranchFastForward_WithTrunkUpdate verifies that when both trunk
+// and a stack branch have remote updates, both are handled correctly.
+func TestSync_BranchFastForward_WithTrunkUpdate(t *testing.T) {
+	s := stack.Stack{
+		Trunk: stack.BranchRef{Branch: "main"},
+		Branches: []stack.BranchRef{
+			{Branch: "b1"},
+			{Branch: "b2"},
+		},
+	}
+
+	tmpDir := t.TempDir()
+	writeStackFile(t, tmpDir, s)
+
+	var updateBranchRefCalls []struct{ branch, sha string }
+	var rebaseCalls []rebaseCall
+	var pushCalls []pushCall
+
+	mock := newSyncMock(tmpDir, "b1")
+	// Trunk and b2 both behind remote
+	mock.RevParseFn = func(ref string) (string, error) {
+		if ref == "main" {
+			return "trunk-local", nil
+		}
+		if ref == "origin/main" {
+			return "trunk-remote", nil
+		}
+		if ref == "b2" {
+			return "b2-local", nil
+		}
+		if ref == "origin/b2" {
+			return "b2-remote", nil
+		}
+		if strings.HasPrefix(ref, "origin/") {
+			return "sha-" + strings.TrimPrefix(ref, "origin/"), nil
+		}
+		return "sha-" + ref, nil
+	}
+	mock.IsAncestorFn = func(a, d string) (bool, error) {
+		if a == "trunk-local" && d == "trunk-remote" {
+			return true, nil
+		}
+		if a == "b2-local" && d == "b2-remote" {
+			return true, nil
+		}
+		return false, nil
+	}
+	mock.UpdateBranchRefFn = func(branch, sha string) error {
+		updateBranchRefCalls = append(updateBranchRefCalls, struct{ branch, sha string }{branch, sha})
+		return nil
+	}
+	mock.CheckoutBranchFn = func(string) error { return nil }
+	mock.RebaseFn = func(base string) error {
+		rebaseCalls = append(rebaseCalls, rebaseCall{branch: "(rebase)" + base})
+		return nil
+	}
+	mock.RebaseOntoFn = func(newBase, oldBase, branch string) error {
+		rebaseCalls = append(rebaseCalls, rebaseCall{newBase, oldBase, branch})
+		return nil
+	}
+	mock.PushFn = func(remote string, branches []string, force, atomic bool) error {
+		pushCalls = append(pushCalls, pushCall{remote, branches, force, atomic})
+		return nil
+	}
+
+	restore := git.SetOps(mock)
+	defer restore()
+
+	cfg, _, errR := config.NewTestConfig()
+	cmd := SyncCmd(cfg)
+	cmd.SetOut(io.Discard)
+	cmd.SetErr(io.Discard)
+	err := cmd.Execute()
+
+	cfg.Err.Close()
+	errOut, _ := io.ReadAll(errR)
+	output := string(errOut)
+
+	assert.NoError(t, err)
+
+	// Both trunk and b2 should be updated
+	branchUpdates := make(map[string]string)
+	for _, c := range updateBranchRefCalls {
+		branchUpdates[c.branch] = c.sha
+	}
+	assert.Equal(t, "trunk-remote", branchUpdates["main"], "trunk should be fast-forwarded")
+	assert.Equal(t, "b2-remote", branchUpdates["b2"], "b2 should be fast-forwarded")
+
+	assert.Contains(t, output, "fast-forwarded")
+	assert.NotEmpty(t, rebaseCalls, "rebase should occur")
+	require.Len(t, pushCalls, 1)
+	assert.True(t, pushCalls[0].force, "push should use force after rebase")
 }
