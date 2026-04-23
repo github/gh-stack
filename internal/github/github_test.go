@@ -3,6 +3,7 @@ package github
 import (
 	"testing"
 
+	graphql "github.com/cli/shurcooL-graphql"
 	"github.com/stretchr/testify/assert"
 )
 
@@ -44,5 +45,18 @@ func TestPullRequest_IsQueued(t *testing.T) {
 	t.Run("nil receiver is safe", func(t *testing.T) {
 		var pr *PullRequest
 		assert.False(t, pr.IsQueued())
+	})
+}
+
+func TestToGraphQLInt(t *testing.T) {
+	t.Run("in range", func(t *testing.T) {
+		got, err := toGraphQLInt(123)
+		assert.NoError(t, err)
+		assert.Equal(t, graphql.Int(123), got)
+	})
+
+	t.Run("out of range", func(t *testing.T) {
+		_, err := toGraphQLInt(1 << 40)
+		assert.Error(t, err)
 	})
 }

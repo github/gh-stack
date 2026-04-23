@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
+	"math"
 
 	"github.com/cli/go-gh/v2/pkg/api"
 	graphql "github.com/cli/shurcooL-graphql"
@@ -319,6 +320,11 @@ func (c *Client) FindPRDetailsForBranch(branch string) (*PRDetails, error) {
 
 // FindPRByNumber fetches a pull request by its number.
 func (c *Client) FindPRByNumber(number int) (*PullRequest, error) {
+	gqlNumber, err := toGraphQLInt(number)
+	if err != nil {
+		return nil, err
+	}
+
 	var query struct {
 		Repository struct {
 			PullRequest struct {
@@ -339,7 +345,7 @@ func (c *Client) FindPRByNumber(number int) (*PullRequest, error) {
 	variables := map[string]interface{}{
 		"owner":  graphql.String(c.owner),
 		"name":   graphql.String(c.repo),
-		"number": graphql.Int(number),
+		"number": gqlNumber,
 	}
 
 	if err := c.gql.Query("FindPRByNumber", &query, variables); err != nil {
@@ -362,6 +368,13 @@ func (c *Client) FindPRByNumber(number int) (*PullRequest, error) {
 		Merged:          n.Merged,
 		MergeQueueEntry: n.MergeQueueEntry,
 	}, nil
+}
+
+func toGraphQLInt(n int) (graphql.Int, error) {
+	if n < math.MinInt32 || n > math.MaxInt32 {
+		return 0, fmt.Errorf("number %d is out of GraphQL Int range", n)
+	}
+	return graphql.Int(n), nil
 }
 
 type RemoteStack struct {
