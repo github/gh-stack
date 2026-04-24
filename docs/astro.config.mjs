@@ -65,6 +65,7 @@ export default defineConfig({
 						{ label: 'Working with Stacked PRs', slug: 'guides/stacked-prs' },
 						{ label: 'Stacked PRs in the GitHub UI', slug: 'guides/ui' },
 						{ label: 'Typical Workflows', slug: 'guides/workflows' },
+						{ label: 'CI and Custom Integrations', slug: 'guides/ci-integration' },
 					],
 				},
 				{
