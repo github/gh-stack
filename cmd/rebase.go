@@ -10,6 +10,7 @@ import (
 
 	"github.com/github/gh-stack/internal/config"
 	"github.com/github/gh-stack/internal/git"
+	"github.com/github/gh-stack/internal/modify"
 	"github.com/github/gh-stack/internal/stack"
 	"github.com/spf13/cobra"
 )
@@ -76,6 +77,11 @@ func runRebase(cfg *config.Config, opts *rebaseOptions) error {
 
 	if opts.abort {
 		return abortRebase(cfg, gitDir)
+	}
+
+	if err := modify.CheckStateGuard(gitDir); err != nil {
+		cfg.Errorf("%s", err)
+		return ErrModifyRecovery
 	}
 
 	result, err := loadStack(cfg, opts.branch)

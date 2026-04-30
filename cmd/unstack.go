@@ -5,6 +5,7 @@ import (
 
 	"github.com/cli/go-gh/v2/pkg/api"
 	"github.com/github/gh-stack/internal/config"
+	"github.com/github/gh-stack/internal/modify"
 	"github.com/github/gh-stack/internal/stack"
 	"github.com/spf13/cobra"
 )
@@ -42,6 +43,12 @@ func runUnstack(cfg *config.Config, opts *unstackOptions) error {
 		return ErrNotInStack
 	}
 	gitDir := result.GitDir
+
+	if err := modify.CheckStateGuard(gitDir); err != nil {
+		cfg.Errorf("%s", err)
+		return ErrModifyRecovery
+	}
+
 	sf := result.StackFile
 	s := result.Stack
 

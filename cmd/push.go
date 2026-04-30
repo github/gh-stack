@@ -7,6 +7,7 @@ import (
 	"github.com/cli/go-gh/v2/pkg/prompter"
 	"github.com/github/gh-stack/internal/config"
 	"github.com/github/gh-stack/internal/git"
+	"github.com/github/gh-stack/internal/modify"
 	"github.com/github/gh-stack/internal/stack"
 	"github.com/spf13/cobra"
 )
@@ -36,6 +37,11 @@ func runPush(cfg *config.Config, opts *pushOptions) error {
 	if err != nil {
 		cfg.Errorf("not a git repository")
 		return ErrNotInStack
+	}
+
+	if err := modify.CheckStateGuard(gitDir); err != nil {
+		cfg.Errorf("%s", err)
+		return ErrModifyRecovery
 	}
 
 	sf, err := stack.Load(gitDir)
