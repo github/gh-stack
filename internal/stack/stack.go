@@ -316,6 +316,14 @@ func Save(gitDir string, sf *StackFile) error {
 	return writeStackFile(gitDir, sf)
 }
 
+// SaveWithLock writes the stack file while the caller already holds the lock.
+// This avoids double-locking when the caller needs to hold the lock across
+// multiple operations (e.g. modify apply).  The staleness check is skipped
+// because the caller owns the lock and has been mutating the StackFile.
+func SaveWithLock(gitDir string, sf *StackFile, _ *FileLock) error {
+	return writeStackFile(gitDir, sf)
+}
+
 // SaveNonBlocking attempts to save without blocking.  If another process holds
 // the lock or the file was modified since Load, the save is silently skipped.
 // Use this for best-effort metadata persistence (e.g. syncing PR state in view).
