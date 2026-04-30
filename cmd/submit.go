@@ -11,6 +11,7 @@ import (
 	"github.com/github/gh-stack/internal/config"
 	"github.com/github/gh-stack/internal/git"
 	"github.com/github/gh-stack/internal/github"
+	"github.com/github/gh-stack/internal/modify"
 	"github.com/github/gh-stack/internal/stack"
 	"github.com/spf13/cobra"
 )
@@ -219,9 +220,18 @@ func runSubmit(cfg *config.Config, opts *submitOptions) error {
 		}
 	}
 
+	// Handle pending modify state (delete old stack)
+	if stacksAvailable {
+		if err := handlePendingModify(cfg, client, s, gitDir); err != nil {
+			// Error already reported — continue with sync attempt
+		}
+	}
+
 	// Create or update the stack on GitHub
 	if stacksAvailable {
 		syncStack(cfg, client, s)
+		// Clear modify state after successful stack sync
+		clearPendingModifyState(cfg, gitDir)
 	}
 
 	// Update base commit hashes and sync PR state
@@ -273,6 +283,50 @@ func humanize(s string) string {
 		}
 		return r
 	}, s)
+}
+
+// handlePendingModify handles the stack recreation after a modify operation.
+// It deletes the old remote stack and clears s.ID so syncStack creates a new
+// one. The state file is NOT cleared here — it is cleared after syncStack
+// succeeds, ensuring retry safety.
+func handlePendingModify(cfg *config.Config, client github.ClientOps, s *stack.Stack, gitDir string) error {
+	state, err := modify.LoadState(gitDir)
+	if err != nil || state == nil {
+		return nil // No modify state — nothing to do
+	}
+	if state.Phase != "pending_submit" {
+		return nil // Not in pending_submit phase
+	}
+
+	// Delete the old remote stack
+	if state.PriorRemoteStackID != "" {
+		if err := client.DeleteStack(state.PriorRemoteStackID); err != nil {
+			var httpErr *api.HTTPError
+			if errors.As(err, &httpErr) && httpErr.StatusCode == 404 {
+				cfg.Printf("Previous stack already deleted on GitHub")
+			} else {
+				cfg.Warningf("Failed to delete previous stack: %v", err)
+				cfg.Printf("Run `%s` again to retry", cfg.ColorCyan("gh stack submit"))
+				return err
+			}
+		} else {
+			cfg.Successf("Deleted previous stack on GitHub")
+		}
+		// Clear the old stack ID so syncStack creates a new one
+		s.ID = ""
+	}
+
+	return nil
+}
+
+// clearPendingModifyState clears the modify state file after a successful submit.
+// Called after syncStack succeeds to ensure retry safety.
+func clearPendingModifyState(cfg *config.Config, gitDir string) {
+	if !modify.StateExists(gitDir) {
+		return
+	}
+	modify.ClearState(gitDir)
+	cfg.Successf("Modify state cleared — stack recreated on GitHub")
 }
 
 // syncStack creates or updates a stack on GitHub from the active PRs.
