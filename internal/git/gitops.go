@@ -56,6 +56,10 @@ type Ops interface {
 	Commit(message string) (string, error)
 	CommitInteractive() (string, error)
 	ValidateRefName(name string) error
+	RenameBranch(oldName, newName string) error
+	CherryPick(commits []string) error
+	HasUncommittedChanges() (bool, error)
+	LogMerges(base, head string) ([]CommitInfo, error)
 }
 
 // defaultOps implements Ops by delegating to the real git client and helpers.
@@ -493,4 +497,54 @@ func (d *defaultOps) CommitInteractive() (string, error) {
 func (d *defaultOps) ValidateRefName(name string) error {
 	_, err := run("check-ref-format", "--branch", name)
 	return err
+}
+
+func (d *defaultOps) RenameBranch(oldName, newName string) error {
+	return runSilent("branch", "-m", oldName, newName)
+}
+
+func (d *defaultOps) CherryPick(commits []string) error {
+	args := append([]string{"cherry-pick"}, commits...)
+	return runSilent(args...)
+}
+
+func (d *defaultOps) HasUncommittedChanges() (bool, error) {
+	out, err := run("status", "--porcelain")
+	if err != nil {
+		return false, err
+	}
+	return out != "", nil
+}
+
+func (d *defaultOps) LogMerges(base, head string) ([]CommitInfo, error) {
+	format := "%H%x01%B%x01%at%x00"
+	rangeSpec := base + ".." + head
+	output, err := run("log", "--merges", rangeSpec, "--format="+format)
+	if err != nil {
+		return nil, err
+	}
+	if output == "" {
+		return nil, nil
+	}
+
+	var commits []CommitInfo
+	for _, record := range strings.Split(output, "\x00") {
+		record = strings.TrimSpace(record)
+		if record == "" {
+			continue
+		}
+		parts := strings.SplitN(record, "\x01", 3)
+		if len(parts) < 3 {
+			continue
+		}
+		ts, _ := strconv.ParseInt(strings.TrimSpace(parts[2]), 10, 64)
+		subject, body := splitCommitMessage(parts[1])
+		commits = append(commits, CommitInfo{
+			SHA:     parts[0],
+			Subject: subject,
+			Body:    body,
+			Time:    time.Unix(ts, 0),
+		})
+	}
+	return commits, nil
 }

@@ -43,7 +43,11 @@ type MockOps struct {
 	HasStagedChangesFn    func() bool
 	CommitFn              func(string) (string, error)
 	CommitInteractiveFn   func() (string, error)
-	ValidateRefNameFn     func(string) error
+	ValidateRefNameFn       func(string) error
+	RenameBranchFn          func(string, string) error
+	CherryPickFn            func([]string) error
+	HasUncommittedChangesFn func() (bool, error)
+	LogMergesFn             func(string, string) ([]CommitInfo, error)
 }
 
 var _ Ops = (*MockOps)(nil)
@@ -335,4 +339,32 @@ func (m *MockOps) ValidateRefName(name string) error {
 		return m.ValidateRefNameFn(name)
 	}
 	return nil
+}
+
+func (m *MockOps) RenameBranch(oldName, newName string) error {
+	if m.RenameBranchFn != nil {
+		return m.RenameBranchFn(oldName, newName)
+	}
+	return nil
+}
+
+func (m *MockOps) CherryPick(commits []string) error {
+	if m.CherryPickFn != nil {
+		return m.CherryPickFn(commits)
+	}
+	return nil
+}
+
+func (m *MockOps) HasUncommittedChanges() (bool, error) {
+	if m.HasUncommittedChangesFn != nil {
+		return m.HasUncommittedChangesFn()
+	}
+	return false, nil
+}
+
+func (m *MockOps) LogMerges(base, head string) ([]CommitInfo, error) {
+	if m.LogMergesFn != nil {
+		return m.LogMergesFn(base, head)
+	}
+	return nil, nil
 }
