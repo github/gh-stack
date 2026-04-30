@@ -13,7 +13,8 @@ import (
 )
 
 type modifyOptions struct {
-	recover bool
+	recover  bool
+	cont     bool
 }
 
 func ModifyCmd(cfg *config.Config) *cobra.Command {
@@ -36,11 +37,15 @@ After applying, run 'gh stack submit' to push changes and recreate the stack on 
 			if opts.recover {
 				return runModifyRecover(cfg)
 			}
+			if opts.cont {
+				return runModifyContinue(cfg)
+			}
 			return runModify(cfg)
 		},
 	}
 
 	cmd.Flags().BoolVar(&opts.recover, "recover", false, "Recover from a crashed modify session")
+	cmd.Flags().BoolVar(&opts.cont, "continue", false, "Continue after resolving conflicts")
 
 	return cmd
 }
@@ -122,7 +127,7 @@ func runModify(cfg *config.Config) error {
 		}
 		cfg.Printf("")
 		cfg.Printf("To resolve: fix conflicts, then run `%s`",
-			cfg.ColorCyan("gh stack rebase --continue"))
+			cfg.ColorCyan("gh stack modify --continue"))
 		cfg.Printf("To undo all changes: run `%s`",
 			cfg.ColorCyan("gh stack modify --recover"))
 		return ErrConflict
@@ -211,6 +216,22 @@ func runModifyRecover(cfg *config.Config) error {
 	}
 }
 
+// runModifyContinue continues applying after the user resolves a rebase conflict.
+func runModifyContinue(cfg *config.Config) error {
+	gitDir, err := git.GitDir()
+	if err != nil {
+		cfg.Errorf("not a git repository")
+		return ErrNotInStack
+	}
+
+	if err := modify.ContinueApply(cfg, gitDir, updateBaseSHAs); err != nil {
+		cfg.Errorf("%s", err)
+		return ErrConflict
+	}
+
+	return nil
+}
+
 // ---------------------------------------------------------------------------
 // Preconditions
 // ---------------------------------------------------------------------------
@@ -284,6 +305,12 @@ func checkNoModifyInProgress(cfg *config.Config, gitDir string) error {
 		cfg.Printf("Run `%s` to restore your stack",
 			cfg.ColorCyan("gh stack modify --recover"))
 		return ErrModifyRecovery
+	case "conflict":
+		cfg.Errorf("a modify has unresolved conflicts")
+		cfg.Printf("Run `%s` to continue, or `%s` to restore your stack",
+			cfg.ColorCyan("gh stack modify --continue"),
+			cfg.ColorCyan("gh stack modify --recover"))
+		return ErrSilent
 	case "pending_submit":
 		cfg.Errorf("a modify was completed but the stack has not been submitted yet")
 		cfg.Printf("Run `%s` to push changes and recreate the stack on GitHub",

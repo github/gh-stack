@@ -399,6 +399,24 @@ func ApplyPlan(
 			if files, ferr := git.ConflictedFiles(); ferr == nil {
 				conflict.ConflictedFiles = files
 			}
+
+			// Save conflict state so --continue can resume
+			remaining := make([]string, 0)
+			for j := i + 1; j < len(s.Branches); j++ {
+				if !s.Branches[j].IsMerged() {
+					remaining = append(remaining, s.Branches[j].Branch)
+				}
+			}
+			stateFile.Phase = "conflict"
+			stateFile.ConflictBranch = b.Branch
+			stateFile.RemainingBranches = remaining
+			stateFile.OriginalBranch = currentBranch
+			stateFile.OriginalRefs = originalParentTips
+			_ = SaveState(gitDir, stateFile)
+
+			// Save stack metadata so far (renames, folds, drops already applied)
+			_ = stack.SaveWithLock(gitDir, sf, lock)
+
 			return nil, conflict, fmt.Errorf("rebase conflict on %s", b.Branch)
 		}
 
@@ -429,6 +447,152 @@ func ApplyPlan(
 	}
 
 	return result, nil, nil
+}
+
+// ContinueApply resumes a modify operation after the user resolves a rebase conflict.
+// It finishes the in-progress git rebase, then continues the cascading rebase for
+// remaining branches stored in the state file.
+func ContinueApply(
+	cfg *config.Config,
+	gitDir string,
+	updateBaseSHAs func(*stack.Stack),
+) error {
+	state, err := LoadState(gitDir)
+	if err != nil {
+		return fmt.Errorf("loading modify state: %w", err)
+	}
+	if state == nil {
+		return fmt.Errorf("no modify state file found")
+	}
+	if state.Phase != "conflict" {
+		return fmt.Errorf("no modify conflict in progress (phase: %s)", state.Phase)
+	}
+
+	sf, err := stack.Load(gitDir)
+	if err != nil {
+		return fmt.Errorf("loading stack: %w", err)
+	}
+
+	// Find the stack
+	var s *stack.Stack
+	for i := range sf.Stacks {
+		if sf.Stacks[i].Trunk.Branch == state.StackName {
+			s = &sf.Stacks[i]
+			break
+		}
+	}
+	if s == nil {
+		return fmt.Errorf("stack %q not found", state.StackName)
+	}
+
+	// Finish the in-progress git rebase
+	if git.IsRebaseInProgress() {
+		if err := git.RebaseContinue(); err != nil {
+			return fmt.Errorf("rebase continue failed — resolve remaining conflicts and try again: %w", err)
+		}
+	}
+
+	cfg.Successf("Rebased %s", state.ConflictBranch)
+
+	// Continue cascading rebase for remaining branches
+	for _, branchName := range state.RemainingBranches {
+		idx := s.IndexOf(branchName)
+		if idx < 0 {
+			cfg.Warningf("branch %s no longer in stack, skipping", branchName)
+			continue
+		}
+		b := s.Branches[idx]
+		if b.IsMerged() {
+			continue
+		}
+
+		var newBase string
+		if idx == 0 {
+			newBase = s.Trunk.Branch
+		} else {
+			newBase = s.ActiveBaseBranch(b.Branch)
+		}
+
+		// Use original parent tip or merge-base as oldBase
+		oldBase := ""
+		if state.OriginalRefs != nil {
+			oldBase = state.OriginalRefs[b.Branch]
+		}
+		if oldBase == "" {
+			if mb, mberr := git.MergeBase(newBase, b.Branch); mberr == nil {
+				oldBase = mb
+			} else {
+				continue
+			}
+		}
+
+		// Check if rebase is needed
+		isAnc, ancErr := git.IsAncestor(newBase, b.Branch)
+		if ancErr == nil && isAnc {
+			if mb, mberr := git.MergeBase(newBase, b.Branch); mberr == nil && mb == oldBase {
+				continue
+			}
+		}
+
+		if err := git.RebaseOnto(newBase, oldBase, b.Branch); err != nil {
+			// Another conflict — update state and bail
+			remaining := make([]string, 0)
+			foundCurrent := false
+			for _, rn := range state.RemainingBranches {
+				if rn == branchName {
+					foundCurrent = true
+					continue
+				}
+				if foundCurrent {
+					remaining = append(remaining, rn)
+				}
+			}
+			state.ConflictBranch = branchName
+			state.RemainingBranches = remaining
+			_ = SaveState(gitDir, state)
+
+			cfg.Warningf("Conflict rebasing %s", branchName)
+			if files, ferr := git.ConflictedFiles(); ferr == nil {
+				for _, f := range files {
+					cfg.Printf("  %s", f)
+				}
+			}
+			return fmt.Errorf("rebase conflict on %s — resolve and run `gh stack modify --continue` again", branchName)
+		}
+
+		cfg.Successf("Rebased %s onto %s", branchName, newBase)
+	}
+
+	// All rebases done — restore original branch
+	if state.OriginalBranch != "" {
+		_ = git.CheckoutBranch(state.OriginalBranch)
+	}
+
+	// Update base SHAs
+	updateBaseSHAs(s)
+
+	// Transition to pending_submit or clear
+	if s.ID != "" {
+		state.Phase = "pending_submit"
+		state.ConflictBranch = ""
+		state.RemainingBranches = nil
+		state.OriginalRefs = nil
+		if err := SaveState(gitDir, state); err != nil {
+			cfg.Warningf("failed to update modify state: %s", err)
+		}
+	} else {
+		ClearState(gitDir)
+	}
+
+	// Save stack metadata
+	if err := stack.Save(gitDir, sf); err != nil {
+		cfg.Warningf("failed to save stack: %v", err)
+	}
+
+	cfg.Successf("Modify apply completed")
+	cfg.Printf("Run `%s` to push branches and recreate the stack on GitHub",
+		cfg.ColorCyan("gh stack submit"))
+	return nil
 }
 
 // Unwind restores the stack to its pre-modify state using the snapshot.

@@ -17,10 +17,16 @@ type StateFile struct {
 	SchemaVersion      int            `json:"schema_version"`
 	StackName          string         `json:"stack_name"`
 	StartedAt          time.Time      `json:"started_at"`
-	Phase              string         `json:"phase"` // "applying" or "pending_submit"
+	Phase              string         `json:"phase"` // "applying", "conflict", or "pending_submit"
 	PriorRemoteStackID string         `json:"prior_remote_stack_id,omitempty"`
 	Snapshot           Snapshot       `json:"snapshot"`
 	Plan               []Action       `json:"plan"`
+
+	// Conflict state — populated when phase is "conflict"
+	ConflictBranch    string            `json:"conflict_branch,omitempty"`
+	RemainingBranches []string          `json:"remaining_branches,omitempty"`
+	OriginalBranch    string            `json:"original_branch,omitempty"`
+	OriginalRefs      map[string]string `json:"original_refs,omitempty"`
 }
 
 // Snapshot captures the pre-modify state for unwind/recovery.
@@ -109,6 +115,9 @@ func CheckStateGuard(gitDir string) error {
 	}
 	if state.Phase == "applying" {
 		return fmt.Errorf("a modify session was interrupted — run `gh stack modify --recover` to restore your stack")
+	}
+	if state.Phase == "conflict" {
+		return fmt.Errorf("a modify has unresolved conflicts — run `gh stack modify --continue` or `gh stack modify --recover`")
 	}
 	return nil
 }
