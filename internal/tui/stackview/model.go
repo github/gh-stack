@@ -5,13 +5,12 @@ import (
 	"os/exec"
 	"runtime"
 	"strings"
-	"time"
 
 	"github.com/charmbracelet/bubbles/help"
 	"github.com/charmbracelet/bubbles/key"
 	tea "github.com/charmbracelet/bubbletea"
-	"github.com/charmbracelet/lipgloss"
 	"github.com/github/gh-stack/internal/stack"
+	"github.com/github/gh-stack/internal/tui/shared"
 )
 
 // keyMap defines the key bindings for the stack view.
@@ -63,36 +62,6 @@ var keys = keyMap{
 		key.WithHelp("q", "quit"),
 	),
 }
-
-// headerHeight is the total number of lines the header box occupies (top border + 10 art lines + bottom border).
-const headerHeight = 12
-
-// minHeightForHeader is the minimum terminal height to show the header.
-const minHeightForHeader = 25
-
-// minWidthForShortcuts is the minimum terminal width to show keyboard shortcuts in the header.
-// Below this, the header is shown without the right-side shortcuts column.
-const minWidthForShortcuts = 65
-
-// minWidthForHeader is the minimum terminal width to show the header at all.
-const minWidthForHeader = 50
-
-// artLines contains the braille ASCII art displayed in the header.
-var artLines = [10]string{
-	"⠀⠀⠀⠀⠀⠀⣀⣤⣤⣤⣤⣤⣤⣀⠀⠀⠀⠀⠀⠀",
-	"⠀⠀⠀⣠⣴⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣶⣄⠀⠀⠀",
-	"⠀⢀⣼⣿⣿⠛⠛⠿⠿⠿⠿⠿⠿⠛⠛⣿⣿⣷⡀⠀",
-	"⠀⣾⣿⣿⣿⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⣿⣿⣿⣷⡀",
-	"⢸⣿⣿⣿⡇⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⢸⣿⣿⣿⡇",
-	"⢸⣿⣿⣿⡇⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⢸⣿⣿⣿⡇",
-	"⠘⣿⣿⣿⣿⣦⡀⠀⠀⠀⠀⠀⠀⢀⣤⣿⣿⣿⣿⠇",
-	"⠀⠹⣿⣦⡈⠻⢿⠟⠀⠀⠀⠀⢻⣿⣿⣿⣿⣿⠏⠀",
-	"⠀⠀⠈⠻⣷⣤⣀⡀⠀⠀⠀⠀⢸⣿⣿⣿⡿⠃⠀⠀",
-	"⠀⠀⠀⠀⠈⠙⠻⠇⠀⠀⠀⠀⠸⠟⠛⠁⠀⠀⠀⠀",
-}
-
-// artDisplayWidth is the visual column width of each art line.
-const artDisplayWidth = 20
 
 // Model is the Bubbletea model for the interactive stack view.
 type Model struct {
@@ -235,15 +204,33 @@ func openBrowserInBackground(url string) {
 	_ = cmd.Start()
 }
 
+// toBranchNodeData converts a BranchNode to shared.BranchNodeData.
+func toBranchNodeData(node BranchNode) shared.BranchNodeData {
+	return shared.BranchNodeData{
+		Ref:              node.Ref,
+		IsCurrent:        node.IsCurrent,
+		IsLinear:         node.IsLinear,
+		BaseBranch:       node.BaseBranch,
+		Commits:          node.Commits,
+		FilesChanged:     node.FilesChanged,
+		PR:               node.PR,
+		Additions:        node.Additions,
+		Deletions:        node.Deletions,
+		CommitsExpanded:  node.CommitsExpanded,
+		FilesExpanded:    node.FilesExpanded,
+		ShowCurrentLabel: true,
+	}
+}
+
 // handleMouseClick processes a mouse click at the given screen position.
 func (m Model) handleMouseClick(screenX, screenY int) (tea.Model, tea.Cmd) {
 	// If header is visible, clicks in the header area are ignored
 	yOffset := 0
-	if m.showHeader() {
-		if screenY < headerHeight {
+	if shared.ShouldShowHeader(m.width, m.height) {
+		if screenY < shared.HeaderHeight {
 			return m, nil
 		}
-		yOffset = headerHeight
+		yOffset = shared.HeaderHeight
 	}
 
 	// Map screen Y to content line, accounting for scroll offset and header
@@ -307,29 +294,7 @@ func (m Model) handleMouseClick(screenX, screenY int) (tea.Model, tea.Cmd) {
 
 // nodeLineCount returns how many rendered lines a node occupies.
 func (m Model) nodeLineCount(idx int) int {
-	node := m.nodes[idx]
-	lines := 1 // header line (PR line or branch line)
-
-	if node.PR != nil {
-		lines++ // branch + diff stats line (below PR header)
-	}
-
-	if len(node.FilesChanged) > 0 {
-		lines++ // files toggle line
-		if node.FilesExpanded {
-			lines += len(node.FilesChanged)
-		}
-	}
-
-	if len(node.Commits) > 0 {
-		lines++ // commits toggle line
-		if node.CommitsExpanded {
-			lines += len(node.Commits)
-		}
-	}
-
-	lines++ // connector/spacer line
-	return lines
+	return shared.NodeLineCount(toBranchNodeData(m.nodes[idx]))
 }
 
 // commitToggleLineOffset returns the offset from node start to the commits toggle line.
@@ -364,7 +329,7 @@ func (m Model) prLabelColumns(idx int) (int, int) {
 	node := m.nodes[idx]
 	// Layout: "├ " (2) + optional status icon + " " (2) + "#N..."
 	col := 2 // bullet + space
-	icon := m.statusIcon(node)
+	icon := shared.StatusIcon(toBranchNodeData(node))
 	if icon != "" {
 		col += 2 // icon (1 visible char) + space
 	}
@@ -406,28 +371,8 @@ func (m *Model) ensureVisible() {
 	}
 	endLine := startLine + m.nodeLineCount(m.cursor)
 
-	// Available content height (reserve space for header or help bar)
 	viewHeight := m.contentViewHeight()
-	if viewHeight < 1 {
-		viewHeight = 1
-	}
-
-	if startLine < m.scrollOffset {
-		m.scrollOffset = startLine
-	}
-	if endLine > m.scrollOffset+viewHeight {
-		m.scrollOffset = endLine - viewHeight
-	}
-}
-
-// showHeader returns true if the terminal is large enough for the header.
-func (m Model) showHeader() bool {
-	return m.height >= minHeightForHeader && m.width >= minWidthForHeader
-}
-
-// showShortcuts returns true if the terminal is wide enough for the shortcuts column in the header.
-func (m Model) showShortcuts() bool {
-	return m.width >= minWidthForShortcuts
+	m.scrollOffset = shared.EnsureVisible(startLine, endLine, m.scrollOffset, viewHeight)
 }
 
 // totalContentLines returns the total number of rendered content lines (excluding header).
@@ -454,8 +399,8 @@ func (m Model) totalContentLines() int {
 // contentViewHeight returns the number of lines available for stack content.
 func (m Model) contentViewHeight() int {
 	reserved := 0
-	if m.showHeader() {
-		reserved = headerHeight
+	if shared.ShouldShowHeader(m.width, m.height) {
+		reserved = shared.HeaderHeight
 	}
 	h := m.height - reserved
 	if h < 1 {
@@ -466,16 +411,7 @@ func (m Model) contentViewHeight() int {
 
 // clampScroll ensures scrollOffset doesn't exceed content bounds.
 func (m *Model) clampScroll() {
-	maxScroll := m.totalContentLines() - m.contentViewHeight()
-	if maxScroll < 0 {
-		maxScroll = 0
-	}
-	if m.scrollOffset > maxScroll {
-		m.scrollOffset = maxScroll
-	}
-	if m.scrollOffset < 0 {
-		m.scrollOffset = 0
-	}
+	m.scrollOffset = shared.ClampScroll(m.totalContentLines(), m.contentViewHeight(), m.scrollOffset)
 }
 
 func (m Model) View() string {
@@ -485,9 +421,9 @@ func (m Model) View() string {
 
 	var out strings.Builder
 
-	showHeader := m.showHeader()
+	showHeader := shared.ShouldShowHeader(m.width, m.height)
 	if showHeader {
-		m.renderHeader(&out)
+		shared.RenderHeader(&out, m.buildHeaderConfig(), m.width, m.height)
 	}
 
 	var b strings.Builder
@@ -499,9 +435,9 @@ func (m Model) View() string {
 		isMerged := m.nodes[i].Ref.IsMerged()
 		isQueued := m.nodes[i].Ref.IsQueued()
 		if isMerged && !prevWasMerged && i > 0 {
-			b.WriteString(connectorStyle.Render("────") + dimStyle.Render(" merged ") + connectorStyle.Render("─────") + "\n")
+			shared.RenderMergedSeparator(&b)
 		} else if isQueued && !prevWasQueued && !prevWasMerged && i > 0 {
-			b.WriteString(connectorStyle.Render("────") + dimStyle.Render(" queued ") + connectorStyle.Render("─────") + "\n")
+			shared.RenderQueuedSeparator(&b)
 		}
 		m.renderNode(&b, i)
 		prevWasMerged = isMerged
@@ -509,9 +445,7 @@ func (m Model) View() string {
 	}
 
 	// Trunk
-	b.WriteString(connectorStyle.Render("└ "))
-	b.WriteString(trunkStyle.Render(m.trunk.Branch))
-	b.WriteString("\n")
+	shared.RenderTrunk(&b, m.trunk.Branch)
 
 	content := b.String()
 	contentLines := strings.Split(content, "\n")
@@ -519,7 +453,7 @@ func (m Model) View() string {
 	// Apply scrolling
 	reservedLines := 0
 	if showHeader {
-		reservedLines = headerHeight
+		reservedLines = shared.HeaderHeight
 	}
 	viewHeight := m.height - reservedLines
 	if viewHeight < 1 {
@@ -546,15 +480,8 @@ func (m Model) View() string {
 	return out.String()
 }
 
-// renderHeader renders the full-width stylized header box with ASCII art, stack info, and keyboard shortcuts.
-func (m Model) renderHeader(b *strings.Builder) {
-	w := m.width
-	if w < 2 {
-		return
-	}
-	innerWidth := w - 2 // subtract left and right border chars
-
-	// Build info lines (placed to the right of art on specific rows)
+// buildHeaderConfig produces the header configuration for the stack view.
+func (m Model) buildHeaderConfig() shared.HeaderConfig {
 	mergedCount := 0
 	queuedCount := 0
 	for _, n := range m.nodes {
@@ -565,6 +492,7 @@ func (m Model) renderHeader(b *strings.Builder) {
 			queuedCount++
 		}
 	}
+
 	branchCount := len(m.nodes)
 	branchInfo := fmt.Sprintf("%d branches", branchCount)
 	if branchCount == 1 {
@@ -577,7 +505,6 @@ func (m Model) renderHeader(b *strings.Builder) {
 		branchInfo += fmt.Sprintf(" (%d queued)", queuedCount)
 	}
 
-	// Branch progress icon: ○ none merged, ◐ some merged, ● all merged
 	branchIcon := "○"
 	if mergedCount > 0 && mergedCount < branchCount {
 		branchIcon = "◐"
@@ -585,406 +512,33 @@ func (m Model) renderHeader(b *strings.Builder) {
 		branchIcon = "●"
 	}
 
-	// Info text mapped to art row indices (0-based)
-	infoByRow := map[int]string{
-		2: headerTitleStyle.Render("GitHub Stacks"),
-		3: headerInfoLabelStyle.Render("v" + m.version),
-		5: headerInfoStyle.Render("✓") + headerInfoLabelStyle.Render(" Stack initialized"),
-		6: headerInfoStyle.Render("◆") + headerInfoLabelStyle.Render(" Base: "+m.trunk.Branch),
-		7: headerInfoStyle.Render(branchIcon) + headerInfoLabelStyle.Render(" "+branchInfo),
+	return shared.HeaderConfig{
+		ShowArt:  true,
+		Title:    "GitHub Stacks",
+		Subtitle: "v" + m.version,
+		InfoLines: []shared.HeaderInfoLine{
+			{Icon: "✓", Label: "Stack initialized"},
+			{Icon: "◆", Label: "Base: " + m.trunk.Branch},
+			{Icon: branchIcon, Label: branchInfo},
+		},
+		ShortcutColumns: 1,
+		Shortcuts: []shared.ShortcutEntry{
+			{Key: "↑", Desc: "up"},
+			{Key: "↓", Desc: "down"},
+			{Key: "c", Desc: "commits"},
+			{Key: "f", Desc: "files"},
+			{Key: "o", Desc: "open PR"},
+			{Key: "↵", Desc: "checkout"},
+			{Key: "q", Desc: "quit"},
+		},
 	}
-
-	showShortcuts := m.showShortcuts()
-
-	// Build shortcut lines (rendered content + visual widths)
-	type shortcutLine struct {
-		text     string
-		visWidth int
-	}
-	var shortcuts []shortcutLine
-	maxShortcutWidth := 0
-	rightColWidth := 0
-
-	if showShortcuts {
-		shortcuts = []shortcutLine{
-			{headerShortcutKey.Render("↑") + headerShortcutDesc.Render(" up  ") +
-				headerShortcutKey.Render("↓") + headerShortcutDesc.Render(" down"), 0},
-			{headerShortcutKey.Render("c") + headerShortcutDesc.Render(" commits"), 0},
-			{headerShortcutKey.Render("f") + headerShortcutDesc.Render(" files"), 0},
-			{headerShortcutKey.Render("o") + headerShortcutDesc.Render(" open PR"), 0},
-			{headerShortcutKey.Render("↵") + headerShortcutDesc.Render(" checkout"), 0},
-			{headerShortcutKey.Render("q") + headerShortcutDesc.Render(" quit"), 0},
-		}
-		for i := range shortcuts {
-			shortcuts[i].visWidth = lipgloss.Width(shortcuts[i].text)
-			if shortcuts[i].visWidth > maxShortcutWidth {
-				maxShortcutWidth = shortcuts[i].visWidth
-			}
-		}
-		rightColWidth = maxShortcutWidth + 2
-	}
-
-	// Left content base: 1 (margin) + artDisplayWidth
-	leftContentBase := 1 + artDisplayWidth
-
-	// Vertically center shortcuts within the 10 content rows
-	scStartRow := 0
-	if len(shortcuts) > 0 {
-		scStartRow = (10 - len(shortcuts)) / 2
-	}
-
-	// Top border
-	b.WriteString(headerBorderStyle.Render("┌" + strings.Repeat("─", innerWidth) + "┐"))
-	b.WriteString("\n")
-
-	// Content rows
-	gap := "  " // gap between art and info text
-	for i := 0; i < 10; i++ {
-		art := artLines[i]
-
-		// Build info segment
-		infoText := ""
-		infoVisualLen := 0
-		if info, ok := infoByRow[i]; ok {
-			infoText = gap + info
-			infoVisualLen = 2 + lipgloss.Width(info)
-		}
-
-		leftUsed := leftContentBase + infoVisualLen
-
-		if showShortcuts {
-			// Two-column layout: left (art+info) | right (shortcuts)
-			shortcutCol := innerWidth - rightColWidth
-			midPad := shortcutCol - leftUsed
-			if midPad < 0 {
-				midPad = 0
-			}
-
-			scIdx := i - scStartRow
-			shortcutRendered := ""
-			scVisWidth := 0
-			if scIdx >= 0 && scIdx < len(shortcuts) {
-				shortcutRendered = shortcuts[scIdx].text
-				scVisWidth = shortcuts[scIdx].visWidth
-			}
-			scTrailingPad := rightColWidth - scVisWidth
-			if scTrailingPad < 0 {
-				scTrailingPad = 0
-			}
-
-			b.WriteString(headerBorderStyle.Render("│"))
-			b.WriteString(" ")
-			b.WriteString(art)
-			b.WriteString(infoText)
-			b.WriteString(strings.Repeat(" ", midPad))
-			b.WriteString(shortcutRendered)
-			b.WriteString(strings.Repeat(" ", scTrailingPad))
-			b.WriteString(headerBorderStyle.Render("│"))
-		} else {
-			// Single-column layout: art + info, padded to fill
-			trailingPad := innerWidth - leftUsed
-			if trailingPad < 0 {
-				trailingPad = 0
-			}
-
-			b.WriteString(headerBorderStyle.Render("│"))
-			b.WriteString(" ")
-			b.WriteString(art)
-			b.WriteString(infoText)
-			b.WriteString(strings.Repeat(" ", trailingPad))
-			b.WriteString(headerBorderStyle.Render("│"))
-		}
-		b.WriteString("\n")
-	}
-
-	// Bottom border
-	b.WriteString(headerBorderStyle.Render("└" + strings.Repeat("─", innerWidth) + "┘"))
-	b.WriteString("\n")
 }
 
 // renderNode renders a single branch node.
 func (m Model) renderNode(b *strings.Builder, idx int) {
 	node := m.nodes[idx]
 	isFocused := idx == m.cursor
-
-	// Determine connector character and style
-	connector := "│"
-	connStyle := connectorStyle
-	isMerged := node.Ref.IsMerged()
-	isQueued := node.Ref.IsQueued()
-	if !node.IsLinear && !isMerged && !isQueued {
-		connector = "┊"
-		connStyle = connectorDashedStyle
-	}
-	// Override style when this node is focused
-	if isFocused {
-		if node.IsCurrent {
-			connStyle = connectorCurrentStyle
-		} else if isMerged {
-			connStyle = connectorMergedStyle
-		} else if isQueued {
-			connStyle = connectorQueuedStyle
-		} else {
-			connStyle = connectorFocusedStyle
-		}
-	}
-
-	// Render header: either PR line + branch line, or just branch line
-	if node.PR != nil {
-		m.renderPRHeader(b, node, isFocused, connStyle)
-		m.renderBranchLine(b, node, connector, connStyle)
-	} else {
-		m.renderBranchHeader(b, node, isFocused, connStyle)
-	}
-
-	// Files changed toggle + expanded file list
-	if len(node.FilesChanged) > 0 {
-		m.renderFiles(b, node, connector, connStyle)
-	}
-
-	// Commits toggle + expanded commits
-	if len(node.Commits) > 0 {
-		m.renderCommits(b, node, connector, connStyle)
-	}
-
-	// Connector/spacer
-	b.WriteString(connStyle.Render(connector))
-	b.WriteString("\n")
-}
-
-// renderPRHeader renders the top line when a PR exists: bullet + status icon + PR number + state.
-func (m Model) renderPRHeader(b *strings.Builder, node BranchNode, isFocused bool, connStyle lipgloss.Style) {
-	bullet := "├"
-	if isFocused {
-		bullet = "▶"
-	}
-
-	b.WriteString(connStyle.Render(bullet + " "))
-
-	statusIcon := m.statusIcon(node)
-
-	if statusIcon != "" {
-		b.WriteString(statusIcon + " ")
-	}
-
-	// PR number + state label
-	pr := node.PR
-	prLabel := fmt.Sprintf("#%d", pr.Number)
-	stateLabel := ""
-	style := prOpenStyle
-	switch {
-	case pr.Merged:
-		stateLabel = " MERGED"
-		style = prMergedStyle
-	case pr.IsQueued:
-		stateLabel = " QUEUED"
-		style = prQueuedStyle
-	case pr.State == "CLOSED":
-		stateLabel = " CLOSED"
-		style = prClosedStyle
-	case pr.IsDraft:
-		stateLabel = " DRAFT"
-		style = prDraftStyle
-	default:
-		stateLabel = " OPEN"
-	}
-	b.WriteString(style.Underline(true).Render(prLabel) + style.Render(stateLabel))
-
-	b.WriteString("\n")
-}
-
-// renderBranchLine renders the branch name + diff stats below the PR header.
-func (m Model) renderBranchLine(b *strings.Builder, node BranchNode, connector string, connStyle lipgloss.Style) {
-	b.WriteString(connStyle.Render(connector))
-	b.WriteString(" ")
-
-	branchName := node.Ref.Branch
-	if node.IsCurrent {
-		b.WriteString(currentBranchStyle.Render(branchName + " (current)"))
-	} else {
-		b.WriteString(normalBranchStyle.Render(branchName))
-	}
-
-	m.renderDiffStats(b, node)
-	b.WriteString("\n")
-}
-
-// renderBranchHeader renders the header line when there is no PR: bullet + branch name + diff stats.
-func (m Model) renderBranchHeader(b *strings.Builder, node BranchNode, isFocused bool, connStyle lipgloss.Style) {
-	bullet := "├"
-	if isFocused {
-		bullet = "▶"
-	}
-
-	b.WriteString(connStyle.Render(bullet + " "))
-
-	// Status indicator
-	statusIcon := m.statusIcon(node)
-	if statusIcon != "" {
-		b.WriteString(statusIcon + " ")
-	}
-
-	// Branch name
-	branchName := node.Ref.Branch
-	if node.IsCurrent {
-		b.WriteString(currentBranchStyle.Render(branchName + " (current)"))
-	} else {
-		b.WriteString(normalBranchStyle.Render(branchName))
-	}
-
-	m.renderDiffStats(b, node)
-	b.WriteString("\n")
-}
-
-// renderDiffStats appends +N -N diff stats to the current line if available.
-func (m Model) renderDiffStats(b *strings.Builder, node BranchNode) {
-	if node.Additions > 0 || node.Deletions > 0 {
-		b.WriteString("  ")
-		b.WriteString(additionsStyle.Render(fmt.Sprintf("+%d", node.Additions)))
-		b.WriteString(" ")
-		b.WriteString(deletionsStyle.Render(fmt.Sprintf("-%d", node.Deletions)))
-	}
-}
-
-// statusIcon returns the appropriate status icon for a branch.
-func (m Model) statusIcon(node BranchNode) string {
-	if node.Ref.IsMerged() {
-		return mergedIcon
-	}
-	if node.Ref.IsQueued() {
-		return queuedIcon
-	}
-	if !node.IsLinear {
-		return warningIcon
-	}
-	if node.PR != nil && node.PR.Number != 0 {
-		return openIcon
-	}
-	return ""
-}
-
-// renderFiles renders the files changed toggle and optionally the expanded file list.
-func (m Model) renderFiles(b *strings.Builder, node BranchNode, connector string, connStyle lipgloss.Style) {
-	b.WriteString(connStyle.Render(connector))
-	b.WriteString("  ")
-
-	icon := collapsedIcon
-	if node.FilesExpanded {
-		icon = expandedIcon
-	}
-	fileLabel := "files changed"
-	if len(node.FilesChanged) == 1 {
-		fileLabel = "file changed"
-	}
-	b.WriteString(commitTimeStyle.Render(fmt.Sprintf("%s %d %s", icon, len(node.FilesChanged), fileLabel)))
-	b.WriteString("\n")
-
-	if !node.FilesExpanded {
-		return
-	}
-
-	for _, f := range node.FilesChanged {
-		b.WriteString(connStyle.Render(connector))
-		b.WriteString("    ")
-
-		path := f.Path
-		maxLen := m.width - 30
-		if maxLen < 20 {
-			maxLen = 20
-		}
-		if len(path) > maxLen {
-			path = "…" + path[len(path)-maxLen+1:]
-		}
-		b.WriteString(normalBranchStyle.Render(path))
-		b.WriteString("  ")
-		b.WriteString(additionsStyle.Render(fmt.Sprintf("+%d", f.Additions)))
-		b.WriteString(" ")
-		b.WriteString(deletionsStyle.Render(fmt.Sprintf("-%d", f.Deletions)))
-		b.WriteString("\n")
-	}
-}
-
-// renderCommits renders the commits toggle and optionally the expanded commit list.
-func (m Model) renderCommits(b *strings.Builder, node BranchNode, connector string, connStyle lipgloss.Style) {
-	b.WriteString(connStyle.Render(connector))
-	b.WriteString("  ")
-
-	icon := collapsedIcon
-	if node.CommitsExpanded {
-		icon = expandedIcon
-	}
-	commitLabel := "commits"
-	if len(node.Commits) == 1 {
-		commitLabel = "commit"
-	}
-	b.WriteString(commitTimeStyle.Render(fmt.Sprintf("%s %d %s", icon, len(node.Commits), commitLabel)))
-	b.WriteString("\n")
-
-	if !node.CommitsExpanded {
-		return
-	}
-
-	for _, c := range node.Commits {
-		b.WriteString(connStyle.Render(connector))
-		b.WriteString("    ")
-
-		sha := c.SHA
-		if len(sha) > 7 {
-			sha = sha[:7]
-		}
-		b.WriteString(commitSHAStyle.Render(sha))
-		b.WriteString(" ")
-
-		subject := c.Subject
-		maxLen := m.width - 35
-		if maxLen < 20 {
-			maxLen = 20
-		}
-		if len(subject) > maxLen {
-			subject = subject[:maxLen-1] + "…"
-		}
-		b.WriteString(commitSubjectStyle.Render(subject))
-		b.WriteString("  ")
-		b.WriteString(commitTimeStyle.Render(timeAgo(c.Time)))
-		b.WriteString("\n")
-	}
-}
-
-// timeAgo returns a human-readable time-ago string.
-func timeAgo(t time.Time) string {
-	d := time.Since(t)
-	switch {
-	case d < time.Minute:
-		secs := int(d.Seconds())
-		if secs == 1 {
-			return "1 second ago"
-		}
-		return fmt.Sprintf("%d seconds ago", secs)
-	case d < time.Hour:
-		mins := int(d.Minutes())
-		if mins == 1 {
-			return "1 minute ago"
-		}
-		return fmt.Sprintf("%d minutes ago", mins)
-	case d < 24*time.Hour:
-		hours := int(d.Hours())
-		if hours == 1 {
-			return "1 hour ago"
-		}
-		return fmt.Sprintf("%d hours ago", hours)
-	case d < 30*24*time.Hour:
-		days := int(d.Hours() / 24)
-		if days == 1 {
-			return "1 day ago"
-		}
-		return fmt.Sprintf("%d days ago", days)
-	default:
-		months := int(d.Hours() / 24 / 30)
-		if months <= 1 {
-			return "1 month ago"
-		}
-		return fmt.Sprintf("%d months ago", months)
-	}
+	shared.RenderNode(b, toBranchNodeData(node), isFocused, m.width, nil)
 }
 
 // browserCmd returns an exec.Cmd to open a URL in the default browser.
