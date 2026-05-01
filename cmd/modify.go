@@ -118,17 +118,12 @@ func runModify(cfg *config.Config) error {
 	applyResult, conflict, applyErr := modify.ApplyPlan(cfg, gitDir, s, sf, reordered, currentBranch, updateBaseSHAs)
 
 	if conflict != nil {
-		cfg.Warningf("Conflict while rebasing %s", conflict.Branch)
-		if len(conflict.ConflictedFiles) > 0 {
-			cfg.Printf("Conflicted files:")
-			for _, f := range conflict.ConflictedFiles {
-				cfg.Printf("  %s", f)
-			}
-		}
+		cfg.Warningf("Rebasing %s — conflict", conflict.Branch)
+
+		printConflictDetailsWithContinue(cfg, conflict.Branch, "gh stack modify --continue")
 		cfg.Printf("")
-		cfg.Printf("To resolve: fix conflicts, then run `%s`",
-			cfg.ColorCyan("gh stack modify --continue"))
-		cfg.Printf("To undo all changes: run `%s`",
+
+		cfg.Printf("Or restore the stack to its pre-modify state with `%s`",
 			cfg.ColorCyan("gh stack modify --recover"))
 		return ErrConflict
 	}

@@ -616,6 +616,10 @@ func clearRebaseState(gitDir string) {
 }
 
 func printConflictDetails(cfg *config.Config, branch string) {
+	printConflictDetailsWithContinue(cfg, branch, "gh stack rebase --continue")
+}
+
+func printConflictDetailsWithContinue(cfg *config.Config, branch string, continueCmd string) {
 	files, err := git.ConflictedFiles()
 	if err != nil || len(files) == 0 {
 		return
@@ -643,5 +647,5 @@ func printConflictDetails(cfg *config.Config, branch string) {
 	cfg.Printf("     %s  (changes being rebased)", cfg.ColorCyan(">>>>>>>"))
 	cfg.Printf("  2. Edit the file to keep the desired changes and remove the markers")
 	cfg.Printf("  3. Stage resolved files: `%s`", cfg.ColorCyan("git add <file>"))
-	cfg.Printf("  4. Continue the rebase:  `%s`", cfg.ColorCyan("gh stack rebase --continue"))
+	cfg.Printf("  4. Continue:  `%s`", cfg.ColorCyan(continueCmd))
 }
