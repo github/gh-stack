@@ -134,6 +134,18 @@ func runSubmit(cfg *config.Config, opts *submitOptions) error {
 		return ErrSilent
 	}
 
+	// Handle pending modify state — delete old stack and clear s.ID BEFORE
+	// the PR base update loop, so that base branches can be updated freely
+	// (the stack API locks base branches while a stack exists).
+	if stacksAvailable {
+		if err := handlePendingModify(cfg, client, s, gitDir); err != nil {
+			if errors.Is(err, errInterrupt) {
+				return ErrSilent
+			}
+			// Other errors already reported — continue with sync attempt
+		}
+	}
+
 	// Create or update PRs — ensure every active branch has a PR with the
 	// correct base branch. This makes submit idempotent: running it again
 	// fills gaps and fixes base branches before syncing the stack.
@@ -220,13 +232,6 @@ func runSubmit(cfg *config.Config, opts *submitOptions) error {
 		}
 	}
 
-	// Handle pending modify state (delete old stack)
-	if stacksAvailable {
-		if err := handlePendingModify(cfg, client, s, gitDir); err != nil {
-			// Error already reported — continue with sync attempt
-		}
-	}
-
 	// Create or update the stack on GitHub
 	if stacksAvailable {
 		syncStack(cfg, client, s)
@@ -298,6 +303,24 @@ func handlePendingModify(cfg *config.Config, client github.ClientOps, s *stack.S
 		return nil // Not in pending_submit phase
 	}
 
+	// Prompt for confirmation before overwriting the remote stack
+	if cfg.IsInteractive() {
+		p := prompter.New(cfg.In, cfg.Out, cfg.Err)
+		proceed, promptErr := p.Confirm("The local stack has been modified. Overwrite the existing stack on GitHub?", false)
+		if promptErr != nil {
+			if isInterruptError(promptErr) {
+				printInterrupt(cfg)
+				return errInterrupt
+			}
+			return promptErr
+		}
+		if !proceed {
+			cfg.Printf("Skipping stack recreation — run `%s` when ready",
+				cfg.ColorCyan("gh stack submit"))
+			return errInterrupt
+		}
+	}
+
 	// Delete the old remote stack
 	if state.PriorRemoteStackID != "" {
 		if err := client.DeleteStack(state.PriorRemoteStackID); err != nil {
@@ -310,7 +333,7 @@ func handlePendingModify(cfg *config.Config, client github.ClientOps, s *stack.S
 				return err
 			}
 		} else {
-			cfg.Successf("Deleted previous stack on GitHub")
+			cfg.Successf("Cleared previous stack on GitHub")
 		}
 		// Clear the old stack ID so syncStack creates a new one
 		s.ID = ""
