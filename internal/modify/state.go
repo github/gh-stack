@@ -16,6 +16,7 @@ const stateFileName = "gh-stack-modify-state"
 type StateFile struct {
 	SchemaVersion      int            `json:"schema_version"`
 	StackName          string         `json:"stack_name"`
+	StackIndex         int            `json:"stack_index"` // index in StackFile.Stacks at modify start
 	StartedAt          time.Time      `json:"started_at"`
 	Phase              string         `json:"phase"` // "applying", "conflict", or "pending_submit"
 	PriorRemoteStackID string         `json:"prior_remote_stack_id,omitempty"`

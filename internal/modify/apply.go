@@ -111,10 +111,20 @@ func ApplyPlan(
 
 	plan := BuildPlan(nodes)
 
+	// Find the index of this stack in the stack file for reliable identification
+	stackIndex := -1
+	for i := range sf.Stacks {
+		if &sf.Stacks[i] == s {
+			stackIndex = i
+			break
+		}
+	}
+
 	// Write state file with phase "applying"
 	stateFile := &StateFile{
 		SchemaVersion:      1,
 		StackName:          s.Trunk.Branch,
+		StackIndex:         stackIndex,
 		StartedAt:          time.Now().UTC(),
 		Phase:              "applying",
 		PriorRemoteStackID: s.ID,
@@ -155,7 +165,7 @@ func ApplyPlan(
 	}
 	if err != nil {
 		// Unwind on failure
-		unwindErr := Unwind(cfg, gitDir, snapshot, s, sf)
+		unwindErr := Unwind(cfg, gitDir, snapshot, stackIndex, sf)
 		if unwindErr != nil {
 			return nil, nil, fmt.Errorf("failed to resolve refs (%v) and unwind failed (%v)", err, unwindErr)
 		}
@@ -168,7 +178,7 @@ func ApplyPlan(
 			oldName := n.Ref.Branch
 			newName := n.PendingAction.NewName
 			if err := git.RenameBranch(oldName, newName); err != nil {
-				unwindErr := Unwind(cfg, gitDir, snapshot, s, sf)
+				unwindErr := Unwind(cfg, gitDir, snapshot, stackIndex, sf)
 				if unwindErr != nil {
 					return nil, nil, fmt.Errorf("rename failed (%v) and unwind failed (%v)", err, unwindErr)
 				}
@@ -237,7 +247,7 @@ func ApplyPlan(
 		} else {
 			// Checkout target and cherry-pick
 			if err := git.CheckoutBranch(targetBranch); err != nil {
-				unwindErr := Unwind(cfg, gitDir, snapshot, s, sf)
+				unwindErr := Unwind(cfg, gitDir, snapshot, stackIndex, sf)
 				if unwindErr != nil {
 					return nil, nil, fmt.Errorf("checkout failed (%v) and unwind failed (%v)", err, unwindErr)
 				}
@@ -596,7 +606,8 @@ func ContinueApply(
 }
 
 // Unwind restores the stack to its pre-modify state using the snapshot.
-func Unwind(cfg *config.Config, gitDir string, snapshot Snapshot, s *stack.Stack, sf *stack.StackFile) error {
+// stackIndex is the index of the stack in sf.Stacks at modify start time.
+func Unwind(cfg *config.Config, gitDir string, snapshot Snapshot, stackIndex int, sf *stack.StackFile) error {
 	// Abort any in-progress rebase
 	if git.IsRebaseInProgress() {
 		_ = git.RebaseAbort()
@@ -628,12 +639,9 @@ func Unwind(cfg *config.Config, gitDir string, snapshot Snapshot, s *stack.Stack
 		return fmt.Errorf("restoring stack metadata: %w", err)
 	}
 
-	// Find and replace the stack in the stack file
-	for i := range sf.Stacks {
-		if &sf.Stacks[i] == s {
-			sf.Stacks[i] = restoredStack
-			break
-		}
+	// Replace the stack at the saved index
+	if stackIndex >= 0 && stackIndex < len(sf.Stacks) {
+		sf.Stacks[stackIndex] = restoredStack
 	}
 
 	// Save restored stack
@@ -668,24 +676,5 @@ func UnwindFromStateFile(cfg *config.Config, gitDir string) error {
 		return fmt.Errorf("loading stack: %w", err)
 	}
 
-	// Find the stack by trunk name
-	var s *stack.Stack
-	for i := range sf.Stacks {
-		if sf.Stacks[i].Trunk.Branch == state.StackName {
-			s = &sf.Stacks[i]
-			break
-		}
-	}
-
-	if s == nil {
-		// Stack not found — try to restore from snapshot metadata
-		var restoredStack stack.Stack
-		if err := json.Unmarshal(state.Snapshot.StackMetadata, &restoredStack); err != nil {
-			return fmt.Errorf("restoring stack from snapshot: %w", err)
-		}
-		sf.AddStack(restoredStack)
-		s = &sf.Stacks[len(sf.Stacks)-1]
-	}
-
-	return Unwind(cfg, gitDir, state.Snapshot, s, sf)
+	return Unwind(cfg, gitDir, state.Snapshot, state.StackIndex, sf)
 }
