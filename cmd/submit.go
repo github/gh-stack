@@ -107,7 +107,7 @@ func runSubmit(cfg *config.Config, opts *submitOptions) error {
 	// Sync PR state to detect merged/queued PRs before pushing.
 	syncStackPRs(cfg, s)
 
-	// Push all active branches atomically
+	// Resolve remote for pushing
 	remote, err := pickRemote(cfg, currentBranch, opts.remote)
 	if err != nil {
 		if !errors.Is(err, errInterrupt) {
@@ -128,21 +128,74 @@ func runSubmit(cfg *config.Config, opts *submitOptions) error {
 		cfg.Printf("All branches are merged or queued, nothing to submit")
 		return nil
 	}
-	cfg.Printf("Pushing %d %s to %s...", len(activeBranches), plural(len(activeBranches), "branch", "branches"), remote)
-	if err := git.Push(remote, activeBranches, true, true); err != nil {
-		cfg.Errorf("failed to push: %s", err)
-		return ErrSilent
+
+	// When a modify is pending, delete the old stack BEFORE pushing so that
+	// PRs aren't auto-merged/closed during the force-push.
+	pendingModify := false
+	if stacksAvailable {
+		if state, _ := modify.LoadState(gitDir); state != nil && state.Phase == "pending_submit" {
+			pendingModify = true
+			if err := handlePendingModify(cfg, client, s, gitDir); err != nil {
+				if errors.Is(err, errInterrupt) {
+					return ErrSilent
+				}
+			}
+		}
 	}
 
-	// Handle pending modify state — delete old stack and clear s.ID BEFORE
-	// the PR base update loop, so that base branches can be updated freely
-	// (the stack API locks base branches while a stack exists).
-	if stacksAvailable {
-		if err := handlePendingModify(cfg, client, s, gitDir); err != nil {
-			if errors.Is(err, errInterrupt) {
+	if pendingModify {
+		// Push branches one at a time in stack order (bottom to top) and
+		// update each PR's base immediately after pushing. This prevents
+		// false "merge" detections when branches are pushed simultaneously
+		// with stale base relationships.
+		cfg.Printf("Pushing %d %s to %s (sequentially)...", len(activeBranches), plural(len(activeBranches), "branch", "branches"), remote)
+		for i, b := range s.Branches {
+			if s.Branches[i].IsMerged() || s.Branches[i].IsQueued() {
+				continue
+			}
+
+			// Push this single branch
+			if err := git.Push(remote, []string{b.Branch}, true, false); err != nil {
+				cfg.Errorf("failed to push %s: %s", b.Branch, err)
 				return ErrSilent
 			}
-			// Other errors already reported — continue with sync attempt
+
+			// Update PR base immediately after pushing
+			baseBranch := s.ActiveBaseBranch(b.Branch)
+			pr, prErr := client.FindPRForBranch(b.Branch)
+			if prErr != nil {
+				continue
+			}
+			if pr != nil {
+				if s.Branches[i].PullRequest == nil {
+					s.Branches[i].PullRequest = &stack.PullRequestRef{
+						Number: pr.Number,
+						ID:     pr.ID,
+						URL:    pr.URL,
+					}
+				}
+				if pr.BaseRefName != baseBranch {
+					if err := client.UpdatePRBase(pr.Number, baseBranch); err != nil {
+						cfg.Warningf("failed to update base branch for PR %s: %v",
+							cfg.PRLink(pr.Number, pr.URL), err)
+					} else {
+						cfg.Successf("Updated base branch for PR %s to %s",
+							cfg.PRLink(pr.Number, pr.URL), baseBranch)
+					}
+				} else {
+					cfg.Printf("PR %s for %s is up to date", cfg.PRLink(pr.Number, pr.URL), b.Branch)
+				}
+			} else {
+				// No PR yet — will be created in the PR loop below
+				cfg.Printf("Pushed %s", b.Branch)
+			}
+		}
+	} else {
+		// Normal submit — push all branches atomically
+		cfg.Printf("Pushing %d %s to %s...", len(activeBranches), plural(len(activeBranches), "branch", "branches"), remote)
+		if err := git.Push(remote, activeBranches, true, true); err != nil {
+			cfg.Errorf("failed to push: %s", err)
+			return ErrSilent
 		}
 	}
 
@@ -211,10 +264,11 @@ func runSubmit(cfg *config.Config, opts *submitOptions) error {
 				}
 			}
 
-			if pr.BaseRefName != baseBranch {
+			if pendingModify {
+				// Base updates already handled in the sequential push loop.
+				cfg.Printf("PR %s for %s is up to date", cfg.PRLink(pr.Number, pr.URL), b.Branch)
+			} else if pr.BaseRefName != baseBranch {
 				if s.ID != "" {
-					// PRs in an existing stack can't have their base updated
-					// via the API — the stack owns the base relationships.
 					cfg.Warningf("PR %s has base %q (expected %q) but cannot update while stacked",
 						cfg.PRLink(pr.Number, pr.URL), pr.BaseRefName, baseBranch)
 				} else {
