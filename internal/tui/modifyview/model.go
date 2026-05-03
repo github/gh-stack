@@ -546,6 +546,22 @@ func (m *Model) toggleDrop() {
 			}
 		}
 
+		// Check if this would remove the last active branch
+		active := 0
+		for j, other := range m.nodes {
+			if j == m.cursor {
+				continue // skip the branch we're about to drop
+			}
+			if !other.Removed && !other.Ref.IsMerged() {
+				active++
+			}
+		}
+		if active < 1 {
+			m.statusMessage = "Cannot drop the last branch in the stack"
+			m.statusIsError = true
+			return
+		}
+
 		// Apply drop
 		m.actionStack = append(m.actionStack, StagedAction{
 			Type:       ActionDrop,
@@ -623,6 +639,22 @@ func (m *Model) fold(action ActionType) {
 			m.statusIsError = true
 			return
 		}
+	}
+
+	// Check if this would remove the last active branch
+	active := 0
+	for j, other := range m.nodes {
+		if j == m.cursor {
+			continue
+		}
+		if !other.Removed && !other.Ref.IsMerged() {
+			active++
+		}
+	}
+	if active < 1 {
+		m.statusMessage = "Cannot fold the last branch in the stack"
+		m.statusIsError = true
+		return
 	}
 
 	m.actionStack = append(m.actionStack, StagedAction{
