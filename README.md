@@ -232,6 +232,68 @@ gh stack rebase --continue
 gh stack rebase --abort
 ```
 
+### `gh stack modify`
+
+Interactively restructure the current stack.
+
+```
+gh stack modify [flags]
+```
+
+Opens a terminal UI for restructuring a stack. You can rename, drop, reorder, and fold branches into adjacent ones. All the changes are staged during the preview and applied at once on save.
+
+If the stack of PRs has been created on GitHub, run `gh stack submit` afterwards to push the changes and recreate the stack.
+
+| Flag | Description |
+|------|-------------|
+| `--continue` | Continue after resolving conflicts |
+| `--abort` | Abort the modify session and restore the stack to its pre-modify state |
+
+**Operations:**
+
+- **Drop** (`x`): Remove a branch and its commits from the stack. Local branch and associated PR are preserved.
+- **Fold down** (`d`): Absorb a branch's commits into the branch below (toward trunk). Folded branch removed from stack.
+- **Fold up** (`u`): Absorb a branch's commits into the branch above (away from trunk). Folded branch removed from stack.
+- **Reorder** (`Shift+↑`/`Shift+↓`): Move a branch up (away from trunk) or down (toward trunk) in the stack.
+- **Rename** (`r`): Rename a branch locally and in the stack metadata.
+- **Undo** (`z`): Undo the last staged action.
+
+**Keybindings:**
+
+| Key | Action |
+|-----|--------|
+| `↑`/`↓` | Navigate branch list |
+| `f` | View files changed |
+| `c` | View commits |
+| `x` | Drop branch |
+| `r` | Rename branch |
+| `u/d` | Fold branch up/down |
+| `Shift+↑`/`Shift+↓` | Move branch up/down |
+| `z` | Undo last action |
+| `Ctrl+S` | Apply all changes |
+| `q`/`Esc` | Cancel and exit |
+| `?` | Help |
+
+**Preconditions:**
+- Must have an active stack checked out locally
+- Working tree must be clean
+- No rebase in progress
+- No PR in the stack is queued for merge
+- Commit history must be linear
+
+**Examples:**
+
+```sh
+# Open the modify TUI
+gh stack modify
+
+# Continue after resolving a conflict
+gh stack modify --continue
+
+# Abort and restore to the previous state
+gh stack modify --abort
+```
+
 ### `gh stack sync`
 
 Fetch, rebase, push, and sync PR state in a single command.

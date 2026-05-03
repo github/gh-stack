@@ -168,24 +168,49 @@ All branches in a stack should be part of the same feature or project. If you ne
 
 ## Restructuring a Stack
 
-When you need to remove a branch, reorder branches, or rename branches, tear down the stack and rebuild it:
+When you need to change the composition of a stack — remove a branch, combine branches, change the order, or rename a branch — use `gh stack modify`:
 
 ```sh
-# 1. Remove the stack on GitHub and locally
-gh stack unstack
+# Open the modify TUI
+gh stack modify
 
-# 2. Make structural changes
-git branch -m old-branch-1 new-branch-1  # rename a branch
-git branch -D branch-3                   # delete a branch
+# In the TUI:
+#   x     → drop a branch
+#   d     → fold down (into branch below)
+#   u     → fold up (into branch above)
+#   Shift+↑/↓ → reorder
+#   r     → rename
+#   z     → undo
+#   Ctrl+S → apply changes
+#   q     → cancel
 
-# 3. Re-create the stack with the new order
-gh stack init --adopt new-branch-1 branch-2 branch-4
-
-# 4. Push and sync the new stack
+# After modifying, push changes to remote and recreate the stack on GitHub
 gh stack submit
 ```
 
-The `unstack` command deletes the stack on GitHub first, then removes local tracking. Your branches and PRs are not affected — only the stack relationship is removed. After `init --adopt`, any existing open PRs are automatically re-associated with the new stack.
+### Common restructuring scenarios
+
+**Remove a branch and its unique commits from the stack:**
+1. `gh stack modify`
+2. Navigate to the branch, press `x` to mark it for drop
+3. Press `Ctrl+S` to apply
+4. `gh stack submit`
+
+**Combine two branches into one:**
+1. `gh stack modify`
+2. Navigate to the branch you want to fold
+3. Press `d` to fold its commits into the branch below, or `u` to fold into the branch above
+4. Press `Ctrl+S` to apply
+5. `gh stack submit`
+
+**Reorder branches:**
+1. `gh stack modify`
+2. Navigate to the branch to move
+3. Press `Shift+↑` to move up or `Shift+↓` to move down
+4. Press `Ctrl+S` to apply
+5. `gh stack submit`
+
+For a comprehensive guide on all modify operations, see the [Restructuring Stacks](/gh-stack/guides/modify/) guide.
 
 ## Using AI Agents with Stacks
 
