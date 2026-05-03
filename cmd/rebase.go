@@ -621,21 +621,19 @@ func printConflictDetails(cfg *config.Config, branch string) {
 
 func printConflictDetailsWithContinue(cfg *config.Config, branch string, continueCmd string) {
 	files, err := git.ConflictedFiles()
-	if err != nil || len(files) == 0 {
-		return
-	}
-
-	cfg.Printf("")
-	cfg.Printf("%s", cfg.ColorBold("Conflicted files:"))
-	for _, f := range files {
-		info, err := git.FindConflictMarkers(f)
-		if err != nil || len(info.Sections) == 0 {
-			cfg.Printf("  %s %s", cfg.ColorWarning("C"), f)
-			continue
-		}
-		for _, sec := range info.Sections {
-			cfg.Printf("  %s %s (lines %d–%d)",
-				cfg.ColorWarning("C"), f, sec.StartLine, sec.EndLine)
+	if err == nil && len(files) > 0 {
+		cfg.Printf("")
+		cfg.Printf("%s", cfg.ColorBold("Conflicted files:"))
+		for _, f := range files {
+			info, err := git.FindConflictMarkers(f)
+			if err != nil || len(info.Sections) == 0 {
+				cfg.Printf("  %s %s", cfg.ColorWarning("C"), f)
+				continue
+			}
+			for _, sec := range info.Sections {
+				cfg.Printf("  %s %s (lines %d–%d)",
+					cfg.ColorWarning("C"), f, sec.StartLine, sec.EndLine)
+			}
 		}
 	}
 

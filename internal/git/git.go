@@ -362,6 +362,12 @@ func CherryPick(commits []string) error {
 	return ops.CherryPick(commits)
 }
 
+// CherryPickAbort clears any in-progress cherry-pick state.
+// Errors are silently ignored (no-op if no cherry-pick is in progress).
+func CherryPickAbort() {
+	_ = ops.CherryPickAbort()
+}
+
 // HasUncommittedChanges returns true if the working tree has uncommitted changes.
 func HasUncommittedChanges() (bool, error) {
 	return ops.HasUncommittedChanges()

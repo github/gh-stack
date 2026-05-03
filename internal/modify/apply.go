@@ -206,7 +206,17 @@ func ApplyPlan(
 		}
 	}
 
-	// Step 2: Folds — cherry-pick commits from folded branch onto target
+	// Step 2: Folds — absorb one branch's commits into an adjacent branch.
+	//
+	// Fold-down: cherry-pick the folded branch's commits onto the target below.
+	//   The target is below in the stack (closer to trunk), so it doesn't
+	//   contain the folded branch's commits. Cherry-pick adds them.
+	//
+	// Fold-up: the target (above) already contains the folded branch's commits
+	//   in its ancestry (it's stacked on top). Instead of cherry-picking, we
+	//   adjust originalParentTips so the cascading rebase replays both the
+	//   folded branch's commits AND the target's own commits when rebasing
+	//   the target onto the folded branch's base.
 	for _, n := range nodes {
 		if n.PendingAction == nil {
 			continue
@@ -227,54 +237,62 @@ func ApplyPlan(
 		if n.PendingAction.Type == modifyview.ActionFoldDown {
 			// Target is the branch below (toward trunk)
 			if foldIdx == 0 {
-				continue // Can't fold below the bottom
+				continue
 			}
 			targetBranch = s.Branches[foldIdx-1].Branch
 		} else {
 			// Target is the branch above (away from trunk)
 			if foldIdx >= len(s.Branches)-1 {
-				continue // Can't fold above the top
+				continue
 			}
 			targetBranch = s.Branches[foldIdx+1].Branch
 		}
 
-		// Get commits unique to the folded branch
 		baseBranch := s.ActiveBaseBranch(foldBranch)
-		commits, err := git.LogRange(baseBranch, foldBranch)
-		if err != nil || len(commits) == 0 {
-			// No commits to cherry-pick — just remove from stack
-			cfg.Printf("No commits to fold from %s", foldBranch)
+
+		if n.PendingAction.Type == modifyview.ActionFoldDown {
+			// Fold-down: cherry-pick the folded branch's commits onto the target.
+			commits, err := git.LogRange(baseBranch, foldBranch)
+			if err != nil || len(commits) == 0 {
+				cfg.Printf("No commits to fold from %s", foldBranch)
+			} else {
+				if err := git.CheckoutBranch(targetBranch); err != nil {
+					unwindErr := Unwind(cfg, gitDir, snapshot, stackIndex, sf)
+					if unwindErr != nil {
+						return nil, nil, fmt.Errorf("checkout failed (%v) and unwind failed (%v)", err, unwindErr)
+					}
+					return nil, nil, fmt.Errorf("checking out %s for fold: %w", targetBranch, err)
+				}
+
+				shas := make([]string, len(commits))
+				for i, c := range commits {
+					shas[len(commits)-1-i] = c.SHA
+				}
+
+				git.CherryPickAbort()
+
+				if err := git.CherryPick(shas); err != nil {
+					conflict := &modifyview.ConflictInfo{Branch: foldBranch}
+					if files, ferr := git.ConflictedFiles(); ferr == nil {
+						conflict.ConflictedFiles = files
+					}
+					return nil, conflict, fmt.Errorf("cherry-pick conflict folding %s into %s", foldBranch, targetBranch)
+				}
+
+				cfg.Successf("Folded %s into %s (%d commits)", foldBranch, targetBranch, len(commits))
+			}
 		} else {
-			// Checkout target and cherry-pick
-			if err := git.CheckoutBranch(targetBranch); err != nil {
-				unwindErr := Unwind(cfg, gitDir, snapshot, stackIndex, sf)
-				if unwindErr != nil {
-					return nil, nil, fmt.Errorf("checkout failed (%v) and unwind failed (%v)", err, unwindErr)
-				}
-				return nil, nil, fmt.Errorf("checking out %s for fold: %w", targetBranch, err)
-			}
-
-			// Get SHAs in chronological order (LogRange returns newest first)
-			shas := make([]string, len(commits))
-			for i, c := range commits {
-				shas[len(commits)-1-i] = c.SHA
-			}
-
-			if err := git.CherryPick(shas); err != nil {
-				// Cherry-pick conflict
-				conflict := &modifyview.ConflictInfo{
-					Branch: foldBranch,
-				}
-				if files, ferr := git.ConflictedFiles(); ferr == nil {
-					conflict.ConflictedFiles = files
-				}
-				return nil, conflict, fmt.Errorf("cherry-pick conflict folding %s into %s", foldBranch, targetBranch)
-			}
-
-			cfg.Successf("Folded %s into %s (%d commits)", foldBranch, targetBranch, len(commits))
+			// Fold-up: the target (above) already has the folded branch's
+			// commits in its history. We adjust originalParentTips so the
+			// cascading rebase uses the folded branch's BASE as the cutoff,
+			// replaying both the folded branch's commits and the target's
+			// own commits onto the new parent.
+			originalParentTips[targetBranch] = originalParentTips[foldBranch]
+			cfg.Successf("Folded %s into %s", foldBranch, targetBranch)
 		}
 
-		// Remove from stack metadata
+		// Remove folded branch from stack metadata
+		foldIdx = s.IndexOf(foldBranch) // re-resolve in case earlier folds shifted indices
 		if foldIdx >= 0 && foldIdx < len(s.Branches) {
 			s.Branches = append(s.Branches[:foldIdx], s.Branches[foldIdx+1:]...)
 		}
@@ -422,7 +440,9 @@ func ApplyPlan(
 			stateFile.RemainingBranches = remaining
 			stateFile.OriginalBranch = currentBranch
 			stateFile.OriginalRefs = originalParentTips
-			_ = SaveState(gitDir, stateFile)
+			if saveErr := SaveState(gitDir, stateFile); saveErr != nil {
+				cfg.Warningf("failed to save conflict state: %v", saveErr)
+			}
 
 			// Save stack metadata so far (renames, folds, drops already applied)
 			_ = stack.SaveWithLock(gitDir, sf, lock)

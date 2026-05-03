@@ -58,6 +58,7 @@ type Ops interface {
 	ValidateRefName(name string) error
 	RenameBranch(oldName, newName string) error
 	CherryPick(commits []string) error
+	CherryPickAbort() error
 	HasUncommittedChanges() (bool, error)
 	LogMerges(base, head string) ([]CommitInfo, error)
 }
@@ -506,6 +507,10 @@ func (d *defaultOps) RenameBranch(oldName, newName string) error {
 func (d *defaultOps) CherryPick(commits []string) error {
 	args := append([]string{"cherry-pick"}, commits...)
 	return runSilent(args...)
+}
+
+func (d *defaultOps) CherryPickAbort() error {
+	return runSilent("cherry-pick", "--quit")
 }
 
 func (d *defaultOps) HasUncommittedChanges() (bool, error) {

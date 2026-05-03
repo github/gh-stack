@@ -13,8 +13,8 @@ import (
 )
 
 type modifyOptions struct {
-	recover  bool
-	cont     bool
+	recover bool
+	cont    bool
 }
 
 func ModifyCmd(cfg *config.Config) *cobra.Command {
