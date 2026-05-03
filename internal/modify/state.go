@@ -115,10 +115,10 @@ func CheckStateGuard(gitDir string) error {
 		return nil
 	}
 	if state.Phase == "applying" {
-		return fmt.Errorf("a modify session was interrupted — run `gh stack modify --recover` to restore your stack")
+		return fmt.Errorf("a modify session was interrupted — run `gh stack modify --abort` to restore your stack")
 	}
 	if state.Phase == "conflict" {
-		return fmt.Errorf("a modify has unresolved conflicts — run `gh stack modify --continue` or `gh stack modify --recover`")
+		return fmt.Errorf("a modify has unresolved conflicts — run `gh stack modify --continue` or `gh stack modify --abort`")
 	}
 	return nil
 }

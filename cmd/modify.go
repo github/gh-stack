@@ -13,8 +13,8 @@ import (
 )
 
 type modifyOptions struct {
-	recover bool
-	cont    bool
+	abort bool
+	cont  bool
 }
 
 func ModifyCmd(cfg *config.Config) *cobra.Command {
@@ -34,8 +34,8 @@ Operations available:
 All changes are staged in the TUI and applied together when you press Ctrl+S.
 After applying, run 'gh stack submit' to push changes and recreate the stack on GitHub.`,
 		RunE: func(cmd *cobra.Command, args []string) error {
-			if opts.recover {
-				return runModifyRecover(cfg)
+			if opts.abort {
+				return runModifyAbort(cfg)
 			}
 			if opts.cont {
 				return runModifyContinue(cfg)
@@ -44,7 +44,7 @@ After applying, run 'gh stack submit' to push changes and recreate the stack on 
 		},
 	}
 
-	cmd.Flags().BoolVar(&opts.recover, "recover", false, "Recover from a crashed modify session")
+	cmd.Flags().BoolVar(&opts.abort, "abort", false, "Abort the modify session and restore the stack to its pre-modify state")
 	cmd.Flags().BoolVar(&opts.cont, "continue", false, "Continue after resolving conflicts")
 
 	return cmd
@@ -125,7 +125,7 @@ func runModify(cfg *config.Config) error {
 		cfg.Printf("")
 
 		cfg.Printf("Or restore the stack to its pre-modify state with `%s`",
-			cfg.ColorCyan("gh stack modify --recover"))
+			cfg.ColorCyan("gh stack modify --abort"))
 		return ErrConflict
 	}
 
@@ -170,8 +170,8 @@ func printModifySuccess(cfg *config.Config, result *modifyview.ApplyResult, hasR
 	}
 }
 
-// runModifyRecover handles recovery from a crashed modify session.
-func runModifyRecover(cfg *config.Config) error {
+// runModifyAbort handles recovery to a pre-modify state.
+func runModifyAbort(cfg *config.Config) error {
 	gitDir, err := git.GitDir()
 	if err != nil {
 		cfg.Errorf("not a git repository")
@@ -185,7 +185,7 @@ func runModifyRecover(cfg *config.Config) error {
 	}
 
 	if state == nil {
-		cfg.Printf("No modify session to recover")
+		cfg.Printf("No modify session to abort")
 		return nil
 	}
 
@@ -301,13 +301,13 @@ func checkNoModifyInProgress(cfg *config.Config, gitDir string) error {
 	case "applying":
 		cfg.Errorf("a previous modify session was interrupted")
 		cfg.Printf("Run `%s` to restore your stack",
-			cfg.ColorCyan("gh stack modify --recover"))
+			cfg.ColorCyan("gh stack modify --abort"))
 		return ErrModifyRecovery
 	case "conflict":
 		cfg.Errorf("a modify has unresolved conflicts")
 		cfg.Printf("Run `%s` to continue, or `%s` to restore your stack",
 			cfg.ColorCyan("gh stack modify --continue"),
-			cfg.ColorCyan("gh stack modify --recover"))
+			cfg.ColorCyan("gh stack modify --abort"))
 		return ErrSilent
 	case "pending_submit":
 		cfg.Errorf("a modify was completed but the stack has not been submitted yet")

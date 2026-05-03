@@ -592,7 +592,7 @@ func ContinueApply(
 				cfg.ColorCyan("git add <file>"),
 				cfg.ColorCyan("gh stack modify --continue"))
 			cfg.Printf("Or restore the stack with `%s`",
-				cfg.ColorCyan("gh stack modify --recover"))
+				cfg.ColorCyan("gh stack modify --abort"))
 			return fmt.Errorf("rebase conflict on %s", branchName)
 		}
 
@@ -690,7 +690,7 @@ func Unwind(cfg *config.Config, gitDir string, snapshot Snapshot, stackIndex int
 	return nil
 }
 
-// UnwindFromStateFile restores the stack from a modify state file (for --recover).
+// UnwindFromStateFile restores the stack from a modify state file (for --abort).
 func UnwindFromStateFile(cfg *config.Config, gitDir string) error {
 	state, err := LoadState(gitDir)
 	if err != nil {
