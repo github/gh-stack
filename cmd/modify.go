@@ -164,7 +164,7 @@ func printModifySuccess(cfg *config.Config, result *modifyview.ApplyResult) {
 	}
 
 	cfg.Printf("")
-	cfg.Printf("Run `%s` to push branches and recreate the stack on GitHub",
+	cfg.Printf("Run `%s` to push your changes and update the stack of PRs on GitHub",
 		cfg.ColorCyan("gh stack submit"))
 }
 

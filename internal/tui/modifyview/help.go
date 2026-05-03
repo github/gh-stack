@@ -6,51 +6,58 @@ import (
 	"github.com/charmbracelet/lipgloss"
 )
 
-type helpEntry struct {
-	keys string
-	desc string
-}
-
-var helpEntries = []helpEntry{
-	{"↑/↓, k/j", "Select branch"},
-	{"f", "View files changed"},
-	{"c", "View commits"},
-	{"x", "Drop branch from stack"},
-	{"r", "Rename branch"},
-	{"u", "Fold up (merge into branch above)"},
-	{"d", "Fold down (merge into branch below)"},
-	{"shift+↑/↓, K/J", "Reorder branch up/down"},
-	{"z", "Undo last action"},
-	{"ctrl+s", "Apply all changes"},
-	{"q/esc", "Cancel and exit (abandon changes)"},
-}
-
-// renderHelpOverlay renders a centered help overlay.
+// renderHelpOverlay renders a centered help overlay with a guide to modify operations.
 func renderHelpOverlay(width, height int) string {
 	var b strings.Builder
 
-	title := helpTitleStyle.Render("Keyboard Shortcuts")
+	title := helpTitleStyle.Render("Modify Stack")
 	b.WriteString(title)
-	b.WriteString("\n\n")
+	b.WriteString("\n")
+	b.WriteString(helpDescStyle.Render("Restructure your stack by dropping, folding, renaming, or reordering branches."))
+	b.WriteString("\n")
 
-	maxKeyWidth := 0
-	for _, e := range helpEntries {
-		w := lipgloss.Width(e.keys)
-		if w > maxKeyWidth {
-			maxKeyWidth = w
+	sections := []struct {
+		heading string
+		body    string
+	}{
+		{
+			"Drop (x)",
+			"Remove a branch and its commits from the stack.\nThe local branch is preserved; the PR stays open on GitHub.",
+		},
+		{
+			"Fold up / down (u / d)",
+			"Merge a branch's commits into an adjacent branch.\nFold up absorbs into the branch above; fold down into the branch below.",
+		},
+		{
+			"Rename (r)",
+			"Rename a branch locally. The new name is pushed on submit.",
+		},
+		{
+			"Reorder (Shift+↑/↓)",
+			"Move a branch up or down in the stack.\nA cascading rebase adjusts all affected branches.",
+		},
+	}
+
+	for _, s := range sections {
+		b.WriteString("\n")
+		b.WriteString(helpKeyStyle.Render(s.heading))
+		b.WriteString("\n")
+		for _, line := range strings.Split(s.body, "\n") {
+			b.WriteString(helpDescStyle.Render(line))
+			b.WriteString("\n")
 		}
 	}
 
-	for _, e := range helpEntries {
-		keyVisWidth := lipgloss.Width(e.keys)
-		keyPad := strings.Repeat(" ", maxKeyWidth-keyVisWidth+2)
-		b.WriteString(helpKeyStyle.Render(e.keys))
-		b.WriteString(keyPad)
-		b.WriteString(helpDescStyle.Render(e.desc))
-		b.WriteString("\n")
-	}
-
 	b.WriteString("\n")
+	b.WriteString(helpKeyStyle.Render("Applying changes"))
+	b.WriteString("\n")
+	b.WriteString(helpDescStyle.Render("Press " + helpKeyStyle.Render("Ctrl+S") + " to apply all staged changes. Nothing is modified until you save."))
+	b.WriteString("\n")
+	b.WriteString(helpDescStyle.Render("If you have open PRs, run ") + helpKeyStyle.Render("gh stack submit") + helpDescStyle.Render(" afterwards to push the updated"))
+	b.WriteString("\n")
+	b.WriteString(helpDescStyle.Render("branches and recreate the stack of PRs on GitHub."))
+
+	b.WriteString("\n\n")
 	b.WriteString(statusBarStyle.Render("Press ? or Esc to close"))
 
 	content := b.String()

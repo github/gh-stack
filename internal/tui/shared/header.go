@@ -51,12 +51,12 @@ const ArtDisplayWidth = 20
 
 // HeaderConfig controls what the header displays.
 type HeaderConfig struct {
-	ShowArt          bool             // true for View (GitHub logo), false for Modify
-	Title            string           // "GitHub Stacks" or "Modify Mode"
-	Subtitle         string           // version string, or empty
-	InfoLines        []HeaderInfoLine // info rows (stack info)
-	Shortcuts        []ShortcutEntry  // keyboard shortcuts
-	ShortcutColumns  int              // number of columns for shortcuts (default 1; set 2 for side-by-side)
+	ShowArt         bool             // whether to display GitHub logo
+	Title           string           // heading next to logo art
+	Subtitle        string           // version string, or empty
+	InfoLines       []HeaderInfoLine // info rows (stack info)
+	Shortcuts       []ShortcutEntry  // keyboard shortcuts
+	ShortcutColumns int              // number of columns for shortcuts (default 1; set 2 for side-by-side)
 }
 
 // ShouldShowHeader returns whether the header should be displayed.

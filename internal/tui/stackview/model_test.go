@@ -184,7 +184,7 @@ func TestView_HeaderShownWhenTallEnough(t *testing.T) {
 	view := m.View()
 	assert.Contains(t, view, "┌")
 	assert.Contains(t, view, "┘")
-	assert.Contains(t, view, "GitHub Stacks")
+	assert.Contains(t, view, "View Stack")
 	assert.Contains(t, view, "v0.0.1")
 	assert.Contains(t, view, "Base: main")
 	assert.Contains(t, view, "2 branches")
@@ -203,7 +203,7 @@ func TestView_HeaderHiddenWhenShort(t *testing.T) {
 	view := m.View()
 	// Should NOT contain header box
 	assert.NotContains(t, view, "┌")
-	assert.NotContains(t, view, "GitHub Stacks")
+	assert.NotContains(t, view, "View Stack")
 	// Should NOT contain help bar either (hints are only in header)
 	assert.NotContains(t, view, "commits")
 }
@@ -218,7 +218,7 @@ func TestView_HeaderHiddenWhenNarrow(t *testing.T) {
 
 	view := m.View()
 	assert.NotContains(t, view, "┌")
-	assert.NotContains(t, view, "GitHub Stacks")
+	assert.NotContains(t, view, "View Stack")
 }
 
 func TestView_HeaderWithoutShortcutsWhenMediumWidth(t *testing.T) {
@@ -231,7 +231,7 @@ func TestView_HeaderWithoutShortcutsWhenMediumWidth(t *testing.T) {
 
 	view := m.View()
 	assert.Contains(t, view, "┌", "header should be shown")
-	assert.Contains(t, view, "GitHub Stacks", "info should be shown")
+	assert.Contains(t, view, "View Stack", "info should be shown")
 	assert.NotContains(t, view, "checkout", "shortcuts should be hidden at this width")
 }
 

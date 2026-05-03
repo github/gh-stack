@@ -587,7 +587,13 @@ func ContinueApply(
 					cfg.Printf("  %s", f)
 				}
 			}
-			return fmt.Errorf("rebase conflict on %s — resolve and run `gh stack modify --continue` again", branchName)
+			cfg.Printf("")
+			cfg.Printf("Resolve the conflicts, stage with `%s`, then run `%s`",
+				cfg.ColorCyan("git add <file>"),
+				cfg.ColorCyan("gh stack modify --continue"))
+			cfg.Printf("Or restore the stack with `%s`",
+				cfg.ColorCyan("gh stack modify --recover"))
+			return fmt.Errorf("rebase conflict on %s", branchName)
 		}
 
 		cfg.Successf("Rebased %s onto %s", branchName, newBase)
@@ -619,8 +625,9 @@ func ContinueApply(
 		cfg.Warningf("failed to save stack: %v", err)
 	}
 
-	cfg.Successf("Modify apply completed")
-	cfg.Printf("Run `%s` to push branches and recreate the stack on GitHub",
+	cfg.Successf("Stack modified successfully")
+	cfg.Printf("")
+	cfg.Printf("Run `%s` to push your changes and update the stack of PRs on GitHub",
 		cfg.ColorCyan("gh stack submit"))
 	return nil
 }

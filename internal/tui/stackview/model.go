@@ -409,7 +409,7 @@ func (m Model) buildHeaderConfig() shared.HeaderConfig {
 
 	return shared.HeaderConfig{
 		ShowArt:  true,
-		Title:    "GitHub Stacks",
+		Title:    "View Stack",
 		Subtitle: "v" + m.version,
 		InfoLines: []shared.HeaderInfoLine{
 			{Icon: "✓", Label: "Stack initialized"},
