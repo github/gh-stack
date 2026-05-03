@@ -129,167 +129,45 @@ func runSubmit(cfg *config.Config, opts *submitOptions) error {
 		return nil
 	}
 
-	// When a modify is pending, delete the old stack BEFORE pushing so that
-	// PRs aren't auto-merged/closed during the force-push.
-	pendingModify := false
+	// If a modify is pending, delete the old remote stack first so that
+	// PR base updates are allowed and force-pushes don't trigger auto-merges.
 	if stacksAvailable {
-		if state, _ := modify.LoadState(gitDir); state != nil && state.Phase == "pending_submit" {
-			pendingModify = true
-			if err := handlePendingModify(cfg, client, s, gitDir); err != nil {
-				if errors.Is(err, errInterrupt) {
-					return ErrSilent
-				}
-			}
-		}
-	}
-
-	if pendingModify {
-		// Push branches one at a time in stack order (bottom to top) and
-		// update each PR's base immediately after pushing. This prevents
-		// false "merge" detections when branches are pushed simultaneously
-		// with stale base relationships.
-		cfg.Printf("Pushing %d %s to %s (sequentially)...", len(activeBranches), plural(len(activeBranches), "branch", "branches"), remote)
-		for i, b := range s.Branches {
-			if s.Branches[i].IsMerged() || s.Branches[i].IsQueued() {
-				continue
-			}
-
-			// Push this single branch
-			if err := git.Push(remote, []string{b.Branch}, true, false); err != nil {
-				cfg.Errorf("failed to push %s: %s", b.Branch, err)
+		if err := handlePendingModify(cfg, client, s, gitDir); err != nil {
+			if errors.Is(err, errInterrupt) {
 				return ErrSilent
 			}
-
-			// Update PR base immediately after pushing
-			baseBranch := s.ActiveBaseBranch(b.Branch)
-			pr, prErr := client.FindPRForBranch(b.Branch)
-			if prErr != nil {
-				continue
-			}
-			if pr != nil {
-				if s.Branches[i].PullRequest == nil {
-					s.Branches[i].PullRequest = &stack.PullRequestRef{
-						Number: pr.Number,
-						ID:     pr.ID,
-						URL:    pr.URL,
-					}
-				}
-				if pr.BaseRefName != baseBranch {
-					if err := client.UpdatePRBase(pr.Number, baseBranch); err != nil {
-						cfg.Warningf("failed to update base branch for PR %s: %v",
-							cfg.PRLink(pr.Number, pr.URL), err)
-					} else {
-						cfg.Successf("Updated base branch for PR %s to %s",
-							cfg.PRLink(pr.Number, pr.URL), baseBranch)
-					}
-				} else {
-					cfg.Printf("PR %s for %s is up to date", cfg.PRLink(pr.Number, pr.URL), b.Branch)
-				}
-			} else {
-				// No PR yet — will be created in the PR loop below
-				cfg.Printf("Pushed %s", b.Branch)
-			}
-		}
-	} else {
-		// Normal submit — push all branches atomically
-		cfg.Printf("Pushing %d %s to %s...", len(activeBranches), plural(len(activeBranches), "branch", "branches"), remote)
-		if err := git.Push(remote, activeBranches, true, true); err != nil {
-			cfg.Errorf("failed to push: %s", err)
-			return ErrSilent
 		}
 	}
 
-	// Create or update PRs — ensure every active branch has a PR with the
-	// correct base branch. This makes submit idempotent: running it again
-	// fills gaps and fixes base branches before syncing the stack.
+	// Push each branch and create/update its PR in stack order (bottom to top).
+	// Sequential pushing ensures each branch's base is up-to-date on the
+	// remote before the next branch is pushed, preventing race conditions.
+	cfg.Printf("Pushing %d %s to %s...", len(activeBranches), plural(len(activeBranches), "branch", "branches"), remote)
 	for i, b := range s.Branches {
 		if s.Branches[i].IsMerged() || s.Branches[i].IsQueued() {
 			continue
 		}
-		baseBranch := s.ActiveBaseBranch(b.Branch)
 
-		pr, err := client.FindPRForBranch(b.Branch)
-		if err != nil {
-			cfg.Warningf("failed to check PR for %s: %v", b.Branch, err)
-			continue
+		// Push this branch
+		if err := git.Push(remote, []string{b.Branch}, true, false); err != nil {
+			cfg.Errorf("failed to push %s: %s", b.Branch, err)
+			return ErrSilent
 		}
 
-		if pr == nil {
-			// Create new PR — auto-generate title from commits/branch name,
-			// then prompt interactively unless --auto or non-interactive.
-			baseBranchForDiff := s.ActiveBaseBranch(b.Branch)
-			title, commitBody := defaultPRTitleBody(baseBranchForDiff, b.Branch)
-			originalTitle := title
-			if !opts.auto && cfg.IsInteractive() {
-				p := prompter.New(cfg.In, cfg.Out, cfg.Err)
-				input, err := p.Input(fmt.Sprintf("Title for PR (branch %s):", b.Branch), title)
-				if err != nil {
-					if isInterruptError(err) {
-						printInterrupt(cfg)
-						return ErrSilent
-					}
-					// Non-interrupt error: keep the auto-generated title.
-				} else if input != "" {
-					title = input
-				}
+		// Find or create PR, and fix base if needed
+		baseBranch := s.ActiveBaseBranch(b.Branch)
+		if err := ensurePR(cfg, client, s, i, baseBranch, opts); err != nil {
+			if errors.Is(err, errInterrupt) {
+				printInterrupt(cfg)
+				return ErrSilent
 			}
-
-			// If the user changed the title and the commit had a multi-line
-			// message, put the full commit message in the PR body so no
-			// content is lost.
-			prBody := commitBody
-			if title != originalTitle && commitBody != "" {
-				prBody = originalTitle + "\n\n" + commitBody
-			}
-			body := generatePRBody(prBody)
-
-			newPR, createErr := client.CreatePR(baseBranch, b.Branch, title, body, opts.draft)
-			if createErr != nil {
-				cfg.Warningf("failed to create PR for %s: %v", b.Branch, createErr)
-				continue
-			}
-			cfg.Successf("Created PR %s for %s", cfg.PRLink(newPR.Number, newPR.URL), b.Branch)
-			s.Branches[i].PullRequest = &stack.PullRequestRef{
-				Number: newPR.Number,
-				ID:     newPR.ID,
-				URL:    newPR.URL,
-			}
-		} else {
-			// PR already exists — record it and fix base branch if needed.
-			if s.Branches[i].PullRequest == nil {
-				s.Branches[i].PullRequest = &stack.PullRequestRef{
-					Number: pr.Number,
-					ID:     pr.ID,
-					URL:    pr.URL,
-				}
-			}
-
-			if pendingModify {
-				// Base updates already handled in the sequential push loop.
-				cfg.Printf("PR %s for %s is up to date", cfg.PRLink(pr.Number, pr.URL), b.Branch)
-			} else if pr.BaseRefName != baseBranch {
-				if s.ID != "" {
-					cfg.Warningf("PR %s has base %q (expected %q) but cannot update while stacked",
-						cfg.PRLink(pr.Number, pr.URL), pr.BaseRefName, baseBranch)
-				} else {
-					if err := client.UpdatePRBase(pr.Number, baseBranch); err != nil {
-						cfg.Warningf("failed to update base branch for PR %s: %v",
-							cfg.PRLink(pr.Number, pr.URL), err)
-					} else {
-						cfg.Successf("Updated base branch for PR %s to %s",
-							cfg.PRLink(pr.Number, pr.URL), baseBranch)
-					}
-				}
-			} else {
-				cfg.Printf("PR %s for %s is up to date", cfg.PRLink(pr.Number, pr.URL), b.Branch)
-			}
+			// Non-fatal — continue with remaining branches
 		}
 	}
 
 	// Create or update the stack on GitHub
 	if stacksAvailable {
 		syncStack(cfg, client, s)
-		// Clear modify state after successful stack sync
 		clearPendingModifyState(cfg, gitDir)
 	}
 
@@ -302,6 +180,91 @@ func runSubmit(cfg *config.Config, opts *submitOptions) error {
 	}
 
 	cfg.Successf("Pushed and synced %d branches", len(s.ActiveBranches()))
+	return nil
+}
+
+// ensurePR finds or creates a PR for the branch at index i, and updates
+// its base branch if needed. This is the single place where PR state is
+// reconciled during submit.
+func ensurePR(cfg *config.Config, client github.ClientOps, s *stack.Stack, i int, baseBranch string, opts *submitOptions) error {
+	b := s.Branches[i]
+
+	pr, err := client.FindPRForBranch(b.Branch)
+	if err != nil {
+		cfg.Warningf("failed to check PR for %s: %v", b.Branch, err)
+		return nil
+	}
+
+	if pr == nil {
+		return createPR(cfg, client, s, i, baseBranch, opts)
+	}
+
+	// PR exists — record it and fix base if needed.
+	if s.Branches[i].PullRequest == nil {
+		s.Branches[i].PullRequest = &stack.PullRequestRef{
+			Number: pr.Number,
+			ID:     pr.ID,
+			URL:    pr.URL,
+		}
+	}
+
+	if pr.BaseRefName != baseBranch {
+		if s.ID != "" {
+			// Stack API owns base relationships — can't update directly.
+			cfg.Warningf("PR %s has base %q (expected %q) but cannot update while stacked",
+				cfg.PRLink(pr.Number, pr.URL), pr.BaseRefName, baseBranch)
+		} else {
+			if err := client.UpdatePRBase(pr.Number, baseBranch); err != nil {
+				cfg.Warningf("failed to update base branch for PR %s: %v",
+					cfg.PRLink(pr.Number, pr.URL), err)
+			} else {
+				cfg.Successf("Updated base branch for PR %s to %s",
+					cfg.PRLink(pr.Number, pr.URL), baseBranch)
+			}
+		}
+	} else {
+		cfg.Printf("PR %s for %s is up to date", cfg.PRLink(pr.Number, pr.URL), b.Branch)
+	}
+
+	return nil
+}
+
+// createPR creates a new PR for the branch at index i.
+func createPR(cfg *config.Config, client github.ClientOps, s *stack.Stack, i int, baseBranch string, opts *submitOptions) error {
+	b := s.Branches[i]
+
+	title, commitBody := defaultPRTitleBody(baseBranch, b.Branch)
+	originalTitle := title
+	if !opts.auto && cfg.IsInteractive() {
+		p := prompter.New(cfg.In, cfg.Out, cfg.Err)
+		input, err := p.Input(fmt.Sprintf("Title for PR (branch %s):", b.Branch), title)
+		if err != nil {
+			if isInterruptError(err) {
+				return errInterrupt
+			}
+			// Non-interrupt error: keep the auto-generated title.
+		} else if input != "" {
+			title = input
+		}
+	}
+
+	prBody := commitBody
+	if title != originalTitle && commitBody != "" {
+		prBody = originalTitle + "\n\n" + commitBody
+	}
+	body := generatePRBody(prBody)
+
+	newPR, createErr := client.CreatePR(baseBranch, b.Branch, title, body, opts.draft)
+	if createErr != nil {
+		cfg.Warningf("failed to create PR for %s: %v", b.Branch, createErr)
+		return nil
+	}
+	cfg.Successf("Created PR %s for %s", cfg.PRLink(newPR.Number, newPR.URL), b.Branch)
+	s.Branches[i].PullRequest = &stack.PullRequestRef{
+		Number: newPR.Number,
+		ID:     newPR.ID,
+		URL:    newPR.URL,
+	}
 	return nil
 }
 

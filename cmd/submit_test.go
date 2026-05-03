@@ -123,10 +123,11 @@ func TestSubmit_CreatesPRsAndStack(t *testing.T) {
 
 	assert.NoError(t, err)
 
-	// Branches should be pushed
-	require.Len(t, pushCalls, 1)
+	// Branches should be pushed (sequentially, one per branch)
+	require.Len(t, pushCalls, 2)
 	assert.Equal(t, "origin", pushCalls[0].remote)
-	assert.Equal(t, []string{"b1", "b2"}, pushCalls[0].branches)
+	assert.Equal(t, []string{"b1"}, pushCalls[0].branches)
+	assert.Equal(t, []string{"b2"}, pushCalls[1].branches)
 
 	// PRs should be created
 	assert.Equal(t, []string{"b1", "b2"}, createdPRs)
