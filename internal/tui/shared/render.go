@@ -2,6 +2,8 @@ package shared
 
 import (
 	"fmt"
+	"os/exec"
+	"runtime"
 	"strings"
 	"time"
 
@@ -158,7 +160,7 @@ func RenderPRHeader(b *strings.Builder, node BranchNodeData, isFocused bool, con
 	default:
 		stateLabel = " OPEN"
 	}
-	b.WriteString(style.Underline(true).Render(prLabel) + style.Render(stateLabel))
+	b.WriteString(PRLinkStyle.Render(prLabel) + style.Render(stateLabel))
 
 	if annotation != nil {
 		b.WriteString("  ")
@@ -392,5 +394,136 @@ func TimeAgo(t time.Time) string {
 			return "1 month ago"
 		}
 		return fmt.Sprintf("%d months ago", months)
+	}
+}
+
+// --- Mouse click helpers ---
+
+// ClickResult describes what happened when a node was clicked.
+type ClickResult struct {
+	NodeIndex    int  // which node was clicked (-1 if none)
+	ToggleFiles  bool // should toggle files expansion
+	ToggleCommits bool // should toggle commits expansion
+	OpenURL      string // URL to open in browser (empty if none)
+}
+
+// HandleClick maps a screen click to a node action.
+// nodes is the list of BranchNodeData in display order.
+// showHeader indicates whether the header is visible.
+// scrollOffset is the current scroll position.
+// hasSeparators controls whether merged/queued separator lines are accounted for.
+func HandleClick(screenX, screenY int, nodes []BranchNodeData, width, height, scrollOffset int, showHeader, hasSeparators bool) ClickResult {
+	yOffset := 0
+	if showHeader {
+		if screenY < HeaderHeight {
+			return ClickResult{NodeIndex: -1}
+		}
+		yOffset = HeaderHeight
+	}
+
+	contentLine := (screenY - yOffset) + scrollOffset
+
+	line := 0
+	prevWasMerged := false
+	prevWasQueued := false
+	for i := 0; i < len(nodes); i++ {
+		if hasSeparators {
+			isMerged := nodes[i].Ref.IsMerged()
+			isQueued := nodes[i].Ref.IsQueued()
+			if isMerged && !prevWasMerged && i > 0 {
+				line++
+			} else if isQueued && !prevWasQueued && !prevWasMerged && i > 0 {
+				line++
+			}
+			prevWasMerged = isMerged
+			prevWasQueued = isQueued
+		}
+
+		nodeStart := line
+		nodeLines := NodeLineCount(nodes[i])
+
+		if contentLine >= nodeStart && contentLine < nodeStart+nodeLines {
+			result := ClickResult{NodeIndex: i}
+
+			// Click on PR header line — check if clicking the PR number
+			if contentLine == nodeStart && nodes[i].PR != nil && nodes[i].PR.URL != "" {
+				prStartX, prEndX := PRLabelColumns(nodes[i])
+				if screenX >= prStartX && screenX < prEndX {
+					result.OpenURL = nodes[i].PR.URL
+				}
+			}
+
+			// Click on files toggle line
+			if len(nodes[i].FilesChanged) > 0 {
+				if contentLine == nodeStart+FilesToggleLineOffset(nodes[i]) {
+					result.ToggleFiles = true
+				}
+			}
+
+			// Click on commits toggle line
+			if len(nodes[i].Commits) > 0 {
+				if contentLine == nodeStart+CommitToggleLineOffset(nodes[i]) {
+					result.ToggleCommits = true
+				}
+			}
+
+			return result
+		}
+		line += nodeLines
+	}
+
+	return ClickResult{NodeIndex: -1}
+}
+
+// FilesToggleLineOffset returns the line offset from node start to the files toggle.
+func FilesToggleLineOffset(node BranchNodeData) int {
+	offset := 1 // after header
+	if node.PR != nil {
+		offset++
+	}
+	return offset
+}
+
+// CommitToggleLineOffset returns the line offset from node start to the commits toggle.
+func CommitToggleLineOffset(node BranchNodeData) int {
+	offset := 1
+	if node.PR != nil {
+		offset++
+	}
+	if len(node.FilesChanged) > 0 {
+		offset++
+		if node.FilesExpanded {
+			offset += len(node.FilesChanged)
+		}
+	}
+	return offset
+}
+
+// PRLabelColumns returns the start and end X columns of the PR number label.
+func PRLabelColumns(node BranchNodeData) (int, int) {
+	col := 2 // bullet + space
+	icon := StatusIcon(node)
+	if icon != "" {
+		col += 2
+	}
+	prLabel := fmt.Sprintf("#%d", node.PR.Number)
+	return col, col + len(prLabel)
+}
+
+// OpenBrowserInBackground launches the system browser for the given URL.
+func OpenBrowserInBackground(url string) {
+	cmd := BrowserCmd(url)
+	_ = cmd.Start()
+}
+
+// BrowserCmd returns an exec.Cmd to open a URL in the default browser.
+func BrowserCmd(url string) *exec.Cmd {
+	switch runtime.GOOS {
+	case "darwin":
+		return exec.Command("open", url)
+	case "windows":
+		return exec.Command("cmd", "/c", "start", url)
+	default:
+		return exec.Command("xdg-open", url)
 	}
 }

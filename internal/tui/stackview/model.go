@@ -2,8 +2,6 @@ package stackview
 
 import (
 	"fmt"
-	"os/exec"
-	"runtime"
 	"strings"
 
 	"github.com/charmbracelet/bubbles/help"
@@ -159,7 +157,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			if m.cursor >= 0 && m.cursor < len(m.nodes) {
 				node := m.nodes[m.cursor]
 				if node.PR != nil && node.PR.URL != "" {
-					openBrowserInBackground(node.PR.URL)
+					shared.OpenBrowserInBackground(node.PR.URL)
 				}
 			}
 			return m, nil
@@ -198,12 +196,6 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
-// openBrowserInBackground launches the system browser for the given URL.
-func openBrowserInBackground(url string) {
-	cmd := browserCmd(url)
-	_ = cmd.Start()
-}
-
 // toBranchNodeData converts a BranchNode to shared.BranchNodeData.
 func toBranchNodeData(node BranchNode) shared.BranchNodeData {
 	return shared.BranchNodeData{
@@ -224,69 +216,28 @@ func toBranchNodeData(node BranchNode) shared.BranchNodeData {
 
 // handleMouseClick processes a mouse click at the given screen position.
 func (m Model) handleMouseClick(screenX, screenY int) (tea.Model, tea.Cmd) {
-	// If header is visible, clicks in the header area are ignored
-	yOffset := 0
-	if shared.ShouldShowHeader(m.width, m.height) {
-		if screenY < shared.HeaderHeight {
-			return m, nil
-		}
-		yOffset = shared.HeaderHeight
+	nodes := make([]shared.BranchNodeData, len(m.nodes))
+	for i, n := range m.nodes {
+		nodes[i] = toBranchNodeData(n)
 	}
 
-	// Map screen Y to content line, accounting for scroll offset and header
-	contentLine := (screenY - yOffset) + m.scrollOffset
+	result := shared.HandleClick(screenX, screenY, nodes, m.width, m.height, m.scrollOffset, shared.ShouldShowHeader(m.width, m.height), true)
+	if result.NodeIndex < 0 {
+		return m, nil
+	}
 
-	// Walk through rendered lines to find which node was clicked.
-	// Account for the merged/queued separator lines that may appear between nodes.
-	line := 0
-	prevWasMerged := false
-	prevWasQueued := false
-	for i := 0; i < len(m.nodes); i++ {
-		isMerged := m.nodes[i].Ref.IsMerged()
-		isQueued := m.nodes[i].Ref.IsQueued()
-		if isMerged && !prevWasMerged && i > 0 {
-			line++ // separator line
-		} else if isQueued && !prevWasQueued && !prevWasMerged && i > 0 {
-			line++ // separator line
-		}
-		prevWasMerged = isMerged
-		prevWasQueued = isQueued
+	m.cursor = result.NodeIndex
 
-		nodeStart := line
-		nodeLines := m.nodeLineCount(i)
-
-		if contentLine >= nodeStart && contentLine < nodeStart+nodeLines {
-			m.cursor = i
-
-			// Click on PR header line — only open browser if clicking the PR number
-			if contentLine == nodeStart && m.nodes[i].PR != nil && m.nodes[i].PR.URL != "" {
-				prStartX, prEndX := m.prLabelColumns(i)
-				if screenX >= prStartX && screenX < prEndX {
-					openBrowserInBackground(m.nodes[i].PR.URL)
-				}
-			}
-
-			// Click on files toggle line → toggle expansion
-			if len(m.nodes[i].FilesChanged) > 0 {
-				filesToggleLine := nodeStart + m.filesToggleLineOffset(i)
-				if contentLine == filesToggleLine {
-					m.nodes[i].FilesExpanded = !m.nodes[i].FilesExpanded
-					m.clampScroll()
-				}
-			}
-
-			// Click on commits toggle line → toggle expansion
-			if len(m.nodes[i].Commits) > 0 {
-				commitToggleLine := nodeStart + m.commitToggleLineOffset(i)
-				if contentLine == commitToggleLine {
-					m.nodes[i].CommitsExpanded = !m.nodes[i].CommitsExpanded
-					m.clampScroll()
-				}
-			}
-
-			return m, nil
-		}
-		line += nodeLines
+	if result.OpenURL != "" {
+		shared.OpenBrowserInBackground(result.OpenURL)
+	}
+	if result.ToggleFiles {
+		m.nodes[result.NodeIndex].FilesExpanded = !m.nodes[result.NodeIndex].FilesExpanded
+		m.clampScroll()
+	}
+	if result.ToggleCommits {
+		m.nodes[result.NodeIndex].CommitsExpanded = !m.nodes[result.NodeIndex].CommitsExpanded
+		m.clampScroll()
 	}
 
 	return m, nil
@@ -295,46 +246,6 @@ func (m Model) handleMouseClick(screenX, screenY int) (tea.Model, tea.Cmd) {
 // nodeLineCount returns how many rendered lines a node occupies.
 func (m Model) nodeLineCount(idx int) int {
 	return shared.NodeLineCount(toBranchNodeData(m.nodes[idx]))
-}
-
-// commitToggleLineOffset returns the offset from node start to the commits toggle line.
-func (m Model) commitToggleLineOffset(idx int) int {
-	node := m.nodes[idx]
-	offset := 1 // after header
-	if node.PR != nil {
-		offset++ // branch + diff line
-	}
-	if len(node.FilesChanged) > 0 {
-		offset++ // files toggle line
-		if node.FilesExpanded {
-			offset += len(node.FilesChanged)
-		}
-	}
-	return offset
-}
-
-// filesToggleLineOffset returns the offset from node start to the files toggle line.
-func (m Model) filesToggleLineOffset(idx int) int {
-	node := m.nodes[idx]
-	offset := 1 // after header
-	if node.PR != nil {
-		offset++ // branch + diff line
-	}
-	return offset
-}
-
-// prLabelColumns returns the start and end X columns of the PR number label
-// (e.g. "#123") on the PR header line, for click hit-testing.
-func (m Model) prLabelColumns(idx int) (int, int) {
-	node := m.nodes[idx]
-	// Layout: "├ " (2) + optional status icon + " " (2) + "#N..."
-	col := 2 // bullet + space
-	icon := shared.StatusIcon(toBranchNodeData(node))
-	if icon != "" {
-		col += 2 // icon (1 visible char) + space
-	}
-	prLabel := fmt.Sprintf("#%d", node.PR.Number)
-	return col, col + len(prLabel)
 }
 
 // ensureVisible adjusts scroll offset so the cursor is visible.
@@ -448,7 +359,6 @@ func (m Model) View() string {
 	shared.RenderTrunk(&b, m.trunk.Branch)
 
 	content := b.String()
-	contentLines := strings.Split(content, "\n")
 
 	// Apply scrolling
 	reservedLines := 0
@@ -460,22 +370,7 @@ func (m Model) View() string {
 		viewHeight = 1
 	}
 
-	// Clamp scroll offset so we can't scroll past content
-	maxScroll := len(contentLines) - viewHeight
-	if maxScroll < 0 {
-		maxScroll = 0
-	}
-	start := m.scrollOffset
-	if start > maxScroll {
-		start = maxScroll
-	}
-	end := start + viewHeight
-	if end > len(contentLines) {
-		end = len(contentLines)
-	}
-
-	visibleContent := strings.Join(contentLines[start:end], "\n")
-	out.WriteString(visibleContent)
+	out.WriteString(shared.ApplyScrollToContent(content, m.scrollOffset, viewHeight))
 
 	return out.String()
 }
@@ -539,16 +434,4 @@ func (m Model) renderNode(b *strings.Builder, idx int) {
 	node := m.nodes[idx]
 	isFocused := idx == m.cursor
 	shared.RenderNode(b, toBranchNodeData(node), isFocused, m.width, nil)
-}
-
-// browserCmd returns an exec.Cmd to open a URL in the default browser.
-func browserCmd(url string) *exec.Cmd {
-	switch runtime.GOOS {
-	case "darwin":
-		return exec.Command("open", url)
-	case "windows":
-		return exec.Command("cmd", "/c", "start", url)
-	default:
-		return exec.Command("xdg-open", url)
-	}
 }

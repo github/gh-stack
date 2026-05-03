@@ -382,12 +382,12 @@ func handlePendingModify(cfg *config.Config, client github.ClientOps, s *stack.S
 			if errors.As(err, &httpErr) && httpErr.StatusCode == 404 {
 				cfg.Printf("Previous stack already deleted on GitHub")
 			} else {
-				cfg.Warningf("Failed to delete previous stack: %v", err)
+				cfg.Warningf("Failed to delete existing stack: %v", err)
 				cfg.Printf("Run `%s` again to retry", cfg.ColorCyan("gh stack submit"))
 				return err
 			}
 		} else {
-			cfg.Successf("Cleared previous stack on GitHub")
+			cfg.Successf("Cleared existing stack on GitHub")
 		}
 		// Clear the old stack ID so syncStack creates a new one
 		s.ID = ""
@@ -403,7 +403,7 @@ func clearPendingModifyState(cfg *config.Config, gitDir string) {
 		return
 	}
 	modify.ClearState(gitDir)
-	cfg.Successf("Modify state cleared — stack recreated on GitHub")
+	cfg.Successf("Stack recreated on GitHub to match local state")
 }
 
 // syncStack creates or updates a stack on GitHub from the active PRs.

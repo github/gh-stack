@@ -211,6 +211,25 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m.updateRename(msg)
 		}
 		return m.updateNormal(msg)
+
+	case tea.MouseMsg:
+		switch msg.Action {
+		case tea.MouseActionPress:
+			if msg.Button == tea.MouseButtonLeft {
+				return m.handleMouseClick(msg.X, msg.Y)
+			}
+			if msg.Button == tea.MouseButtonWheelUp {
+				if m.scrollOffset > 0 {
+					m.scrollOffset--
+				}
+				return m, nil
+			}
+			if msg.Button == tea.MouseButtonWheelDown {
+				m.scrollOffset++
+				m.clampScroll()
+				return m, nil
+			}
+		}
 	}
 
 	return m, nil
@@ -803,12 +822,7 @@ func (m *Model) ensureVisible() {
 	endLine := startLine + m.nodeLineCount(m.cursor)
 
 	viewHeight := m.contentViewHeight()
-	if startLine < m.scrollOffset {
-		m.scrollOffset = startLine
-	}
-	if endLine > m.scrollOffset+viewHeight {
-		m.scrollOffset = endLine - viewHeight
-	}
+	m.scrollOffset = shared.EnsureVisible(startLine, endLine, m.scrollOffset, viewHeight)
 }
 
 func (m Model) nodeLineCount(idx int) int {
@@ -833,16 +847,38 @@ func (m *Model) clampScroll() {
 		total += m.nodeLineCount(i)
 	}
 	total++ // trunk line
-	maxScroll := total - m.contentViewHeight()
-	if maxScroll < 0 {
-		maxScroll = 0
+	m.scrollOffset = shared.ClampScroll(total, m.contentViewHeight(), m.scrollOffset)
+}
+
+// --- Mouse handling ---
+
+// handleMouseClick processes a mouse click at the given screen position.
+func (m Model) handleMouseClick(screenX, screenY int) (tea.Model, tea.Cmd) {
+	nodes := make([]shared.BranchNodeData, len(m.nodes))
+	for i, n := range m.nodes {
+		nodes[i] = toNodeData(n, i)
 	}
-	if m.scrollOffset > maxScroll {
-		m.scrollOffset = maxScroll
+
+	result := shared.HandleClick(screenX, screenY, nodes, m.width, m.height, m.scrollOffset, shared.ShouldShowHeader(m.width, m.height), false)
+	if result.NodeIndex < 0 {
+		return m, nil
 	}
-	if m.scrollOffset < 0 {
-		m.scrollOffset = 0
+
+	m.cursor = result.NodeIndex
+
+	if result.OpenURL != "" {
+		shared.OpenBrowserInBackground(result.OpenURL)
 	}
+	if result.ToggleFiles {
+		m.nodes[result.NodeIndex].FilesExpanded = !m.nodes[result.NodeIndex].FilesExpanded
+		m.clampScroll()
+	}
+	if result.ToggleCommits {
+		m.nodes[result.NodeIndex].CommitsExpanded = !m.nodes[result.NodeIndex].CommitsExpanded
+		m.clampScroll()
+	}
+
+	return m, nil
 }
 
 // --- View ---
@@ -980,7 +1016,6 @@ func (m Model) View() string {
 	}
 
 	content := b.String()
-	contentLines := strings.Split(content, "\n")
 
 	// Scrolling
 	reservedLines := 0
@@ -992,20 +1027,7 @@ func (m Model) View() string {
 		viewHeight = 1
 	}
 
-	maxScroll := len(contentLines) - viewHeight
-	if maxScroll < 0 {
-		maxScroll = 0
-	}
-	start := m.scrollOffset
-	if start > maxScroll {
-		start = maxScroll
-	}
-	end := start + viewHeight
-	if end > len(contentLines) {
-		end = len(contentLines)
-	}
-
-	out.WriteString(strings.Join(contentLines[start:end], "\n"))
+	out.WriteString(shared.ApplyScrollToContent(content, m.scrollOffset, viewHeight))
 	out.WriteString("\n")
 
 	// Status line at the bottom

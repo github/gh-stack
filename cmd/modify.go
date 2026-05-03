@@ -86,6 +86,7 @@ func runModify(cfg *config.Config) error {
 	p := tea.NewProgram(
 		model,
 		tea.WithAltScreen(),
+		tea.WithMouseAllMotion(),
 	)
 
 	finalModel, err := p.Run()

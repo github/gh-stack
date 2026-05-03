@@ -16,6 +16,7 @@ var (
 	QueuedIcon  = lipgloss.NewStyle().Foreground(lipgloss.Color("130")).Render("◎")
 
 	// PR status styles
+	PRLinkStyle   = lipgloss.NewStyle().Foreground(lipgloss.Color("15")).Underline(true)
 	PROpenStyle   = lipgloss.NewStyle().Foreground(lipgloss.Color("2"))
 	PRMergedStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("5"))
 	PRClosedStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("1"))
