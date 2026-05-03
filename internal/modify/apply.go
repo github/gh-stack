@@ -626,9 +626,11 @@ func ContinueApply(
 	}
 
 	cfg.Successf("Stack modified successfully")
-	cfg.Printf("")
-	cfg.Printf("Run `%s` to push your changes and update the stack of PRs on GitHub",
-		cfg.ColorCyan("gh stack submit"))
+	if state.PriorRemoteStackID != "" {
+		cfg.Printf("")
+		cfg.Printf("Run `%s` to push your changes and update the stack of PRs on GitHub",
+			cfg.ColorCyan("gh stack submit"))
+	}
 	return nil
 }
 

@@ -135,13 +135,13 @@ func runModify(cfg *config.Config) error {
 	}
 
 	// Print success summary
-	printModifySuccess(cfg, applyResult)
+	printModifySuccess(cfg, applyResult, s.ID != "")
 
 	return nil
 }
 
 // printModifySuccess prints a summary of what was applied.
-func printModifySuccess(cfg *config.Config, result *modifyview.ApplyResult) {
+func printModifySuccess(cfg *config.Config, result *modifyview.ApplyResult, hasRemoteStack bool) {
 	if result == nil {
 		return
 	}
@@ -164,8 +164,10 @@ func printModifySuccess(cfg *config.Config, result *modifyview.ApplyResult) {
 	}
 
 	cfg.Printf("")
-	cfg.Printf("Run `%s` to push your changes and update the stack of PRs on GitHub",
-		cfg.ColorCyan("gh stack submit"))
+	if hasRemoteStack {
+		cfg.Printf("Run `%s` to push your changes and update the stack of PRs on GitHub",
+			cfg.ColorCyan("gh stack submit"))
+	}
 }
 
 // runModifyRecover handles recovery from a crashed modify session.
