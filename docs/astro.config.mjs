@@ -71,6 +71,7 @@ export default defineConfig({
 					label: 'Reference',
 					items: [
 						{ label: 'CLI Commands', slug: 'reference/cli' },
+						{ label: 'Webhooks', slug: 'reference/webhooks' },
 					],
 				},
 				{
