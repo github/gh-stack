@@ -113,8 +113,9 @@ type Model struct {
 	actionStack []StagedAction
 
 	// Rename mode
-	renameMode  bool
-	renameInput textinput.Model
+	renameMode     bool
+	renameInput    textinput.Model
+	renameOriginal string // original branch name shown as label
 
 	// Help overlay
 	showHelp bool
@@ -701,7 +702,9 @@ func (m *Model) startRename() {
 	}
 
 	m.renameMode = true
+	m.renameOriginal = node.Ref.Branch
 	m.renameInput.SetValue(node.Ref.Branch)
+	m.renameInput.Prompt = ""
 	m.renameInput.Focus()
 	m.renameInput.CursorEnd()
 }
@@ -830,7 +833,7 @@ func (m Model) nodeLineCount(idx int) int {
 }
 
 func (m Model) contentViewHeight() int {
-	reserved := 1 // status line
+	reserved := 3 // post-scroll newline + context line + status bar
 	if shared.ShouldShowHeader(m.width, m.height) {
 		reserved += shared.HeaderHeight
 	}
@@ -983,55 +986,51 @@ func (m Model) View() string {
 		shared.RenderHeader(&out, m.buildHeaderConfig(), m.width, m.height)
 	}
 
+	// Build the scrollable branch list content
 	var b strings.Builder
-
-	// Branch list — all nodes rendered with shared renderer, annotations for pending actions
 	for i := 0; i < len(m.nodes); i++ {
 		nodeData := toNodeData(m.nodes[i], i)
 		isFocused := i == m.cursor
 		annotation := nodeAnnotation(m.nodes[i], i)
 		shared.RenderNode(&b, nodeData, isFocused, m.width, annotation)
 	}
-
-	// Trunk
 	shared.RenderTrunk(&b, m.trunk.Branch)
 
-	// Rename input line (if in rename mode)
-	if m.renameMode {
-		b.WriteString("\n")
-		b.WriteString(renameBadge.Render("Rename: "))
-		b.WriteString(m.renameInput.View())
-		b.WriteString("\n")
-	}
+	// Count fixed bottom lines (always visible, not scrollable).
+	// The bottom section always has 2 lines: one for contextual info
+	// (rename prompt or error, blank when neither) and one for the status bar.
+	bottomLines := 2 // post-scroll newline + context line + status bar
 
-	// Transient status message
-	if m.statusMessage != "" {
-		b.WriteString("\n")
-		if m.statusIsError {
-			b.WriteString(transientErrorStyle.Render("✗ " + m.statusMessage))
-		} else {
-			b.WriteString(transientInfoStyle.Render(m.statusMessage))
-		}
-		b.WriteString("\n")
-	}
-
-	content := b.String()
-
-	// Scrolling
-	reservedLines := 0
+	// Scrolling — reserve space for header and fixed bottom
+	reservedLines := bottomLines
 	if showHeader {
-		reservedLines = shared.HeaderHeight
+		reservedLines += shared.HeaderHeight
 	}
-	viewHeight := m.height - reservedLines - 1 // -1 for status line
+	viewHeight := m.height - reservedLines
 	if viewHeight < 1 {
 		viewHeight = 1
 	}
 
-	out.WriteString(shared.ApplyScrollToContent(content, m.scrollOffset, viewHeight))
+	out.WriteString(shared.ApplyScrollToContent(b.String(), m.scrollOffset, viewHeight))
 	out.WriteString("\n")
 
-	// Status line at the bottom
-	out.WriteString(renderStatusLine(m.nodes, m.width))
+	// Second-to-bottom: error/status message line (always present, blank when empty)
+	if m.statusMessage != "" {
+		if m.statusIsError {
+			out.WriteString(transientErrorStyle.Render("✗ " + m.statusMessage))
+		} else {
+			out.WriteString(transientInfoStyle.Render(m.statusMessage))
+		}
+	}
+
+	// Bottom line: rename prompt (when active) or status bar
+	out.WriteString("\n")
+	if m.renameMode {
+		out.WriteString(renameBadge.Render(fmt.Sprintf("Rename: %s → ", m.renameOriginal)))
+		out.WriteString(m.renameInput.View())
+	} else {
+		out.WriteString(renderStatusLine(m.nodes, m.width))
+	}
 
 	return out.String()
 }
@@ -1079,12 +1078,12 @@ func (m Model) buildHeaderConfig() shared.HeaderConfig {
 		ShortcutColumns: 2,
 		Shortcuts: []shared.ShortcutEntry{
 			// Left column                          // Right column
-			{Key: "↑↓", Desc: "select branch"},     {Key: "x", Desc: "drop", Disabled: structureDisabled},
-			{Key: "f", Desc: "view files"},          {Key: "r", Desc: "rename", Disabled: structureDisabled},
-			{Key: "c", Desc: "view commits"},        {Key: "u", Desc: "fold up", Disabled: structureDisabled},
-			{Key: "?", Desc: "help"},                {Key: "d", Desc: "fold down", Disabled: structureDisabled},
-			{Key: "q/esc", Desc: "quit"},            {Key: "shift+↑↓", Desc: "reorder", Disabled: reorderDisabled},
-			{Key: "^S", Desc: "apply changes"},      {Key: "z", Desc: "undo"},
+			{Key: "↑↓", Desc: "select branch"}, {Key: "x", Desc: "drop", Disabled: structureDisabled},
+			{Key: "f", Desc: "view files"}, {Key: "r", Desc: "rename", Disabled: structureDisabled},
+			{Key: "c", Desc: "view commits"}, {Key: "u", Desc: "fold up", Disabled: structureDisabled},
+			{Key: "?", Desc: "help"}, {Key: "d", Desc: "fold down", Disabled: structureDisabled},
+			{Key: "q/esc", Desc: "quit"}, {Key: "shift+↑↓", Desc: "reorder", Disabled: reorderDisabled},
+			{Key: "^S", Desc: "apply changes"}, {Key: "z", Desc: "undo"},
 		},
 	}
 }

@@ -221,18 +221,17 @@ func TestView_HeaderHiddenWhenNarrow(t *testing.T) {
 	assert.NotContains(t, view, "View Stack")
 }
 
-func TestView_HeaderWithoutShortcutsWhenMediumWidth(t *testing.T) {
+func TestView_HeaderShortcutsAlwaysVisible(t *testing.T) {
 	nodes := makeNodes("b1", "b2")
 	m := New(nodes, testTrunk, "0.0.1")
 
-	// Wide enough for header but not for shortcuts (between minWidthForHeader and minWidthForShortcuts)
+	// Even at medium width, shortcuts should still be visible
 	updated, _ := m.Update(tea.WindowSizeMsg{Width: 60, Height: 40})
 	m = updated.(Model)
 
 	view := m.View()
 	assert.Contains(t, view, "┌", "header should be shown")
-	assert.Contains(t, view, "View Stack", "info should be shown")
-	assert.NotContains(t, view, "checkout", "shortcuts should be hidden at this width")
+	assert.Contains(t, view, "checkout", "shortcuts should always be visible")
 }
 
 func TestView_HeaderShowsMergedCount(t *testing.T) {

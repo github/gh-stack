@@ -70,15 +70,15 @@ func ShouldShowShortcuts(width int) bool {
 }
 
 // RenderHeader renders the full-width header box.
+// Progressive disclosure as width narrows: first hides the art, then the
+// info text, keeping keyboard shortcuts always visible.
 func RenderHeader(b *strings.Builder, cfg HeaderConfig, width, height int) {
 	if width < 2 {
 		return
 	}
 	innerWidth := width - 2
 
-	showShortcuts := ShouldShowShortcuts(width)
-
-	// Build shortcut lines (possibly multi-column)
+	// Always build shortcut lines
 	type shortcutLine struct {
 		text     string
 		visWidth int
@@ -92,7 +92,7 @@ func RenderHeader(b *strings.Builder, cfg HeaderConfig, width, height int) {
 		cols = 1
 	}
 
-	if showShortcuts && len(cfg.Shortcuts) > 0 {
+	if len(cfg.Shortcuts) > 0 {
 		if cols >= 2 {
 			// Two-column layout with aligned keys and descriptions.
 			// First pass: compute max visual key width per column.
@@ -167,27 +167,45 @@ func RenderHeader(b *strings.Builder, cfg HeaderConfig, width, height int) {
 		rightColWidth = maxShortcutWidth + 2
 	}
 
+	// Determine what fits: shortcuts always shown, art and info are progressive.
+	// Hide art first (below 88 cols), then info text, as width narrows.
+	showArt := cfg.ShowArt
+	showInfo := true
+
+	// Hide art when viewport is too narrow for art + info + shortcuts
+	if showArt && width < 88 {
+		showArt = false
+	}
+
+	// If info + shortcuts don't fit, hide info
+	infoMinWidth := 20 // rough minimum for title/info text
+	if innerWidth < rightColWidth+infoMinWidth+4 {
+		showInfo = false
+	}
+
 	// Map info lines to row indices
 	infoByRow := make(map[int]string)
-	infoByRow[2] = HeaderTitleStyle.Render(cfg.Title)
-	if cfg.Subtitle != "" {
-		infoByRow[3] = HeaderInfoLabelStyle.Render(cfg.Subtitle)
-	}
-	for i, info := range cfg.InfoLines {
-		row := 5 + i
-		if row > 9 {
-			break
+	if showInfo {
+		infoByRow[2] = HeaderTitleStyle.Render(cfg.Title)
+		if cfg.Subtitle != "" {
+			infoByRow[3] = HeaderInfoLabelStyle.Render(cfg.Subtitle)
 		}
-		iconStyle := HeaderInfoStyle
-		if info.IconStyle != nil {
-			iconStyle = *info.IconStyle
+		for i, info := range cfg.InfoLines {
+			row := 5 + i
+			if row > 9 {
+				break
+			}
+			iconStyle := HeaderInfoStyle
+			if info.IconStyle != nil {
+				iconStyle = *info.IconStyle
+			}
+			infoByRow[row] = iconStyle.Render(info.Icon) + HeaderInfoLabelStyle.Render(" "+info.Label)
 		}
-		infoByRow[row] = iconStyle.Render(info.Icon) + HeaderInfoLabelStyle.Render(" "+info.Label)
 	}
 
 	// Left content base width
 	leftContentBase := 1 // margin
-	if cfg.ShowArt {
+	if showArt {
 		leftContentBase += ArtDisplayWidth
 	}
 
@@ -207,7 +225,7 @@ func RenderHeader(b *strings.Builder, cfg HeaderConfig, width, height int) {
 	for i := 0; i < 10; i++ {
 		// Left column: art (optional) + info
 		artText := ""
-		if cfg.ShowArt {
+		if showArt {
 			artText = ArtLines[i]
 		}
 
@@ -220,7 +238,7 @@ func RenderHeader(b *strings.Builder, cfg HeaderConfig, width, height int) {
 
 		leftUsed := leftContentBase + infoVisualLen
 
-		if showShortcuts && len(shortcuts) > 0 {
+		if len(shortcuts) > 0 {
 			shortcutCol := innerWidth - rightColWidth
 			midPad := shortcutCol - leftUsed
 			if midPad < 0 {
@@ -241,7 +259,7 @@ func RenderHeader(b *strings.Builder, cfg HeaderConfig, width, height int) {
 
 			b.WriteString(HeaderBorderStyle.Render("│"))
 			b.WriteString(" ")
-			if cfg.ShowArt {
+			if showArt {
 				b.WriteString(artText)
 			}
 			b.WriteString(infoText)
@@ -257,7 +275,7 @@ func RenderHeader(b *strings.Builder, cfg HeaderConfig, width, height int) {
 
 			b.WriteString(HeaderBorderStyle.Render("│"))
 			b.WriteString(" ")
-			if cfg.ShowArt {
+			if showArt {
 				b.WriteString(artText)
 			}
 			b.WriteString(infoText)
