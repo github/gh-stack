@@ -89,7 +89,7 @@ jobs:
           echo "Stack base SHA: ${{ github.event.pull_request.stack.base.sha }}"
 
       - name: Run a step only when the stack targets a release branch
-        if: startsWith(github.event.pull_request.stack.base.ref, 'release/')
+        if: github.event.pull_request.stack != null && startsWith(github.event.pull_request.stack.base.ref, 'release/')
         run: echo "This stack targets a release branch"
 ```
 
