@@ -368,6 +368,11 @@ func CherryPickAbort() {
 	_ = ops.CherryPickAbort()
 }
 
+// CherryPickContinue continues an in-progress cherry-pick after conflicts are resolved.
+func CherryPickContinue() error {
+	return ops.CherryPickContinue()
+}
+
 // HasUncommittedChanges returns true if the working tree has uncommitted changes.
 func HasUncommittedChanges() (bool, error) {
 	return ops.HasUncommittedChanges()

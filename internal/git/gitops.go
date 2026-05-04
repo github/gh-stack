@@ -59,6 +59,7 @@ type Ops interface {
 	RenameBranch(oldName, newName string) error
 	CherryPick(commits []string) error
 	CherryPickAbort() error
+	CherryPickContinue() error
 	HasUncommittedChanges() (bool, error)
 	LogMerges(base, head string) ([]CommitInfo, error)
 }
@@ -511,6 +512,12 @@ func (d *defaultOps) CherryPick(commits []string) error {
 
 func (d *defaultOps) CherryPickAbort() error {
 	return runSilent("cherry-pick", "--quit")
+}
+
+func (d *defaultOps) CherryPickContinue() error {
+	cmd := exec.Command("git", "cherry-pick", "--continue")
+	cmd.Env = append(os.Environ(), "GIT_EDITOR=true")
+	return cmd.Run()
 }
 
 func (d *defaultOps) HasUncommittedChanges() (bool, error) {

@@ -281,6 +281,35 @@ func ApplyPlan(
 					if files, ferr := git.ConflictedFiles(); ferr == nil {
 						conflict.ConflictedFiles = files
 					}
+
+					// Compute remaining branches for cascading rebase after cherry-pick resumes.
+					// Since folds happen before cascading rebase (Step 5), all non-merged, non-folded
+					// branches need rebasing.
+					remaining := make([]string, 0)
+					for _, br := range s.Branches {
+						if !br.IsMerged() && br.Branch != foldBranch {
+							remaining = append(remaining, br.Branch)
+						}
+					}
+
+					// Save conflict state so --continue can resume the cherry-pick
+					stateFile.Phase = PhaseConflict
+					stateFile.ConflictBranch = foldBranch
+					stateFile.ConflictType = "cherry_pick"
+					stateFile.FoldBranch = foldBranch
+					stateFile.FoldTarget = targetBranch
+					stateFile.RemainingBranches = remaining
+					stateFile.OriginalBranch = currentBranch
+					stateFile.OriginalRefs = originalParentTips
+					if saveErr := SaveState(gitDir, stateFile); saveErr != nil {
+						cfg.Warningf("failed to save conflict state: %v", saveErr)
+					}
+
+					// Save stack metadata so far
+					if saveErr := stack.SaveWithLock(gitDir, sf, lock); saveErr != nil {
+						cfg.Warningf("failed to save stack metadata: %v", saveErr)
+					}
+
 					return nil, conflict, fmt.Errorf("cherry-pick conflict folding %s into %s", foldBranch, targetBranch)
 				}
 
@@ -446,6 +475,7 @@ func ApplyPlan(
 			}
 			stateFile.Phase = PhaseConflict
 			stateFile.ConflictBranch = b.Branch
+			stateFile.ConflictType = "rebase"
 			stateFile.RemainingBranches = remaining
 			stateFile.OriginalBranch = currentBranch
 			stateFile.OriginalRefs = originalParentTips
@@ -454,7 +484,9 @@ func ApplyPlan(
 			}
 
 			// Save stack metadata so far (renames, folds, drops already applied)
-			_ = stack.SaveWithLock(gitDir, sf, lock)
+			if saveErr := stack.SaveWithLock(gitDir, sf, lock); saveErr != nil {
+				cfg.Warningf("failed to save stack metadata: %v", saveErr)
+			}
 
 			return nil, conflict, fmt.Errorf("rebase conflict on %s", b.Branch)
 		}
@@ -519,26 +551,36 @@ func ContinueApply(
 	}
 	defer lock.Unlock()
 
-	// Find the stack
+	// Find the stack using the saved index for reliable identification.
 	var s *stack.Stack
-	for i := range sf.Stacks {
-		if sf.Stacks[i].Trunk.Branch == state.StackName {
-			s = &sf.Stacks[i]
-			break
-		}
+	if state.StackIndex >= 0 && state.StackIndex < len(sf.Stacks) {
+		s = &sf.Stacks[state.StackIndex]
 	}
 	if s == nil {
-		return fmt.Errorf("stack %q not found", state.StackName)
+		return fmt.Errorf("stack at index %d not found (stack file may have changed)", state.StackIndex)
 	}
 
-	// Finish the in-progress git rebase
-	if git.IsRebaseInProgress() {
-		if err := git.RebaseContinue(); err != nil {
-			return fmt.Errorf("rebase continue failed — resolve remaining conflicts and try again: %w", err)
+	// Finish the in-progress git operation (rebase or cherry-pick)
+	if state.ConflictType == "cherry_pick" {
+		if err := git.CherryPickContinue(); err != nil {
+			return fmt.Errorf("cherry-pick continue failed — resolve remaining conflicts and try again: %w", err)
 		}
-	}
+		cfg.Successf("Folded %s into %s", state.FoldBranch, state.FoldTarget)
 
-	cfg.Successf("Rebased %s", state.ConflictBranch)
+		// Remove the folded branch from stack metadata
+		foldIdx := s.IndexOf(state.FoldBranch)
+		if foldIdx >= 0 && foldIdx < len(s.Branches) {
+			s.Branches = append(s.Branches[:foldIdx], s.Branches[foldIdx+1:]...)
+		}
+	} else {
+		// Rebase conflict
+		if git.IsRebaseInProgress() {
+			if err := git.RebaseContinue(); err != nil {
+				return fmt.Errorf("rebase continue failed — resolve remaining conflicts and try again: %w", err)
+			}
+		}
+		cfg.Successf("Rebased %s", state.ConflictBranch)
+	}
 
 	// Continue cascading rebase for remaining branches
 	for _, branchName := range state.RemainingBranches {

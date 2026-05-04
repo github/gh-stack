@@ -359,6 +359,10 @@ func (m *MockOps) CherryPickAbort() error {
 	return nil
 }
 
+func (m *MockOps) CherryPickContinue() error {
+	return nil
+}
+
 func (m *MockOps) HasUncommittedChanges() (bool, error) {
 	if m.HasUncommittedChangesFn != nil {
 		return m.HasUncommittedChangesFn()

@@ -31,9 +31,14 @@ type StateFile struct {
 
 	// Conflict state — populated when phase is "conflict"
 	ConflictBranch    string            `json:"conflict_branch,omitempty"`
+	ConflictType      string            `json:"conflict_type,omitempty"` // "rebase" or "cherry_pick"
 	RemainingBranches []string          `json:"remaining_branches,omitempty"`
 	OriginalBranch    string            `json:"original_branch,omitempty"`
 	OriginalRefs      map[string]string `json:"original_refs,omitempty"`
+
+	// Cherry-pick conflict context — which fold was in progress
+	FoldBranch string `json:"fold_branch,omitempty"` // branch being folded
+	FoldTarget string `json:"fold_target,omitempty"` // branch receiving the cherry-pick
 }
 
 // Snapshot captures the pre-modify state for unwind/recovery.

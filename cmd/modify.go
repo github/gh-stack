@@ -123,26 +123,15 @@ func runModify(cfg *config.Config) error {
 		isCherryPick := applyErr != nil && strings.Contains(applyErr.Error(), "cherry-pick")
 		if isCherryPick {
 			cfg.Warningf("Cherry-pick conflict folding %s", conflict.Branch)
-			if len(conflict.ConflictedFiles) > 0 {
-				cfg.Printf("")
-				cfg.Printf("%s", cfg.ColorBold("Conflicted files:"))
-				for _, f := range conflict.ConflictedFiles {
-					cfg.Printf("  %s %s", cfg.ColorWarning("C"), f)
-				}
-			}
-			cfg.Printf("")
-			cfg.Printf("Cherry-pick conflicts cannot be continued with `--continue`.")
-			cfg.Printf("Restore the stack to its pre-modify state with `%s`",
-				cfg.ColorCyan("gh stack modify --abort"))
 		} else {
 			cfg.Warningf("Rebasing %s — conflict", conflict.Branch)
-
-			printConflictDetailsWithContinue(cfg, conflict.Branch, "gh stack modify --continue")
-			cfg.Printf("")
-
-			cfg.Printf("Or restore the stack to its pre-modify state with `%s`",
-				cfg.ColorCyan("gh stack modify --abort"))
 		}
+
+		printConflictDetailsWithContinue(cfg, conflict.Branch, "gh stack modify --continue")
+		cfg.Printf("")
+
+		cfg.Printf("Or restore the stack to its pre-modify state with `%s`",
+			cfg.ColorCyan("gh stack modify --abort"))
 		return ErrConflict
 	}
 

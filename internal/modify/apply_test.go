@@ -751,15 +751,86 @@ func TestApplyPlan_ConflictDuringCherryPick(t *testing.T) {
 	require.NotNil(t, conflict)
 	assert.Equal(t, "B", conflict.Branch)
 
-	// Cherry-pick conflicts return a conflict immediately (no "conflict" state for continue)
+	// Cherry-pick conflicts now save state for --continue recovery
 	state, loadErr := LoadState(gitDir)
 	require.NoError(t, loadErr)
-	// The state file is created with "applying" phase before the conflict,
-	// but cherry-pick conflicts don't update it to "conflict"
-	if state != nil {
-		assert.NotEqual(t, "conflict", state.Phase,
-			"cherry-pick conflicts should not set phase to 'conflict'")
+	require.NotNil(t, state)
+	assert.Equal(t, PhaseConflict, state.Phase)
+	assert.Equal(t, "cherry_pick", state.ConflictType)
+	assert.Equal(t, "B", state.FoldBranch)
+	assert.Equal(t, "A", state.FoldTarget)
+	assert.Equal(t, "A", state.OriginalBranch)
+	assert.Contains(t, state.RemainingBranches, "A")
+}
+
+// ─── ContinueApply: Multi-Stack Finds Correct Stack ─────────────────────────
+
+func TestContinueApply_MultiStackFindsCorrectStack(t *testing.T) {
+	// When multiple stacks share the same trunk, ContinueApply should use
+	// StackIndex to find the right stack, not just trunk name matching.
+	gitDir := t.TempDir()
+
+	// Stack 0: main <- X (a different stack)
+	// Stack 1: main <- A <- B <- C (the one being modified)
+	sf := &stack.StackFile{
+		SchemaVersion: 1,
+		Stacks: []stack.Stack{
+			{
+				Trunk:    stack.BranchRef{Branch: "main"},
+				Branches: []stack.BranchRef{{Branch: "X"}},
+			},
+			{
+				Trunk: stack.BranchRef{Branch: "main"},
+				Branches: []stack.BranchRef{
+					{Branch: "A"},
+					{Branch: "B"},
+					{Branch: "C"},
+				},
+			},
+		},
 	}
+	data, err := json.MarshalIndent(sf, "", "  ")
+	require.NoError(t, err)
+	require.NoError(t, os.WriteFile(filepath.Join(gitDir, "gh-stack"), data, 0644))
+
+	// Create a state file pointing at Stack 1 (index 1)
+	state := &StateFile{
+		SchemaVersion:   1,
+		StackName:       "main",
+		StackIndex:      1, // The correct stack is at index 1
+		Phase:           PhaseConflict,
+		ConflictBranch:  "A",
+		ConflictType:    "rebase",
+		RemainingBranches: []string{"B", "C"},
+		OriginalRefs:    map[string]string{"B": "sha-A", "C": "sha-B"},
+	}
+	require.NoError(t, SaveState(gitDir, state))
+
+	mock := newApplyMock(gitDir, map[string]string{
+		"main": "sha-main", "A": "sha-A", "B": "sha-B", "C": "sha-C",
+	})
+	mock.IsRebaseInProgressFn = func() bool { return true }
+	mock.RebaseContinueFn = func() error { return nil }
+
+	var rebasedBranches []string
+	mock.RebaseOntoFn = func(newBase, oldBase, branch string) error {
+		rebasedBranches = append(rebasedBranches, branch)
+		return nil
+	}
+
+	restore := git.SetOps(mock)
+	defer restore()
+
+	cfg, _, _ := config.NewTestConfig()
+	defer cfg.Out.Close()
+	defer cfg.Err.Close()
+
+	err = ContinueApply(cfg, gitDir, noopUpdateBaseSHAs)
+	require.NoError(t, err)
+
+	// B and C should have been found and processed (not "no longer in stack")
+	assert.Contains(t, rebasedBranches, "B", "B should be rebased")
+	assert.Contains(t, rebasedBranches, "C", "C should be rebased")
 }
 
 // ─── Unwind ──────────────────────────────────────────────────────────────────
