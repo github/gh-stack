@@ -71,6 +71,35 @@ Every PR in a stack is treated as if it is targeting the **base of the stack** (
 
 GitHub Actions workflows trigger as if each PR in the stack is targeting the base of the stack (e.g., `main`). If you have a workflow configured to run on `pull_request` events targeting `main`, it will run for **every PR in the stack** — not just the bottom one.
 
+### How do I access stack metadata in my GitHub Actions workflow?
+
+For advanced use cases, you can access the stack's base ref and base SHA in workflow expressions via `github.event.pull_request.stack`. This property is only present when the PR belongs to a stack.
+
+```yaml
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Show stack info
+        if: github.event.pull_request.stack != null
+        run: |
+          echo "Stack base ref: ${{ github.event.pull_request.stack.base.ref }}"
+          echo "Stack base SHA: ${{ github.event.pull_request.stack.base.sha }}"
+
+      - name: Run a step only when the stack targets a release branch
+        if: startsWith(github.event.pull_request.stack.base.ref, 'release/')
+        run: echo "This stack targets a release branch"
+```
+
+| Expression | Description |
+|------------|-------------|
+| `github.event.pull_request.stack.base.ref` | The branch the entire stack ultimately targets (e.g., `main`). |
+| `github.event.pull_request.stack.base.sha` | The HEAD SHA of that target branch at the time of the event. |
+
+See the [Webhooks reference](/gh-stack/reference/webhooks/) for the full details on the `stack` object in webhook payloads.
+
 ### Do all previous PRs need to be passing checks before I can merge?
 
 Yes. In order to merge a PR in the stack, **all PRs below it** must also have passing checks and meet all merge requirements. For example, in a stack of `main <- PR1 <- PR2 <- PR3`, if you want to merge PR #3, both PR #1 and PR #2 must have passing checks, required reviews, and satisfy all branch protection rules.
