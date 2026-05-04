@@ -85,6 +85,9 @@ func SaveState(gitDir string, state *StateFile) error {
 	if err := os.WriteFile(tmp, data, 0644); err != nil {
 		return fmt.Errorf("writing modify state: %w", err)
 	}
+	// Remove existing target before rename for Windows compatibility
+	// (os.Rename fails on Windows if the target already exists).
+	_ = os.Remove(target)
 	if err := os.Rename(tmp, target); err != nil {
 		_ = os.Remove(tmp)
 		return fmt.Errorf("committing modify state: %w", err)

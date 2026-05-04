@@ -193,6 +193,11 @@ func ApplyPlan(
 					originalRefs[newName] = sha
 					delete(originalRefs, oldName)
 				}
+				// Update originalParentTips key
+				if sha, ok := originalParentTips[oldName]; ok {
+					originalParentTips[newName] = sha
+					delete(originalParentTips, oldName)
+				}
 				s.Branches[idx].Branch = newName
 			}
 			// Update the node's ref for later steps
@@ -360,25 +365,29 @@ func ApplyPlan(
 		needsReorder = true
 	}
 
-	// Rebuild s.Branches in the desired order
-	if needsReorder || len(s.Branches) != len(desiredOrder) {
-		newBranches := make([]stack.BranchRef, 0, len(desiredOrder))
-
-		// Add merged branches first (they stay in place)
-		for _, b := range s.Branches {
-			if b.IsMerged() {
-				newBranches = append(newBranches, b)
-			}
-		}
-
-		// Add active branches in desired order
+	// Rebuild s.Branches in the desired order, preserving merged branches
+	// at their original positions.
+	if needsReorder {
+		// Build a queue of active branches in the desired order
+		desiredIdx := 0
 		branchMap := make(map[string]stack.BranchRef)
 		for _, b := range s.Branches {
 			branchMap[b.Branch] = b
 		}
-		for _, name := range desiredOrder {
-			if b, ok := branchMap[name]; ok {
+
+		newBranches := make([]stack.BranchRef, 0, len(s.Branches))
+		for _, b := range s.Branches {
+			if b.IsMerged() {
+				// Merged branches stay at their original position
 				newBranches = append(newBranches, b)
+			} else {
+				// Substitute the next active branch from the desired order
+				if desiredIdx < len(desiredOrder) {
+					if sub, ok := branchMap[desiredOrder[desiredIdx]]; ok {
+						newBranches = append(newBranches, sub)
+					}
+					desiredIdx++
+				}
 			}
 		}
 

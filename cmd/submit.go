@@ -136,6 +136,8 @@ func runSubmit(cfg *config.Config, opts *submitOptions) error {
 			if errors.Is(err, errInterrupt) {
 				return ErrSilent
 			}
+			// DeleteStack or other failure — don't continue with stale state
+			return ErrSilent
 		}
 	}
 
