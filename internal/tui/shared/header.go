@@ -18,6 +18,9 @@ const MinWidthForShortcuts = 65
 // MinWidthForHeader is the minimum width to show the header at all.
 const MinWidthForHeader = 50
 
+// MinWidthForArt is the minimum width to show ASCII art in the header.
+const MinWidthForArt = 88
+
 // ShortcutEntry represents a keyboard shortcut for the header.
 type ShortcutEntry struct {
 	Key      string
@@ -173,7 +176,7 @@ func RenderHeader(b *strings.Builder, cfg HeaderConfig, width, height int) {
 	showInfo := true
 
 	// Hide art when viewport is too narrow for art + info + shortcuts
-	if showArt && width < 88 {
+	if showArt && width < MinWidthForArt {
 		showArt = false
 	}
 

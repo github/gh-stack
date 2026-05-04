@@ -11,7 +11,6 @@ import (
 	"github.com/github/gh-stack/internal/git"
 	"github.com/github/gh-stack/internal/stack"
 	"github.com/github/gh-stack/internal/tui/shared"
-	"github.com/github/gh-stack/internal/tui/stackview"
 )
 
 // modifyKeyMap defines key bindings for the modify view.
@@ -767,7 +766,7 @@ func (m *Model) undoLast() {
 
 	case ActionRename:
 		for i := range m.nodes {
-			if m.nodes[i].Ref.Branch == action.BranchName || (m.nodes[i].PendingAction != nil && m.nodes[i].PendingAction.Type == ActionRename) {
+			if m.nodes[i].Ref.Branch == action.BranchName || (m.nodes[i].PendingAction != nil && m.nodes[i].PendingAction.Type == ActionRename && m.nodes[i].PendingAction.NewName == action.NewName) {
 				m.nodes[i].PendingAction = nil
 				break
 			}
@@ -999,7 +998,7 @@ func (m Model) View() string {
 	// Count fixed bottom lines (always visible, not scrollable).
 	// The bottom section always has 2 lines: one for contextual info
 	// (rename prompt or error, blank when neither) and one for the status bar.
-	bottomLines := 2 // post-scroll newline + context line + status bar
+	bottomLines := 2 // error/status line + status bar (post-scroll newline is inline)
 
 	// Scrolling — reserve space for header and fixed bottom
 	reservedLines := bottomLines
@@ -1090,6 +1089,3 @@ func (m Model) buildHeaderConfig() shared.HeaderConfig {
 
 // Ensure Model satisfies the tea.Model interface.
 var _ tea.Model = Model{}
-
-// Ensure stackview import is used (BranchNode is embedded in ModifyBranchNode).
-var _ = stackview.BranchNode{}

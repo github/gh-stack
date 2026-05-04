@@ -317,10 +317,12 @@ func Save(gitDir string, sf *StackFile) error {
 }
 
 // SaveWithLock writes the stack file while the caller already holds the lock.
-// This avoids double-locking when the caller needs to hold the lock across
-// multiple operations (e.g. modify apply).  The staleness check is skipped
-// because the caller owns the lock and has been mutating the StackFile.
-func SaveWithLock(gitDir string, sf *StackFile, _ *FileLock) error {
+// The caller is responsible for acquiring and releasing the lock.
+// Panics if lock is nil to catch programming errors.
+func SaveWithLock(gitDir string, sf *StackFile, lock *FileLock) error {
+	if lock == nil {
+		panic("SaveWithLock called with nil lock")
+	}
 	return writeStackFile(gitDir, sf)
 }
 

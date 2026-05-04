@@ -697,3 +697,62 @@ func TestPluralize(t *testing.T) {
 	assert.Equal(t, "drops", pluralize(2, "drop", "drops"))
 	assert.Equal(t, "drops", pluralize(0, "drop", "drops"))
 }
+
+func TestUndoRename(t *testing.T) {
+	nodes := []ModifyBranchNode{
+		makeNode("a", false, 0),
+		makeNode("b", true, 1),
+		makeNode("c", false, 2),
+	}
+	m := New(nodes, testTrunk, "1.0.0")
+
+	// Simulate a rename on node at index 1 (bypass git validation)
+	m.nodes[1].PendingAction = &PendingAction{Type: ActionRename, NewName: "b-renamed"}
+	m.actionStack = append(m.actionStack, StagedAction{
+		Type:         ActionRename,
+		BranchName:   "b",
+		OriginalName: "b",
+		NewName:      "b-renamed",
+	})
+
+	require.NotNil(t, m.nodes[1].PendingAction)
+	assert.Equal(t, ActionRename, m.nodes[1].PendingAction.Type)
+	assert.Equal(t, "b-renamed", m.nodes[1].PendingAction.NewName)
+
+	// Undo
+	m = sendKey(t, m, runeKey('z'))
+	assert.Nil(t, m.nodes[1].PendingAction, "PendingAction should be cleared after undo")
+}
+
+func TestUndoRename_DoesNotAffectOtherRenames(t *testing.T) {
+	nodes := []ModifyBranchNode{
+		makeNode("a", false, 0),
+		makeNode("b", true, 1),
+		makeNode("c", false, 2),
+	}
+	m := New(nodes, testTrunk, "1.0.0")
+
+	// Simulate rename on node 0 (first rename)
+	m.nodes[0].PendingAction = &PendingAction{Type: ActionRename, NewName: "a-renamed"}
+	m.actionStack = append(m.actionStack, StagedAction{
+		Type:         ActionRename,
+		BranchName:   "a",
+		OriginalName: "a",
+		NewName:      "a-renamed",
+	})
+
+	// Simulate rename on node 2 (second rename)
+	m.nodes[2].PendingAction = &PendingAction{Type: ActionRename, NewName: "c-renamed"}
+	m.actionStack = append(m.actionStack, StagedAction{
+		Type:         ActionRename,
+		BranchName:   "c",
+		OriginalName: "c",
+		NewName:      "c-renamed",
+	})
+
+	// Undo the second rename
+	m = sendKey(t, m, runeKey('z'))
+	assert.Nil(t, m.nodes[2].PendingAction, "second rename should be undone")
+	require.NotNil(t, m.nodes[0].PendingAction, "first rename should still be intact")
+	assert.Equal(t, "a-renamed", m.nodes[0].PendingAction.NewName, "first rename new name should be unchanged")
+}

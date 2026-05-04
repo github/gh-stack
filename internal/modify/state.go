@@ -11,6 +11,12 @@ import (
 
 const stateFileName = "gh-stack-modify-state"
 
+const (
+	PhaseApplying      = "applying"
+	PhaseConflict      = "conflict"
+	PhasePendingSubmit = "pending_submit"
+)
+
 // StateFile holds the state of an in-progress or pending-submit modify operation.
 // It is stored at .git/gh-stack-modify-state.
 type StateFile struct {
@@ -117,10 +123,10 @@ func CheckStateGuard(gitDir string) error {
 	if state == nil {
 		return nil
 	}
-	if state.Phase == "applying" {
+	if state.Phase == PhaseApplying {
 		return fmt.Errorf("a modify session was interrupted — run `gh stack modify --abort` to restore your stack")
 	}
-	if state.Phase == "conflict" {
+	if state.Phase == PhaseConflict {
 		return fmt.Errorf("a modify has unresolved conflicts — run `gh stack modify --continue` or `gh stack modify --abort`")
 	}
 	return nil

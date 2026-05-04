@@ -38,10 +38,6 @@ func CheckStackLinearity(cfg *config.Config, s *stack.Stack) error {
 		if i == 0 {
 			parentBranch = s.Trunk.Branch
 		} else {
-			parentBranch = s.Branches[i-1].Branch
-		}
-
-		if i > 0 && s.Branches[i-1].IsMerged() {
 			parentBranch = s.ActiveBaseBranch(b.Branch)
 		}
 
