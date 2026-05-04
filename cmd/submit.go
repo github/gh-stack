@@ -144,7 +144,7 @@ func runSubmit(cfg *config.Config, opts *submitOptions) error {
 	// Push each branch and create/update its PR in stack order (bottom to top).
 	// Sequential pushing ensures each branch's base is up-to-date on the
 	// remote before the next branch is pushed, preventing race conditions.
-	cfg.Printf("Pushing %d %s to %s...", len(activeBranches), plural(len(activeBranches), "branch", "branches"), remote)
+	cfg.Printf("Pushing to %s...", remote)
 	for i, b := range s.Branches {
 		if s.Branches[i].IsMerged() || s.Branches[i].IsQueued() {
 			continue
@@ -318,14 +318,14 @@ func handlePendingModify(cfg *config.Config, client github.ClientOps, s *stack.S
 	if err != nil || state == nil {
 		return nil // No modify state — nothing to do
 	}
-	if state.Phase != "pending_submit" {
+	if state.Phase != modify.PhasePendingSubmit {
 		return nil // Not in pending_submit phase
 	}
 
 	// Prompt for confirmation before overwriting the remote stack
 	if cfg.IsInteractive() {
 		p := prompter.New(cfg.In, cfg.Out, cfg.Err)
-		proceed, promptErr := p.Confirm("The local stack has been modified. Overwrite the existing stack on GitHub?", false)
+		proceed, promptErr := p.Confirm("The local stack has been modified. Overwrite the existing stack on GitHub?", true)
 		if promptErr != nil {
 			if isInterruptError(promptErr) {
 				printInterrupt(cfg)

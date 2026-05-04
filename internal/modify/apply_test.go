@@ -834,7 +834,7 @@ func TestUnwind(t *testing.T) {
 	defer cfg.Out.Close()
 	defer cfg.Err.Close()
 
-	err = Unwind(cfg, gitDir, snapshot, 0, sf)
+	err = Unwind(cfg, gitDir, snapshot, 0, sf, nil)
 	require.NoError(t, err)
 
 	// ResetHard should be called for each branch with snapshot SHAs
@@ -1126,7 +1126,7 @@ func TestUnwind_AbortsActiveRebase(t *testing.T) {
 	defer cfg.Out.Close()
 	defer cfg.Err.Close()
 
-	err = Unwind(cfg, gitDir, snapshot, 0, sf)
+	err = Unwind(cfg, gitDir, snapshot, 0, sf, nil)
 	require.NoError(t, err)
 	assert.True(t, rebaseAbortCalled, "RebaseAbort should be called when rebase is in progress")
 	assert.False(t, StateExists(gitDir))
@@ -1175,7 +1175,7 @@ func TestUnwind_RestoresRenamedBranch(t *testing.T) {
 	defer cfg.Out.Close()
 	defer cfg.Err.Close()
 
-	err = Unwind(cfg, gitDir, snapshot, 0, sf)
+	err = Unwind(cfg, gitDir, snapshot, 0, sf, nil)
 	require.NoError(t, err)
 
 	// A should be recreated via CreateBranch

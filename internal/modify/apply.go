@@ -126,7 +126,7 @@ func ApplyPlan(
 		StackName:          s.Trunk.Branch,
 		StackIndex:         stackIndex,
 		StartedAt:          time.Now().UTC(),
-		Phase:              "applying",
+		Phase:              PhaseApplying,
 		PriorRemoteStackID: s.ID,
 		Snapshot:           snapshot,
 		Plan:               plan,
@@ -146,6 +146,14 @@ func ApplyPlan(
 		}
 	}
 	originalRefs, err := git.RevParseMap(branchNames)
+	if err != nil {
+		// Unwind on failure
+		unwindErr := Unwind(cfg, gitDir, snapshot, stackIndex, sf, plan)
+		if unwindErr != nil {
+			return nil, nil, fmt.Errorf("failed to resolve refs (%v) and unwind failed (%v)", err, unwindErr)
+		}
+		return nil, nil, fmt.Errorf("failed to resolve branch SHAs: %w", err)
+	}
 
 	// Build a map of each branch's original parent tip SHA for accurate --onto rebase
 	originalParentTips := make(map[string]string)
@@ -163,14 +171,6 @@ func ApplyPlan(
 			originalParentTips[b.Branch] = sha
 		}
 	}
-	if err != nil {
-		// Unwind on failure
-		unwindErr := Unwind(cfg, gitDir, snapshot, stackIndex, sf)
-		if unwindErr != nil {
-			return nil, nil, fmt.Errorf("failed to resolve refs (%v) and unwind failed (%v)", err, unwindErr)
-		}
-		return nil, nil, fmt.Errorf("failed to resolve branch SHAs: %w", err)
-	}
 
 	// Step 1: Renames
 	for i, n := range nodes {
@@ -178,7 +178,7 @@ func ApplyPlan(
 			oldName := n.Ref.Branch
 			newName := n.PendingAction.NewName
 			if err := git.RenameBranch(oldName, newName); err != nil {
-				unwindErr := Unwind(cfg, gitDir, snapshot, stackIndex, sf)
+				unwindErr := Unwind(cfg, gitDir, snapshot, stackIndex, sf, plan)
 				if unwindErr != nil {
 					return nil, nil, fmt.Errorf("rename failed (%v) and unwind failed (%v)", err, unwindErr)
 				}
@@ -262,7 +262,7 @@ func ApplyPlan(
 				cfg.Printf("No commits to fold from %s", foldBranch)
 			} else {
 				if err := git.CheckoutBranch(targetBranch); err != nil {
-					unwindErr := Unwind(cfg, gitDir, snapshot, stackIndex, sf)
+					unwindErr := Unwind(cfg, gitDir, snapshot, stackIndex, sf, plan)
 					if unwindErr != nil {
 						return nil, nil, fmt.Errorf("checkout failed (%v) and unwind failed (%v)", err, unwindErr)
 					}
@@ -444,7 +444,7 @@ func ApplyPlan(
 					remaining = append(remaining, s.Branches[j].Branch)
 				}
 			}
-			stateFile.Phase = "conflict"
+			stateFile.Phase = PhaseConflict
 			stateFile.ConflictBranch = b.Branch
 			stateFile.RemainingBranches = remaining
 			stateFile.OriginalBranch = currentBranch
@@ -471,7 +471,7 @@ func ApplyPlan(
 
 	// Update state file phase
 	if s.ID != "" {
-		stateFile.Phase = "pending_submit"
+		stateFile.Phase = PhasePendingSubmit
 		if err := SaveState(gitDir, stateFile); err != nil {
 			cfg.Warningf("failed to update modify state: %s", err)
 		}
@@ -503,7 +503,7 @@ func ContinueApply(
 	if state == nil {
 		return fmt.Errorf("no modify state file found")
 	}
-	if state.Phase != "conflict" {
+	if state.Phase != PhaseConflict {
 		return fmt.Errorf("no modify conflict in progress (phase: %s)", state.Phase)
 	}
 
@@ -511,6 +511,13 @@ func ContinueApply(
 	if err != nil {
 		return fmt.Errorf("loading stack: %w", err)
 	}
+
+	// Acquire lock for the duration of the operation
+	lock, err := stack.Lock(gitDir)
+	if err != nil {
+		return fmt.Errorf("acquiring stack lock: %w", err)
+	}
+	defer lock.Unlock()
 
 	// Find the stack
 	var s *stack.Stack
@@ -618,7 +625,7 @@ func ContinueApply(
 
 	// Transition to pending_submit or clear
 	if s.ID != "" {
-		state.Phase = "pending_submit"
+		state.Phase = PhasePendingSubmit
 		state.ConflictBranch = ""
 		state.RemainingBranches = nil
 		state.OriginalRefs = nil
@@ -630,7 +637,7 @@ func ContinueApply(
 	}
 
 	// Save stack metadata
-	if err := stack.Save(gitDir, sf); err != nil {
+	if err := stack.SaveWithLock(gitDir, sf, lock); err != nil {
 		cfg.Warningf("failed to save stack: %v", err)
 	}
 
@@ -645,14 +652,16 @@ func ContinueApply(
 
 // Unwind restores the stack to its pre-modify state using the snapshot.
 // stackIndex is the index of the stack in sf.Stacks at modify start time.
-func Unwind(cfg *config.Config, gitDir string, snapshot Snapshot, stackIndex int, sf *stack.StackFile) error {
+func Unwind(cfg *config.Config, gitDir string, snapshot Snapshot, stackIndex int, sf *stack.StackFile, plan []Action) error {
 	// Abort any in-progress rebase
 	if git.IsRebaseInProgress() {
 		_ = git.RebaseAbort()
 	}
 
 	// Restore branch tips
+	snapshotNames := make(map[string]bool, len(snapshot.Branches))
 	for _, bs := range snapshot.Branches {
+		snapshotNames[bs.Name] = true
 		if !git.BranchExists(bs.Name) {
 			// Branch was renamed — try to find it by SHA and recreate
 			if err := git.CreateBranch(bs.Name, bs.TipSHA); err != nil {
@@ -667,6 +676,15 @@ func Unwind(cfg *config.Config, gitDir string, snapshot Snapshot, stackIndex int
 			if err := git.ResetHard(bs.TipSHA); err != nil {
 				cfg.Warningf("failed to reset %s to %s: %v", bs.Name, bs.TipSHA[:7], err)
 				continue
+			}
+		}
+	}
+
+	// Clean up branches created by renames during the partial apply
+	for _, action := range plan {
+		if action.Type == "rename" && action.NewName != "" {
+			if !snapshotNames[action.NewName] && git.BranchExists(action.NewName) {
+				_ = git.DeleteBranch(action.NewName, true)
 			}
 		}
 	}
@@ -714,5 +732,5 @@ func UnwindFromStateFile(cfg *config.Config, gitDir string) error {
 		return fmt.Errorf("loading stack: %w", err)
 	}
 
-	return Unwind(cfg, gitDir, state.Snapshot, state.StackIndex, sf)
+	return Unwind(cfg, gitDir, state.Snapshot, state.StackIndex, sf, state.Plan)
 }

@@ -2,6 +2,7 @@ package cmd
 
 import (
 	"fmt"
+	"strings"
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/github/gh-stack/internal/config"
@@ -119,13 +120,29 @@ func runModify(cfg *config.Config) error {
 	applyResult, conflict, applyErr := modify.ApplyPlan(cfg, gitDir, s, sf, reordered, currentBranch, updateBaseSHAs)
 
 	if conflict != nil {
-		cfg.Warningf("Rebasing %s — conflict", conflict.Branch)
+		isCherryPick := applyErr != nil && strings.Contains(applyErr.Error(), "cherry-pick")
+		if isCherryPick {
+			cfg.Warningf("Cherry-pick conflict folding %s", conflict.Branch)
+			if len(conflict.ConflictedFiles) > 0 {
+				cfg.Printf("")
+				cfg.Printf("%s", cfg.ColorBold("Conflicted files:"))
+				for _, f := range conflict.ConflictedFiles {
+					cfg.Printf("  %s %s", cfg.ColorWarning("C"), f)
+				}
+			}
+			cfg.Printf("")
+			cfg.Printf("Cherry-pick conflicts cannot be continued with `--continue`.")
+			cfg.Printf("Restore the stack to its pre-modify state with `%s`",
+				cfg.ColorCyan("gh stack modify --abort"))
+		} else {
+			cfg.Warningf("Rebasing %s — conflict", conflict.Branch)
 
-		printConflictDetailsWithContinue(cfg, conflict.Branch, "gh stack modify --continue")
-		cfg.Printf("")
+			printConflictDetailsWithContinue(cfg, conflict.Branch, "gh stack modify --continue")
+			cfg.Printf("")
 
-		cfg.Printf("Or restore the stack to its pre-modify state with `%s`",
-			cfg.ColorCyan("gh stack modify --abort"))
+			cfg.Printf("Or restore the stack to its pre-modify state with `%s`",
+				cfg.ColorCyan("gh stack modify --abort"))
+		}
 		return ErrConflict
 	}
 
@@ -190,7 +207,7 @@ func runModifyAbort(cfg *config.Config) error {
 	}
 
 	switch state.Phase {
-	case "applying":
+	case modify.PhaseApplying:
 		cfg.Printf("A modify session was interrupted during the apply phase")
 		cfg.Printf("Restoring stack to pre-modify state...")
 		if err := modify.UnwindFromStateFile(cfg, gitDir); err != nil {
@@ -200,7 +217,7 @@ func runModifyAbort(cfg *config.Config) error {
 		cfg.Successf("Stack restored successfully")
 		return nil
 
-	case "pending_submit":
+	case modify.PhasePendingSubmit:
 		cfg.Printf("A modify completed but the stack has not been submitted")
 		cfg.Printf("Run `%s` to push changes and recreate the stack on GitHub",
 			cfg.ColorCyan("gh stack submit"))
@@ -291,6 +308,7 @@ func checkModifyPreconditions(cfg *config.Config) (*loadStackResult, error) {
 func checkNoModifyInProgress(cfg *config.Config, gitDir string) error {
 	state, err := modify.LoadState(gitDir)
 	if err != nil {
+		cfg.Warningf("failed to read modify state: %v", err)
 		return nil
 	}
 	if state == nil {
@@ -298,18 +316,18 @@ func checkNoModifyInProgress(cfg *config.Config, gitDir string) error {
 	}
 
 	switch state.Phase {
-	case "applying":
+	case modify.PhaseApplying:
 		cfg.Errorf("a previous modify session was interrupted")
 		cfg.Printf("Run `%s` to restore your stack",
 			cfg.ColorCyan("gh stack modify --abort"))
 		return ErrModifyRecovery
-	case "conflict":
+	case modify.PhaseConflict:
 		cfg.Errorf("a modify has unresolved conflicts")
 		cfg.Printf("Run `%s` to continue, or `%s` to restore your stack",
 			cfg.ColorCyan("gh stack modify --continue"),
 			cfg.ColorCyan("gh stack modify --abort"))
 		return ErrSilent
-	case "pending_submit":
+	case modify.PhasePendingSubmit:
 		cfg.Errorf("a modify was completed but the stack has not been submitted yet")
 		cfg.Printf("Run `%s` to push changes and recreate the stack on GitHub",
 			cfg.ColorCyan("gh stack submit"))
