@@ -21,6 +21,7 @@ type Ops interface {
 	BranchExists(name string) bool
 	CheckoutBranch(name string) error
 	Fetch(remote string) error
+	FetchBranches(remote string, branches []string) error
 	DefaultBranch() (string, error)
 	CreateBranch(name, base string) error
 	Push(remote string, branches []string, force, atomic bool) error
@@ -104,6 +105,15 @@ func (d *defaultOps) CheckoutBranch(name string) error {
 
 func (d *defaultOps) Fetch(remote string) error {
 	return client.Fetch(context.Background(), remote, "")
+}
+
+func (d *defaultOps) FetchBranches(remote string, branches []string) error {
+	if len(branches) == 0 {
+		return nil
+	}
+	args := []string{"fetch", remote}
+	args = append(args, branches...)
+	return runSilent(args...)
 }
 
 func (d *defaultOps) DefaultBranch() (string, error) {

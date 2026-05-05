@@ -141,6 +141,13 @@ func runSubmit(cfg *config.Config, opts *submitOptions) error {
 		}
 	}
 
+	// Fetch the active branches from the remote so that the local tracking refs
+	// are up-to-date before pushing. This ensures --force-with-lease has accurate
+	// remote state even in shallow clones.
+	if err := git.FetchBranches(remote, activeBranches); err != nil {
+		cfg.Warningf("Failed to fetch branches from %s: %v", remote, err)
+	}
+
 	// Push each branch and create/update its PR in stack order (bottom to top).
 	// Sequential pushing ensures each branch's base is up-to-date on the
 	// remote before the next branch is pushed, preventing race conditions.

@@ -1370,3 +1370,68 @@ func TestSubmit_WithPendingModify_SequentialPush(t *testing.T) {
 	// State file should be cleared
 	assert.False(t, modify.StateExists(tmpDir), "modify state file should be cleared after success")
 }
+
+func TestSubmit_FetchesBeforePush(t *testing.T) {
+	s := stack.Stack{
+		Trunk: stack.BranchRef{Branch: "main"},
+		Branches: []stack.BranchRef{
+			{Branch: "b1"},
+			{Branch: "b2"},
+		},
+	}
+
+	tmpDir := t.TempDir()
+	writeStackFile(t, tmpDir, s)
+
+	var callOrder []string
+	var fetchedBranches []string
+
+	mock := newSubmitMock(tmpDir, "b1")
+	mock.FetchBranchesFn = func(remote string, branches []string) error {
+		callOrder = append(callOrder, "fetch")
+		fetchedBranches = branches
+		assert.Equal(t, "origin", remote)
+		return nil
+	}
+	mock.PushFn = func(remote string, branches []string, force, atomic bool) error {
+		callOrder = append(callOrder, "push")
+		return nil
+	}
+
+	restore := git.SetOps(mock)
+	defer restore()
+
+	cfg, _, errR := config.NewTestConfig()
+	cfg.GitHubClientOverride = &github.MockClient{
+		FindPRForBranchFn: func(branch string) (*github.PullRequest, error) {
+			return &github.PullRequest{
+				Number:      1,
+				URL:         "https://github.com/o/r/pull/1",
+				BaseRefName: "main",
+				HeadRefName: branch,
+				State:       "OPEN",
+			}, nil
+		},
+		ListStacksFn: func() ([]github.RemoteStack, error) {
+			return []github.RemoteStack{}, nil
+		},
+		CreateStackFn: func(prNumbers []int) (int, error) {
+			return 42, nil
+		},
+	}
+
+	cmd := SubmitCmd(cfg)
+	cmd.SetArgs([]string{"--auto"})
+	cmd.SetOut(io.Discard)
+	cmd.SetErr(io.Discard)
+	err := cmd.Execute()
+
+	cfg.Err.Close()
+	_, _ = io.ReadAll(errR)
+
+	assert.NoError(t, err)
+	assert.Equal(t, []string{"b1", "b2"}, fetchedBranches, "should fetch active branches")
+	// fetch must come before all pushes
+	require.True(t, len(callOrder) >= 3, "expected at least 3 calls (fetch + 2 pushes)")
+	assert.Equal(t, "fetch", callOrder[0], "fetch must happen before any push")
+}

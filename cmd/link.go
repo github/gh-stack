@@ -161,6 +161,10 @@ func pushBranchArgs(cfg *config.Config, opts *linkOptions, args []string) error 
 		return ErrSilent
 	}
 
+	if err := git.FetchBranches(remote, branches); err != nil {
+		cfg.Warningf("Failed to fetch branches from %s: %v", remote, err)
+	}
+
 	cfg.Printf("Pushing %d %s to %s...", len(branches), plural(len(branches), "branch", "branches"), remote)
 	if err := git.Push(remote, branches, false, true); err != nil {
 		cfg.Errorf("failed to push branches: %s", err)

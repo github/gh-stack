@@ -93,8 +93,11 @@ func runPush(cfg *config.Config, opts *pushOptions) error {
 		cfg.Printf("No active branches to push (all merged or queued)")
 		return nil
 	}
+	if err := git.FetchBranches(remote, activeBranches); err != nil {
+		cfg.Warningf("Failed to fetch branches from %s: %v", remote, err)
+	}
 	cfg.Printf("Pushing %d %s to %s...", len(activeBranches), plural(len(activeBranches), "branch", "branches"), remote)
-	if err := git.Push(remote, activeBranches, true, true); err != nil {
+	if err := git.Push(remote, activeBranches, true, false); err != nil {
 		cfg.Errorf("failed to push: %s", err)
 		return ErrSilent
 	}
