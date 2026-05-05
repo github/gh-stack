@@ -436,7 +436,7 @@ Remove a stack from local tracking and delete it on GitHub. Also available as `g
 gh stack unstack [flags]
 ```
 
-You must have an active stack checkout out locally. The command targets the active stack — the one that contains the currently checked out branch.
+You must have an active stack checked out locally. The command targets the active stack — the one that contains the currently checked out branch.
 
 Deletes the stack on GitHub first, if it exists, then removes local tracking. Use `--local` to only remove from local tracking.
 
