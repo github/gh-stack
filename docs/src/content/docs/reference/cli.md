@@ -237,12 +237,12 @@ gh stack submit [flags]
 
 Creates a Stacked PR for every branch in the stack, pushing branches to the remote. After creating PRs, `submit` automatically creates a **Stack** on GitHub to link the PRs together. If the stack already exists on GitHub (e.g., from a previous submit), new PRs are added to the existing stack.
 
-When creating new PRs, you will be prompted to enter a title for each one. Press Enter to accept the default (branch name), or use `--auto` to skip prompting entirely.
+When creating new PRs, you will be prompted to enter a title for each one. Press Enter to accept the default (branch name), or use `--auto` to skip prompting entirely. New PRs are created as **drafts by default**; use `--open` to create new PRs as ready for review and to mark existing PRs as ready for review.
 
 | Flag | Description |
 |------|-------------|
 | `--auto` | Use auto-generated PR titles without prompting |
-| `--open` | Mark new and existing PRs as ready for review |
+| `--open` | Create new PRs as ready for review instead of drafts, and mark existing PRs as ready for review |
 | `--remote <name>` | Remote to push to (defaults to auto-detected remote) |
 
 **Examples:**

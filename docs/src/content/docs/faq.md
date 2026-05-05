@@ -249,7 +249,7 @@ gh stack link change1 change2 change3
 
 This doesn't create any local tracking and only hits the APIs to create Stacked PRs.
 
-If the provided branches already have open PRs, `link` will use them. If not, it creates draft PRs with the correct base branch chaining.
+If the provided branches already have open PRs, `link` will use them. If not, it creates draft PRs by default with the correct base branch chaining.
 
 To add more to the stack, run `link` again, but be sure to include the full list of PRs/branches in the stack:
 
