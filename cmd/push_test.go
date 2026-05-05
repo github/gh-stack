@@ -62,7 +62,7 @@ func TestPush_PushesAllBranches(t *testing.T) {
 	assert.Equal(t, "origin", pushCalls[0].remote)
 	assert.Equal(t, []string{"b1", "b2"}, pushCalls[0].branches)
 	assert.True(t, pushCalls[0].force)
-	assert.True(t, pushCalls[0].atomic)
+	assert.False(t, pushCalls[0].atomic)
 	assert.Contains(t, output, "Pushed 2 branches")
 	assert.Contains(t, output, "gh stack submit", "should hint about submit when branches have no PRs")
 }
@@ -180,6 +180,89 @@ func TestPush_PushFailure(t *testing.T) {
 
 	assert.ErrorIs(t, err, ErrSilent)
 	assert.Contains(t, output, "failed to push")
+}
+
+func TestPush_FetchesBeforePush(t *testing.T) {
+	s := stack.Stack{
+		Trunk: stack.BranchRef{Branch: "main"},
+		Branches: []stack.BranchRef{
+			{Branch: "b1"},
+			{Branch: "b2"},
+		},
+	}
+
+	tmpDir := t.TempDir()
+	writeStackFile(t, tmpDir, s)
+
+	var callOrder []string
+
+	mock := newPushMock(tmpDir, "b1")
+	mock.FetchBranchesFn = func(remote string, branches []string) error {
+		callOrder = append(callOrder, "fetch")
+		assert.Equal(t, "origin", remote)
+		assert.Equal(t, []string{"b1", "b2"}, branches)
+		return nil
+	}
+	mock.PushFn = func(remote string, branches []string, force, atomic bool) error {
+		callOrder = append(callOrder, "push")
+		return nil
+	}
+
+	restore := git.SetOps(mock)
+	defer restore()
+
+	cfg, _, errR := config.NewTestConfig()
+	cfg.GitHubClientOverride = &github.MockClient{}
+	cmd := PushCmd(cfg)
+	cmd.SetOut(io.Discard)
+	cmd.SetErr(io.Discard)
+	err := cmd.Execute()
+
+	cfg.Err.Close()
+	_, _ = io.ReadAll(errR)
+
+	assert.NoError(t, err)
+	assert.Equal(t, []string{"fetch", "push"}, callOrder, "fetch must happen before push")
+}
+
+func TestPush_FetchFailureIsNonFatal(t *testing.T) {
+	s := stack.Stack{
+		Trunk: stack.BranchRef{Branch: "main"},
+		Branches: []stack.BranchRef{
+			{Branch: "b1"},
+		},
+	}
+
+	tmpDir := t.TempDir()
+	writeStackFile(t, tmpDir, s)
+
+	pushCalled := false
+
+	mock := newPushMock(tmpDir, "b1")
+	mock.FetchBranchesFn = func(string, []string) error {
+		return fmt.Errorf("network error")
+	}
+	mock.PushFn = func(string, []string, bool, bool) error {
+		pushCalled = true
+		return nil
+	}
+
+	restore := git.SetOps(mock)
+	defer restore()
+
+	cfg, _, errR := config.NewTestConfig()
+	cfg.GitHubClientOverride = &github.MockClient{}
+	cmd := PushCmd(cfg)
+	cmd.SetOut(io.Discard)
+	cmd.SetErr(io.Discard)
+	err := cmd.Execute()
+
+	cfg.Err.Close()
+	errOut, _ := io.ReadAll(errR)
+
+	assert.NoError(t, err, "fetch failure should not abort push")
+	assert.True(t, pushCalled, "push should proceed after fetch failure")
+	assert.Contains(t, string(errOut), "Failed to fetch")
 }
 
 func TestPush_DoesNotCreatePRs(t *testing.T) {

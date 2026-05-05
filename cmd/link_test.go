@@ -1096,3 +1096,59 @@ func TestLink_SkipsBaseFix_ForNewlyCreatedPRs(t *testing.T) {
 
 // Silence "imported and not used" for fmt in case test helpers use it.
 var _ = fmt.Sprintf
+
+func TestLink_FetchesBeforePush(t *testing.T) {
+	var callOrder []string
+	var fetchedBranches []string
+
+	mock := newLinkGitMock("feat-a", "feat-b")
+	mock.FetchBranchesFn = func(remote string, branches []string) error {
+		callOrder = append(callOrder, "fetch")
+		fetchedBranches = branches
+		assert.Equal(t, "origin", remote)
+		return nil
+	}
+	mock.PushFn = func(remote string, branches []string, force, atomic bool) error {
+		callOrder = append(callOrder, "push")
+		return nil
+	}
+
+	restore := git.SetOps(mock)
+	defer restore()
+
+	prNum := 0
+	cfg, _, errR := config.NewTestConfig()
+	cfg.GitHubClientOverride = &github.MockClient{
+		FindPRForBranchFn: func(branch string) (*github.PullRequest, error) {
+			prNum++
+			return &github.PullRequest{
+				Number:      prNum,
+				URL:         fmt.Sprintf("https://github.com/o/r/pull/%d", prNum),
+				BaseRefName: "main",
+				HeadRefName: branch,
+				State:       "OPEN",
+			}, nil
+		},
+		ListStacksFn: func() ([]github.RemoteStack, error) {
+			return []github.RemoteStack{}, nil
+		},
+		CreateStackFn: func(prNumbers []int) (int, error) {
+			return 42, nil
+		},
+	}
+
+	cmd := LinkCmd(cfg)
+	cmd.SetArgs([]string{"feat-a", "feat-b"})
+	cmd.SetOut(io.Discard)
+	cmd.SetErr(io.Discard)
+	err := cmd.Execute()
+
+	cfg.Err.Close()
+	_, _ = io.ReadAll(errR)
+
+	assert.NoError(t, err)
+	assert.Equal(t, []string{"feat-a", "feat-b"}, fetchedBranches, "should fetch pushed branches")
+	require.Len(t, callOrder, 2)
+	assert.Equal(t, "fetch", callOrder[0], "fetch must happen before push")
+	assert.Equal(t, "push", callOrder[1])
+}

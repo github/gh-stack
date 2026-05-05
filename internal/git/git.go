@@ -124,6 +124,12 @@ func Fetch(remote string) error {
 	return ops.Fetch(remote)
 }
 
+// FetchBranches fetches specific branches from a remote,
+// updating their tracking refs.
+func FetchBranches(remote string, branches []string) error {
+	return ops.FetchBranches(remote, branches)
+}
+
 // DefaultBranch returns the HEAD branch from origin.
 func DefaultBranch() (string, error) {
 	return ops.DefaultBranch()
