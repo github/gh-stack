@@ -5,7 +5,6 @@ package github
 // ClientOps method call. When nil, a reasonable default is returned.
 type MockClient struct {
 	FindPRForBranchFn        func(string) (*PullRequest, error)
-	FindAnyPRForBranchFn     func(string) (*PullRequest, error)
 	FindPRByNumberFn         func(int) (*PullRequest, error)
 	FindPRDetailsForBranchFn func(string) (*PRDetails, error)
 	CreatePRFn               func(string, string, string, string, bool) (*PullRequest, error)
@@ -23,13 +22,6 @@ var _ ClientOps = (*MockClient)(nil)
 func (m *MockClient) FindPRForBranch(branch string) (*PullRequest, error) {
 	if m.FindPRForBranchFn != nil {
 		return m.FindPRForBranchFn(branch)
-	}
-	return nil, nil
-}
-
-func (m *MockClient) FindAnyPRForBranch(branch string) (*PullRequest, error) {
-	if m.FindAnyPRForBranchFn != nil {
-		return m.FindAnyPRForBranchFn(branch)
 	}
 	return nil, nil
 }
