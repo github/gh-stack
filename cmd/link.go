@@ -9,6 +9,7 @@ import (
 	"github.com/github/gh-stack/internal/config"
 	"github.com/github/gh-stack/internal/git"
 	"github.com/github/gh-stack/internal/github"
+	"github.com/github/gh-stack/internal/pr"
 	"github.com/spf13/cobra"
 )
 
@@ -109,6 +110,12 @@ func runLink(cfg *config.Config, opts *linkOptions, args []string) error {
 		}
 	}
 
+	// Look up the repository's PR template (best-effort; skip if not in a repo).
+	var templateContent string
+	if repoRoot, tlErr := git.RootDir(); tlErr == nil {
+		templateContent = pr.FindTemplate(repoRoot)
+	}
+
 	// Phase 4: Create PRs for branches that don't have one yet
 	needsCreation := 0
 	for _, r := range found {
@@ -119,7 +126,7 @@ func runLink(cfg *config.Config, opts *linkOptions, args []string) error {
 	if needsCreation > 0 {
 		cfg.Printf("Creating %d %s...", needsCreation, plural(needsCreation, "PR", "PRs"))
 	}
-	resolved, err := createMissingPRs(cfg, client, opts, args, found)
+	resolved, err := createMissingPRs(cfg, client, opts, args, found, templateContent)
 	if err != nil {
 		return err
 	}
@@ -303,7 +310,7 @@ func prevalidateStack(cfg *config.Config, stacks []github.RemoteStack, knownPRNu
 
 // createMissingPRs creates PRs for branches that don't have one yet.
 // Returns the fully resolved list with all branches mapped to PRs.
-func createMissingPRs(cfg *config.Config, client github.ClientOps, opts *linkOptions, args []string, found []*resolvedArg) ([]resolvedArg, error) {
+func createMissingPRs(cfg *config.Config, client github.ClientOps, opts *linkOptions, args []string, found []*resolvedArg, templateContent string) ([]resolvedArg, error) {
 	resolved := make([]resolvedArg, len(args))
 
 	for i, arg := range args {
@@ -319,7 +326,7 @@ func createMissingPRs(cfg *config.Config, client github.ClientOps, opts *linkOpt
 		}
 
 		title := humanize(arg)
-		body := generatePRBody("")
+		body := generatePRBody("", templateContent)
 
 		newPR, err := client.CreatePR(baseBranch, arg, title, body, !opts.open)
 		if err != nil {

@@ -104,6 +104,11 @@ func GitDir() (string, error) {
 	return ops.GitDir()
 }
 
+// RootDir returns the repository's root directory.
+func RootDir() (string, error) {
+	return ops.RootDir()
+}
+
 // CurrentBranch returns the name of the current branch.
 func CurrentBranch() (string, error) {
 	return ops.CurrentBranch()

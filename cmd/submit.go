@@ -12,6 +12,7 @@ import (
 	"github.com/github/gh-stack/internal/git"
 	"github.com/github/gh-stack/internal/github"
 	"github.com/github/gh-stack/internal/modify"
+	"github.com/github/gh-stack/internal/pr"
 	"github.com/github/gh-stack/internal/stack"
 	"github.com/spf13/cobra"
 )
@@ -148,6 +149,12 @@ func runSubmit(cfg *config.Config, opts *submitOptions) error {
 	// remote yet.
 	_ = git.FetchBranches(remote, activeBranches)
 
+	// Look up the repository's PR template once before creating any PRs.
+	var templateContent string
+	if repoRoot, err := git.RootDir(); err == nil {
+		templateContent = pr.FindTemplate(repoRoot)
+	}
+
 	// Push each branch and create/update its PR in stack order (bottom to top).
 	// Sequential pushing ensures each branch's base is up-to-date on the
 	// remote before the next branch is pushed, preventing race conditions.
@@ -165,7 +172,7 @@ func runSubmit(cfg *config.Config, opts *submitOptions) error {
 
 		// Find or create PR, and fix base if needed
 		baseBranch := s.ActiveBaseBranch(b.Branch)
-		if err := ensurePR(cfg, client, s, i, baseBranch, opts); err != nil {
+		if err := ensurePR(cfg, client, s, i, baseBranch, opts, templateContent); err != nil {
 			if errors.Is(err, errInterrupt) {
 				printInterrupt(cfg)
 				return ErrSilent
@@ -195,7 +202,7 @@ func runSubmit(cfg *config.Config, opts *submitOptions) error {
 // ensurePR finds or creates a PR for the branch at index i, and updates
 // its base branch if needed. This is the single place where PR state is
 // reconciled during submit.
-func ensurePR(cfg *config.Config, client github.ClientOps, s *stack.Stack, i int, baseBranch string, opts *submitOptions) error {
+func ensurePR(cfg *config.Config, client github.ClientOps, s *stack.Stack, i int, baseBranch string, opts *submitOptions, templateContent string) error {
 	b := s.Branches[i]
 
 	pr, err := client.FindPRForBranch(b.Branch)
@@ -205,7 +212,7 @@ func ensurePR(cfg *config.Config, client github.ClientOps, s *stack.Stack, i int
 	}
 
 	if pr == nil {
-		return createPR(cfg, client, s, i, baseBranch, opts)
+		return createPR(cfg, client, s, i, baseBranch, opts, templateContent)
 	}
 
 	// PR exists — record it and fix base if needed.
@@ -250,7 +257,7 @@ func ensurePR(cfg *config.Config, client github.ClientOps, s *stack.Stack, i int
 }
 
 // createPR creates a new PR for the branch at index i.
-func createPR(cfg *config.Config, client github.ClientOps, s *stack.Stack, i int, baseBranch string, opts *submitOptions) error {
+func createPR(cfg *config.Config, client github.ClientOps, s *stack.Stack, i int, baseBranch string, opts *submitOptions, templateContent string) error {
 	b := s.Branches[i]
 
 	title, commitBody := defaultPRTitleBody(baseBranch, b.Branch)
@@ -272,7 +279,7 @@ func createPR(cfg *config.Config, client github.ClientOps, s *stack.Stack, i int
 	if title != originalTitle && commitBody != "" {
 		prBody = originalTitle + "\n\n" + commitBody
 	}
-	body := generatePRBody(prBody)
+	body := generatePRBody(prBody, templateContent)
 
 	newPR, createErr := client.CreatePR(baseBranch, b.Branch, title, body, !opts.open)
 	if createErr != nil {
@@ -299,9 +306,14 @@ func defaultPRTitleBody(base, head string) (string, string) {
 	return humanize(head), ""
 }
 
-// generatePRBody builds a PR description from the commit body (if any)
-// and a footer linking to the CLI and feedback form.
-func generatePRBody(commitBody string) string {
+// generatePRBody builds a PR description. When a templateContent is provided,
+// it is used as the body and the attribution footer is omitted. Otherwise the
+// body is built from the commit body with a footer linking to the CLI.
+func generatePRBody(commitBody string, templateContent string) string {
+	if templateContent != "" {
+		return templateContent
+	}
+
 	var parts []string
 
 	if commitBody != "" {

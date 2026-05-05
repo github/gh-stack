@@ -5,6 +5,7 @@ package git
 // Ops method call. When nil, a reasonable default is returned.
 type MockOps struct {
 	GitDirFn              func() (string, error)
+	RootDirFn             func() (string, error)
 	CurrentBranchFn       func() (string, error)
 	BranchExistsFn        func(string) bool
 	CheckoutBranchFn      func(string) error
@@ -58,6 +59,13 @@ func (m *MockOps) GitDir() (string, error) {
 		return m.GitDirFn()
 	}
 	return "/tmp/fake-git-dir", nil
+}
+
+func (m *MockOps) RootDir() (string, error) {
+	if m.RootDirFn != nil {
+		return m.RootDirFn()
+	}
+	return "/tmp/fake-repo", nil
 }
 
 func (m *MockOps) CurrentBranch() (string, error) {

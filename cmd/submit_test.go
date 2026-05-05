@@ -6,6 +6,7 @@ import (
 	"io"
 	"net/url"
 	"os"
+	"path/filepath"
 	"testing"
 
 	"github.com/cli/go-gh/v2/pkg/api"
@@ -20,12 +21,14 @@ import (
 
 func TestGeneratePRBody(t *testing.T) {
 	tests := []struct {
-		name         string
-		commitBody   string
-		wantContains []string
+		name            string
+		commitBody      string
+		templateContent string
+		wantContains    []string
+		wantNotContains []string
 	}{
 		{
-			name:       "empty commit body",
+			name:       "empty commit body no template",
 			commitBody: "",
 			wantContains: []string{
 				"GitHub Stacks CLI",
@@ -34,7 +37,7 @@ func TestGeneratePRBody(t *testing.T) {
 			},
 		},
 		{
-			name:       "with commit body",
+			name:       "with commit body no template",
 			commitBody: "This is a detailed description\nof the change.",
 			wantContains: []string{
 				"This is a detailed description\nof the change.",
@@ -42,13 +45,36 @@ func TestGeneratePRBody(t *testing.T) {
 				"<sub>",
 			},
 		},
+		{
+			name:            "with template",
+			commitBody:      "some commit body",
+			templateContent: "## Description\n\nFill in details.",
+			wantContains: []string{
+				"## Description",
+				"Fill in details.",
+			},
+			wantNotContains: []string{
+				"GitHub Stacks CLI",
+				feedbackURL,
+				"some commit body",
+			},
+		},
+		{
+			name:            "template replaces footer",
+			templateContent: "Template body only",
+			wantContains:    []string{"Template body only"},
+			wantNotContains: []string{"<sub>"},
+		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got := generatePRBody(tt.commitBody)
+			got := generatePRBody(tt.commitBody, tt.templateContent)
 			for _, want := range tt.wantContains {
 				assert.Contains(t, got, want)
+			}
+			for _, notWant := range tt.wantNotContains {
+				assert.NotContains(t, got, notWant)
 			}
 		})
 	}
@@ -58,6 +84,7 @@ func TestGeneratePRBody(t *testing.T) {
 func newSubmitMock(tmpDir string, currentBranch string) *git.MockOps {
 	return &git.MockOps{
 		GitDirFn:        func() (string, error) { return tmpDir, nil },
+		RootDirFn:       func() (string, error) { return tmpDir, nil },
 		CurrentBranchFn: func() (string, error) { return currentBranch, nil },
 		ResolveRemoteFn: func(string) (string, error) { return "origin", nil },
 		PushFn:          func(string, []string, bool, bool) error { return nil },
@@ -1580,4 +1607,103 @@ func TestSubmit_FetchesBeforePush(t *testing.T) {
 	// fetch must come before all pushes
 	require.True(t, len(callOrder) >= 3, "expected at least 3 calls (fetch + 2 pushes)")
 	assert.Equal(t, "fetch", callOrder[0], "fetch must happen before any push")
+}
+
+func TestSubmit_UsesPRTemplate(t *testing.T) {
+	s := stack.Stack{
+		Trunk: stack.BranchRef{Branch: "main"},
+		Branches: []stack.BranchRef{
+			{Branch: "b1"},
+		},
+	}
+
+	tmpDir := t.TempDir()
+	writeStackFile(t, tmpDir, s)
+
+	// Create a PR template in the repo root
+	ghDir := filepath.Join(tmpDir, ".github")
+	require.NoError(t, os.MkdirAll(ghDir, 0o755))
+	require.NoError(t, os.WriteFile(
+		filepath.Join(ghDir, "pull_request_template.md"),
+		[]byte("## What\n\nDescribe changes.\n\n## Why\n\nExplain motivation."),
+		0o644,
+	))
+
+	var capturedBody string
+
+	mock := newSubmitMock(tmpDir, "b1")
+	mock.PushFn = func(string, []string, bool, bool) error { return nil }
+	mock.LogRangeFn = func(base, head string) ([]git.CommitInfo, error) {
+		return []git.CommitInfo{{Subject: "add feature", Body: "detailed commit body"}}, nil
+	}
+	restore := git.SetOps(mock)
+	defer restore()
+
+	cfg, _, _ := config.NewTestConfig()
+	cfg.GitHubClientOverride = &github.MockClient{
+		ListStacksFn: func() ([]github.RemoteStack, error) { return nil, nil },
+		FindPRForBranchFn: func(string) (*github.PullRequest, error) { return nil, nil },
+		CreatePRFn: func(base, head, title, body string, draft bool) (*github.PullRequest, error) {
+			capturedBody = body
+			return &github.PullRequest{Number: 1, ID: "PR_1", URL: "https://github.com/o/r/pull/1"}, nil
+		},
+		CreateStackFn: func([]int) (int, error) { return 1, nil },
+	}
+
+	cmd := SubmitCmd(cfg)
+	cmd.SetArgs([]string{"--auto"})
+	cmd.SetOut(io.Discard)
+	cmd.SetErr(io.Discard)
+	err := cmd.Execute()
+
+	assert.NoError(t, err)
+	assert.Contains(t, capturedBody, "## What")
+	assert.Contains(t, capturedBody, "## Why")
+	assert.NotContains(t, capturedBody, "GitHub Stacks CLI", "footer should not be present when template is used")
+	assert.NotContains(t, capturedBody, feedbackURL)
+}
+
+func TestSubmit_NoTemplate_UsesFooter(t *testing.T) {
+	s := stack.Stack{
+		Trunk: stack.BranchRef{Branch: "main"},
+		Branches: []stack.BranchRef{
+			{Branch: "b1"},
+		},
+	}
+
+	tmpDir := t.TempDir()
+	writeStackFile(t, tmpDir, s)
+
+	// No template file created
+
+	var capturedBody string
+
+	mock := newSubmitMock(tmpDir, "b1")
+	mock.PushFn = func(string, []string, bool, bool) error { return nil }
+	mock.LogRangeFn = func(base, head string) ([]git.CommitInfo, error) {
+		return []git.CommitInfo{{Subject: "fix bug"}}, nil
+	}
+	restore := git.SetOps(mock)
+	defer restore()
+
+	cfg, _, _ := config.NewTestConfig()
+	cfg.GitHubClientOverride = &github.MockClient{
+		ListStacksFn: func() ([]github.RemoteStack, error) { return nil, nil },
+		FindPRForBranchFn: func(string) (*github.PullRequest, error) { return nil, nil },
+		CreatePRFn: func(base, head, title, body string, draft bool) (*github.PullRequest, error) {
+			capturedBody = body
+			return &github.PullRequest{Number: 1, ID: "PR_1", URL: "https://github.com/o/r/pull/1"}, nil
+		},
+		CreateStackFn: func([]int) (int, error) { return 1, nil },
+	}
+
+	cmd := SubmitCmd(cfg)
+	cmd.SetArgs([]string{"--auto"})
+	cmd.SetOut(io.Discard)
+	cmd.SetErr(io.Discard)
+	err := cmd.Execute()
+
+	assert.NoError(t, err)
+	assert.Contains(t, capturedBody, "GitHub Stacks CLI", "footer should be present when no template")
+	assert.Contains(t, capturedBody, feedbackURL)
 }

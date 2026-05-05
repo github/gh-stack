@@ -17,6 +17,7 @@ import (
 // Tests can substitute a mock via SetOps().
 type Ops interface {
 	GitDir() (string, error)
+	RootDir() (string, error)
 	CurrentBranch() (string, error)
 	BranchExists(name string) bool
 	CheckoutBranch(name string) error
@@ -89,6 +90,10 @@ func CurrentOps() Ops {
 
 func (d *defaultOps) GitDir() (string, error) {
 	return client.GitDir(context.Background())
+}
+
+func (d *defaultOps) RootDir() (string, error) {
+	return run("rev-parse", "--show-toplevel")
 }
 
 func (d *defaultOps) CurrentBranch() (string, error) {
