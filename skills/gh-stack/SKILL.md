@@ -788,8 +788,10 @@ When a branch name is provided, the command resolves it against locally tracked 
 
 Tear down a stack so you can restructure it — remove a branch, reorder branches, rename branches, or make other large changes. After unstacking, use `gh stack init` to re-create the stack with the desired structure.
 
+You must have a branch from the stack checked out locally. The command targets the active stack — the one that contains the currently checked out branch.
+
 ```
-gh stack unstack [flags] [branch]
+gh stack unstack [flags]
 ```
 
 ```bash
@@ -799,18 +801,11 @@ gh stack init --base main --adopt branch-2 branch-1 branch-3 # reordered
 
 # Only remove local tracking (keep the stack on GitHub)
 gh stack unstack --local
-
-# Specify a branch to identify which stack to tear down
-gh stack unstack feature-auth
 ```
 
 | Flag | Description |
 |------|-------------|
 | `--local` | Only delete the stack locally (keep it on GitHub) |
-
-| Argument | Description |
-|----------|-------------|
-| `[branch]` | A branch in the stack (defaults to the current branch) |
 
 ---
 
