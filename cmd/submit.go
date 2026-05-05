@@ -18,7 +18,7 @@ import (
 
 type submitOptions struct {
 	auto   bool
-	draft  bool
+	open   bool
 	remote string
 }
 
@@ -34,7 +34,7 @@ func SubmitCmd(cfg *config.Config) *cobra.Command {
 	}
 
 	cmd.Flags().BoolVar(&opts.auto, "auto", false, "Use auto-generated PR titles without prompting")
-	cmd.Flags().BoolVar(&opts.draft, "draft", false, "Create PRs as drafts")
+	cmd.Flags().BoolVar(&opts.open, "open", false, "Mark new and existing PRs as ready for review")
 	cmd.Flags().StringVar(&opts.remote, "remote", "", "Remote to push to (defaults to auto-detected remote)")
 
 	return cmd
@@ -235,6 +235,17 @@ func ensurePR(cfg *config.Config, client github.ClientOps, s *stack.Stack, i int
 		cfg.Printf("PR %s for %s is up to date", cfg.PRLink(pr.Number, pr.URL), b.Branch)
 	}
 
+	// Convert draft PR to ready for review when --open is set.
+	if opts.open && pr.IsDraft {
+		if err := client.MarkPRReadyForReview(pr.ID); err != nil {
+			cfg.Warningf("failed to mark PR %s as ready for review: %v",
+				cfg.PRLink(pr.Number, pr.URL), err)
+		} else {
+			cfg.Successf("Marked PR %s as ready for review",
+				cfg.PRLink(pr.Number, pr.URL))
+		}
+	}
+
 	return nil
 }
 
@@ -263,7 +274,7 @@ func createPR(cfg *config.Config, client github.ClientOps, s *stack.Stack, i int
 	}
 	body := generatePRBody(prBody)
 
-	newPR, createErr := client.CreatePR(baseBranch, b.Branch, title, body, opts.draft)
+	newPR, createErr := client.CreatePR(baseBranch, b.Branch, title, body, !opts.open)
 	if createErr != nil {
 		cfg.Warningf("failed to create PR for %s: %v", b.Branch, createErr)
 		return nil

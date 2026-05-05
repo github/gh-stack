@@ -477,7 +477,7 @@ func TestLink_BranchNames_AllNeedPRs(t *testing.T) {
 	assert.Contains(t, output, "Created stack with 3 PRs")
 }
 
-func TestLink_BranchNames_DraftFlag(t *testing.T) {
+func TestLink_BranchNames_DefaultDraft(t *testing.T) {
 	restore := git.SetOps(newLinkGitMock("feat-a", "feat-b"))
 	defer restore()
 
@@ -512,13 +512,120 @@ func TestLink_BranchNames_DraftFlag(t *testing.T) {
 	}
 
 	cmd := LinkCmd(cfg)
-	cmd.SetArgs([]string{"--draft", "feat-a", "feat-b"})
+	cmd.SetArgs([]string{"feat-a", "feat-b"})
 	cmd.SetOut(io.Discard)
 	cmd.SetErr(io.Discard)
 	err := cmd.Execute()
 
 	assert.NoError(t, err)
-	assert.True(t, createdDraft, "PRs should be created as drafts when --draft is set")
+	assert.True(t, createdDraft, "PRs should be created as drafts by default")
+}
+
+func TestLink_BranchNames_OpenFlag(t *testing.T) {
+	restore := git.SetOps(newLinkGitMock("feat-a", "feat-b"))
+	defer restore()
+
+	var createdDraft bool
+	prCounter := 0
+
+	cfg, _, _ := config.NewTestConfig()
+	cfg.GitHubClientOverride = &github.MockClient{
+		FindPRForBranchFn: func(branch string) (*github.PullRequest, error) {
+			return nil, nil
+		},
+		FindPRByNumberFn: func(n int) (*github.PullRequest, error) {
+			heads := map[int]string{1: "feat-a", 2: "feat-b"}
+			bases := map[int]string{1: "main", 2: "feat-a"}
+			if h, ok := heads[n]; ok {
+				return &github.PullRequest{Number: n, HeadRefName: h, BaseRefName: bases[n]}, nil
+			}
+			return nil, nil
+		},
+		CreatePRFn: func(base, head, title, body string, draft bool) (*github.PullRequest, error) {
+			createdDraft = draft
+			prCounter++
+			return &github.PullRequest{
+				Number: prCounter, HeadRefName: head, BaseRefName: base,
+				URL: fmt.Sprintf("https://github.com/o/r/pull/%d", prCounter),
+			}, nil
+		},
+		ListStacksFn: func() ([]github.RemoteStack, error) {
+			return []github.RemoteStack{}, nil
+		},
+		CreateStackFn: func([]int) (int, error) { return 1, nil },
+	}
+
+	cmd := LinkCmd(cfg)
+	cmd.SetArgs([]string{"--open", "feat-a", "feat-b"})
+	cmd.SetOut(io.Discard)
+	cmd.SetErr(io.Discard)
+	err := cmd.Execute()
+
+	assert.NoError(t, err)
+	assert.False(t, createdDraft, "PRs should not be created as drafts when --open is set")
+}
+
+func TestLink_OpenFlag_ConvertsDraftPRs(t *testing.T) {
+	restore := git.SetOps(newLinkGitMock("feat-a", "feat-b"))
+	defer restore()
+
+	var markedReady []string
+
+	cfg, _, errR := config.NewTestConfig()
+	cfg.GitHubClientOverride = &github.MockClient{
+		FindPRForBranchFn: func(branch string) (*github.PullRequest, error) {
+			switch branch {
+			case "feat-a":
+				return &github.PullRequest{
+					Number: 1, ID: "PR_1", HeadRefName: "feat-a", BaseRefName: "main",
+					IsDraft: true, URL: "https://github.com/o/r/pull/1",
+				}, nil
+			case "feat-b":
+				return &github.PullRequest{
+					Number: 2, ID: "PR_2", HeadRefName: "feat-b", BaseRefName: "feat-a",
+					IsDraft: true, URL: "https://github.com/o/r/pull/2",
+				}, nil
+			}
+			return nil, nil
+		},
+		FindPRByNumberFn: func(n int) (*github.PullRequest, error) {
+			switch n {
+			case 1:
+				return &github.PullRequest{
+					Number: 1, ID: "PR_1", HeadRefName: "feat-a", BaseRefName: "main",
+					IsDraft: true, URL: "https://github.com/o/r/pull/1",
+				}, nil
+			case 2:
+				return &github.PullRequest{
+					Number: 2, ID: "PR_2", HeadRefName: "feat-b", BaseRefName: "feat-a",
+					IsDraft: true, URL: "https://github.com/o/r/pull/2",
+				}, nil
+			}
+			return nil, nil
+		},
+		MarkPRReadyForReviewFn: func(prID string) error {
+			markedReady = append(markedReady, prID)
+			return nil
+		},
+		ListStacksFn: func() ([]github.RemoteStack, error) {
+			return []github.RemoteStack{}, nil
+		},
+		CreateStackFn: func([]int) (int, error) { return 1, nil },
+	}
+
+	cmd := LinkCmd(cfg)
+	cmd.SetArgs([]string{"--open", "feat-a", "feat-b"})
+	cmd.SetOut(io.Discard)
+	cmd.SetErr(io.Discard)
+	err := cmd.Execute()
+
+	cfg.Err.Close()
+	errOut, _ := io.ReadAll(errR)
+	output := string(errOut)
+
+	assert.NoError(t, err)
+	assert.Equal(t, []string{"PR_1", "PR_2"}, markedReady, "both draft PRs should be marked ready")
+	assert.Contains(t, output, "Marked PR")
 }
 
 func TestLink_MixedArgs_PRNumberAndBranch(t *testing.T) {

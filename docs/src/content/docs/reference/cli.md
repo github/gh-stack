@@ -238,7 +238,7 @@ When creating new PRs, you will be prompted to enter a title for each one. Press
 | Flag | Description |
 |------|-------------|
 | `--auto` | Use auto-generated PR titles without prompting |
-| `--draft` | Create new PRs as drafts |
+| `--open` | Mark new and existing PRs as ready for review |
 | `--remote <name>` | Remote to push to (defaults to auto-detected remote) |
 
 **Examples:**
@@ -246,7 +246,7 @@ When creating new PRs, you will be prompted to enter a title for each one. Press
 ```sh
 gh stack submit
 gh stack submit --auto
-gh stack submit --draft
+gh stack submit --open
 ```
 
 ### `gh stack sync`
@@ -386,7 +386,7 @@ If the PRs are not yet in a stack, a new stack is created. If some of the PRs ar
 | Flag | Description |
 |------|-------------|
 | `--base <branch>` | Base branch for the bottom of the stack (default: `main`) |
-| `--draft` | Create new PRs as drafts |
+| `--open` | Mark new and existing PRs as ready for review |
 | `--remote <name>` | Remote to push to (defaults to auto-detected remote) |
 
 **Examples:**
@@ -401,8 +401,8 @@ gh stack link 10 20 30
 # Add branches to an existing stack of PRs
 gh stack link 42 43 feature-auth feature-ui
 
-# Use a different base branch and create PRs as drafts
-gh stack link --base develop --draft feat-a feat-b feat-c
+# Use a different base branch and mark PRs as ready for review
+gh stack link --base develop --open feat-a feat-b feat-c
 ```
 
 ---

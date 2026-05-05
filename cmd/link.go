@@ -14,7 +14,7 @@ import (
 
 type linkOptions struct {
 	base   string
-	draft  bool
+	open   bool
 	remote string
 }
 
@@ -51,7 +51,7 @@ the new PRs (existing PRs are never removed).`,
 	}
 
 	cmd.Flags().StringVar(&opts.base, "base", "main", "Base branch for the bottom of the stack")
-	cmd.Flags().BoolVar(&opts.draft, "draft", false, "Create new PRs as drafts")
+	cmd.Flags().BoolVar(&opts.open, "open", false, "Mark new and existing PRs as ready for review")
 	cmd.Flags().StringVar(&opts.remote, "remote", "", "Remote to push to (defaults to auto-detected remote)")
 
 	return cmd
@@ -325,7 +325,7 @@ func createMissingPRs(cfg *config.Config, client github.ClientOps, opts *linkOpt
 		title := humanize(arg)
 		body := generatePRBody("")
 
-		newPR, err := client.CreatePR(baseBranch, arg, title, body, opts.draft)
+		newPR, err := client.CreatePR(baseBranch, arg, title, body, !opts.open)
 		if err != nil {
 			cfg.Errorf("failed to create PR for branch %s: %v", arg, err)
 			return nil, ErrAPIFailure
@@ -377,6 +377,17 @@ func fixBaseBranches(cfg *config.Config, client github.ClientOps, opts *linkOpti
 			} else {
 				cfg.Successf("Updated base branch for PR %s to %s",
 					cfg.PRLink(r.prNumber, r.prURL), expectedBase)
+			}
+		}
+
+		// Convert draft PR to ready for review when --open is set.
+		if opts.open && pr.IsDraft {
+			if err := client.MarkPRReadyForReview(pr.ID); err != nil {
+				cfg.Warningf("failed to mark PR %s as ready for review: %v",
+					cfg.PRLink(r.prNumber, r.prURL), err)
+			} else {
+				cfg.Successf("Marked PR %s as ready for review",
+					cfg.PRLink(r.prNumber, r.prURL))
 			}
 		}
 	}

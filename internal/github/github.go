@@ -234,6 +234,33 @@ func (c *Client) UpdatePRBase(number int, base string) error {
 	return c.rest.Patch(path, bytes.NewReader(body), nil)
 }
 
+// MarkPRReadyForReview converts a draft pull request to ready for review.
+func (c *Client) MarkPRReadyForReview(prID string) error {
+	var mutation struct {
+		MarkPullRequestReadyForReview struct {
+			PullRequest struct {
+				ID string
+			}
+		} `graphql:"markPullRequestReadyForReview(input: $input)"`
+	}
+
+	type MarkPullRequestReadyForReviewInput struct {
+		PullRequestID string `json:"pullRequestId"`
+	}
+
+	variables := map[string]interface{}{
+		"input": MarkPullRequestReadyForReviewInput{
+			PullRequestID: prID,
+		},
+	}
+
+	if err := c.gql.Mutate("MarkPullRequestReadyForReview", &mutation, variables); err != nil {
+		return fmt.Errorf("marking PR ready for review: %w", err)
+	}
+
+	return nil
+}
+
 func (c *Client) repositoryID() (string, error) {
 	var query struct {
 		Repository struct {
