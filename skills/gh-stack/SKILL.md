@@ -147,8 +147,8 @@ Small, incidental fixes (e.g., fixing a typo you noticed) can go in the current 
 | Add branch + stage all + commit | `gh stack add -Am "message" api-routes` |
 | Push branches to remote | `gh stack push` |
 | Push to specific remote | `gh stack push --remote origin` |
-| Push branches + create PRs | `gh stack submit --auto` |
-| Create PRs as drafts | `gh stack submit --auto --draft` |
+| Push branches + create draft PRs | `gh stack submit --auto` |
+| Create PRs as ready for review | `gh stack submit --auto --open` |
 | Sync (fetch, rebase, push) | `gh stack sync` |
 | Sync with specific remote | `gh stack sync --remote origin` |
 | Rebase entire stack | `gh stack rebase` |
@@ -231,8 +231,8 @@ git commit -m "Add frontend dashboard"
 
 # ── Stack complete: feat/auth → feat/api-routes → feat/frontend ──
 
-# 7. Push everything and create draft PRs
-gh stack submit --auto --draft
+# 7. Push everything and create PRs (drafts by default)
+gh stack submit --auto
 
 # 8. Verify the stack
 gh stack view --json
@@ -525,14 +525,14 @@ Push all stack branches and create PRs on GitHub. **Always pass `--auto`** — w
 # Submit and auto-title new PRs (required for non-interactive use)
 gh stack submit --auto
 
-# Submit and create PRs as drafts
-gh stack submit --auto --draft
+# Submit and create PRs as ready for review (not drafts)
+gh stack submit --auto --open
 ```
 
 | Flag | Description |
 |------|-------------|
 | `--auto` | Auto-generate PR titles without prompting (**required** for non-interactive use) |
-| `--draft` | Create new PRs as drafts |
+| `--open` | Mark new and existing PRs as ready for review |
 | `--remote <name>` | Remote to push to (use if multiple remotes exist) |
 
 **Behavior:**
@@ -568,8 +568,8 @@ gh stack link [flags] <branch-or-pr> <branch-or-pr> [...]
 # Link branches into a stack (pushes, creates PRs, creates stack)
 gh stack link branch-a branch-b branch-c
 
-# Use a different base branch and create PRs as drafts
-gh stack link --base develop --draft branch-a branch-b branch-c
+# Use a different base branch and mark PRs as ready for review
+gh stack link --base develop --open branch-a branch-b branch-c
 
 # Link existing PRs by number
 gh stack link 10 20 30
@@ -581,7 +581,7 @@ gh stack link 42 43 feature-auth feature-ui
 | Flag | Description |
 |------|---------|
 | `--base <branch>` | Base branch for the bottom of the stack (default: `main`) |
-| `--draft` | Create new PRs as drafts |
+| `--open` | Mark new and existing PRs as ready for review |
 | `--remote <name>` | Remote to push to (use if multiple remotes exist) |
 
 **Behavior:**
