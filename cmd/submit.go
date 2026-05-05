@@ -59,6 +59,8 @@ func runSubmit(cfg *config.Config, opts *submitOptions) error {
 		return ErrNotInStack
 	}
 
+	cfg.Printf("Checking stack state...")
+
 	// Find the stack for the current branch without switching branches.
 	// Submit should never change the user's checked-out branch.
 	stacks := sf.FindAllStacksForBranch(currentBranch)
@@ -141,12 +143,10 @@ func runSubmit(cfg *config.Config, opts *submitOptions) error {
 		}
 	}
 
-	// Fetch the active branches from the remote so that the local tracking refs
-	// are up-to-date before pushing. This ensures --force-with-lease has accurate
-	// remote state even in shallow clones.
-	if err := git.FetchBranches(remote, activeBranches); err != nil {
-		cfg.Warningf("Failed to fetch branches from %s: %v", remote, err)
-	}
+	// Best-effort fetch to update tracking refs (helps --force-with-lease
+	// in shallow clones). Silently ignored if branches don't exist on the
+	// remote yet.
+	_ = git.FetchBranches(remote, activeBranches)
 
 	// Push each branch and create/update its PR in stack order (bottom to top).
 	// Sequential pushing ensures each branch's base is up-to-date on the

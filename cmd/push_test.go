@@ -262,7 +262,7 @@ func TestPush_FetchFailureIsNonFatal(t *testing.T) {
 
 	assert.NoError(t, err, "fetch failure should not abort push")
 	assert.True(t, pushCalled, "push should proceed after fetch failure")
-	assert.Contains(t, string(errOut), "Failed to fetch")
+	assert.NotContains(t, string(errOut), "Failed to fetch", "fetch failure should be silent")
 }
 
 func TestPush_DoesNotCreatePRs(t *testing.T) {
