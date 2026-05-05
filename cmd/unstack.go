@@ -11,23 +11,19 @@ import (
 )
 
 type unstackOptions struct {
-	target string
-	local  bool
+	local bool
 }
 
 func UnstackCmd(cfg *config.Config) *cobra.Command {
 	opts := &unstackOptions{}
 
 	cmd := &cobra.Command{
-		Use:     "unstack [branch]",
+		Use:     "unstack",
 		Aliases: []string{"delete"},
 		Short:   "Delete a stack locally and on GitHub",
-		Long:    "Remove a stack from local tracking and delete it on GitHub. Use --local to only remove local tracking.",
-		Args:    cobra.MaximumNArgs(1),
+		Long:    "Remove the current active stack from local tracking and delete it on GitHub. Use --local to only remove local tracking.",
+		Args:    cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
-			if len(args) > 0 {
-				opts.target = args[0]
-			}
 			return runUnstack(cfg, opts)
 		},
 	}
@@ -38,7 +34,7 @@ func UnstackCmd(cfg *config.Config) *cobra.Command {
 }
 
 func runUnstack(cfg *config.Config, opts *unstackOptions) error {
-	result, err := loadStack(cfg, opts.target)
+	result, err := loadStack(cfg, "")
 	if err != nil {
 		return ErrNotInStack
 	}
