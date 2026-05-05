@@ -346,20 +346,18 @@ gh stack push --remote upstream
 Remove a stack from local tracking and delete it on GitHub. Also available as `gh stack delete`.
 
 ```sh
-gh stack unstack [flags] [branch]
+gh stack unstack [flags]
 ```
 
-Deletes the stack on GitHub first, then removes it from local tracking. If the remote deletion fails, the local state is left untouched so you can retry. Use `--local` to skip the remote deletion and only remove local tracking.
+You must have a branch from the stack checked out locally. The command targets the active stack — the one that contains the currently checked out branch.
+
+Deletes the stack on GitHub first, if it exists, then removes it from local tracking. If the remote deletion fails, the local state is left untouched so you can retry. Use `--local` to skip the remote deletion and only remove local tracking.
 
 This is useful when you need to restructure a stack — remove a branch, reorder branches, rename branches, or make other large changes. After unstacking, use `gh stack init --adopt` to re-create the stack with the desired structure.
 
 | Flag | Description |
 |------|-------------|
 | `--local` | Only delete the stack locally (keep it on GitHub) |
-
-| Argument | Description |
-|----------|-------------|
-| `[branch]` | A branch in the stack to identify which stack to delete (defaults to the current branch) |
 
 **Examples:**
 
@@ -369,9 +367,6 @@ gh stack unstack
 
 # Only remove local tracking
 gh stack unstack --local
-
-# Specify a branch to identify which stack
-gh stack unstack feature-auth
 ```
 
 ### `gh stack link`
