@@ -1,6 +1,7 @@
 package cmd
 
 import (
+	"encoding/json"
 	"fmt"
 	"io"
 	"net/url"
@@ -11,6 +12,7 @@ import (
 	"github.com/github/gh-stack/internal/config"
 	"github.com/github/gh-stack/internal/git"
 	"github.com/github/gh-stack/internal/github"
+	"github.com/github/gh-stack/internal/modify"
 	"github.com/github/gh-stack/internal/stack"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -121,10 +123,11 @@ func TestSubmit_CreatesPRsAndStack(t *testing.T) {
 
 	assert.NoError(t, err)
 
-	// Branches should be pushed
-	require.Len(t, pushCalls, 1)
+	// Branches should be pushed (sequentially, one per branch)
+	require.Len(t, pushCalls, 2)
 	assert.Equal(t, "origin", pushCalls[0].remote)
-	assert.Equal(t, []string{"b1", "b2"}, pushCalls[0].branches)
+	assert.Equal(t, []string{"b1"}, pushCalls[0].branches)
+	assert.Equal(t, []string{"b2"}, pushCalls[1].branches)
 
 	// PRs should be created
 	assert.Equal(t, []string{"b1", "b2"}, createdPRs)
@@ -1072,4 +1075,298 @@ func TestSubmit_PreflightCheck_SkippedWhenStackIDSet(t *testing.T) {
 	// preflight check. Two syncStackPRs calls happen in submit (before and
 	// after PR creation), so expect exactly 2 ListStacks calls.
 	assert.Equal(t, 2, listStacksCallCount, "ListStacks should only be called by syncStackPRs, not by the preflight check")
+}
+
+// --- Modify + Submit integration tests ---
+
+func saveModifyState(t *testing.T, gitDir string, state *modify.StateFile) {
+	t.Helper()
+	require.NoError(t, modify.SaveState(gitDir, state))
+}
+
+func newPendingSubmitState(priorStackID string) *modify.StateFile {
+	return &modify.StateFile{
+		SchemaVersion:      1,
+		Phase:              "pending_submit",
+		PriorRemoteStackID: priorStackID,
+		Snapshot:           modify.Snapshot{StackMetadata: json.RawMessage(`{}`)},
+	}
+}
+
+func TestHandlePendingModify_DeletesOldStack(t *testing.T) {
+	gitDir := t.TempDir()
+
+	saveModifyState(t, gitDir, newPendingSubmitState("stack-123"))
+
+	s := &stack.Stack{ID: "stack-123", Trunk: stack.BranchRef{Branch: "main"}}
+
+	var deletedStackID string
+	client := &github.MockClient{
+		DeleteStackFn: func(id string) error {
+			deletedStackID = id
+			return nil
+		},
+	}
+
+	cfg, _, _ := config.NewTestConfig()
+	defer cfg.Out.Close()
+	defer cfg.Err.Close()
+
+	err := handlePendingModify(cfg, client, s, gitDir)
+	require.NoError(t, err)
+	assert.Equal(t, "stack-123", deletedStackID)
+	assert.Equal(t, "", s.ID)
+}
+
+func TestHandlePendingModify_NoStateFile(t *testing.T) {
+	gitDir := t.TempDir()
+	// No state file on disk.
+
+	s := &stack.Stack{ID: "stack-123", Trunk: stack.BranchRef{Branch: "main"}}
+
+	deleteCalled := false
+	client := &github.MockClient{
+		DeleteStackFn: func(id string) error {
+			deleteCalled = true
+			return nil
+		},
+	}
+
+	cfg, _, _ := config.NewTestConfig()
+	defer cfg.Out.Close()
+	defer cfg.Err.Close()
+
+	err := handlePendingModify(cfg, client, s, gitDir)
+	assert.NoError(t, err)
+	assert.False(t, deleteCalled, "DeleteStack should not be called when no state file exists")
+	assert.Equal(t, "stack-123", s.ID, "stack ID should remain unchanged")
+}
+
+func TestHandlePendingModify_WrongPhase(t *testing.T) {
+	gitDir := t.TempDir()
+
+	state := &modify.StateFile{
+		SchemaVersion: 1,
+		Phase:         "conflict",
+		Snapshot:      modify.Snapshot{StackMetadata: json.RawMessage(`{}`)},
+	}
+	saveModifyState(t, gitDir, state)
+
+	s := &stack.Stack{ID: "stack-99", Trunk: stack.BranchRef{Branch: "main"}}
+
+	deleteCalled := false
+	client := &github.MockClient{
+		DeleteStackFn: func(id string) error {
+			deleteCalled = true
+			return nil
+		},
+	}
+
+	cfg, _, _ := config.NewTestConfig()
+	defer cfg.Out.Close()
+	defer cfg.Err.Close()
+
+	err := handlePendingModify(cfg, client, s, gitDir)
+	assert.NoError(t, err)
+	assert.False(t, deleteCalled, "DeleteStack should not be called for non-pending_submit phase")
+	assert.Equal(t, "stack-99", s.ID, "stack ID should remain unchanged")
+}
+
+func TestHandlePendingModify_DeleteFails(t *testing.T) {
+	gitDir := t.TempDir()
+
+	saveModifyState(t, gitDir, newPendingSubmitState("stack-456"))
+
+	s := &stack.Stack{ID: "stack-456", Trunk: stack.BranchRef{Branch: "main"}}
+
+	client := &github.MockClient{
+		DeleteStackFn: func(id string) error {
+			return fmt.Errorf("server error")
+		},
+	}
+
+	cfg, _, _ := config.NewTestConfig()
+	defer cfg.Out.Close()
+	defer cfg.Err.Close()
+
+	err := handlePendingModify(cfg, client, s, gitDir)
+	assert.Error(t, err)
+	assert.Equal(t, "stack-456", s.ID, "stack ID should NOT be cleared on delete failure")
+}
+
+func TestHandlePendingModify_Delete404(t *testing.T) {
+	gitDir := t.TempDir()
+
+	saveModifyState(t, gitDir, newPendingSubmitState("stack-gone"))
+
+	s := &stack.Stack{ID: "stack-gone", Trunk: stack.BranchRef{Branch: "main"}}
+
+	client := &github.MockClient{
+		DeleteStackFn: func(id string) error {
+			return &api.HTTPError{
+				StatusCode: 404,
+				Message:    "Not Found",
+				RequestURL: &url.URL{Path: "/repos/o/r/cli_internal/pulls/stacks/stack-gone"},
+			}
+		},
+	}
+
+	cfg, _, _ := config.NewTestConfig()
+	defer cfg.Out.Close()
+	defer cfg.Err.Close()
+
+	err := handlePendingModify(cfg, client, s, gitDir)
+	require.NoError(t, err, "404 should be treated as success (stack already deleted)")
+	assert.Equal(t, "", s.ID, "stack ID should be cleared after 404")
+}
+
+func TestClearPendingModifyState_ClearsFile(t *testing.T) {
+	gitDir := t.TempDir()
+
+	saveModifyState(t, gitDir, newPendingSubmitState("stack-789"))
+	require.True(t, modify.StateExists(gitDir), "precondition: state file should exist")
+
+	cfg, _, _ := config.NewTestConfig()
+	defer cfg.Out.Close()
+	defer cfg.Err.Close()
+
+	clearPendingModifyState(cfg, gitDir)
+	assert.False(t, modify.StateExists(gitDir), "state file should be removed")
+}
+
+func TestClearPendingModifyState_NoFile(t *testing.T) {
+	gitDir := t.TempDir()
+	// No state file on disk.
+
+	cfg, _, _ := config.NewTestConfig()
+	defer cfg.Out.Close()
+	defer cfg.Err.Close()
+
+	// Should not panic or error.
+	clearPendingModifyState(cfg, gitDir)
+	assert.False(t, modify.StateExists(gitDir))
+}
+
+func TestSubmit_WithPendingModify_SequentialPush(t *testing.T) {
+	s := stack.Stack{
+		ID:    "old-stack-42",
+		Trunk: stack.BranchRef{Branch: "main"},
+		Branches: []stack.BranchRef{
+			{Branch: "b1", PullRequest: &stack.PullRequestRef{Number: 10}},
+			{Branch: "b2", PullRequest: &stack.PullRequestRef{Number: 11}},
+			{Branch: "b3", PullRequest: &stack.PullRequestRef{Number: 12}},
+		},
+	}
+
+	tmpDir := t.TempDir()
+	writeStackFile(t, tmpDir, s)
+	saveModifyState(t, tmpDir, newPendingSubmitState("old-stack-42"))
+
+	// Track call ordering
+	var callOrder []string
+	var pushCalls []pushCall
+
+	mock := newSubmitMock(tmpDir, "b1")
+	mock.PushFn = func(remote string, branches []string, force, atomic bool) error {
+		pushCalls = append(pushCalls, pushCall{remote, branches, force, atomic})
+		callOrder = append(callOrder, fmt.Sprintf("push:%s", branches[0]))
+		return nil
+	}
+
+	restore := git.SetOps(mock)
+	defer restore()
+
+	var deletedStackID string
+	var createdStackPRs []int
+
+	cfg, _, errR := config.NewTestConfig()
+	cfg.GitHubClientOverride = &github.MockClient{
+		DeleteStackFn: func(id string) error {
+			deletedStackID = id
+			callOrder = append(callOrder, "delete:"+id)
+			return nil
+		},
+		FindPRForBranchFn: func(branch string) (*github.PullRequest, error) {
+			switch branch {
+			case "b1":
+				return &github.PullRequest{
+					Number: 10, ID: "PR_10",
+					URL:         "https://github.com/owner/repo/pull/10",
+					BaseRefName: "main", HeadRefName: "b1",
+					State: "OPEN",
+				}, nil
+			case "b2":
+				return &github.PullRequest{
+					Number: 11, ID: "PR_11",
+					URL:         "https://github.com/owner/repo/pull/11",
+					BaseRefName: "b1", HeadRefName: "b2",
+					State: "OPEN",
+				}, nil
+			case "b3":
+				return &github.PullRequest{
+					Number: 12, ID: "PR_12",
+					URL:         "https://github.com/owner/repo/pull/12",
+					BaseRefName: "b2", HeadRefName: "b3",
+					State: "OPEN",
+				}, nil
+			}
+			return nil, nil
+		},
+		CreateStackFn: func(prNumbers []int) (int, error) {
+			createdStackPRs = prNumbers
+			callOrder = append(callOrder, "create_stack")
+			return 99, nil
+		},
+		ListStacksFn: func() ([]github.RemoteStack, error) {
+			return []github.RemoteStack{}, nil
+		},
+	}
+
+	cmd := SubmitCmd(cfg)
+	cmd.SetArgs([]string{"--auto"})
+	cmd.SetOut(io.Discard)
+	cmd.SetErr(io.Discard)
+	err := cmd.Execute()
+
+	cfg.Err.Close()
+	_, _ = io.ReadAll(errR)
+
+	assert.NoError(t, err)
+
+	// DeleteStack called with old stack ID
+	assert.Equal(t, "old-stack-42", deletedStackID)
+
+	// Push called per-branch (3 separate calls, not 1 atomic call)
+	require.Len(t, pushCalls, 3, "should push each branch individually")
+	assert.Equal(t, []string{"b1"}, pushCalls[0].branches)
+	assert.Equal(t, []string{"b2"}, pushCalls[1].branches)
+	assert.Equal(t, []string{"b3"}, pushCalls[2].branches)
+	for _, pc := range pushCalls {
+		assert.False(t, pc.atomic, "sequential push should not use atomic mode")
+	}
+
+	// CreateStack called with all 3 PRs
+	assert.Equal(t, []int{10, 11, 12}, createdStackPRs)
+
+	// Verify ordering: delete before push, push before create_stack
+	assert.True(t, len(callOrder) >= 5, "expected at least 5 calls, got %d: %v", len(callOrder), callOrder)
+	deleteIdx := -1
+	firstPushIdx := -1
+	createIdx := -1
+	for i, c := range callOrder {
+		if c == "delete:old-stack-42" && deleteIdx == -1 {
+			deleteIdx = i
+		}
+		if c == "push:b1" && firstPushIdx == -1 {
+			firstPushIdx = i
+		}
+		if c == "create_stack" && createIdx == -1 {
+			createIdx = i
+		}
+	}
+	assert.Greater(t, firstPushIdx, deleteIdx, "delete should happen before push")
+	assert.Greater(t, createIdx, firstPushIdx, "create_stack should happen after push")
+
+	// State file should be cleared
+	assert.False(t, modify.StateExists(tmpDir), "modify state file should be cleared after success")
 }

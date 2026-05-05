@@ -157,6 +157,68 @@ gh stack checkout feature-auth
 gh stack checkout
 ```
 
+### `gh stack modify`
+
+Interactively restructure the current stack.
+
+```sh
+gh stack modify [flags]
+```
+
+Opens an interactive terminal UI for restructuring a stack. All changes are staged in the TUI and applied together when you press `Ctrl+S`. Branches from merged PRs cannot be modified.
+
+| Flag | Description |
+|------|-------------|
+| `--continue` | Continue after resolving conflicts |
+| `--abort` | Abort the modify session and restore the stack to its pre-modify state |
+
+**Preconditions:**
+
+The command checks these conditions before opening the TUI:
+
+1. Must have an active stack checked out locally
+2. Working tree must be clean (no uncommitted changes)
+3. No rebase in progress
+4. No PR in the stack is queued for merge
+5. Commit history must be linear (no merge commits, no diverged branches)
+
+**Operations:**
+
+| Operation | Key | Effect |
+|-----------|-----|--------|
+| Drop | `x` | Remove branch and its commits from stack. Local branch and associated PR are preserved. |
+| Fold down | `d` | Absorb commits into branch below (toward trunk). Folded branch removed from stack. |
+| Fold up | `u` | Absorb commits into branch above (away from trunk). Folded branch removed from stack. |
+| Move down | `Shift+↓` | Reorder branch down (toward trunk) in the stack |
+| Move up | `Shift+↑` | Reorder branch up (away from trunk) in the stack |
+| Rename | `r` | Rename the branch (opens inline prompt) |
+| Undo | `z` | Undo the last staged action |
+
+**Apply phase:**
+
+When you press `Ctrl+S`, the staged changes are applied by renaming branches, folding/dropping branches, and running a cascading rebase to create a linear commit history with the desired stack state.
+
+If a rebase conflict occurs, you can:
+- Resolve conflicts, stage files, and run `gh stack modify --continue`
+- Or run `gh stack modify --abort` to abort the operation and restore the stack to the pre-modify state
+
+**After modifying:**
+
+If a stack of PRs has been created on GitHub, run `gh stack submit` to push the updated branches and recreate the stack. The old stack is automatically replaced.
+
+**Examples:**
+
+```sh
+# Open the interactive modify TUI
+gh stack modify
+
+# Continue after resolving a conflict
+gh stack modify --continue
+
+# Abort and restore to the previous state
+gh stack modify --abort
+```
+
 ---
 
 ## Remote Operations

@@ -10,6 +10,7 @@ import (
 
 	"github.com/github/gh-stack/internal/config"
 	"github.com/github/gh-stack/internal/git"
+	"github.com/github/gh-stack/internal/modify"
 	"github.com/github/gh-stack/internal/stack"
 	"github.com/spf13/cobra"
 )
@@ -76,6 +77,11 @@ func runRebase(cfg *config.Config, opts *rebaseOptions) error {
 
 	if opts.abort {
 		return abortRebase(cfg, gitDir)
+	}
+
+	if err := modify.CheckStateGuard(gitDir); err != nil {
+		cfg.Errorf("%s", err)
+		return ErrModifyRecovery
 	}
 
 	result, err := loadStack(cfg, opts.branch)
@@ -610,22 +616,24 @@ func clearRebaseState(gitDir string) {
 }
 
 func printConflictDetails(cfg *config.Config, branch string) {
-	files, err := git.ConflictedFiles()
-	if err != nil || len(files) == 0 {
-		return
-	}
+	printConflictDetailsWithContinue(cfg, branch, "gh stack rebase --continue")
+}
 
-	cfg.Printf("")
-	cfg.Printf("%s", cfg.ColorBold("Conflicted files:"))
-	for _, f := range files {
-		info, err := git.FindConflictMarkers(f)
-		if err != nil || len(info.Sections) == 0 {
-			cfg.Printf("  %s %s", cfg.ColorWarning("C"), f)
-			continue
-		}
-		for _, sec := range info.Sections {
-			cfg.Printf("  %s %s (lines %d–%d)",
-				cfg.ColorWarning("C"), f, sec.StartLine, sec.EndLine)
+func printConflictDetailsWithContinue(cfg *config.Config, branch string, continueCmd string) {
+	files, err := git.ConflictedFiles()
+	if err == nil && len(files) > 0 {
+		cfg.Printf("")
+		cfg.Printf("%s", cfg.ColorBold("Conflicted files:"))
+		for _, f := range files {
+			info, err := git.FindConflictMarkers(f)
+			if err != nil || len(info.Sections) == 0 {
+				cfg.Printf("  %s %s", cfg.ColorWarning("C"), f)
+				continue
+			}
+			for _, sec := range info.Sections {
+				cfg.Printf("  %s %s (lines %d–%d)",
+					cfg.ColorWarning("C"), f, sec.StartLine, sec.EndLine)
+			}
 		}
 	}
 
@@ -637,5 +645,5 @@ func printConflictDetails(cfg *config.Config, branch string) {
 	cfg.Printf("     %s  (changes being rebased)", cfg.ColorCyan(">>>>>>>"))
 	cfg.Printf("  2. Edit the file to keep the desired changes and remove the markers")
 	cfg.Printf("  3. Stage resolved files: `%s`", cfg.ColorCyan("git add <file>"))
-	cfg.Printf("  4. Continue the rebase:  `%s`", cfg.ColorCyan("gh stack rebase --continue"))
+	cfg.Printf("  4. Continue:  `%s`", cfg.ColorCyan(continueCmd))
 }

@@ -7,6 +7,7 @@ import (
 
 	"github.com/github/gh-stack/internal/config"
 	"github.com/github/gh-stack/internal/git"
+	"github.com/github/gh-stack/internal/modify"
 	"github.com/github/gh-stack/internal/stack"
 	"github.com/spf13/cobra"
 )
@@ -50,6 +51,12 @@ func runSync(cfg *config.Config, opts *syncOptions) error {
 		return ErrNotInStack
 	}
 	gitDir := result.GitDir
+
+	if err := modify.CheckStateGuard(gitDir); err != nil {
+		cfg.Errorf("%s", err)
+		return ErrModifyRecovery
+	}
+
 	sf := result.StackFile
 	s := result.Stack
 	currentBranch := result.CurrentBranch

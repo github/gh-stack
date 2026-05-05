@@ -28,7 +28,8 @@ var (
 	ErrDisambiguate      = &ExitError{Code: 6} // multiple stacks/remotes, can't auto-select
 	ErrRebaseActive      = &ExitError{Code: 7} // rebase already in progress
 	ErrLockFailed        = &ExitError{Code: 8} // could not acquire stack file lock
-	ErrStacksUnavailable = &ExitError{Code: 9} // stacked PRs not available for this repository
+	ErrStacksUnavailable = &ExitError{Code: 9}  // stacked PRs not available for this repository
+	ErrModifyRecovery    = &ExitError{Code: 10} // modify session interrupted, recovery required
 )
 
 // ExitError is returned by commands to indicate a specific exit code.

@@ -351,3 +351,34 @@ func CommitInteractive() (string, error) {
 func ValidateRefName(name string) error {
 	return ops.ValidateRefName(name)
 }
+
+// RenameBranch renames a local branch.
+func RenameBranch(oldName, newName string) error {
+	return ops.RenameBranch(oldName, newName)
+}
+
+// CherryPick applies the given commits to the current branch.
+func CherryPick(commits []string) error {
+	return ops.CherryPick(commits)
+}
+
+// CherryPickAbort clears any in-progress cherry-pick state.
+// Errors are silently ignored (no-op if no cherry-pick is in progress).
+func CherryPickAbort() {
+	_ = ops.CherryPickAbort()
+}
+
+// CherryPickContinue continues an in-progress cherry-pick after conflicts are resolved.
+func CherryPickContinue() error {
+	return ops.CherryPickContinue()
+}
+
+// HasUncommittedChanges returns true if the working tree has uncommitted changes.
+func HasUncommittedChanges() (bool, error) {
+	return ops.HasUncommittedChanges()
+}
+
+// LogMerges returns merge commits in the range base..head.
+func LogMerges(base, head string) ([]CommitInfo, error) {
+	return ops.LogMerges(base, head)
+}
