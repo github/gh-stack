@@ -129,7 +129,7 @@ func runSubmit(cfg *config.Config, opts *submitOptions) error {
 		return nil
 	}
 
-	// If a modify is pending, delete the old remote stack first so that
+	// If a modification is pending, delete the old remote stack first so that
 	// PR base updates are allowed and force-pushes don't trigger auto-merges.
 	if stacksAvailable {
 		if err := handlePendingModify(cfg, client, s, gitDir); err != nil {
