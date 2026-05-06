@@ -41,7 +41,7 @@ func runMerge(cfg *config.Config, target string) error {
 	currentBranch := result.CurrentBranch
 
 	// Sync PR state from GitHub so merge status is up to date.
-	syncStackPRs(cfg, s)
+	_ = syncStackPRs(cfg, s)
 
 	// Persist the refreshed PR state.
 	stack.SaveNonBlocking(result.GitDir, result.StackFile)

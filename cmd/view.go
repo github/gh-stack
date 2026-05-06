@@ -50,9 +50,20 @@ func runView(cfg *config.Config, opts *viewOptions) error {
 	s := result.Stack
 	currentBranch := result.CurrentBranch
 
+	// Show loading indicator for interactive TUI mode.
+	showingLoader := false
+	if !opts.asJSON && !opts.short && cfg.IsInteractive() {
+		fmt.Fprintf(cfg.Err, "Loading stack...")
+		showingLoader = true
+	}
+
 	// Sync PR state and save (best-effort).
-	syncStackPRs(cfg, s)
+	prDetails := syncStackPRs(cfg, s)
 	stack.SaveNonBlocking(gitDir, sf)
+
+	if showingLoader {
+		fmt.Fprintf(cfg.Err, "\r\033[2K")
+	}
 
 	if opts.asJSON {
 		return viewJSON(cfg, s, currentBranch)
@@ -62,7 +73,7 @@ func runView(cfg *config.Config, opts *viewOptions) error {
 		return viewShort(cfg, s, currentBranch)
 	}
 
-	return viewFull(cfg, s, currentBranch)
+	return viewFull(cfg, s, currentBranch, prDetails)
 }
 
 func viewShort(cfg *config.Config, s *stack.Stack, currentBranch string) error {
@@ -222,17 +233,17 @@ func shortPRSuffix(cfg *config.Config, b stack.BranchRef, host, owner, repo stri
 	return fmt.Sprintf(" %s", colorFn(prNum))
 }
 
-func viewFull(cfg *config.Config, s *stack.Stack, currentBranch string) error {
+func viewFull(cfg *config.Config, s *stack.Stack, currentBranch string, prDetails map[string]*ghapi.PRDetails) error {
 	if !cfg.IsInteractive() {
 		return viewFullStatic(cfg, s, currentBranch)
 	}
 
-	return viewFullTUI(cfg, s, currentBranch)
+	return viewFullTUI(cfg, s, currentBranch, prDetails)
 }
 
-func viewFullTUI(cfg *config.Config, s *stack.Stack, currentBranch string) error {
+func viewFullTUI(cfg *config.Config, s *stack.Stack, currentBranch string, prDetails map[string]*ghapi.PRDetails) error {
 	// Load enriched data for all branches
-	nodes := stackview.LoadBranchNodes(cfg, s, currentBranch)
+	nodes := stackview.LoadBranchNodes(cfg, s, currentBranch, prDetails)
 
 	// Reverse nodes so index 0 = top of stack (matches visual order)
 	reversed := make([]stackview.BranchNode, len(nodes))

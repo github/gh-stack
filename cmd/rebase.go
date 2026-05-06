@@ -176,7 +176,7 @@ func runRebase(cfg *config.Config, opts *rebaseOptions) error {
 		branchesToRebase[0].Branch, branchesToRebase[len(branchesToRebase)-1].Branch)
 
 	// Sync PR state before rebase so we can detect merged PRs.
-	syncStackPRs(cfg, s)
+	_ = syncStackPRs(cfg, s)
 
 	branchNames := make([]string, 0, len(s.Branches))
 	for _, b := range s.Branches {
@@ -349,7 +349,7 @@ func runRebase(cfg *config.Config, opts *rebaseOptions) error {
 
 	updateBaseSHAs(s)
 
-	syncStackPRs(cfg, s)
+	_ = syncStackPRs(cfg, s)
 
 	stack.SaveNonBlocking(gitDir, sf)
 
@@ -540,7 +540,7 @@ func continueRebase(cfg *config.Config, gitDir string) error {
 
 	updateBaseSHAs(s)
 
-	syncStackPRs(cfg, s)
+	_ = syncStackPRs(cfg, s)
 
 	stack.SaveNonBlocking(gitDir, sf)
 

@@ -264,7 +264,7 @@ func TestSyncStackPRs_NoTrackedPR_OnlyAdoptsOpenPRs(t *testing.T) {
 		},
 	}
 
-	syncStackPRs(cfg, s)
+	_ = syncStackPRs(cfg, s)
 	collectOutput(cfg, outR, errR)
 
 	// Branch should still have no PR tracked.
@@ -292,7 +292,7 @@ func TestSyncStackPRs_NoTrackedPR_AdoptsOpenPR(t *testing.T) {
 		},
 	}
 
-	syncStackPRs(cfg, s)
+	_ = syncStackPRs(cfg, s)
 	collectOutput(cfg, outR, errR)
 
 	require.NotNil(t, s.Branches[0].PullRequest)
@@ -329,7 +329,7 @@ func TestSyncStackPRs_TrackedPR_DetectsMerge(t *testing.T) {
 		},
 	}
 
-	syncStackPRs(cfg, s)
+	_ = syncStackPRs(cfg, s)
 	collectOutput(cfg, outR, errR)
 
 	require.NotNil(t, s.Branches[0].PullRequest)
@@ -367,7 +367,7 @@ func TestSyncStackPRs_MergedBranch_StaysMerged(t *testing.T) {
 		},
 	}
 
-	syncStackPRs(cfg, s)
+	_ = syncStackPRs(cfg, s)
 	collectOutput(cfg, outR, errR)
 
 	require.NotNil(t, s.Branches[0].PullRequest)
@@ -412,7 +412,7 @@ func TestSyncStackPRs_ClosedPR_ReplacedByOpenPR(t *testing.T) {
 		},
 	}
 
-	syncStackPRs(cfg, s)
+	_ = syncStackPRs(cfg, s)
 	collectOutput(cfg, outR, errR)
 
 	require.NotNil(t, s.Branches[0].PullRequest)
@@ -449,7 +449,7 @@ func TestSyncStackPRs_TrackedOpenPR_UpdatesQueued(t *testing.T) {
 		},
 	}
 
-	syncStackPRs(cfg, s)
+	_ = syncStackPRs(cfg, s)
 	collectOutput(cfg, outR, errR)
 
 	assert.True(t, s.Branches[0].Queued)
@@ -487,7 +487,7 @@ func TestSyncStackPRs_ClosedPR_NoReplacement_ClearsPR(t *testing.T) {
 		},
 	}
 
-	syncStackPRs(cfg, s)
+	_ = syncStackPRs(cfg, s)
 	collectOutput(cfg, outR, errR)
 
 	assert.Nil(t, s.Branches[0].PullRequest)
@@ -524,7 +524,7 @@ func TestSyncStackPRs_RemoteStack_UsesStackAPI(t *testing.T) {
 		},
 	}
 
-	syncStackPRs(cfg, s)
+	_ = syncStackPRs(cfg, s)
 	collectOutput(cfg, outR, errR)
 
 	// b1 should be tracked with open PR
@@ -561,7 +561,7 @@ func TestSyncStackPRs_RemoteStack_ClosedPRStaysAssociated(t *testing.T) {
 		},
 	}
 
-	syncStackPRs(cfg, s)
+	_ = syncStackPRs(cfg, s)
 	collectOutput(cfg, outR, errR)
 
 	// PR should still be associated (not cleared), because the stack API says it's part of the stack.
@@ -590,7 +590,7 @@ func TestSyncStackPRs_RemoteStack_FallsBackOnAPIError(t *testing.T) {
 		},
 	}
 
-	syncStackPRs(cfg, s)
+	_ = syncStackPRs(cfg, s)
 	collectOutput(cfg, outR, errR)
 
 	// Should have fallen back to local discovery and found the open PR.

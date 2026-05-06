@@ -6,6 +6,7 @@ import (
 	"net/url"
 	"strconv"
 	"strings"
+	"sync"
 
 	"github.com/AlecAivazis/survey/v2/terminal"
 	"github.com/cli/go-gh/v2/pkg/prompter"
@@ -21,13 +22,13 @@ var ErrSilent = &ExitError{Code: 1}
 
 // Typed exit errors for programmatic detection by scripts and agents.
 var (
-	ErrNotInStack        = &ExitError{Code: 2} // branch/stack not found
-	ErrConflict          = &ExitError{Code: 3} // rebase conflict
-	ErrAPIFailure        = &ExitError{Code: 4} // GitHub API error
-	ErrInvalidArgs       = &ExitError{Code: 5} // invalid arguments or flags
-	ErrDisambiguate      = &ExitError{Code: 6} // multiple stacks/remotes, can't auto-select
-	ErrRebaseActive      = &ExitError{Code: 7} // rebase already in progress
-	ErrLockFailed        = &ExitError{Code: 8} // could not acquire stack file lock
+	ErrNotInStack        = &ExitError{Code: 2}  // branch/stack not found
+	ErrConflict          = &ExitError{Code: 3}  // rebase conflict
+	ErrAPIFailure        = &ExitError{Code: 4}  // GitHub API error
+	ErrInvalidArgs       = &ExitError{Code: 5}  // invalid arguments or flags
+	ErrDisambiguate      = &ExitError{Code: 6}  // multiple stacks/remotes, can't auto-select
+	ErrRebaseActive      = &ExitError{Code: 7}  // rebase already in progress
+	ErrLockFailed        = &ExitError{Code: 8}  // could not acquire stack file lock
 	ErrStacksUnavailable = &ExitError{Code: 9}  // stacked PRs not available for this repository
 	ErrModifyRecovery    = &ExitError{Code: 10} // modify session interrupted, recovery required
 )
@@ -91,6 +92,7 @@ type loadStackResult struct {
 	StackFile     *stack.StackFile
 	Stack         *stack.Stack
 	CurrentBranch string
+	PRDetails     map[string]*github.PRDetails
 }
 
 // loadStack is the standard way to obtain a Stack for the current (or given)
@@ -233,6 +235,8 @@ func resolveStack(sf *stack.StackFile, branch string, cfg *config.Config) (*stac
 }
 
 // syncStackPRs discovers and updates pull request metadata for branches in a stack.
+// It also collects PRDetails for each branch, returned as a map keyed by branch name.
+// The returned map is consumed by LoadBranchNodes to avoid redundant API calls.
 //
 // When the stack has a remote ID, the stack API is the source of truth: the
 // authoritative PR list is fetched from the server and matched to local
@@ -246,82 +250,191 @@ func resolveStack(sf *stack.StackFile, branch string, cfg *config.Config) (*stac
 //  3. Tracked PR (merged) — skip; the merged state is final.
 //
 // The transient Queued flag is also populated from the API response.
-func syncStackPRs(cfg *config.Config, s *stack.Stack) {
+//
+// API calls for different branches are made concurrently to reduce latency.
+func syncStackPRs(cfg *config.Config, s *stack.Stack) map[string]*github.PRDetails {
 	client, err := cfg.GitHubClient()
 	if err != nil {
-		return
+		return nil
 	}
 
 	// When the stack has a remote ID, the stack API is the source of truth.
 	if s.ID != "" {
-		if syncStackPRsFromRemote(client, s) {
-			return
+		if details, ok := syncStackPRsFromRemote(client, s); ok {
+			return details
 		}
 	}
 
 	// No remote stack (or remote sync failed) — local discovery.
+	// Each branch is processed concurrently; results are collected and applied sequentially.
+	type branchResult struct {
+		index       int
+		pullRequest *stack.PullRequestRef
+		queued      bool
+		details     *github.PRDetails
+		skip        bool // true means keep existing data, don't update
+	}
+
+	results := make([]branchResult, len(s.Branches))
+
+	// Fetch PR data for all branches concurrently using a WaitGroup for
+	// completion and a semaphore channel to cap the number of in-flight
+	// API requests (see maxAPIConcurrency).
+	var wg sync.WaitGroup
+	sem := make(chan struct{}, maxAPIConcurrency)
+
 	for i := range s.Branches {
-		b := &s.Branches[i]
+		b := s.Branches[i]
 
 		if b.IsMerged() {
+			results[i] = branchResult{index: i, skip: true}
+			// Provide PRDetails for merged branches from existing tracked PR
+			if b.PullRequest != nil && b.PullRequest.Number != 0 {
+				results[i].details = &github.PRDetails{
+					Number: b.PullRequest.Number,
+					State:  "MERGED",
+					URL:    b.PullRequest.URL,
+					Merged: true,
+				}
+			}
 			continue
 		}
 
-		if b.PullRequest != nil && b.PullRequest.Number != 0 {
-			// Tracked PR — refresh its state.
-			pr, err := client.FindPRByNumber(b.PullRequest.Number)
-			if err != nil {
-				continue // API error — keep existing tracked PR
+		wg.Add(1)
+		go func(idx int, branch stack.BranchRef) {
+			defer wg.Done()
+
+			// Acquire a semaphore slot to limit concurrent API calls.
+			sem <- struct{}{}
+			defer func() { <-sem }()
+
+			res := branchResult{index: idx}
+
+			trackedResolved := false
+			if branch.PullRequest != nil && branch.PullRequest.Number != 0 {
+				// Tracked PR — refresh its state.
+				pr, err := client.FindPRByNumber(branch.PullRequest.Number)
+				if err != nil {
+					// API error — keep existing tracked PR
+					res.skip = true
+					res.details = prDetailsFromTracked(branch.PullRequest)
+					results[idx] = res
+					return
+				}
+				if pr != nil && pr.State != "CLOSED" {
+					// PR is open or merged — keep it
+					res.pullRequest = &stack.PullRequestRef{
+						Number: pr.Number,
+						ID:     pr.ID,
+						URL:    pr.URL,
+						Merged: pr.Merged,
+					}
+					res.queued = pr.IsQueued()
+					res.details = prDetailsFromPR(pr)
+					results[idx] = res
+					trackedResolved = true
+				}
+				// Otherwise PR not found or closed — fall through to open-PR lookup
 			}
-			if pr == nil {
-				// PR not found — clear stale ref and fall through
-				// to the open-PR lookup below.
+
+			if trackedResolved {
+				return
+			}
+
+			// No tracked PR (or cleared) — only adopt OPEN PRs.
+			pr, err := client.FindPRForBranch(branch.Branch)
+			if err != nil || pr == nil {
+				results[idx] = res
+				return
+			}
+			res.pullRequest = &stack.PullRequestRef{
+				Number: pr.Number,
+				ID:     pr.ID,
+				URL:    pr.URL,
+			}
+			res.queued = pr.IsQueued()
+			// FindPRForBranch only returns OPEN PRs
+			res.details = &github.PRDetails{
+				Number:   pr.Number,
+				State:    "OPEN",
+				URL:      pr.URL,
+				IsDraft:  pr.IsDraft,
+				Merged:   false,
+				IsQueued: pr.IsQueued(),
+			}
+			results[idx] = res
+		}(i, b)
+	}
+	wg.Wait()
+
+	// Apply results sequentially to preserve deterministic behavior.
+	details := make(map[string]*github.PRDetails)
+	for _, res := range results {
+		if res.details != nil {
+			details[s.Branches[res.index].Branch] = res.details
+		}
+		if res.skip {
+			continue
+		}
+		b := &s.Branches[res.index]
+		if res.pullRequest != nil {
+			b.PullRequest = res.pullRequest
+			b.Queued = res.queued
+		} else if !b.IsMerged() {
+			// Clear if we didn't find anything (and original was cleared during discovery)
+			if b.PullRequest != nil && res.pullRequest == nil {
 				b.PullRequest = nil
 				b.Queued = false
-			} else {
-				b.PullRequest = &stack.PullRequestRef{
-					Number: pr.Number,
-					ID:     pr.ID,
-					URL:    pr.URL,
-					Merged: pr.Merged,
-				}
-				b.Queued = pr.IsQueued()
-
-				// If the PR was closed (not merged), remove the association
-				// so we fall through to the open-PR lookup below.
-				if pr.State == "CLOSED" {
-					b.PullRequest = nil
-					b.Queued = false
-				} else {
-					continue
-				}
 			}
 		}
+	}
 
-		// No tracked PR (or just cleared) — only adopt OPEN PRs to avoid
-		// picking up stale merged/closed PRs from a previous use of this
-		// branch name.
-		pr, err := client.FindPRForBranch(b.Branch)
-		if err != nil || pr == nil {
-			continue
-		}
-		b.PullRequest = &stack.PullRequestRef{
-			Number: pr.Number,
-			ID:     pr.ID,
-			URL:    pr.URL,
-		}
-		b.Queued = pr.IsQueued()
+	return details
+}
+
+// maxAPIConcurrency limits the number of concurrent API calls to avoid hitting secondary rate limits.
+const maxAPIConcurrency = 6
+
+// prDetailsFromPR builds PRDetails from a PullRequest returned by FindPRByNumber.
+func prDetailsFromPR(pr *github.PullRequest) *github.PRDetails {
+	if pr == nil {
+		return nil
+	}
+	return &github.PRDetails{
+		Number:   pr.Number,
+		State:    pr.State,
+		URL:      pr.URL,
+		IsDraft:  pr.IsDraft,
+		Merged:   pr.Merged,
+		IsQueued: pr.IsQueued(),
+	}
+}
+
+// prDetailsFromTracked builds minimal PRDetails from a tracked PullRequestRef.
+func prDetailsFromTracked(ref *stack.PullRequestRef) *github.PRDetails {
+	if ref == nil {
+		return nil
+	}
+	state := "OPEN"
+	if ref.Merged {
+		state = "MERGED"
+	}
+	return &github.PRDetails{
+		Number: ref.Number,
+		State:  state,
+		URL:    ref.URL,
+		Merged: ref.Merged,
 	}
 }
 
 // syncStackPRsFromRemote uses the stack API to sync PR state. The remote
 // stack's PR list is the source of truth — PRs stay associated even if
-// closed. Returns true if the sync succeeded, false if we should fall
-// back to local discovery (e.g. stack not found remotely, API error).
-func syncStackPRsFromRemote(client github.ClientOps, s *stack.Stack) bool {
+// closed. Returns the PRDetails map and true if sync succeeded, or nil and
+// false if we should fall back to local discovery.
+func syncStackPRsFromRemote(client github.ClientOps, s *stack.Stack) (map[string]*github.PRDetails, bool) {
 	stacks, err := client.ListStacks()
 	if err != nil {
-		return false
+		return nil, false
 	}
 
 	// Find our stack in the remote list.
@@ -333,20 +446,47 @@ func syncStackPRsFromRemote(client github.ClientOps, s *stack.Stack) bool {
 		}
 	}
 	if remotePRNumbers == nil {
-		return false
+		return nil, false
 	}
 
-	// Fetch each remote PR's details and index by head branch name.
+	// Fetch each remote PR concurrently. Results are written to an ordered
+	// slice (one slot per PR number) so that when we build the branch map
+	// below, later entries win on duplicate HeadRefNames — matching the
+	// sequential behavior of the old code.
+	prResults := make([]*github.PullRequest, len(remotePRNumbers))
+
+	var wg sync.WaitGroup
+	sem := make(chan struct{}, maxAPIConcurrency) // limits concurrent API calls
+
+	for i, num := range remotePRNumbers {
+		wg.Add(1)
+		go func(idx, prNum int) {
+			defer wg.Done()
+
+			// Acquire a semaphore slot to limit concurrent API calls.
+			sem <- struct{}{}
+			defer func() { <-sem }()
+
+			pr, err := client.FindPRByNumber(prNum)
+			if err != nil || pr == nil {
+				return
+			}
+			// Each goroutine writes to its own index — no lock needed.
+			prResults[idx] = pr
+		}(i, num)
+	}
+	wg.Wait()
+
+	// Build map sequentially to preserve order semantics.
 	prByBranch := make(map[string]*github.PullRequest, len(remotePRNumbers))
-	for _, num := range remotePRNumbers {
-		pr, err := client.FindPRByNumber(num)
-		if err != nil || pr == nil {
-			continue
+	for _, pr := range prResults {
+		if pr != nil {
+			prByBranch[pr.HeadRefName] = pr
 		}
-		prByBranch[pr.HeadRefName] = pr
 	}
 
-	// Match remote PRs to local branches.
+	// Match remote PRs to local branches and collect PRDetails.
+	details := make(map[string]*github.PRDetails)
 	for i := range s.Branches {
 		b := &s.Branches[i]
 		pr, ok := prByBranch[b.Branch]
@@ -360,9 +500,10 @@ func syncStackPRsFromRemote(client github.ClientOps, s *stack.Stack) bool {
 			Merged: pr.Merged,
 		}
 		b.Queued = pr.IsQueued()
+		details[b.Branch] = prDetailsFromPR(pr)
 	}
 
-	return true
+	return details, true
 }
 
 // updateBaseSHAs refreshes the Base and Head SHAs for all active branches
