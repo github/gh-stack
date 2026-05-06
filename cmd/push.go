@@ -4,7 +4,7 @@ import (
 	"errors"
 	"fmt"
 
-	"github.com/cli/go-gh/v2/pkg/prompter"
+	"github.com/github/gh-stack/internal/prompter"
 	"github.com/github/gh-stack/internal/config"
 	"github.com/github/gh-stack/internal/git"
 	"github.com/github/gh-stack/internal/modify"
@@ -151,7 +151,6 @@ func pickRemote(cfg *config.Config, branch, remoteOverride string) (string, erro
 	selected, promptErr := p.Select("Multiple remotes found. Which remote should be used?", "", multi.Remotes)
 	if promptErr != nil {
 		if isInterruptError(promptErr) {
-			clearSelectPrompt(cfg, len(multi.Remotes))
 			printInterrupt(cfg)
 			return "", errInterrupt
 		}

@@ -7,7 +7,7 @@ import (
 	"strings"
 
 	"github.com/cli/go-gh/v2/pkg/api"
-	"github.com/cli/go-gh/v2/pkg/prompter"
+	"github.com/github/gh-stack/internal/prompter"
 	"github.com/github/gh-stack/internal/config"
 	"github.com/github/gh-stack/internal/git"
 	"github.com/github/gh-stack/internal/github"
@@ -84,8 +84,12 @@ func runSubmit(cfg *config.Config, opts *submitOptions) error {
 		if _, err := client.ListStacks(); err != nil {
 			cfg.Warningf("Stacked PRs are not enabled for this repository")
 			if cfg.IsInteractive() {
-				p := prompter.New(cfg.In, cfg.Out, cfg.Err)
-				proceed, promptErr := p.Confirm("Would you still like to create regular PRs?", false)
+				confirmFn := cfg.ConfirmFn
+				if confirmFn == nil {
+					p := prompter.New(cfg.In, cfg.Out, cfg.Err)
+					confirmFn = p.Confirm
+				}
+				proceed, promptErr := confirmFn("Would you still like to create regular PRs?", false)
 				if promptErr != nil {
 					if isInterruptError(promptErr) {
 						printInterrupt(cfg)

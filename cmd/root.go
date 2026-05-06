@@ -69,6 +69,9 @@ func Execute() {
 	wrapCmd.SetArgs(append([]string{"stack"}, os.Args[1:]...))
 
 	if err := wrapCmd.Execute(); err != nil {
+		if errors.Is(err, errInterrupt) {
+			os.Exit(1)
+		}
 		var exitErr *ExitError
 		if errors.As(err, &exitErr) {
 			os.Exit(exitErr.Code)

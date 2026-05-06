@@ -6,24 +6,24 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/AlecAivazis/survey/v2/terminal"
 	"github.com/github/gh-stack/internal/config"
 	"github.com/github/gh-stack/internal/git"
 	"github.com/github/gh-stack/internal/github"
+	"github.com/github/gh-stack/internal/prompter"
 	"github.com/github/gh-stack/internal/stack"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
 func TestIsInterruptError_DirectMatch(t *testing.T) {
-	if !isInterruptError(terminal.InterruptErr) {
-		t.Error("expected true for terminal.InterruptErr")
+	if !isInterruptError(prompter.ErrInterrupt) {
+		t.Error("expected true for prompter.ErrInterrupt")
 	}
 }
 
 func TestIsInterruptError_Wrapped(t *testing.T) {
 	// This is how the prompter library wraps the interrupt error.
-	wrapped := fmt.Errorf("could not prompt: %w", terminal.InterruptErr)
+	wrapped := fmt.Errorf("could not prompt: %w", prompter.ErrInterrupt)
 	if !isInterruptError(wrapped) {
 		t.Error("expected true for wrapped interrupt error")
 	}
@@ -31,7 +31,7 @@ func TestIsInterruptError_Wrapped(t *testing.T) {
 
 func TestIsInterruptError_DoubleWrapped(t *testing.T) {
 	// Simulate additional wrapping by callers.
-	inner := fmt.Errorf("could not prompt: %w", terminal.InterruptErr)
+	inner := fmt.Errorf("could not prompt: %w", prompter.ErrInterrupt)
 	outer := fmt.Errorf("stack selection: %w", inner)
 	if !isInterruptError(outer) {
 		t.Error("expected true for double-wrapped interrupt error")
@@ -65,8 +65,10 @@ func TestPrintInterrupt_Output(t *testing.T) {
 }
 
 func TestErrInterrupt_IsDistinct(t *testing.T) {
-	if errors.Is(errInterrupt, terminal.InterruptErr) {
-		t.Error("errInterrupt sentinel should not match terminal.InterruptErr")
+	// errInterrupt (the cmd-level sentinel) and prompter.ErrInterrupt
+	// are distinct errors — they should not match each other.
+	if errors.Is(errInterrupt, prompter.ErrInterrupt) {
+		t.Error("errInterrupt sentinel should not match prompter.ErrInterrupt")
 	}
 	if !errors.Is(errInterrupt, errInterrupt) {
 		t.Error("errInterrupt should match itself")

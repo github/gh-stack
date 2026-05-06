@@ -7,7 +7,7 @@ import (
 	"strings"
 
 	"github.com/cli/go-gh/v2/pkg/api"
-	"github.com/cli/go-gh/v2/pkg/prompter"
+	"github.com/github/gh-stack/internal/prompter"
 	"github.com/github/gh-stack/internal/config"
 	"github.com/github/gh-stack/internal/git"
 	"github.com/github/gh-stack/internal/github"
@@ -376,7 +376,6 @@ func handleCompositionConflict(
 	selected, err := p.Select("How would you like to resolve this?", "", options)
 	if err != nil {
 		if isInterruptError(err) {
-			clearSelectPrompt(cfg, len(options))
 			printInterrupt(cfg)
 			return nil, errInterrupt
 		}
@@ -574,7 +573,6 @@ func interactiveStackPicker(cfg *config.Config, sf *stack.StackFile) (*stack.Sta
 	)
 	if err != nil {
 		if isInterruptError(err) {
-			clearSelectPrompt(cfg, len(options))
 			printInterrupt(cfg)
 			return nil, errInterrupt
 		}
