@@ -19,6 +19,10 @@ Stacked PRs is currently in private preview. This feature will **not work** unle
 gh extension install github/gh-stack
 ```
 
+:::note[Authentication]
+The `gh stack` CLI requires OAuth authentication via `gh auth login`. Personal access tokens (PATs) are not supported.
+:::
+
 ## Set Up AI Agent Integration
 
 If you use AI coding agents (like GitHub Copilot), install the gh-stack skill so they know how to work with Stacked PRs:
