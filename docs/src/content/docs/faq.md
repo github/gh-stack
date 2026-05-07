@@ -113,7 +113,7 @@ Yes. There must be a **fully linear history** between each of the branches in th
 If the stack is not linear (e.g., after changes were pushed to a lower branch), you can fix it in two ways:
 
 - **From the CLI** — Run `gh stack rebase` to perform a cascading rebase locally and then push with `gh stack push`.
-- **From the UI** — Click the **Rebase Stack** button in the merge box to trigger a cascading rebase across all branches in the stack.
+- **From the UI** — Click the **Rebase Stack** button in the merge box to trigger a server-side cascading rebase. This rebases the entire stack on top of the latest trunk, updates every unmerged branch on top of its base branch, and force-pushes the results. See [Rebasing from the UI](/gh-stack/guides/ui/#rebasing-from-the-ui) for details.
 
 ## Merging Stacked PRs
 

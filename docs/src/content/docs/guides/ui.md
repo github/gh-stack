@@ -77,6 +77,20 @@ Before a PR in the stack can be merged, the following conditions must be met:
 
 ![Merge box for a stacked pull request](../../../assets/screenshots/stack-merge-box.png)
 
+## Rebasing from the UI
+
+When the stack is not linear (e.g., after changes were pushed to a lower branch, or after `main` has moved ahead), a **Rebase Stack** button appears in the merge box. Clicking it triggers a server-side cascading rebase that:
+
+1. Rebases the entire stack on top of the latest trunk (e.g., `main`) HEAD.
+2. Rebases every unmerged branch on top of the latest changes from its base branch, working from the bottom of the stack upward.
+3. Force-pushes each rebased branch to update the remote.
+
+After the rebase completes, all PRs in the stack reflect the updated branches and CI checks are re-triggered.
+
+:::note[Commit signing]
+Commits created by a server-side rebase are **not signed**. If your repository requires signed commits, we recommend using the CLI. Running `gh stack rebase` uses local git operations, so the generated commits will follow your local git signing configuration. After rebasing locally, you can force push your updated branches with `gh stack push`.
+:::
+
 ## Unstacking
 
 If you want to reorder or reorganize the PRs in a stack, you must first dissolve the stack and then re-create it. You can unstack PRs from the UI.
