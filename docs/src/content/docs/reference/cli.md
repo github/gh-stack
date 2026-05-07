@@ -11,6 +11,10 @@ gh extension install github/gh-stack
 
 Requires the [GitHub CLI](https://cli.github.com/) (`gh`) v2.0+.
 
+:::note[Authentication]
+The `gh stack` CLI requires OAuth authentication via `gh auth login`. Personal access tokens (PATs) are not supported.
+:::
+
 ---
 
 ## Stack Management
