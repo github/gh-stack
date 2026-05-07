@@ -33,7 +33,7 @@ You can also add PRs to an existing stack from the GitHub UI. See [Adding to an 
 
 ### How can I modify my stack?
 
-Use `gh stack modify` to restructure a stack. It opens an interactive TUI where you can reorder, drop, fold (combine), and rename branches — then applies all changes at once. See the [Restructuring Stacks](/gh-stack/guides/modify/) guide for a full walkthrough.
+Use `gh stack modify` to restructure a stack. It opens an interactive terminal UI where you can reorder, drop, fold (combine), and rename branches — then applies all changes at once. See the [Restructuring Stacks](/gh-stack/guides/modify/) guide for a full walkthrough.
 
 Alternatively, you can manually tear down and re-create the stack with `gh stack unstack` and `gh stack init --adopt`:
 
