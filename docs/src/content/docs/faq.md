@@ -33,7 +33,9 @@ You can also add PRs to an existing stack from the GitHub UI. See [Adding to an 
 
 ### How can I modify my stack?
 
-Reordering or inserting branches into the middle of a stack is not currently supported. To restructure a stack, use `gh stack unstack` to tear it down and then re-create it with `gh stack init --adopt`:
+Use `gh stack modify` to restructure a stack. It opens an interactive TUI where you can reorder, drop, fold (combine), and rename branches — then applies all changes at once. See the [Restructuring Stacks](/gh-stack/guides/modify/) guide for a full walkthrough.
+
+Alternatively, you can manually tear down and re-create the stack with `gh stack unstack` and `gh stack init --adopt`:
 
 ```sh
 # 1. Remove the stack
@@ -43,7 +45,7 @@ gh stack unstack
 git branch -m old-name new-name
 
 # 3. Re-create the stack with the new structure
-gh stack init --adopt branch-2 branch-1 branch-3
+gh stack init --adopt branch-1 branch-2 branch-3
 ```
 
 ### How do I delete my stack?
@@ -121,11 +123,13 @@ Every PR in a stack must meet the same merge requirements as a PR targeting the 
 
 ### How does merging a stack of PRs differ from merging a regular PR?
 
-Stacks must be merged **from the bottom up**. When you merge a PR, all non-merged PRs below it in the stack are also merged. After a PR is merged, the remaining stack is automatically rebased so the next PR targets `main` directly.
+Stacks merge from the bottom up as a single atomic operation. When you click merge on a PR in a stack, that PR and all unmerged PRs below it land on the base branch together. PRs above remain open, and the remaining stack is automatically rebased so the next PR targets `main` directly.
 
 ### What happens when you merge a PR in the middle of the stack?
 
-You cannot merge a PR in the middle of the stack before the PRs below it are merged. PRs must be merged in order from the bottom up.
+When you click merge on a PR in the middle of the stack, that PR and all unmerged PRs below it land on the base branch together as a single atomic operation, ordered from the bottom up in the resulting history. PRs above the selected one remain open. After the merge, the lowest unmerged PR is updated to target the stack base directly, and a cascading rebase runs across the remaining branches.
+
+It is not possible to merge a middle PR in isolation: the PRs below it always merge with it.
 
 ### How does squash merge work?
 
@@ -171,13 +175,13 @@ When you merge a stack using the merge commit strategy, it creates **one merge c
 
 ### How does rebase merge work?
 
-With rebase merge, all of the commits from each PR in the stack are replayed onto the base branch one at a time, creating a linear history without merge commits.
+With rebase merge, the commits from each PR in the stack are replayed onto the base branch, creating a linear history without merge commits. The full set of commits lands as a single atomic operation.
 
 ### Do all PRs get merged at once or one at a time?
 
-PRs in a stack are merged sequentially, from the bottom up. When you initiate a merge, the bottom PR is merged first, and then the next PR above it, and so on. 
+All PRs in the stack land in a single atomic operation. When you click merge on a PR, that PR and all unmerged PRs below it are merged together onto the base branch at the same time, ordered from the bottom up in the resulting history. PRs above the selected one remain open.
 
-Commits are not all landed in a single atomic operation — each PR is merged individually in sequence.
+This applies whether or not a merge queue is enabled. With a merge queue, the same atomic landing happens once the stack's merge group reaches the front of the queue.
 
 ### Can I merge only part of a stack? What happens to the remaining unmerged PRs?
 
@@ -189,7 +193,7 @@ Closing a PR in the middle of the stack will block all PRs above it from being m
 
 ### What happens when there is an error merging a PR in the middle of a stack?
 
-If a merge fails (e.g., due to a failing check or merge conflict), the operation stops and no subsequent PRs are merged. You'll need to resolve the issue before continuing.
+Pre-merge checks run before any merge attempt, but a merge can still fail (e.g., due to an unexpected merge conflict or intermittent failure). If a failure occurs partway through, merging stops at that PR. PRs below it that successfully merged remain landed on the base branch; the failed PR and PRs above it stay open. Resolve the issue on the failed PR and retry to land the rest of the stack.
 
 ### Do Stacked PRs support merge queue?
 
@@ -197,7 +201,7 @@ Yes, Stacked PRs fully support merging via merge queue. When you merge a stack t
 
 - **All PRs in the stack are added to the queue** in the correct order, ensuring a linear sequence.
 - **If a PR is removed or ejected from the merge queue**, all PRs above it in the stack are also ejected and removed from the queue.
-- **Stacks can be split across merge groups** in the merge queue — not all PRs in the stack need to be in the same merge group.
+- **Stacks are kept in the same merge group on a best-effort basis.** To keep a stack together, the merge queue allows the merge group to exceed its configured max size by up to 50%. If the stack is too large to fit within that buffer, it splits across consecutive merge groups: as much of the stack as fits goes into the current group, and the remaining PRs continue in subsequent groups until the full stack has landed.
 
 ## Local Development
 
