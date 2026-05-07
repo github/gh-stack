@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"io"
 	"net/url"
-	"os"
 	"testing"
 
 	"github.com/cli/go-gh/v2/pkg/api"
