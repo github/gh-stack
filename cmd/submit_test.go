@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"io"
 	"net/url"
-	"os"
 	"testing"
 
 	"github.com/cli/go-gh/v2/pkg/api"
@@ -905,15 +904,11 @@ func TestSubmit_PreflightCheck_404_Interactive_UserDeclinesAborts(t *testing.T) 
 	restore := git.SetOps(mock)
 	defer restore()
 
-	// Force interactive mode; survey will fail on the pipe,
-	// which is treated as a decline — same as user saying "no".
-	inR, inW, _ := os.Pipe()
-	inW.Close()
-	defer inR.Close()
-
 	cfg, _, errR := config.NewTestConfig()
-	cfg.In = inR
 	cfg.ForceInteractive = true
+	cfg.ConfirmFn = func(prompt string, defaultValue bool) (bool, error) {
+		return false, nil // user declines
+	}
 	cfg.GitHubClientOverride = &github.MockClient{
 		ListStacksFn: func() ([]github.RemoteStack, error) {
 			return nil, &api.HTTPError{StatusCode: 404, Message: "Not Found"}

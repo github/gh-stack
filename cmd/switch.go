@@ -3,7 +3,7 @@ package cmd
 import (
 	"fmt"
 
-	"github.com/cli/go-gh/v2/pkg/prompter"
+	"github.com/github/gh-stack/internal/prompter"
 	"github.com/github/gh-stack/internal/config"
 	"github.com/github/gh-stack/internal/git"
 	"github.com/spf13/cobra"
@@ -68,7 +68,6 @@ func runSwitch(cfg *config.Config) error {
 	selected, err := selectFn("Select a branch in the stack to switch to:", defaultOpt, options)
 	if err != nil {
 		if isInterruptError(err) {
-			clearSelectPrompt(cfg, len(options))
 			printInterrupt(cfg)
 			return errInterrupt
 		}

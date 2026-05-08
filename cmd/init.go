@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/cli/go-gh/v2/pkg/prompter"
+	"github.com/github/gh-stack/internal/prompter"
 	"github.com/github/gh-stack/internal/branch"
 	"github.com/github/gh-stack/internal/config"
 	"github.com/github/gh-stack/internal/git"

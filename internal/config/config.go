@@ -38,6 +38,14 @@ type Config struct {
 	// SelectFn, when non-nil, is called instead of prompting via the
 	// terminal. Used in tests to simulate interactive selection.
 	SelectFn func(prompt, defaultValue string, options []string) (int, error)
+
+	// ConfirmFn, when non-nil, is called instead of prompting via the
+	// terminal. Used in tests to simulate interactive confirmation.
+	ConfirmFn func(prompt string, defaultValue bool) (bool, error)
+
+	// InputFn, when non-nil, is called instead of prompting via the
+	// terminal. Used in tests to simulate interactive text input.
+	InputFn func(prompt, defaultValue string) (string, error)
 }
 
 // New creates a new Config with terminal-aware output and color support.
