@@ -38,6 +38,14 @@ locally tracked stacks only.
 
 When run without arguments, shows a menu of all locally available
 stacks to choose from.`,
+		Example: `  # Check out a stack by PR number
+  $ gh stack checkout 42
+
+  # Check out a stack by branch name
+  $ gh stack checkout feat/api-routes
+
+  # Show a menu of all locally tracked stacks
+  $ gh stack checkout`,
 		Args: cobra.MaximumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			if len(args) > 0 {
@@ -114,6 +122,8 @@ func runCheckout(cfg *config.Config, opts *checkoutOptions) error {
 
 	cfg.Successf("Switched to %s", targetBranch)
 	cfg.Printf("Stack: %s", s.DisplayChain())
+	cfg.Printf("Run `%s` to see the full stack",
+		cfg.ColorCyan("gh stack view"))
 	return nil
 }
 

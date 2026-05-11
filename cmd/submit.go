@@ -29,6 +29,24 @@ func SubmitCmd(cfg *config.Config) *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "submit",
 		Short: "Create a stack of PRs on GitHub",
+		Long: `Push all branches and create or update a stack of PRs on GitHub.
+
+This command performs several steps:
+  1. Pushes all branches to the remote
+  2. Creates new PRs for branches that don't have one
+  3. Updates base branches for existing PRs
+  4. Creates or updates the stack on GitHub
+
+New PRs are created as drafts by default. Use --open to mark them as ready
+for review.`,
+		Example: `  # Push and create/update PRs (prompts for PR titles)
+  $ gh stack submit
+
+  # Use auto-generated PR titles without prompting
+  $ gh stack submit --auto
+
+  # Mark all PRs as ready for review
+  $ gh stack submit --open`,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			return runSubmit(cfg, opts)
 		},

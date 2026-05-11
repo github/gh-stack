@@ -32,6 +32,14 @@ func AliasCmd(cfg *config.Config) *cobra.Command {
 This installs a small wrapper script into ~/.local/bin/ that forwards all
 arguments to "gh stack". The default alias name is "gs", but you can choose
 any name by passing it as an argument.`,
+		Example: `  # Create the default 'gs' alias
+  $ gh stack alias
+
+  # Create a custom alias
+  $ gh stack alias gst
+
+  # Remove alias
+  $ gh stack alias --remove`,
 		Args: cobra.MaximumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			name := defaultAliasName

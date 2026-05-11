@@ -45,6 +45,14 @@ automatically with the correct base branch chaining.
 If the PRs are not yet in a stack, a new stack is created. If some of
 the PRs are already in a stack, the existing stack is updated to include
 the new PRs (existing PRs are never removed).`,
+		Example: `  # Link branches into a stack (bottom to top)
+  $ gh stack link auth-layer api-routes ui-components
+
+  # Link existing PRs by number
+  $ gh stack link 41 42 43
+
+  # Specify a custom base branch for stack
+  $ gh stack link --base develop auth-layer api-routes`,
 		Args: cobra.MinimumNArgs(2),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			return runLink(cfg, opts, args)

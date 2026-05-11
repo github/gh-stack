@@ -29,6 +29,24 @@ func ViewCmd(cfg *config.Config) *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "view",
 		Short: "View the current stack",
+		Long: `View the current stack as a list showing branches and PR status.
+
+Status icons:
+  ✓  PR merged
+  ◎  PR queued
+  ○  PR open
+  ⚠  Needs rebase
+
+The current branch is highlighted. Use --short for a compact one-line-per-branch
+view, or --json for machine-readable output.`,
+		Example: `  # Show the stack (default interactive view)
+  $ gh stack view
+
+  # Show compact output
+  $ gh stack view --short
+
+  # Output as JSO
+  $ gh stack view --json`,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			return runView(cfg, opts)
 		},

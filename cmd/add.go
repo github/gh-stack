@@ -30,6 +30,14 @@ When -m is omitted but -A or -u is used, your editor opens for the
 commit message. When -m is provided without an explicit branch name,
 the branch name is auto-generated based on the commit message and
 stack prefix.`,
+		Example: `  # Add a new named branch to the stack
+  $ gh stack add my-feature
+
+  # Add a branch and commit staged changes
+  $ gh stack add -Am "Add user authentication"
+
+  # Auto-generate branch name from the commit message
+  $ gh stack add -m "Fix login bug"`,
 		Args: cobra.MaximumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			return runAdd(cfg, opts, args)

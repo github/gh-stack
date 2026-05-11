@@ -13,11 +13,17 @@ func SwitchCmd(cfg *config.Config) *cobra.Command {
 	return &cobra.Command{
 		Use:   "switch",
 		Short: "Interactively switch to another branch in the stack",
-		Long: `Show an interactive picker listing all branches in the current
-stack and switch to the selected one.
+		Long: `Show an interactive picker listing all branches in the current stack
+and switch to the selected one.
 
-Branches are displayed from top (furthest from trunk) to bottom
-(closest to trunk) with their position number.`,
+Branches are displayed from top (furthest from trunk) to bottom (closest to
+trunk) with their position number. Use the arrow keys to navigate and Enter
+to select.
+
+To move one branch up or down without an interactive picker, use
+'gh stack up' or 'gh stack down' instead.`,
+		Example: `  # Open the branch picker for the current stack
+  $ gh stack switch`,
 		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			return runSwitch(cfg)

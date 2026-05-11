@@ -12,7 +12,14 @@ func UpCmd(cfg *config.Config) *cobra.Command {
 	return &cobra.Command{
 		Use:   "up [n]",
 		Short: "Check out a branch further up in the stack (further from the trunk)",
-		Args:  cobra.MaximumNArgs(1),
+		Long: `Check out a branch further up in the stack (further from the trunk).
+Merged branches are automatically skipped.`,
+		Example: `  # Move one branch up
+  $ gh stack up
+
+  # Move three branches up
+  $ gh stack up 3`,
+		Args: cobra.MaximumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			n := 1
 			if len(args) > 0 {
@@ -32,7 +39,14 @@ func DownCmd(cfg *config.Config) *cobra.Command {
 	return &cobra.Command{
 		Use:   "down [n]",
 		Short: "Check out a branch further down in the stack (closer to the trunk)",
-		Args:  cobra.MaximumNArgs(1),
+		Long: `Check out a branch further down in the stack (closer to the trunk).
+Merged branches are automatically skipped.`,
+		Example: `  # Move one branch down
+  $ gh stack down
+
+  # Move two branches down
+  $ gh stack down 2`,
+		Args: cobra.MaximumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			n := 1
 			if len(args) > 0 {
@@ -52,6 +66,10 @@ func TopCmd(cfg *config.Config) *cobra.Command {
 	return &cobra.Command{
 		Use:   "top",
 		Short: "Check out the top branch of the stack (furthest from the trunk)",
+		Long: `Check out the top branch of the stack (furthest from the trunk).
+Merged branches are automatically skipped.`,
+		Example: `  # Jump to the top of the stack
+  $ gh stack top`,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			return runNavigateToEnd(cfg, true)
 		},
@@ -62,6 +80,10 @@ func BottomCmd(cfg *config.Config) *cobra.Command {
 	return &cobra.Command{
 		Use:   "bottom",
 		Short: "Check out the bottom branch of the stack (closest to the trunk)",
+		Long: `Check out the bottom branch of the stack (closest to the trunk).
+Merged branches are automatically skipped.`,
+		Example: `  # Jump to the bottom of the stack
+  $ gh stack bottom`,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			return runNavigateToEnd(cfg, false)
 		},

@@ -34,6 +34,14 @@ Operations available:
 
 All changes are staged in the TUI and applied together when you press Ctrl+S.
 After applying, run 'gh stack submit' to push changes and recreate the stack on GitHub.`,
+		Example: `  # Open the interactive TUI to restructure the stack
+  $ gh stack modify
+
+  # Abort a modify session and restore the stack
+  $ gh stack modify --abort
+
+  # Continue after resolving conflicts from a modify
+  $ gh stack modify --continue`,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			if opts.abort {
 				return runModifyAbort(cfg)
@@ -202,9 +210,9 @@ func runModifyAbort(cfg *config.Config) error {
 		if err := modify.UnwindFromStateFile(cfg, gitDir); err != nil {
 			cfg.Errorf("recovery failed: %s", err)
 			cfg.Printf("The stack may be in an inconsistent state.")
-			cfg.Printf("Try `%s` to fix, or `%s` + `%s` to recreate.", 
-			  cfg.ColorCyan("gh stack rebase"), cfg.ColorCyan("gh stack unstack --local"), 
-			  cfg.ColorCyan("gh stack init --adopt"))
+			cfg.Printf("Try `%s` to fix, or `%s` + `%s` to recreate.",
+				cfg.ColorCyan("gh stack rebase"), cfg.ColorCyan("gh stack unstack --local"),
+				cfg.ColorCyan("gh stack init --adopt"))
 			return ErrSilent
 		}
 		cfg.Successf("Stack restored successfully")

@@ -22,6 +22,16 @@ func PushCmd(cfg *config.Config) *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "push",
 		Short: "Push all branches in the current stack to the remote",
+		Long: `Push all branches in the current stack to the remote.
+
+Uses --force-with-lease and --atomic to ensure safe, all-or-nothing pushes.
+Merged and queued branches are automatically skipped. This command is safe to
+run repeatedly — it will only update branches that have changed.`,
+		Example: `  # Push all stack branches to the default remote
+  $ gh stack push
+
+  # Push to a specific remote
+  $ gh stack push --remote upstream`,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			return runPush(cfg, opts)
 		},
@@ -123,6 +133,8 @@ func runPush(cfg *config.Config, opts *pushOptions) error {
 	if hasBranchWithoutPR {
 		cfg.Printf("To create PRs for this stack, run `%s`",
 			cfg.ColorCyan("gh stack submit"))
+	} else {
+		cfg.Printf("Run `%s` to see your stack of PRs", cfg.ColorCyan("gh stack view"))
 	}
 	return nil
 }

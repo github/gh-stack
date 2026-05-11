@@ -19,6 +19,11 @@ func FeedbackCmd(cfg *config.Config) *cobra.Command {
 		Use:   "feedback [title]",
 		Short: "Submit feedback for gh-stack",
 		Long:  "Opens a GitHub Discussion in the gh-stack repository to submit feedback. Optionally provide a title for the discussion post.",
+		Example: `  # Open the feedback form in your browser
+  $ gh stack feedback
+
+  # Open with a pre-filled title
+  $ gh stack feedback "My feature request"`,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			return runFeedback(cfg, args)
 		},

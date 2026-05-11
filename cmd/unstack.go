@@ -22,7 +22,12 @@ func UnstackCmd(cfg *config.Config) *cobra.Command {
 		Aliases: []string{"delete"},
 		Short:   "Delete a stack locally and on GitHub",
 		Long:    "Remove the current active stack from local tracking and delete it on GitHub. Use --local to only remove local tracking.",
-		Args:    cobra.NoArgs,
+		Example: `  # Delete the stack locally and on GitHub
+  $ gh stack unstack
+
+  # Only remove local tracking (keep the stack on GitHub)
+  $ gh stack unstack --local`,
+		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			return runUnstack(cfg, opts)
 		},

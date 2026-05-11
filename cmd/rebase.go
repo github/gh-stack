@@ -46,6 +46,20 @@ func RebaseCmd(cfg *config.Config) *cobra.Command {
 
 Ensures that each branch in the stack has the tip of the previous
 layer in its commit history, rebasing if necessary.`,
+		Example: `  # Rebase the entire stack
+  $ gh stack rebase
+
+  # Only rebase from trunk to the current branch
+  $ gh stack rebase --downstack
+
+  # Only rebase from current branch to the top
+  $ gh stack rebase --upstack
+
+  # Continue after resolving conflicts
+  $ gh stack rebase --continue
+
+  # Abort and restore all branches
+  $ gh stack rebase --abort`,
 		Args: cobra.MaximumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			if len(args) > 0 {
