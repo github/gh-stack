@@ -137,6 +137,152 @@ func TestSubmit_CreatesPRsAndStack(t *testing.T) {
 	assert.Contains(t, output, "Pushed and synced 2 branches")
 }
 
+func TestSubmit_DefaultDraft(t *testing.T) {
+	s := stack.Stack{
+		Trunk: stack.BranchRef{Branch: "main"},
+		Branches: []stack.BranchRef{
+			{Branch: "b1"},
+		},
+	}
+
+	tmpDir := t.TempDir()
+	writeStackFile(t, tmpDir, s)
+
+	var createdDraft bool
+
+	mock := newSubmitMock(tmpDir, "b1")
+	mock.PushFn = func(string, []string, bool, bool) error { return nil }
+	mock.LogRangeFn = func(base, head string) ([]git.CommitInfo, error) {
+		return []git.CommitInfo{{Subject: "commit for " + head}}, nil
+	}
+	restore := git.SetOps(mock)
+	defer restore()
+
+	cfg, _, _ := config.NewTestConfig()
+	cfg.GitHubClientOverride = &github.MockClient{
+		ListStacksFn: func() ([]github.RemoteStack, error) { return nil, nil },
+		FindPRForBranchFn: func(string) (*github.PullRequest, error) { return nil, nil },
+		CreatePRFn: func(base, head, title, body string, draft bool) (*github.PullRequest, error) {
+			createdDraft = draft
+			return &github.PullRequest{Number: 1, ID: "PR_1", URL: "https://github.com/o/r/pull/1"}, nil
+		},
+		CreateStackFn: func([]int) (int, error) { return 1, nil },
+	}
+
+	cmd := SubmitCmd(cfg)
+	cmd.SetArgs([]string{"--auto"})
+	cmd.SetOut(io.Discard)
+	cmd.SetErr(io.Discard)
+	err := cmd.Execute()
+
+	assert.NoError(t, err)
+	assert.True(t, createdDraft, "PRs should be created as drafts by default")
+}
+
+func TestSubmit_OpenFlag(t *testing.T) {
+	s := stack.Stack{
+		Trunk: stack.BranchRef{Branch: "main"},
+		Branches: []stack.BranchRef{
+			{Branch: "b1"},
+		},
+	}
+
+	tmpDir := t.TempDir()
+	writeStackFile(t, tmpDir, s)
+
+	var createdDraft bool
+
+	mock := newSubmitMock(tmpDir, "b1")
+	mock.PushFn = func(string, []string, bool, bool) error { return nil }
+	mock.LogRangeFn = func(base, head string) ([]git.CommitInfo, error) {
+		return []git.CommitInfo{{Subject: "commit for " + head}}, nil
+	}
+	restore := git.SetOps(mock)
+	defer restore()
+
+	cfg, _, _ := config.NewTestConfig()
+	cfg.GitHubClientOverride = &github.MockClient{
+		ListStacksFn: func() ([]github.RemoteStack, error) { return nil, nil },
+		FindPRForBranchFn: func(string) (*github.PullRequest, error) { return nil, nil },
+		CreatePRFn: func(base, head, title, body string, draft bool) (*github.PullRequest, error) {
+			createdDraft = draft
+			return &github.PullRequest{Number: 1, ID: "PR_1", URL: "https://github.com/o/r/pull/1"}, nil
+		},
+		CreateStackFn: func([]int) (int, error) { return 1, nil },
+	}
+
+	cmd := SubmitCmd(cfg)
+	cmd.SetArgs([]string{"--auto", "--open"})
+	cmd.SetOut(io.Discard)
+	cmd.SetErr(io.Discard)
+	err := cmd.Execute()
+
+	assert.NoError(t, err)
+	assert.False(t, createdDraft, "PRs should not be created as drafts when --open is set")
+}
+
+func TestSubmit_OpenFlag_ConvertsDraftPRs(t *testing.T) {
+	s := stack.Stack{
+		Trunk: stack.BranchRef{Branch: "main"},
+		Branches: []stack.BranchRef{
+			{Branch: "b1", PullRequest: &stack.PullRequestRef{Number: 10, ID: "PR_10"}},
+			{Branch: "b2"},
+		},
+	}
+
+	tmpDir := t.TempDir()
+	writeStackFile(t, tmpDir, s)
+
+	var markedReady []string
+
+	mock := newSubmitMock(tmpDir, "b1")
+	mock.PushFn = func(string, []string, bool, bool) error { return nil }
+	mock.LogRangeFn = func(base, head string) ([]git.CommitInfo, error) {
+		return []git.CommitInfo{{Subject: "commit for " + head}}, nil
+	}
+	restore := git.SetOps(mock)
+	defer restore()
+
+	cfg, _, errR := config.NewTestConfig()
+	cfg.GitHubClientOverride = &github.MockClient{
+		ListStacksFn: func() ([]github.RemoteStack, error) { return nil, nil },
+		FindPRForBranchFn: func(branch string) (*github.PullRequest, error) {
+			switch branch {
+			case "b1":
+				return &github.PullRequest{
+					Number: 10, ID: "PR_10", HeadRefName: "b1", BaseRefName: "main",
+					IsDraft: true, URL: "https://github.com/o/r/pull/10",
+				}, nil
+			}
+			return nil, nil
+		},
+		CreatePRFn: func(base, head, title, body string, draft bool) (*github.PullRequest, error) {
+			return &github.PullRequest{
+				Number: 11, ID: "PR_11", URL: "https://github.com/o/r/pull/11",
+			}, nil
+		},
+		MarkPRReadyForReviewFn: func(prID string) error {
+			markedReady = append(markedReady, prID)
+			return nil
+		},
+		CreateStackFn: func([]int) (int, error) { return 1, nil },
+	}
+
+	cmd := SubmitCmd(cfg)
+	cmd.SetArgs([]string{"--auto", "--open"})
+	cmd.SetOut(io.Discard)
+	cmd.SetErr(io.Discard)
+	err := cmd.Execute()
+
+	cfg.Err.Close()
+	errOut, _ := io.ReadAll(errR)
+	output := string(errOut)
+
+	assert.NoError(t, err)
+	assert.Equal(t, []string{"PR_10"}, markedReady, "existing draft PR should be marked ready")
+	assert.Contains(t, output, "Marked PR")
+}
+
 func TestSubmit_PushFailure(t *testing.T) {
 	s := stack.Stack{
 		Trunk: stack.BranchRef{Branch: "main"},
