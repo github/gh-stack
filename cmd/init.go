@@ -320,7 +320,7 @@ func runInit(cfg *config.Config, opts *initOptions) error {
 			}
 		}
 	} else {
-		syncStackPRs(cfg, latestStack)
+		_ = syncStackPRs(cfg, latestStack)
 	}
 
 	if err := stack.Save(gitDir, sf); err != nil {

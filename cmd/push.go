@@ -78,7 +78,7 @@ func runPush(cfg *config.Config, opts *pushOptions) error {
 		return ErrSilent
 	}
 	// Sync PR state to detect merged/queued PRs before pushing.
-	syncStackPRs(cfg, s)
+	_ = syncStackPRs(cfg, s)
 
 	merged := s.MergedBranches()
 	if len(merged) > 0 {

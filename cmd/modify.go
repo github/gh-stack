@@ -64,7 +64,7 @@ func runModify(cfg *config.Config) error {
 	currentBranch := result.CurrentBranch
 
 	// Load branch data for the TUI
-	viewNodes := stackview.LoadBranchNodes(cfg, s, currentBranch)
+	viewNodes := stackview.LoadBranchNodes(cfg, s, currentBranch, result.PRDetails)
 
 	// Reverse so index 0 = top of stack (matching visual order)
 	reversed := make([]stackview.BranchNode, len(viewNodes))
@@ -283,8 +283,15 @@ func checkModifyPreconditions(cfg *config.Config) (*loadStackResult, error) {
 		return nil, ErrSilent
 	}
 
+	// Show loading indicator while syncing PRs
+	fmt.Fprintf(cfg.Err, "Loading stack...")
+
 	// Sync PR state and check merge queue
-	syncStackPRs(cfg, s)
+	prDetails := syncStackPRs(cfg, s)
+	result.PRDetails = prDetails
+
+	fmt.Fprintf(cfg.Err, "\r\033[2K")
+
 	if err := modify.CheckNoMergeQueuePRs(cfg, s); err != nil {
 		return nil, ErrSilent
 	}

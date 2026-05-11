@@ -48,7 +48,7 @@ func TestLoadBranchNodes_UsesMergeBaseForDivergedBranch(t *testing.T) {
 	// Ensure no real GitHub API calls
 	cfg.GitHubClientOverride = &ghapi.MockClient{}
 
-	nodes := LoadBranchNodes(cfg, s, "feature")
+	nodes := LoadBranchNodes(cfg, s, "feature", nil)
 
 	require.Len(t, nodes, 1)
 	// Diff must be computed from merge-base, not from "main" directly.
@@ -93,7 +93,7 @@ func TestLoadBranchNodes_LinearBranchStillUsesMergeBase(t *testing.T) {
 	defer errW.Close()
 	cfg.GitHubClientOverride = &ghapi.MockClient{}
 
-	nodes := LoadBranchNodes(cfg, s, "other")
+	nodes := LoadBranchNodes(cfg, s, "other", nil)
 
 	require.Len(t, nodes, 1)
 	assert.Equal(t, "main-tip-sha", diffBase)
@@ -134,7 +134,7 @@ func TestLoadBranchNodes_IgnoresStaleMergedPRDetails(t *testing.T) {
 		},
 	}
 
-	nodes := LoadBranchNodes(cfg, s, "other")
+	nodes := LoadBranchNodes(cfg, s, "other", nil)
 
 	require.Len(t, nodes, 1)
 	assert.Nil(t, nodes[0].PR, "stale merged PR should not be adopted")
@@ -179,7 +179,7 @@ func TestLoadBranchNodes_ShowsTrackedMergedPRDetails(t *testing.T) {
 		},
 	}
 
-	nodes := LoadBranchNodes(cfg, s, "other")
+	nodes := LoadBranchNodes(cfg, s, "other", nil)
 
 	require.Len(t, nodes, 1)
 	require.NotNil(t, nodes[0].PR, "tracked merged PR should be shown")
@@ -217,7 +217,7 @@ func TestLoadBranchNodes_ShowsOpenPRDetails(t *testing.T) {
 		},
 	}
 
-	nodes := LoadBranchNodes(cfg, s, "other")
+	nodes := LoadBranchNodes(cfg, s, "other", nil)
 
 	require.Len(t, nodes, 1)
 	require.NotNil(t, nodes[0].PR, "OPEN PR should be shown")

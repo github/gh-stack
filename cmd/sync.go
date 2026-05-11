@@ -134,7 +134,7 @@ func runSync(cfg *config.Config, opts *syncOptions) error {
 		cfg.Printf("Rebasing stack ...")
 
 		// Sync PR state to detect merged PRs before rebasing.
-		syncStackPRs(cfg, s)
+		_ = syncStackPRs(cfg, s)
 
 		// Save original refs so we can restore on conflict.
 		// Merged branches that no longer exist locally have no ref to
@@ -311,7 +311,7 @@ func runSync(cfg *config.Config, opts *syncOptions) error {
 	// --- Step 5: Sync PR state ---
 	cfg.Printf("")
 	cfg.Printf("Syncing PRs ...")
-	syncStackPRs(cfg, s)
+	_ = syncStackPRs(cfg, s)
 
 	// Report PR status for each branch
 	for _, b := range s.Branches {

@@ -108,7 +108,7 @@ func runSubmit(cfg *config.Config, opts *submitOptions) error {
 	}
 
 	// Sync PR state to detect merged/queued PRs before pushing.
-	syncStackPRs(cfg, s)
+	_ = syncStackPRs(cfg, s)
 
 	// Resolve remote for pushing
 	remote, err := pickRemote(cfg, currentBranch, opts.remote)
@@ -189,7 +189,7 @@ func runSubmit(cfg *config.Config, opts *submitOptions) error {
 
 	// Update base commit hashes and sync PR state
 	updateBaseSHAs(s)
-	syncStackPRs(cfg, s)
+	_ = syncStackPRs(cfg, s)
 
 	if err := stack.Save(gitDir, sf); err != nil {
 		return handleSaveError(cfg, err)
