@@ -128,7 +128,6 @@ func TestLoadBranchNodes_IgnoresStaleMergedPRDetails(t *testing.T) {
 		FindPRDetailsForBranchFn: func(branch string) (*ghapi.PRDetails, error) {
 			return &ghapi.PRDetails{
 				Number: 20,
-				Title:  "Old merged PR",
 				State:  "MERGED",
 				Merged: true,
 			}, nil
@@ -174,7 +173,6 @@ func TestLoadBranchNodes_ShowsTrackedMergedPRDetails(t *testing.T) {
 		FindPRDetailsForBranchFn: func(branch string) (*ghapi.PRDetails, error) {
 			return &ghapi.PRDetails{
 				Number: 20,
-				Title:  "Legitimately merged PR",
 				State:  "MERGED",
 				Merged: true,
 			}, nil
@@ -214,7 +212,6 @@ func TestLoadBranchNodes_ShowsOpenPRDetails(t *testing.T) {
 		FindPRDetailsForBranchFn: func(branch string) (*ghapi.PRDetails, error) {
 			return &ghapi.PRDetails{
 				Number: 50,
-				Title:  "Active PR",
 				State:  "OPEN",
 			}, nil
 		},

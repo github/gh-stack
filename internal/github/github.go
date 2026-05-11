@@ -20,7 +20,6 @@ type MergeQueueEntry struct {
 type PullRequest struct {
 	ID              string           `graphql:"id"`
 	Number          int              `graphql:"number"`
-	Title           string           `graphql:"title"`
 	State           string           `graphql:"state"`
 	URL             string           `graphql:"url"`
 	HeadRefName     string           `graphql:"headRefName"`
@@ -85,7 +84,14 @@ func (c *Client) FindPRForBranch(branch string) (*PullRequest, error) {
 	var query struct {
 		Repository struct {
 			PullRequests struct {
-				Nodes []PullRequest
+				Nodes []struct {
+					ID              string           `graphql:"id"`
+					Number          int              `graphql:"number"`
+					URL             string           `graphql:"url"`
+					BaseRefName     string           `graphql:"baseRefName"`
+					IsDraft         bool             `graphql:"isDraft"`
+					MergeQueueEntry *MergeQueueEntry `graphql:"mergeQueueEntry"`
+				}
 			} `graphql:"pullRequests(headRefName: $head, states: [OPEN], first: 1)"`
 		} `graphql:"repository(owner: $owner, name: $name)"`
 	}
@@ -109,53 +115,9 @@ func (c *Client) FindPRForBranch(branch string) (*PullRequest, error) {
 	return &PullRequest{
 		ID:              n.ID,
 		Number:          n.Number,
-		Title:           n.Title,
-		State:           n.State,
 		URL:             n.URL,
-		HeadRefName:     n.HeadRefName,
 		BaseRefName:     n.BaseRefName,
 		IsDraft:         n.IsDraft,
-		Merged:          n.Merged,
-		MergeQueueEntry: n.MergeQueueEntry,
-	}, nil
-}
-
-// FindAnyPRForBranch finds the most recent PR by head branch name regardless of state.
-func (c *Client) FindAnyPRForBranch(branch string) (*PullRequest, error) {
-	var query struct {
-		Repository struct {
-			PullRequests struct {
-				Nodes []PullRequest
-			} `graphql:"pullRequests(headRefName: $head, last: 1)"`
-		} `graphql:"repository(owner: $owner, name: $name)"`
-	}
-
-	variables := map[string]interface{}{
-		"owner": graphql.String(c.owner),
-		"name":  graphql.String(c.repo),
-		"head":  graphql.String(branch),
-	}
-
-	if err := c.gql.Query("FindAnyPRForBranch", &query, variables); err != nil {
-		return nil, fmt.Errorf("querying PRs: %w", err)
-	}
-
-	nodes := query.Repository.PullRequests.Nodes
-	if len(nodes) == 0 {
-		return nil, nil
-	}
-
-	n := nodes[0]
-	return &PullRequest{
-		ID:              n.ID,
-		Number:          n.Number,
-		Title:           n.Title,
-		State:           n.State,
-		URL:             n.URL,
-		HeadRefName:     n.HeadRefName,
-		BaseRefName:     n.BaseRefName,
-		IsDraft:         n.IsDraft,
-		Merged:          n.Merged,
 		MergeQueueEntry: n.MergeQueueEntry,
 	}, nil
 }
@@ -165,14 +127,9 @@ func (c *Client) CreatePR(base, head, title, body string, draft bool) (*PullRequ
 	var mutation struct {
 		CreatePullRequest struct {
 			PullRequest struct {
-				ID          string
-				Number      int
-				Title       string
-				State       string
-				URL         string `graphql:"url"`
-				HeadRefName string
-				BaseRefName string
-				IsDraft     bool
+				ID     string
+				Number int
+				URL    string `graphql:"url"`
 			}
 		} `graphql:"createPullRequest(input: $input)"`
 	}
@@ -208,14 +165,9 @@ func (c *Client) CreatePR(base, head, title, body string, draft bool) (*PullRequ
 
 	pr := mutation.CreatePullRequest.PullRequest
 	return &PullRequest{
-		ID:          pr.ID,
-		Number:      pr.Number,
-		Title:       pr.Title,
-		State:       pr.State,
-		URL:         pr.URL,
-		HeadRefName: pr.HeadRefName,
-		BaseRefName: pr.BaseRefName,
-		IsDraft:     pr.IsDraft,
+		ID:     pr.ID,
+		Number: pr.Number,
+		URL:    pr.URL,
 	}, nil
 }
 
@@ -282,14 +234,12 @@ func (c *Client) repositoryID() (string, error) {
 
 // PRDetails holds enriched pull request data for display in the TUI.
 type PRDetails struct {
-	Number        int
-	Title         string
-	State         string // OPEN, CLOSED, MERGED
-	URL           string
-	IsDraft       bool
-	Merged        bool
-	IsQueued      bool
-	CommentsCount int
+	Number   int
+	State    string // OPEN, CLOSED, MERGED
+	URL      string
+	IsDraft  bool
+	Merged   bool
+	IsQueued bool
 }
 
 // FindPRDetailsForBranch fetches enriched PR data for display purposes.
@@ -299,19 +249,12 @@ func (c *Client) FindPRDetailsForBranch(branch string) (*PRDetails, error) {
 		Repository struct {
 			PullRequests struct {
 				Nodes []struct {
-					ID              string           `graphql:"id"`
 					Number          int              `graphql:"number"`
-					Title           string           `graphql:"title"`
 					State           string           `graphql:"state"`
 					URL             string           `graphql:"url"`
-					HeadRefName     string           `graphql:"headRefName"`
-					BaseRefName     string           `graphql:"baseRefName"`
 					IsDraft         bool             `graphql:"isDraft"`
 					Merged          bool             `graphql:"merged"`
 					MergeQueueEntry *MergeQueueEntry `graphql:"mergeQueueEntry"`
-					Comments        struct {
-						TotalCount int `graphql:"totalCount"`
-					} `graphql:"comments"`
 				}
 			} `graphql:"pullRequests(headRefName: $head, last: 1)"`
 		} `graphql:"repository(owner: $owner, name: $name)"`
@@ -334,14 +277,12 @@ func (c *Client) FindPRDetailsForBranch(branch string) (*PRDetails, error) {
 
 	n := nodes[0]
 	return &PRDetails{
-		Number:        n.Number,
-		Title:         n.Title,
-		State:         n.State,
-		URL:           n.URL,
-		IsDraft:       n.IsDraft,
-		Merged:        n.Merged,
-		IsQueued:      n.MergeQueueEntry != nil && n.MergeQueueEntry.ID != "",
-		CommentsCount: n.Comments.TotalCount,
+		Number:   n.Number,
+		State:    n.State,
+		URL:      n.URL,
+		IsDraft:  n.IsDraft,
+		Merged:   n.Merged,
+		IsQueued: n.MergeQueueEntry != nil && n.MergeQueueEntry.ID != "",
 	}, nil
 }
 
@@ -357,7 +298,6 @@ func (c *Client) FindPRByNumber(number int) (*PullRequest, error) {
 			PullRequest struct {
 				ID              string           `graphql:"id"`
 				Number          int              `graphql:"number"`
-				Title           string           `graphql:"title"`
 				State           string           `graphql:"state"`
 				URL             string           `graphql:"url"`
 				HeadRefName     string           `graphql:"headRefName"`
@@ -386,7 +326,6 @@ func (c *Client) FindPRByNumber(number int) (*PullRequest, error) {
 	return &PullRequest{
 		ID:              n.ID,
 		Number:          n.Number,
-		Title:           n.Title,
 		State:           n.State,
 		URL:             n.URL,
 		HeadRefName:     n.HeadRefName,
