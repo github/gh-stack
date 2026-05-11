@@ -76,11 +76,11 @@ func runSync(cfg *config.Config, opts *syncOptions) error {
 		return ErrSilent
 	}
 
-	if err := git.Fetch(remote); err != nil {
-		cfg.Warningf("Failed to fetch %s: %v", remote, err)
-	} else {
-		cfg.Successf("Fetched latest changes from %s", remote)
-	}
+	// Fetch trunk + active branches so tracking refs are current for
+	// fast-forward detection (Step 2) and --force-with-lease (Step 4).
+	fetchTargets := append([]string{s.Trunk.Branch}, activeBranchNames(s)...)
+	_ = git.FetchBranches(remote, fetchTargets)
+	cfg.Successf("Fetched latest changes from %s", remote)
 
 	// --- Step 2: Fast-forward trunk ---
 	trunk := s.Trunk.Branch

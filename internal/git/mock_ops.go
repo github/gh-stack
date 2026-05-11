@@ -9,6 +9,7 @@ type MockOps struct {
 	BranchExistsFn        func(string) bool
 	CheckoutBranchFn      func(string) error
 	FetchFn               func(string) error
+	FetchBranchesFn       func(string, []string) error
 	DefaultBranchFn       func() (string, error)
 	CreateBranchFn        func(string, string) error
 	PushFn                func(string, []string, bool, bool) error
@@ -83,6 +84,13 @@ func (m *MockOps) CheckoutBranch(name string) error {
 func (m *MockOps) Fetch(remote string) error {
 	if m.FetchFn != nil {
 		return m.FetchFn(remote)
+	}
+	return nil
+}
+
+func (m *MockOps) FetchBranches(remote string, branches []string) error {
+	if m.FetchBranchesFn != nil {
+		return m.FetchBranchesFn(remote, branches)
 	}
 	return nil
 }

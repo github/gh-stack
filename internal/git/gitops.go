@@ -21,6 +21,7 @@ type Ops interface {
 	BranchExists(name string) bool
 	CheckoutBranch(name string) error
 	Fetch(remote string) error
+	FetchBranches(remote string, branches []string) error
 	DefaultBranch() (string, error)
 	CreateBranch(name, base string) error
 	Push(remote string, branches []string, force, atomic bool) error
@@ -104,6 +105,33 @@ func (d *defaultOps) CheckoutBranch(name string) error {
 
 func (d *defaultOps) Fetch(remote string) error {
 	return client.Fetch(context.Background(), remote, "")
+}
+
+func (d *defaultOps) FetchBranches(remote string, branches []string) error {
+	// Only fetch branches that already have a remote tracking ref.
+	var tracked []string
+	for _, b := range branches {
+		ref := fmt.Sprintf("refs/remotes/%s/%s", remote, b)
+		if err := runSilent("rev-parse", "--verify", "--quiet", ref); err == nil {
+			tracked = append(tracked, b)
+		}
+	}
+	if len(tracked) == 0 {
+		return nil
+	}
+	// Fast path: fetch all tracked branches in a single call.
+	args := []string{"fetch", remote}
+	args = append(args, tracked...)
+	if err := runSilent(args...); err == nil {
+		return nil
+	}
+	// Fallback: a ref may have been deleted on the remote while the
+	// local tracking ref still exists. Fetch branches individually so
+	// one missing ref doesn't block the others.
+	for _, b := range tracked {
+		_ = runSilent("fetch", remote, b)
+	}
+	return nil
 }
 
 func (d *defaultOps) DefaultBranch() (string, error) {
