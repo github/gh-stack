@@ -3,6 +3,8 @@ package cmd
 import (
 	"encoding/json"
 	"io"
+	"os"
+	"path/filepath"
 	"testing"
 	"time"
 
@@ -417,4 +419,120 @@ func indexOf(s, substr string) int {
 		}
 	}
 	return -1
+}
+
+// writeStackFileMulti writes a stack file with multiple stacks.
+func writeStackFileMulti(t *testing.T, dir string, stacks ...stack.Stack) {
+	t.Helper()
+	sf := &stack.StackFile{
+		SchemaVersion: 1,
+		Stacks:        stacks,
+	}
+	data, err := json.MarshalIndent(sf, "", "  ")
+	require.NoError(t, err)
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "gh-stack"), data, 0644))
+}
+
+func TestRunViewJSON_NotInStack(t *testing.T) {
+	tmpDir := t.TempDir()
+	writeStackFile(t, tmpDir, stack.Stack{
+		Trunk:    stack.BranchRef{Branch: "main"},
+		Branches: []stack.BranchRef{{Branch: "feat/01"}},
+	})
+
+	restore := git.SetOps(&git.MockOps{
+		GitDirFn:        func() (string, error) { return tmpDir, nil },
+		CurrentBranchFn: func() (string, error) { return "unrelated-branch", nil },
+	})
+	defer restore()
+
+	cfg, _, errR := config.NewTestConfig()
+	cmd := ViewCmd(cfg)
+	cmd.SetArgs([]string{"--json"})
+	cmd.SetOut(io.Discard)
+	cmd.SetErr(io.Discard)
+	err := cmd.Execute()
+
+	cfg.Err.Close()
+	errOut, _ := io.ReadAll(errR)
+
+	assert.ErrorIs(t, err, ErrNotInStack, "expected exit code 2")
+	assert.Contains(t, string(errOut), "not part of a stack")
+}
+
+func TestRunViewJSON_MultipleStacks(t *testing.T) {
+	tmpDir := t.TempDir()
+	// "main" is the trunk of both stacks → disambiguation.
+	writeStackFileMulti(t, tmpDir,
+		stack.Stack{
+			Trunk:    stack.BranchRef{Branch: "main"},
+			Branches: []stack.BranchRef{{Branch: "feat/01"}},
+		},
+		stack.Stack{
+			Trunk:    stack.BranchRef{Branch: "main"},
+			Branches: []stack.BranchRef{{Branch: "feat/02"}},
+		},
+	)
+
+	restore := git.SetOps(&git.MockOps{
+		GitDirFn:        func() (string, error) { return tmpDir, nil },
+		CurrentBranchFn: func() (string, error) { return "main", nil },
+	})
+	defer restore()
+
+	cfg, _, errR := config.NewTestConfig()
+	cmd := ViewCmd(cfg)
+	cmd.SetArgs([]string{"--json"})
+	cmd.SetOut(io.Discard)
+	cmd.SetErr(io.Discard)
+	err := cmd.Execute()
+
+	cfg.Err.Close()
+	errOut, _ := io.ReadAll(errR)
+
+	assert.ErrorIs(t, err, ErrDisambiguate, "expected exit code 6")
+	assert.Contains(t, string(errOut), "belongs to multiple stacks")
+}
+
+func TestRunViewJSON_SingleStack(t *testing.T) {
+	tmpDir := t.TempDir()
+	writeStackFile(t, tmpDir, stack.Stack{
+		Prefix: "feat",
+		Trunk:  stack.BranchRef{Branch: "main", Head: "aaa"},
+		Branches: []stack.BranchRef{
+			{
+				Branch:      "feat/01",
+				Head:        "bbb",
+				Base:        "aaa",
+				PullRequest: &stack.PullRequestRef{Number: 10, URL: "https://github.com/o/r/pull/10"},
+			},
+		},
+	})
+
+	restore := git.SetOps(&git.MockOps{
+		GitDirFn:        func() (string, error) { return tmpDir, nil },
+		CurrentBranchFn: func() (string, error) { return "feat/01", nil },
+		IsAncestorFn:    func(string, string) (bool, error) { return true, nil },
+	})
+	defer restore()
+
+	cfg, outR, _ := config.NewTestConfig()
+	cmd := ViewCmd(cfg)
+	cmd.SetArgs([]string{"--json"})
+	cmd.SetOut(io.Discard)
+	cmd.SetErr(io.Discard)
+	err := cmd.Execute()
+
+	cfg.Out.Close()
+	raw, _ := io.ReadAll(outR)
+
+	require.NoError(t, err)
+
+	var got viewJSONOutput
+	require.NoError(t, json.Unmarshal(raw, &got), "output should be valid JSON: %s", string(raw))
+	assert.Equal(t, "main", got.Trunk)
+	assert.Equal(t, "feat", got.Prefix)
+	assert.Len(t, got.Branches, 1)
+	assert.Equal(t, "feat/01", got.Branches[0].Name)
+	assert.True(t, got.Branches[0].IsCurrent)
 }

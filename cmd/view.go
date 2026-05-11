@@ -41,6 +41,13 @@ func ViewCmd(cfg *config.Config) *cobra.Command {
 }
 
 func runView(cfg *config.Config, opts *viewOptions) error {
+	// JSON mode must never show interactive prompts so that agents and
+	// scripts always receive machine-readable output.  Resolve the stack
+	// directly (like push/submit) and return typed exit codes.
+	if opts.asJSON {
+		return runViewJSON(cfg)
+	}
+
 	result, err := loadStack(cfg, "")
 	if err != nil {
 		return ErrNotInStack
@@ -52,7 +59,7 @@ func runView(cfg *config.Config, opts *viewOptions) error {
 
 	// Show loading indicator for interactive TUI mode.
 	showingLoader := false
-	if !opts.asJSON && !opts.short && cfg.IsInteractive() {
+	if !opts.short && cfg.IsInteractive() {
 		fmt.Fprintf(cfg.Err, "Loading stack...")
 		showingLoader = true
 	}
@@ -65,15 +72,50 @@ func runView(cfg *config.Config, opts *viewOptions) error {
 		fmt.Fprintf(cfg.Err, "\r\033[2K")
 	}
 
-	if opts.asJSON {
-		return viewJSON(cfg, s, currentBranch)
-	}
-
 	if opts.short {
 		return viewShort(cfg, s, currentBranch)
 	}
 
 	return viewFull(cfg, s, currentBranch, prDetails)
+}
+
+// runViewJSON handles `gh stack view --json` without interactive prompts.
+// It resolves the stack directly and returns typed exit codes when the
+// branch is not part of any stack or belongs to multiple stacks.
+func runViewJSON(cfg *config.Config) error {
+	gitDir, err := git.GitDir()
+	if err != nil {
+		cfg.Errorf("not a git repository")
+		return ErrNotInStack
+	}
+
+	sf, err := stack.Load(gitDir)
+	if err != nil {
+		cfg.Errorf("failed to load stack state: %s", err)
+		return ErrNotInStack
+	}
+
+	currentBranch, err := git.CurrentBranch()
+	if err != nil {
+		cfg.Errorf("failed to get current branch: %s", err)
+		return ErrNotInStack
+	}
+
+	stacks := sf.FindAllStacksForBranch(currentBranch)
+	if len(stacks) == 0 {
+		cfg.Errorf("current branch %q is not part of a stack", currentBranch)
+		return ErrNotInStack
+	}
+	if len(stacks) > 1 {
+		cfg.Errorf("branch %q belongs to multiple stacks; checkout a non-trunk branch first", currentBranch)
+		return ErrDisambiguate
+	}
+	s := stacks[0]
+
+	syncStackPRs(cfg, s)
+	stack.SaveNonBlocking(gitDir, sf)
+
+	return viewJSON(cfg, s, currentBranch)
 }
 
 func viewShort(cfg *config.Config, s *stack.Stack, currentBranch string) error {
