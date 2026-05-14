@@ -166,38 +166,22 @@ func TestInit_InvalidPrefixRejectedBeforeBranchCreation(t *testing.T) {
 	assert.Empty(t, created, "no branches should be created when prefix is invalid")
 }
 
-func TestInit_AdoptRejectsPrefix(t *testing.T) {
+func TestInit_AdoptFlagShowsDeprecationWarning(t *testing.T) {
 	gitDir := t.TempDir()
 	restore := git.SetOps(&git.MockOps{
 		GitDirFn:        func() (string, error) { return gitDir, nil },
 		DefaultBranchFn: func() (string, error) { return "main", nil },
 		CurrentBranchFn: func() (string, error) { return "main", nil },
+		BranchExistsFn:  func(string) bool { return true },
 	})
 	defer restore()
 
 	cfg, outR, errR := config.NewTestConfig()
-	err := runInit(cfg, &initOptions{adopt: true, branches: []string{"b1"}, prefix: "feat"})
+	err := runInit(cfg, &initOptions{adopt: true, branches: []string{"b1"}})
 	output := collectOutput(cfg, outR, errR)
 
-	assert.ErrorIs(t, err, ErrInvalidArgs)
-	assert.Contains(t, output, "--adopt cannot be combined with --prefix or --numbered")
-}
-
-func TestInit_AdoptRejectsNumbered(t *testing.T) {
-	gitDir := t.TempDir()
-	restore := git.SetOps(&git.MockOps{
-		GitDirFn:        func() (string, error) { return gitDir, nil },
-		DefaultBranchFn: func() (string, error) { return "main", nil },
-		CurrentBranchFn: func() (string, error) { return "main", nil },
-	})
-	defer restore()
-
-	cfg, outR, errR := config.NewTestConfig()
-	err := runInit(cfg, &initOptions{adopt: true, branches: []string{"b1"}, numbered: true})
-	output := collectOutput(cfg, outR, errR)
-
-	assert.ErrorIs(t, err, ErrInvalidArgs)
-	assert.Contains(t, output, "--adopt cannot be combined with --prefix or --numbered")
+	require.NoError(t, err)
+	assert.Contains(t, output, "--adopt flag is deprecated")
 }
 
 func TestInit_RerereAlreadyEnabled(t *testing.T) {
@@ -249,21 +233,29 @@ func TestInit_RefuseIfBranchAlreadyInStack(t *testing.T) {
 	assert.Contains(t, output, "already part of a stack")
 }
 
-func TestInit_AdoptNonexistentBranch(t *testing.T) {
+func TestInit_AdoptNonexistentBranch_CreatesIt(t *testing.T) {
+	// --adopt with missing branch now creates it (no error, just a deprecation warning)
 	gitDir := t.TempDir()
+	var created []string
 	restore := git.SetOps(&git.MockOps{
 		GitDirFn:        func() (string, error) { return gitDir, nil },
 		DefaultBranchFn: func() (string, error) { return "main", nil },
 		CurrentBranchFn: func() (string, error) { return "main", nil },
 		BranchExistsFn:  func(string) bool { return false },
+		CreateBranchFn: func(name, base string) error {
+			created = append(created, name)
+			return nil
+		},
 	})
 	defer restore()
 
 	cfg, outR, errR := config.NewTestConfig()
-	runInit(cfg, &initOptions{branches: []string{"nonexistent"}, adopt: true})
+	err := runInit(cfg, &initOptions{branches: []string{"nonexistent"}, adopt: true})
 	output := collectOutput(cfg, outR, errR)
 
-	assert.Contains(t, output, "does not exist")
+	require.NoError(t, err)
+	assert.Contains(t, output, "--adopt flag is deprecated")
+	assert.Equal(t, []string{"nonexistent"}, created)
 }
 
 func TestInit_MultipleBranches_CreatesAll(t *testing.T) {
@@ -470,25 +462,6 @@ func TestInit_ImplicitAdopt_Mixed(t *testing.T) {
 
 	sf, _ := stack.Load(gitDir)
 	assert.Equal(t, []string{"existing1", "new1", "existing2"}, sf.Stacks[0].BranchNames())
-}
-
-func TestInit_StrictAdopt_MissingBranch(t *testing.T) {
-	// Scenario 13: --adopt with missing branch → error
-	gitDir := t.TempDir()
-	restore := git.SetOps(&git.MockOps{
-		GitDirFn:        func() (string, error) { return gitDir, nil },
-		DefaultBranchFn: func() (string, error) { return "main", nil },
-		CurrentBranchFn: func() (string, error) { return "main", nil },
-		BranchExistsFn:  func(name string) bool { return name == "b1" },
-	})
-	defer restore()
-
-	cfg, outR, errR := config.NewTestConfig()
-	err := runInit(cfg, &initOptions{branches: []string{"b1", "b2-missing"}, adopt: true})
-	output := collectOutput(cfg, outR, errR)
-
-	assert.ErrorIs(t, err, ErrInvalidArgs)
-	assert.Contains(t, output, "does not exist")
 }
 
 func TestInit_PrefixDetection_ArgsCommonPrefix(t *testing.T) {

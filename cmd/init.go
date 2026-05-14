@@ -16,9 +16,9 @@ import (
 type initOptions struct {
 	branches []string
 	base     string
-	adopt    bool
 	prefix   string
 	numbered bool
+	adopt    bool // deprecated, kept for backward compat
 }
 
 func InitCmd(cfg *config.Config) *cobra.Command {
@@ -44,7 +44,7 @@ Use --base to specify a different trunk branch.`,
   # Adopt existing branches into a stack (bottom to top)
   $ gh stack init feat/auth feat/api feat/ui
 
-  # Use auto-numbered branches with a prefix
+  # Create a stack with auto-numbered branches (feat/01, feat/02, etc.)
   $ gh stack init --prefix feat --numbered
 
   # Specify a different trunk branch
@@ -56,9 +56,10 @@ Use --base to specify a different trunk branch.`,
 	}
 
 	cmd.Flags().StringVarP(&opts.base, "base", "b", "", "Trunk branch for stack (defaults to default branch)")
-	cmd.Flags().BoolVarP(&opts.adopt, "adopt", "a", false, "Track existing branches as part of a stack")
 	cmd.Flags().StringVarP(&opts.prefix, "prefix", "p", "", "Branch name prefix for the stack")
 	cmd.Flags().BoolVarP(&opts.numbered, "numbered", "n", false, "Use auto-incrementing numbered branch names (requires --prefix)")
+	cmd.Flags().BoolVarP(&opts.adopt, "adopt", "a", false, "Deprecated: existing branches are now adopted automatically")
+	_ = cmd.Flags().MarkHidden("adopt")
 
 	return cmd
 }
@@ -115,10 +116,11 @@ func runInit(cfg *config.Config, opts *initOptions) error {
 
 	// --- Flag validation ---
 
-	// --adopt takes existing branches as-is; --prefix and --numbered don't apply.
-	if opts.adopt && (opts.prefix != "" || opts.numbered) {
-		cfg.Errorf("--adopt cannot be combined with --prefix or --numbered")
-		return ErrInvalidArgs
+	// --adopt is deprecated; print a notice and continue normally.
+	if opts.adopt {
+		cfg.Warningf("The --adopt flag is deprecated. Existing branches are now adopted automatically.")
+		cfg.Printf("You can simply run: %s",
+			cfg.ColorCyan("gh stack init <branch1> <branch2> ..."))
 	}
 
 	// --numbered requires a prefix (either from flag or interactive input).
@@ -189,7 +191,7 @@ func runInit(cfg *config.Config, opts *initOptions) error {
 	} else {
 		// === INTERACTIVE PATH ===
 		if !cfg.IsInteractive() {
-			cfg.Errorf("interactive input required; provide branch names or use --adopt")
+			cfg.Errorf("interactive input required; provide branch names as arguments")
 			return ErrInvalidArgs
 		}
 
@@ -285,10 +287,6 @@ func resolveArgBranches(cfg *config.Config, opts *initOptions, sf *stack.StackFi
 		}
 		exists := git.BranchExists(b)
 
-		if opts.adopt && !exists {
-			cfg.Errorf("branch %q does not exist", b)
-			return nil, nil, ErrInvalidArgs
-		}
 		if err := sf.ValidateNoDuplicateBranch(b); err != nil {
 			cfg.Errorf("branch %q already exists in a stack", b)
 			return nil, nil, ErrInvalidArgs
