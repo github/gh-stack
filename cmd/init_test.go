@@ -721,6 +721,8 @@ func TestInit_Interactive_OnFeatureBranch_UseCurrent(t *testing.T) {
 
 	require.NoError(t, err)
 	assert.Contains(t, output, "Initializing a stack from main")
+	// Branch already exists → should be treated as adopted
+	assert.Contains(t, output, "Adopted")
 
 	sf, _ := stack.Load(gitDir)
 	require.Len(t, sf.Stacks, 1)
@@ -762,6 +764,36 @@ func TestInit_TwoPassValidation_NoBranchCreatedOnError(t *testing.T) {
 	assert.ErrorIs(t, err, ErrInvalidArgs)
 	assert.Contains(t, output, "already exists in a stack")
 	assert.Empty(t, created, "no branches should be created when later arg fails validation")
+}
+
+func TestInit_TwoPassValidation_InvalidRefName(t *testing.T) {
+	// Verify that an invalid ref name in the args list prevents any branch creation
+	gitDir := t.TempDir()
+	var created []string
+	restore := git.SetOps(&git.MockOps{
+		GitDirFn:        func() (string, error) { return gitDir, nil },
+		DefaultBranchFn: func() (string, error) { return "main", nil },
+		CurrentBranchFn: func() (string, error) { return "main", nil },
+		ValidateRefNameFn: func(name string) error {
+			if name == "invalid..name" {
+				return fmt.Errorf("invalid ref name: %s", name)
+			}
+			return nil
+		},
+		CreateBranchFn: func(name, base string) error {
+			created = append(created, name)
+			return nil
+		},
+	})
+	defer restore()
+
+	cfg, outR, errR := config.NewTestConfig()
+	err := runInit(cfg, &initOptions{branches: []string{"valid-branch", "invalid..name", "another-branch"}})
+	output := collectOutput(cfg, outR, errR)
+
+	assert.ErrorIs(t, err, ErrInvalidArgs)
+	assert.Contains(t, output, "invalid branch name")
+	assert.Empty(t, created, "no branches should be created when an arg has an invalid ref name")
 }
 
 func TestDetectPrefix(t *testing.T) {

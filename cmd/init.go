@@ -180,7 +180,9 @@ func runInit(cfg *config.Config, opts *initOptions) error {
 			cfg.Errorf("branch %q already exists in a stack", branchName)
 			return ErrInvalidArgs
 		}
-		if !git.BranchExists(branchName) {
+		if git.BranchExists(branchName) {
+			adopted[branchName] = true
+		} else {
 			if err := git.CreateBranch(branchName, trunk); err != nil {
 				cfg.Errorf("creating branch %s: %s", branchName, err)
 				return ErrSilent
@@ -195,9 +197,13 @@ func runInit(cfg *config.Config, opts *initOptions) error {
 			return ErrInvalidArgs
 		}
 
-		branches, err = runInteractiveInit(cfg, sf, trunk, currentBranch, opts)
+		var interactiveAdopted bool
+		branches, interactiveAdopted, err = runInteractiveInit(cfg, sf, trunk, currentBranch, opts)
 		if err != nil {
 			return err
+		}
+		if interactiveAdopted {
+			adopted[branches[0]] = true
 		}
 	}
 
@@ -285,6 +291,13 @@ func resolveArgBranches(cfg *config.Config, opts *initOptions, sf *stack.StackFi
 		if opts.prefix != "" {
 			b = opts.prefix + "/" + b
 		}
+
+		// Validate ref name before checking existence or creating
+		if err := git.ValidateRefName(b); err != nil {
+			cfg.Errorf("invalid branch name %q: must be a valid git ref", b)
+			return nil, nil, ErrInvalidArgs
+		}
+
 		exists := git.BranchExists(b)
 
 		if err := sf.ValidateNoDuplicateBranch(b); err != nil {
@@ -318,8 +331,9 @@ func resolveArgBranches(cfg *config.Config, opts *initOptions, sf *stack.StackFi
 
 // runInteractiveInit runs the interactive init flow: prints hint about
 // multi-branch args, offers current branch or new branch, then runs
-// prefix detection.
-func runInteractiveInit(cfg *config.Config, sf *stack.StackFile, trunk, currentBranch string, opts *initOptions) ([]string, error) {
+// prefix detection. Returns the branches and whether the branch was adopted
+// (already existed).
+func runInteractiveInit(cfg *config.Config, sf *stack.StackFile, trunk, currentBranch string, opts *initOptions) ([]string, bool, error) {
 	p := prompter.New(cfg.In, cfg.Out, cfg.Err)
 
 	cfg.Printf("Initializing a stack from %s.", trunk)
@@ -348,24 +362,24 @@ func runInteractiveInit(cfg *config.Config, sf *stack.StackFile, trunk, currentB
 					clearSelectPrompt(cfg, len(options))
 				}
 				printInterrupt(cfg)
-				return nil, ErrSilent
+				return nil, false, ErrSilent
 			}
 			cfg.Errorf("failed to read selection: %s", err)
-			return nil, ErrSilent
+			return nil, false, ErrSilent
 		}
 
 		if selected == 0 {
 			// Use current branch
 			if err := sf.ValidateNoDuplicateBranch(currentBranch); err != nil {
 				cfg.Errorf("branch %q already exists in a stack", currentBranch)
-				return nil, ErrInvalidArgs
+				return nil, false, ErrInvalidArgs
 			}
 			branchName = currentBranch
 		} else {
 			// Create a new branch — fall through to input prompt
 			name, err := promptBranchName(cfg, p, opts.prefix)
 			if err != nil {
-				return nil, err
+				return nil, false, err
 			}
 			branchName = name
 		}
@@ -373,20 +387,23 @@ func runInteractiveInit(cfg *config.Config, sf *stack.StackFile, trunk, currentB
 		// On trunk or detached HEAD — prompt for name directly
 		name, err := promptBranchName(cfg, p, opts.prefix)
 		if err != nil {
-			return nil, err
+			return nil, false, err
 		}
 		branchName = name
 	}
 
-	// Validate and create branch
+	// Validate and create branch (track whether it was adopted)
+	wasAdopted := false
 	if err := sf.ValidateNoDuplicateBranch(branchName); err != nil {
 		cfg.Errorf("branch %q already exists in a stack", branchName)
-		return nil, ErrInvalidArgs
+		return nil, false, ErrInvalidArgs
 	}
-	if !git.BranchExists(branchName) {
+	if git.BranchExists(branchName) {
+		wasAdopted = true
+	} else {
 		if err := git.CreateBranch(branchName, trunk); err != nil {
 			cfg.Errorf("creating branch %s: %s", branchName, err)
-			return nil, ErrSilent
+			return nil, false, ErrSilent
 		}
 	}
 
@@ -401,7 +418,7 @@ func runInteractiveInit(cfg *config.Config, sf *stack.StackFile, trunk, currentB
 			if err != nil {
 				if isInterruptError(err) {
 					printInterrupt(cfg)
-					return nil, ErrSilent
+					return nil, false, ErrSilent
 				}
 				// Not fatal — just skip prefix
 			} else if usePrefix {
@@ -410,7 +427,7 @@ func runInteractiveInit(cfg *config.Config, sf *stack.StackFile, trunk, currentB
 		}
 	}
 
-	return []string{branchName}, nil
+	return []string{branchName}, wasAdopted, nil
 }
 
 // promptBranchName prompts the user for a branch name, applying the
