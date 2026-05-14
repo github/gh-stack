@@ -141,7 +141,8 @@ Small, incidental fixes (e.g., fixing a typo you noticed) can go in the current 
 |------|---------|
 | Create a stack (recommended) | `gh stack init -p feat auth` |
 | Create a stack without prefix | `gh stack init auth` |
-| Adopt existing branches | `gh stack init --adopt branch-a branch-b` |
+| Create a stack of multiple branches | `gh stack init auth api frontend` |
+| Adopt existing branches | `gh stack init existing-branch-a existing-branch-b` |
 | Set custom trunk | `gh stack init --base develop branch-a` |
 | Add a branch to stack (suffix only if prefix set) | `gh stack add api-routes` |
 | Add branch + stage all + commit | `gh stack add -Am "message" api-routes` |
@@ -387,7 +388,7 @@ gh stack unstack
 git branch -m old-branch-1 new-branch-1
 
 # 3. Re-create the stack with the new structure
-gh stack init --base main --adopt new-branch-1 new-branch-2 new-branch-3
+gh stack init --base main new-branch-1 new-branch-2 new-branch-3
 ```
 
 ---
@@ -417,21 +418,20 @@ gh stack init branch-a branch-b branch-c
 # Use a different trunk branch
 gh stack init --base develop branch-a branch-b
 
-# Adopt existing branches into a stack
-gh stack init --adopt branch-a branch-b branch-c
+# Adopt existing branches into a stack (handled automatically if the branches exist)
+gh stack init branch-a branch-b branch-c
 ```
 
 | Flag | Description |
 |------|-------------|
 | `-b, --base <branch>` | Trunk branch (defaults to the repo's default branch) |
-| `-a, --adopt` | Adopt existing branches instead of creating new ones |
 | `-p, --prefix <string>` | Branch name prefix. Subsequent `add` calls only need the suffix (e.g., with `-p feat`, `gh stack add auth` creates `feat/auth`) |
 
 **Behavior:**
 
 - Using `-p` is recommended — it simplifies branch naming for subsequent `add` calls
 - Creates any branches that don't already exist (branching from the trunk branch)
-- In `--adopt` mode: validates all branches exist, rejects if any is already in a stack or has an existing PR
+- Existing branches are adopted automatically; missing branches are created from the trunk
 - Checks out the last branch in the list
 - Enables `git rerere` so conflict resolutions are remembered across rebases. On first run in a repo, this may trigger a confirmation prompt — pre-configure with `git config rerere.enabled true` to avoid it
 
@@ -797,7 +797,7 @@ gh stack unstack [flags]
 ```bash
 # Tear down the stack (locally and on GitHub), then rebuild
 gh stack unstack
-gh stack init --base main --adopt branch-2 branch-1 branch-3 # reordered
+gh stack init --base main branch-2 branch-1 branch-3 # reordered
 
 # Only remove local tracking (keep the stack on GitHub)
 gh stack unstack --local

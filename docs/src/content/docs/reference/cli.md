@@ -27,9 +27,9 @@ Initialize a new stack in the current repository.
 gh stack init [flags] [branches...]
 ```
 
-Creates an entry in `.git/gh-stack` to track stack state. In interactive mode (no arguments), prompts you to name branches and offers to use the current branch as the first layer. You'll also be prompted to set an optional branch prefix. When a prefix is set, branch names you enter are automatically prefixed.
+Initializes a new stack locally. In interactive mode (no arguments), prompts for a branch name and offers to use the current branch as the first layer. If a branch name contains slashes (e.g., `feat/api`), prompts if you would like to use a prefix (e.g., `feat/`) for all branches in the stack.
 
-When explicit branch names are given, creates any that don't already exist (branching from the trunk). The trunk defaults to the repository's default branch unless overridden with `--base`.
+When explicit branch names are given, existing branches are adopted automatically and any missing branches are created. The trunk defaults to the repository's default branch unless overridden with `--base`.
 
 Use `--numbered` with `--prefix` to enable auto-incrementing branch names (`prefix/01`, `prefix/02`, …).
 
@@ -38,7 +38,6 @@ Enables `git rerere` automatically so that conflict resolutions are remembered a
 | Flag | Description |
 |------|-------------|
 | `-b, --base <branch>` | Trunk branch for the stack (defaults to the repository's default branch) |
-| `-a, --adopt` | Adopt existing branches into a stack instead of creating new ones |
 | `-p, --prefix <string>` | Set a branch name prefix for the stack |
 | `-n, --numbered` | Use auto-incrementing numbered branch names (requires `--prefix`) |
 
@@ -48,14 +47,14 @@ Enables `git rerere` automatically so that conflict resolutions are remembered a
 # Interactive — prompts for branch names
 gh stack init
 
-# Non-interactive — specify branches upfront
-gh stack init feature-auth feature-api feature-ui
+# Non-interactive — specify first branch upfront
+gh stack init feature-auth
 
 # Use a different trunk branch
 gh stack init --base develop feature-auth
 
-# Adopt existing branches into a stack
-gh stack init --adopt feature-auth feature-api
+# Adopt or create multiple branches at once
+gh stack init feature-auth feature-api feature-ui
 
 # Set a prefix — prompts for a branch name suffix
 gh stack init -p feat
@@ -235,7 +234,7 @@ You must have a branch from the stack checked out locally. The command targets t
 
 Deletes the stack on GitHub first, if it exists, then removes it from local tracking. If the remote deletion fails, the local state is left untouched so you can retry. Use `--local` to skip the remote deletion and only remove local tracking.
 
-This is useful when you need to restructure a stack — remove a branch, reorder branches, rename branches, or make other large changes. After unstacking, use `gh stack init --adopt` to re-create the stack with the desired structure.
+This is useful when you need to restructure a stack — remove a branch, reorder branches, rename branches, or make other large changes. After unstacking, use `gh stack init` to re-create the stack with the desired structure — existing branches are adopted automatically.
 
 | Flag | Description |
 |------|-------------|

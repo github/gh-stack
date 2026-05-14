@@ -35,17 +35,17 @@ You can also add PRs to an existing stack from the GitHub UI. See [Adding to an 
 
 Use `gh stack modify` to restructure a stack. It opens an interactive terminal UI where you can reorder, drop, fold (combine), and rename branches — then applies all changes at once. See the [Restructuring Stacks](/gh-stack/guides/modify/) guide for a full walkthrough.
 
-Alternatively, you can manually tear down and re-create the stack with `gh stack unstack` and `gh stack init --adopt`:
+Alternatively, you can manually tear down and re-create the stack with `gh stack unstack` and `gh stack init`:
 
 ```sh
 # 1. Remove the stack
 gh stack unstack
 
 # 2. Make structural changes (reorder, rename, delete branches)
-git branch -m old-name new-name
+git branch -m api-roots api-routes
 
 # 3. Re-create the stack with the new structure
-gh stack init --adopt branch-1 branch-2 branch-3
+gh stack init db-migrations api-routes frontend
 ```
 
 ### How do I delete my stack?
@@ -263,9 +263,9 @@ You can also use `--base` to specify a different trunk branch and `--open` to ma
 gh stack link --base develop --open change1 change2 change3
 ```
 
-Alternatively, if you want full local stack tracking (for commands like `rebase`, `sync`, and navigation), you can adopt existing branches to local tracking with `gh stack`:
+Alternatively, if you want full local stack tracking (for commands like `rebase`, `sync`, and navigation), you can adopt existing branches to local tracking with `gh stack init`:
 
 ```bash
-gh stack init --adopt change1 change2 change3
+gh stack init change1 change2 change3
 gh stack submit
 ```

@@ -76,7 +76,9 @@ Initialize a new stack in the current repository.
 gh stack init [flags] [branches...]
 ```
 
-Creates an entry in `.git/gh-stack` to track stack state. In interactive mode (no arguments), prompts you to name branches and offers to use the current branch as the first layer. In interactive mode, you'll also be prompted to set an optional branch prefix (unless adopting existing branches). When a prefix is set, branch names you enter are automatically prefixed. When explicit branch names are given, creates any that don't already exist (branching from the trunk). The trunk defaults to the repository's default branch unless overridden with `--base`.
+Initializes a new stack locally. In interactive mode (no arguments), prompts for a branch name and offers to use the current branch as the first layer. If a branch name contains slashes (e.g., `feat/api`), prompts if you would like to use a prefix (e.g., `feat/`) for all branches in the stack.
+
+When explicit branch names are given, existing branches are adopted automatically and any missing branches are created. The trunk defaults to the repository's default branch unless overridden with `--base`.
 
 Use `--numbered` with `--prefix` to enable auto-incrementing numbered branch names (`prefix/01`, `prefix/02`, …). Without `--numbered`, you'll always be prompted to provide a meaningful branch name.
 
@@ -85,7 +87,6 @@ Enables `git rerere` automatically so that conflict resolutions are remembered a
 | Flag | Description |
 |------|-------------|
 | `-b, --base <branch>` | Trunk branch for the stack (defaults to the repository's default branch) |
-| `-a, --adopt` | Adopt existing branches into a stack instead of creating new ones |
 | `-p, --prefix <string>` | Set a branch name prefix for the stack |
 | `-n, --numbered` | Use auto-incrementing numbered branch names (requires `--prefix`) |
 
@@ -102,7 +103,7 @@ gh stack init feature-auth feature-api feature-ui
 gh stack init --base develop feature-auth
 
 # Adopt existing branches into a stack
-gh stack init --adopt feature-auth feature-api
+gh stack init feature-auth feature-api
 
 # Set a prefix — you'll be prompted for a branch name
 gh stack init -p feat

@@ -137,6 +137,34 @@ This command:
 
 If a conflict is detected during the rebase, all branches are restored to their original state, and you're advised to run `gh stack rebase` to resolve conflicts interactively.
 
+## Existing Branches into a Stack
+
+If you already have a set of branches that form a logical chain, you can organize them into a stack by passing them to `gh stack init`. Existing branches are adopted automatically — no special flags needed.
+
+```sh
+# Adopt three existing branches into a stack (bottom to top)
+gh stack init feat/auth feat/api feat/ui
+```
+
+The order matters: branches are listed from bottom (closest to trunk) to top (furthest from trunk). Any PRs already open for these branches are detected and linked to the stack.
+
+You can also mix existing and new branches in one command:
+
+```sh
+# feat/auth exists, feat/api-v2 will be created
+gh stack init feat/auth feat/api-v2
+```
+
+After organizing branches into a stack, run `gh stack submit` to create a Stack on GitHub and link the PRs together.
+
+```sh
+# View the new stack
+gh stack view
+
+# Create/update PRs and link them as a Stack on GitHub
+gh stack submit
+```
+
 ## Structuring Your Stack
 
 Think of a stack from the reviewer's perspective: the PRs should tell a **cohesive story**. A reviewer reading the PRs in sequence should understand the progression of changes.
