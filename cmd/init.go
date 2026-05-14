@@ -27,10 +27,28 @@ func InitCmd(cfg *config.Config) *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "init [branches...]",
 		Short: "Initialize a new stack",
-		Long: `Initialize a stack object in the local repo.
+		Long: `Initialize a new stack of branches in the current repository.
 
-Unless specified, prompts user to create/select branch for first layer of the stack.
-Trunk defaults to default branch, unless specified otherwise.`,
+You can pass multiple branch names to create a multi-layer stack in one
+command. Existing branches are adopted automatically; missing branches are
+created. By default, the first branch is based on the default branch, and
+each subsequent branch is based on the previous one.
+
+Use --base to specify a different trunk branch.`,
+		Example: `  # Create a stack with a new branch
+  $ gh stack init my-feature
+
+  # Create a multi-layer stack at once
+  $ gh stack init auth-layer api-routes ui-components
+
+  # Adopt existing branches into a stack (bottom to top)
+  $ gh stack init feat/auth feat/api feat/ui
+
+  # Use auto-numbered branches with a prefix
+  $ gh stack init --prefix feat --numbered
+
+  # Specify a different trunk branch
+  $ gh stack init --base develop my-feature`,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			opts.branches = args
 			return runInit(cfg, opts)
@@ -95,7 +113,7 @@ func runInit(cfg *config.Config, opts *initOptions) error {
 		}
 	}
 
-	var branches []string
+	// --- Flag validation ---
 
 	// --adopt takes existing branches as-is; --prefix and --numbered don't apply.
 	if opts.adopt && (opts.prefix != "" || opts.numbered) {
@@ -103,19 +121,43 @@ func runInit(cfg *config.Config, opts *initOptions) error {
 		return ErrInvalidArgs
 	}
 
-	// Validate --numbered requires a prefix (either from flag or interactive input,
-	// but for non-interactive paths we can check early).
+	// --numbered requires a prefix (either from flag or interactive input).
 	if opts.numbered && opts.prefix == "" && !cfg.IsInteractive() {
 		cfg.Errorf("--numbered requires --prefix")
 		return ErrInvalidArgs
 	}
 
-	// Prompt for prefix interactively if not provided via flag and we're
-	// in interactive mode (not adopt, not explicit branches).
-	if opts.prefix == "" && !opts.adopt && len(opts.branches) == 0 && cfg.IsInteractive() {
-		p := prompter.New(cfg.In, cfg.Out, cfg.Err)
-		if opts.numbered {
-			// --numbered requires a prefix; prompt specifically for one
+	// Validate explicit --prefix before branch creation.
+	if opts.prefix != "" {
+		if err := git.ValidateRefName(opts.prefix); err != nil {
+			cfg.Errorf("invalid prefix %q: must be a valid git ref component", opts.prefix)
+			return ErrInvalidArgs
+		}
+	}
+
+	// --- Branch collection ---
+
+	var branches []string
+	adopted := make(map[string]bool) // tracks which branches were adopted (existed already)
+
+	if len(opts.branches) > 0 {
+		// === ARGS PATH ===
+		branches, adopted, err = resolveArgBranches(cfg, opts, sf, trunk)
+		if err != nil {
+			return err
+		}
+
+		// Prefix detection (only when --prefix not explicitly set)
+		if opts.prefix == "" {
+			if detected := detectPrefix(branches); detected != "" {
+				opts.prefix = detected
+			}
+		}
+
+	} else if opts.numbered {
+		// === NUMBERED PATH (unchanged) ===
+		if opts.prefix == "" && cfg.IsInteractive() {
+			p := prompter.New(cfg.In, cfg.Out, cfg.Err)
 			prefixInput, err := p.Input("Enter a branch prefix (required for --numbered)", "")
 			if err != nil {
 				if isInterruptError(err) {
@@ -130,153 +172,35 @@ func runInit(cfg *config.Config, opts *initOptions) error {
 				cfg.Errorf("--numbered requires a prefix")
 				return ErrInvalidArgs
 			}
-		} else {
-			prefixInput, err := p.Input("Set a branch prefix? (leave blank to skip)", "")
-			if err != nil {
-				if isInterruptError(err) {
-					printInterrupt(cfg)
-					return ErrSilent
-				}
-				cfg.Errorf("failed to read prefix: %s", err)
+		}
+		branchName := branch.NextNumberedName(opts.prefix, nil)
+		if err := sf.ValidateNoDuplicateBranch(branchName); err != nil {
+			cfg.Errorf("branch %q already exists in a stack", branchName)
+			return ErrInvalidArgs
+		}
+		if !git.BranchExists(branchName) {
+			if err := git.CreateBranch(branchName, trunk); err != nil {
+				cfg.Errorf("creating branch %s: %s", branchName, err)
 				return ErrSilent
 			}
-			opts.prefix = strings.TrimSpace(prefixInput)
 		}
-	}
+		branches = []string{branchName}
 
-	// Validate prefix, after it has been determined (from flag or prompt),
-	// before any branch creation.
-	if opts.prefix != "" {
-		if err := git.ValidateRefName(opts.prefix); err != nil {
-			cfg.Errorf("invalid prefix %q: must be a valid git ref component", opts.prefix)
-			return ErrInvalidArgs
-		}
-	}
-
-	if opts.adopt {
-		// Adopt mode: validate all specified branches exist
-		if len(opts.branches) == 0 {
-			cfg.Errorf("--adopt requires at least one branch name")
-			return ErrInvalidArgs
-		}
-		for _, b := range opts.branches {
-			if !git.BranchExists(b) {
-				cfg.Errorf("branch %q does not exist", b)
-				return ErrInvalidArgs
-			}
-			if err := sf.ValidateNoDuplicateBranch(b); err != nil {
-				cfg.Errorf("branch %q already exists in a stack", b)
-				return ErrInvalidArgs
-			}
-		}
-		branches = opts.branches
-	} else if len(opts.branches) > 0 {
-		// Explicit branch names provided — apply prefix and create them
-		prefixed := make([]string, 0, len(opts.branches))
-		for _, b := range opts.branches {
-			if opts.prefix != "" {
-				b = opts.prefix + "/" + b
-			}
-			if err := sf.ValidateNoDuplicateBranch(b); err != nil {
-				cfg.Errorf("branch %q already exists in a stack", b)
-				return ErrInvalidArgs
-			}
-			if !git.BranchExists(b) {
-				if err := git.CreateBranch(b, trunk); err != nil {
-					cfg.Errorf("creating branch %s: %s", b, err)
-					return ErrSilent
-				}
-			}
-			prefixed = append(prefixed, b)
-		}
-		branches = prefixed
 	} else {
-		// Interactive mode — prefix was already prompted for above
+		// === INTERACTIVE PATH ===
 		if !cfg.IsInteractive() {
 			cfg.Errorf("interactive input required; provide branch names or use --adopt")
 			return ErrInvalidArgs
 		}
-		p := prompter.New(cfg.In, cfg.Out, cfg.Err)
 
-		if opts.numbered {
-			// Auto-generate numbered branch name
-			branchName := branch.NextNumberedName(opts.prefix, nil)
-			if err := sf.ValidateNoDuplicateBranch(branchName); err != nil {
-				cfg.Errorf("branch %q already exists in a stack", branchName)
-				return ErrInvalidArgs
-			}
-			if !git.BranchExists(branchName) {
-				if err := git.CreateBranch(branchName, trunk); err != nil {
-					cfg.Errorf("creating branch %s: %s", branchName, err)
-					return ErrSilent
-				}
-			}
-			branches = []string{branchName}
-		} else {
-			if currentBranch != "" && currentBranch != trunk {
-				// Already on a non-trunk branch — offer to use it
-				useCurrentBranch, err := p.Confirm(
-					fmt.Sprintf("Would you like to use %s as the first layer of your stack?", currentBranch),
-					true,
-				)
-				if err != nil {
-					if isInterruptError(err) {
-						printInterrupt(cfg)
-						return ErrSilent
-					}
-					cfg.Errorf("failed to confirm branch selection: %s", err)
-					return ErrSilent
-				}
-				if useCurrentBranch {
-					if err := sf.ValidateNoDuplicateBranch(currentBranch); err != nil {
-						cfg.Errorf("branch %q already exists in the stack", currentBranch)
-						return ErrInvalidArgs
-					}
-					branches = []string{currentBranch}
-				}
-			}
-
-			if len(branches) == 0 {
-				prompt := "What branch would you like to use as the first layer of your stack?"
-				if opts.prefix != "" {
-					prompt = fmt.Sprintf("Enter a name for the first branch (will be prefixed with %s/)", opts.prefix)
-				}
-				branchName, err := p.Input(prompt, "")
-				if err != nil {
-					if isInterruptError(err) {
-						printInterrupt(cfg)
-						return ErrSilent
-					}
-					cfg.Errorf("failed to read branch name: %s", err)
-					return ErrSilent
-				}
-				branchName = strings.TrimSpace(branchName)
-
-				if branchName == "" {
-					cfg.Errorf("branch name cannot be empty")
-					return ErrInvalidArgs
-				}
-
-				if opts.prefix != "" {
-					branchName = opts.prefix + "/" + branchName
-				}
-
-				if err := sf.ValidateNoDuplicateBranch(branchName); err != nil {
-					cfg.Errorf("branch %q already exists in a stack", branchName)
-					return ErrInvalidArgs
-				}
-				if !git.BranchExists(branchName) {
-					if err := git.CreateBranch(branchName, trunk); err != nil {
-						cfg.Errorf("creating branch %s: %s", branchName, err)
-						return ErrSilent
-					}
-				}
-				branches = []string{branchName}
-			}
+		branches, err = runInteractiveInit(cfg, sf, trunk, currentBranch, opts)
+		if err != nil {
+			return err
 		}
 	}
 
-	// Build stack
+	// --- Build stack ---
+
 	trunkSHA, _ := git.RevParse(trunk)
 	branchRefs := make([]stack.BranchRef, len(branches))
 	for i, b := range branches {
@@ -300,55 +224,284 @@ func runInit(cfg *config.Config, opts *initOptions) error {
 
 	sf.AddStack(newStack)
 
-	// Discover existing PRs for the new stack's branches.
-	// For adopt, only record open/draft PRs (ignore closed/merged).
-	// For non-adopt, use the standard sync which also detects merges.
+	// --- PR detection ---
+	// Use FindPRForBranch for all branches. For adopted branches this
+	// finds existing PRs; for created branches it harmlessly returns nil.
 	latestStack := &sf.Stacks[len(sf.Stacks)-1]
-	if opts.adopt {
-		if client, clientErr := cfg.GitHubClient(); clientErr == nil {
-			for i := range latestStack.Branches {
-				b := &latestStack.Branches[i]
-				pr, err := client.FindPRForBranch(b.Branch)
-				if err != nil || pr == nil {
-					continue
-				}
-				b.PullRequest = &stack.PullRequestRef{
-					Number: pr.Number,
-					ID:     pr.ID,
-					URL:    pr.URL,
-				}
+	prCount := 0
+	if client, clientErr := cfg.GitHubClient(); clientErr == nil {
+		for i := range latestStack.Branches {
+			b := &latestStack.Branches[i]
+			pr, err := client.FindPRForBranch(b.Branch)
+			if err != nil || pr == nil {
+				continue
 			}
+			b.PullRequest = &stack.PullRequestRef{
+				Number: pr.Number,
+				ID:     pr.ID,
+				URL:    pr.URL,
+			}
+			prCount++
 		}
-	} else {
-		_ = syncStackPRs(cfg, latestStack)
 	}
 
 	if err := stack.Save(gitDir, sf); err != nil {
 		return handleSaveError(cfg, err)
 	}
 
-	// Print result
-	if opts.adopt {
-		cfg.Printf("Adopting stack with trunk %s and %d branches", trunk, len(branches))
-		cfg.Printf("Initializing stack: %s", newStack.DisplayChain())
-		cfg.Printf("You can continue working on %s", branches[len(branches)-1])
-	} else {
-		cfg.Successf("Creating stack with trunk %s and branch %s", trunk, branches[len(branches)-1])
-		// Switch to last branch if not already there
-		lastBranch := branches[len(branches)-1]
-		if currentBranch != lastBranch {
-			if err := git.CheckoutBranch(lastBranch); err != nil {
-				cfg.Errorf("switching to branch %s: %s", lastBranch, err)
-				return ErrSilent
-			}
-			cfg.Printf("Switched to branch %s", lastBranch)
-		} else {
-			cfg.Printf("You can continue working on %s", lastBranch)
+	// --- Output: switch to top branch + "What's next" ---
+
+	lastBranch := branches[len(branches)-1]
+	if currentBranch != lastBranch {
+		if err := git.CheckoutBranch(lastBranch); err != nil {
+			cfg.Errorf("switching to branch %s: %s", lastBranch, err)
+			return ErrSilent
 		}
 	}
 
-	cfg.Printf("To add a new layer to your stack, run `%s`", cfg.ColorCyan("gh stack add"))
-	cfg.Printf("When you're ready to push to GitHub and open a stack of PRs, run `%s`", cfg.ColorCyan("gh stack submit"))
+	hasAdopted := len(adopted) > 0
+
+	printWhatsNext(cfg, &newStack, branches, hasAdopted, prCount)
 
 	return nil
+}
+
+// resolveArgBranches handles the args path: classifies each branch as
+// adopted (exists) or created (missing), validates all before creating any.
+func resolveArgBranches(cfg *config.Config, opts *initOptions, sf *stack.StackFile, trunk string) ([]string, map[string]bool, error) {
+	adopted := make(map[string]bool)
+
+	// Phase 1: resolve final names, classify, validate
+	type branchInfo struct {
+		name   string
+		exists bool
+	}
+	resolved := make([]branchInfo, 0, len(opts.branches))
+
+	for _, b := range opts.branches {
+		// Apply explicit --prefix (not detected prefix)
+		if opts.prefix != "" {
+			b = opts.prefix + "/" + b
+		}
+		exists := git.BranchExists(b)
+
+		if opts.adopt && !exists {
+			cfg.Errorf("branch %q does not exist", b)
+			return nil, nil, ErrInvalidArgs
+		}
+		if err := sf.ValidateNoDuplicateBranch(b); err != nil {
+			cfg.Errorf("branch %q already exists in a stack", b)
+			return nil, nil, ErrInvalidArgs
+		}
+
+		resolved = append(resolved, branchInfo{name: b, exists: exists})
+	}
+
+	// Phase 2: create missing branches
+	branches := make([]string, 0, len(resolved))
+	for i, bi := range resolved {
+		if bi.exists {
+			adopted[bi.name] = true
+		} else {
+			parent := trunk
+			if i > 0 {
+				parent = resolved[i-1].name
+			}
+			if err := git.CreateBranch(bi.name, parent); err != nil {
+				cfg.Errorf("creating branch %s: %s", bi.name, err)
+				return nil, nil, ErrSilent
+			}
+		}
+		branches = append(branches, bi.name)
+	}
+
+	return branches, adopted, nil
+}
+
+// runInteractiveInit runs the interactive init flow: prints hint about
+// multi-branch args, offers current branch or new branch, then runs
+// prefix detection.
+func runInteractiveInit(cfg *config.Config, sf *stack.StackFile, trunk, currentBranch string, opts *initOptions) ([]string, error) {
+	p := prompter.New(cfg.In, cfg.Out, cfg.Err)
+
+	cfg.Printf("Initializing a stack from %s.", trunk)
+	cfg.Printf("Have multiple branches already? Run: %s",
+		cfg.ColorCyan("gh stack init <branch1> <branch2> ..."))
+	cfg.Printf("")
+
+	var branchName string
+
+	if currentBranch != "" && currentBranch != trunk {
+		// On a non-trunk branch — offer select
+		options := []string{
+			fmt.Sprintf("Use current branch (%s) as the first layer", currentBranch),
+			"Create a new branch",
+		}
+		selectFn := func(prompt, def string, opts []string) (int, error) {
+			if cfg.SelectFn != nil {
+				return cfg.SelectFn(prompt, def, opts)
+			}
+			return p.Select(prompt, def, opts)
+		}
+		selected, err := selectFn("What do you want to start with?", "", options)
+		if err != nil {
+			if isInterruptError(err) {
+				if cfg.SelectFn == nil {
+					clearSelectPrompt(cfg, len(options))
+				}
+				printInterrupt(cfg)
+				return nil, ErrSilent
+			}
+			cfg.Errorf("failed to read selection: %s", err)
+			return nil, ErrSilent
+		}
+
+		if selected == 0 {
+			// Use current branch
+			if err := sf.ValidateNoDuplicateBranch(currentBranch); err != nil {
+				cfg.Errorf("branch %q already exists in a stack", currentBranch)
+				return nil, ErrInvalidArgs
+			}
+			branchName = currentBranch
+		} else {
+			// Create a new branch — fall through to input prompt
+			name, err := promptBranchName(cfg, p, opts.prefix)
+			if err != nil {
+				return nil, err
+			}
+			branchName = name
+		}
+	} else {
+		// On trunk or detached HEAD — prompt for name directly
+		name, err := promptBranchName(cfg, p, opts.prefix)
+		if err != nil {
+			return nil, err
+		}
+		branchName = name
+	}
+
+	// Validate and create branch
+	if err := sf.ValidateNoDuplicateBranch(branchName); err != nil {
+		cfg.Errorf("branch %q already exists in a stack", branchName)
+		return nil, ErrInvalidArgs
+	}
+	if !git.BranchExists(branchName) {
+		if err := git.CreateBranch(branchName, trunk); err != nil {
+			cfg.Errorf("creating branch %s: %s", branchName, err)
+			return nil, ErrSilent
+		}
+	}
+
+	// Prefix detection (interactive path, no --prefix flag)
+	if opts.prefix == "" {
+		if lastSlash := strings.LastIndex(branchName, "/"); lastSlash > 0 {
+			detected := branchName[:lastSlash]
+			usePrefix, err := p.Confirm(
+				fmt.Sprintf("Use %q as a prefix for new branches in this stack?", detected+"/"),
+				true,
+			)
+			if err != nil {
+				if isInterruptError(err) {
+					printInterrupt(cfg)
+					return nil, ErrSilent
+				}
+				// Not fatal — just skip prefix
+			} else if usePrefix {
+				opts.prefix = detected
+			}
+		}
+	}
+
+	return []string{branchName}, nil
+}
+
+// promptBranchName prompts the user for a branch name, applying the
+// explicit --prefix if set.
+func promptBranchName(cfg *config.Config, p *prompter.Prompter, prefix string) (string, error) {
+	prompt := "What's the name of the first branch?"
+	if prefix != "" {
+		prompt = fmt.Sprintf("Enter a name for the first branch (will be prefixed with %s/)", prefix)
+	}
+	branchName, err := p.Input(prompt, "")
+	if err != nil {
+		if isInterruptError(err) {
+			printInterrupt(cfg)
+			return "", ErrSilent
+		}
+		cfg.Errorf("failed to read branch name: %s", err)
+		return "", ErrSilent
+	}
+	branchName = strings.TrimSpace(branchName)
+	if branchName == "" {
+		cfg.Errorf("branch name cannot be empty")
+		return "", ErrInvalidArgs
+	}
+	if prefix != "" {
+		branchName = prefix + "/" + branchName
+	}
+	return branchName, nil
+}
+
+// detectPrefix finds a common prefix across branches by splitting each
+// at its last slash. Returns the prefix (without trailing slash) if all
+// branches share the same one, or "" otherwise.
+func detectPrefix(branches []string) string {
+	if len(branches) == 0 {
+		return ""
+	}
+	var common string
+	for i, b := range branches {
+		lastSlash := strings.LastIndex(b, "/")
+		if lastSlash <= 0 {
+			return "" // no slash or leading slash — no prefix
+		}
+		prefix := b[:lastSlash]
+		if i == 0 {
+			common = prefix
+		} else if prefix != common {
+			return "" // different prefixes
+		}
+	}
+	return common
+}
+
+// printWhatsNext prints the scenario-aware "What's next" block after init.
+func printWhatsNext(cfg *config.Config, s *stack.Stack, branches []string, hasAdopted bool, prCount int) {
+	lastBranch := branches[len(branches)-1]
+
+	// Build the chain: main → branch1 → branch2
+	parts := []string{s.Trunk.Branch}
+	for _, b := range s.Branches {
+		parts = append(parts, b.Branch)
+	}
+	chain := strings.Join(parts, " → ")
+
+	// Success line
+	if hasAdopted {
+		cfg.Successf("Adopted %d %s: %s",
+			len(branches), plural(len(branches), "branch", "branches"), chain)
+	} else {
+		cfg.Successf("Created stack: %s", chain)
+	}
+
+	// Position
+	cfg.Printf("  You're on %s (top of stack).", lastBranch)
+
+	// PR summary (only when adopting and at least one PR found)
+	if hasAdopted && prCount > 0 {
+		cfg.Printf("  Found PRs for %d of %d %s.",
+			prCount, len(branches), plural(len(branches), "branch", "branches"))
+	}
+
+	cfg.Printf("")
+	cfg.Printf("What's next:")
+	if hasAdopted {
+		cfg.Printf("  • see the full stack:                          %s", cfg.ColorCyan("gh stack view"))
+		cfg.Printf("  • move between branches:                       %s", cfg.ColorCyan("gh stack switch"))
+		cfg.Printf("  • link these PRs into a Stack on GitHub:       %s", cfg.ColorCyan("gh stack submit"))
+	} else {
+		cfg.Printf("  • commit your work as usual, then add a layer:  %s", cfg.ColorCyan("gh stack add"))
+		cfg.Printf("  • see your stack any time:                      %s", cfg.ColorCyan("gh stack view"))
+		cfg.Printf("  • when ready to open PRs:                       %s", cfg.ColorCyan("gh stack submit"))
+	}
 }

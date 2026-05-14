@@ -4,47 +4,47 @@ package git
 // Each field is an optional function that, when set, handles the corresponding
 // Ops method call. When nil, a reasonable default is returned.
 type MockOps struct {
-	GitDirFn              func() (string, error)
-	RootDirFn             func() (string, error)
-	CurrentBranchFn       func() (string, error)
-	BranchExistsFn        func(string) bool
-	CheckoutBranchFn      func(string) error
-	FetchFn               func(string) error
-	FetchBranchesFn       func(string, []string) error
-	DefaultBranchFn       func() (string, error)
-	CreateBranchFn        func(string, string) error
-	PushFn                func(string, []string, bool, bool) error
-	ResolveRemoteFn       func(string) (string, error)
-	RebaseFn              func(string) error
-	EnableRerereFn        func() error
-	IsRerereEnabledFn     func() (bool, error)
-	IsRerereDeclinedFn    func() (bool, error)
-	SaveRerereDeclinedFn  func() error
-	RebaseOntoFn          func(string, string, string) error
-	RebaseContinueFn      func() error
-	RebaseAbortFn         func() error
-	IsRebaseInProgressFn  func() bool
-	ConflictedFilesFn     func() ([]string, error)
-	FindConflictMarkersFn func(string) (*ConflictMarkerInfo, error)
-	IsAncestorFn          func(string, string) (bool, error)
-	RevParseFn            func(string) (string, error)
-	RevParseMultiFn       func([]string) ([]string, error)
-	MergeBaseFn           func(string, string) (string, error)
-	LogFn                 func(string, int) ([]CommitInfo, error)
-	LogRangeFn            func(string, string) ([]CommitInfo, error)
-	DiffStatRangeFn       func(string, string) (int, int, error)
-	DiffStatFilesFn       func(string, string) ([]FileDiffStat, error)
-	DeleteBranchFn        func(string, bool) error
-	DeleteRemoteBranchFn  func(string, string) error
-	ResetHardFn           func(string) error
-	SetUpstreamTrackingFn func(string, string) error
-	MergeFFFn             func(string) error
-	UpdateBranchRefFn     func(string, string) error
-	StageAllFn            func() error
-	StageTrackedFn        func() error
-	HasStagedChangesFn    func() bool
-	CommitFn              func(string) (string, error)
-	CommitInteractiveFn   func() (string, error)
+	GitDirFn                func() (string, error)
+	RootDirFn               func() (string, error)
+	CurrentBranchFn         func() (string, error)
+	BranchExistsFn          func(string) bool
+	CheckoutBranchFn        func(string) error
+	FetchFn                 func(string) error
+	FetchBranchesFn         func(string, []string) error
+	DefaultBranchFn         func() (string, error)
+	CreateBranchFn          func(string, string) error
+	PushFn                  func(string, []string, bool, bool) error
+	ResolveRemoteFn         func(string) (string, error)
+	RebaseFn                func(string) error
+	EnableRerereFn          func() error
+	IsRerereEnabledFn       func() (bool, error)
+	IsRerereDeclinedFn      func() (bool, error)
+	SaveRerereDeclinedFn    func() error
+	RebaseOntoFn            func(string, string, string) error
+	RebaseContinueFn        func() error
+	RebaseAbortFn           func() error
+	IsRebaseInProgressFn    func() bool
+	ConflictedFilesFn       func() ([]string, error)
+	FindConflictMarkersFn   func(string) (*ConflictMarkerInfo, error)
+	IsAncestorFn            func(string, string) (bool, error)
+	RevParseFn              func(string) (string, error)
+	RevParseMultiFn         func([]string) ([]string, error)
+	MergeBaseFn             func(string, string) (string, error)
+	LogFn                   func(string, int) ([]CommitInfo, error)
+	LogRangeFn              func(string, string) ([]CommitInfo, error)
+	DiffStatRangeFn         func(string, string) (int, int, error)
+	DiffStatFilesFn         func(string, string) ([]FileDiffStat, error)
+	DeleteBranchFn          func(string, bool) error
+	DeleteRemoteBranchFn    func(string, string) error
+	ResetHardFn             func(string) error
+	SetUpstreamTrackingFn   func(string, string) error
+	MergeFFFn               func(string) error
+	UpdateBranchRefFn       func(string, string) error
+	StageAllFn              func() error
+	StageTrackedFn          func() error
+	HasStagedChangesFn      func() bool
+	CommitFn                func(string) (string, error)
+	CommitInteractiveFn     func() (string, error)
 	ValidateRefNameFn       func(string) error
 	RenameBranchFn          func(string, string) error
 	CherryPickFn            func([]string) error
