@@ -137,6 +137,106 @@ This command:
 
 If a conflict is detected during the rebase, all branches are restored to their original state, and you're advised to run `gh stack rebase` to resolve conflicts interactively.
 
+## Rebasing Your Stack
+
+Stacked PRs rely on rebasing rather than merge commits to keep each branch's diff clean and reviewable. If you're coming from a merge-commit workflow, the key difference is: instead of merging upstream changes into your branch (which creates a merge commit with multiple parents), you replay your commits on top of the latest base. The result is a linear history where each PR shows only its specific changes.
+
+### How rebasing works with stacks
+
+When you run `gh stack rebase`, it performs a **cascading rebase**: each branch in the stack is rebased onto the tip of the branch below it, starting from the trunk. This ensures every branch has the latest changes from all lower layers.
+
+```sh
+# Rebase the entire stack (all branches, trunk to top)
+gh stack rebase
+
+# Only rebase from trunk up to the current branch
+gh stack rebase --downstack
+
+# Only rebase from the current branch up to the top
+gh stack rebase --upstack
+```
+
+After rebasing, push the updated branches:
+
+```sh
+gh stack push
+```
+
+`gh stack push` uses `--force-with-lease` to safely update the rebased branches. This is a safe form of force push — it ensures you don't overwrite changes that someone else pushed since your last fetch. If the remote has unexpected changes, the push is rejected and you can investigate.
+
+### Rebase from the CLI vs. the web UI
+
+You can rebase stack branches from either the CLI or the GitHub web UI, but they behave differently:
+
+| | CLI (`gh stack rebase`) | Web UI ("Rebase Stack" button) |
+|---|---|---|
+| **Runs where** | Locally, using your Git installation | On GitHub's servers |
+| **Commit signing** | Commits are signed with your local Git committer config (GPG/SSH signing, if configured) | Commits retain the original author but the committer is set to whoever clicked the button — commits are **not** signed |
+| **Conflict resolution** | Interactive — you resolve conflicts in your editor, then `gh stack rebase --continue` | Not available if there are conflicts — you must rebase locally |
+
+If commit signing matters for your project (e.g., branch protection rules require signed commits), use the CLI for rebases.
+
+### Resolving conflicts
+
+When a rebase encounters a conflict, `gh stack rebase` stops and tells you which files are conflicted:
+
+```sh
+gh stack rebase
+# ✗ Conflict detected rebasing feat/api onto feat/auth
+#   C api/routes.go (lines 12–18)
+#
+# Resolve conflicts on feat/api, then run: gh stack rebase --continue
+# Or abort this operation with: gh stack rebase --abort
+```
+
+To resolve:
+
+```sh
+# 1. Open the conflicted files and resolve the markers
+#    (<<<<<<< / ======= / >>>>>>>)
+#    Use your editor of choice
+
+# 2. Stage the resolved files
+git add api/routes.go
+
+# 3. Continue the rebase — remaining branches are rebased automatically
+gh stack rebase --continue
+```
+
+If the conflict is too complex or you want to start over:
+
+```sh
+# Abort and restore all branches to their pre-rebase state
+gh stack rebase --abort
+```
+
+### The rebase + force-push cycle
+
+The typical cycle when updating a stack after making changes looks like this:
+
+```sh
+# 1. Make changes on a mid-stack branch
+gh stack checkout feat/auth
+git add .
+git commit -m "Fix token validation"
+
+# 2. Rebase everything above to incorporate the change
+gh stack rebase --upstack
+
+# 3. Push all updated branches (safe force push)
+gh stack push
+```
+
+This is equivalent but distinct from updating your branch using a merge commit. The key difference is that after changing a lower branch, rebase maintains a linear commit history so the unique set of commits on each branch have clean diffs.
+
+`gh stack push` then handles the force push safely via `--force-with-lease --atomic`, ensuring either all branches update or none do.
+
+For a simpler all-in-one flow, `gh stack sync` combines fetch, rebase, and push into a single command — useful when you just need to pull in the latest upstream changes:
+
+```sh
+gh stack sync
+```
+
 ## Existing Branches into a Stack
 
 If you already have a set of branches that form a logical chain, you can organize them into a stack by passing them to `gh stack init`. Existing branches are adopted automatically — no special flags needed.
