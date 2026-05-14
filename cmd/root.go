@@ -107,10 +107,6 @@ locally, then push to GitHub to create your stack of PRs.`,
 	linkCmd.GroupID = "remote"
 	root.AddCommand(linkCmd)
 
-	mergeCmd := MergeCmd(cfg)
-	mergeCmd.GroupID = "remote"
-	root.AddCommand(mergeCmd)
-
 	// Navigation commands
 	switchCmd := SwitchCmd(cfg)
 	switchCmd.GroupID = "nav"
