@@ -223,6 +223,34 @@ gh stack modify --continue
 gh stack modify --abort
 ```
 
+### `gh stack unstack`
+
+Remove a stack from local tracking and delete it on GitHub. Also available as `gh stack delete`.
+
+```sh
+gh stack unstack [flags]
+```
+
+You must have a branch from the stack checked out locally. The command targets the active stack — the one that contains the currently checked out branch.
+
+Deletes the stack on GitHub first, if it exists, then removes it from local tracking. If the remote deletion fails, the local state is left untouched so you can retry. Use `--local` to skip the remote deletion and only remove local tracking.
+
+This is useful when you need to restructure a stack — remove a branch, reorder branches, rename branches, or make other large changes. After unstacking, use `gh stack init --adopt` to re-create the stack with the desired structure.
+
+| Flag | Description |
+|------|-------------|
+| `--local` | Only delete the stack locally (keep it on GitHub) |
+
+**Examples:**
+
+```sh
+# Delete the stack on GitHub and remove local tracking
+gh stack unstack
+
+# Only remove local tracking
+gh stack unstack --local
+```
+
 ---
 
 ## Remote Operations
@@ -345,34 +373,6 @@ gh stack push
 gh stack push --remote upstream
 ```
 
-### `gh stack unstack`
-
-Remove a stack from local tracking and delete it on GitHub. Also available as `gh stack delete`.
-
-```sh
-gh stack unstack [flags]
-```
-
-You must have a branch from the stack checked out locally. The command targets the active stack — the one that contains the currently checked out branch.
-
-Deletes the stack on GitHub first, if it exists, then removes it from local tracking. If the remote deletion fails, the local state is left untouched so you can retry. Use `--local` to skip the remote deletion and only remove local tracking.
-
-This is useful when you need to restructure a stack — remove a branch, reorder branches, rename branches, or make other large changes. After unstacking, use `gh stack init --adopt` to re-create the stack with the desired structure.
-
-| Flag | Description |
-|------|-------------|
-| `--local` | Only delete the stack locally (keep it on GitHub) |
-
-**Examples:**
-
-```sh
-# Delete the stack on GitHub and remove local tracking
-gh stack unstack
-
-# Only remove local tracking
-gh stack unstack --local
-```
-
 ### `gh stack link`
 
 Link PRs into a stack on GitHub without local tracking.
@@ -416,6 +416,30 @@ gh stack link --base develop --open feat-a feat-b feat-c
 Move between branches in the current stack without having to remember branch names. The **bottom** of the stack is the branch closest to the trunk, and the **top** is furthest from it. `up` moves away from trunk; `down` moves toward it.
 
 All navigation commands clamp to the bounds of the stack — moving up from the top or down from the bottom is a no-op with a message.
+
+### `gh stack switch`
+
+Interactively switch to another branch in the stack.
+
+```sh
+gh stack switch
+```
+
+Shows an interactive picker listing all branches in the current stack, ordered from top (furthest from trunk) to bottom (closest to trunk) with their position number. Select a branch to check it out.
+
+Requires an interactive terminal.
+
+**Examples:**
+
+```sh
+gh stack switch
+#    → Select a branch in the stack to switch to
+#      5. frontend
+#      4. api-endpoints
+#      3. auth-layer
+#      2. db-schema
+#      1. config-setup
+```
 
 ### `gh stack up`
 
@@ -470,30 +494,6 @@ gh stack bottom
 ```
 
 Checks out the branch closest to the trunk.
-
-### `gh stack switch`
-
-Interactively switch to another branch in the stack.
-
-```sh
-gh stack switch
-```
-
-Shows an interactive picker listing all branches in the current stack, ordered from top (furthest from trunk) to bottom (closest to trunk) with their position number. Select a branch to check it out.
-
-Requires an interactive terminal.
-
-**Examples:**
-
-```sh
-gh stack switch
-#    → Select a branch in the stack to switch to
-#      5. frontend
-#      4. api-endpoints
-#      3. auth-layer
-#      2. db-schema
-#      1. config-setup
-```
 
 ---
 
