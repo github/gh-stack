@@ -45,7 +45,7 @@ view, or --json for machine-readable output.`,
   # Show compact output
   $ gh stack view --short
 
-  # Output as JSO
+  # Output as JSON
   $ gh stack view --json`,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			return runView(cfg, opts)
