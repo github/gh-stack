@@ -730,7 +730,7 @@ func TestSyncStack_SkippedForSinglePR(t *testing.T) {
 	assert.False(t, updateCalled, "UpdateStack should not be called with fewer than 2 PRs")
 }
 
-func TestSyncStack_SkipsMergedBranches(t *testing.T) {
+func TestSyncStack_IncludesMergedBranches(t *testing.T) {
 	s := &stack.Stack{
 		Trunk: stack.BranchRef{Branch: "main"},
 		Branches: []stack.BranchRef{
@@ -752,7 +752,7 @@ func TestSyncStack_SkipsMergedBranches(t *testing.T) {
 	syncStack(cfg, mock, s)
 	cfg.Err.Close()
 
-	assert.Equal(t, []int{11, 12}, gotNumbers, "should only include non-merged PRs")
+	assert.Equal(t, []int{10, 11, 12}, gotNumbers, "should include merged PRs to keep API in sync")
 }
 
 func TestSyncStack_SkipsBranchesWithoutPR(t *testing.T) {

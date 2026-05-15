@@ -426,12 +426,11 @@ func clearPendingModifyState(cfg *config.Config, gitDir string) {
 // This is a best-effort operation: failures are reported as warnings but do
 // not cause the submit command to fail (the PRs are already created).
 func syncStack(cfg *config.Config, client github.ClientOps, s *stack.Stack) {
-	// Collect PR numbers in stack order (bottom to top).
+	// Collect PR numbers in stack order (bottom to top), including merged PRs.
+	// The API expects the full list — omitting merged PRs causes a
+	// "Stack contents have changed" rejection.
 	var prNumbers []int
 	for _, b := range s.Branches {
-		if b.IsMerged() {
-			continue
-		}
 		if b.PullRequest != nil {
 			prNumbers = append(prNumbers, b.PullRequest.Number)
 		}
