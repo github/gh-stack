@@ -756,3 +756,21 @@ func TestUndoRename_DoesNotAffectOtherRenames(t *testing.T) {
 	require.NotNil(t, m.nodes[0].PendingAction, "first rename should still be intact")
 	assert.Equal(t, "a-renamed", m.nodes[0].PendingAction.NewName, "first rename new name should be unchanged")
 }
+
+func TestCursorNavigation_SkipsMergedBranches(t *testing.T) {
+	nodes := []ModifyBranchNode{
+		makeNode("a", true, 0),
+		makeMergedNode("merged", 1),
+		makeNode("c", false, 2),
+	}
+	m := New(nodes, testTrunk, "1.0.0")
+	require.Equal(t, 0, m.cursor, "cursor should start on first non-merged")
+
+	// Move down should skip merged and land on c
+	m = sendKey(t, m, runeKey('j'))
+	assert.Equal(t, 2, m.cursor, "down should skip merged branch")
+
+	// Move up should skip merged and land back on a
+	m = sendKey(t, m, runeKey('k'))
+	assert.Equal(t, 0, m.cursor, "up should skip merged branch")
+}

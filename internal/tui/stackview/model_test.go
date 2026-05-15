@@ -341,3 +341,50 @@ func TestScrollClamp_CannotScrollPastContent(t *testing.T) {
 	view := m.View()
 	assert.Contains(t, view, "b1", "content should still be visible after excessive scrolling")
 }
+
+func TestUpdate_CursorSkipsMergedBranches(t *testing.T) {
+	nodes := makeNodes("b1", "b2", "b3")
+	nodes[1].Ref.PullRequest = &stack.PullRequestRef{Number: 2, Merged: true}
+	m := New(nodes, testTrunk, "0.0.1")
+	assert.Equal(t, 0, m.cursor, "cursor should start on first non-merged branch")
+
+	// Down should skip b2 (merged) and land on b3
+	updated, _ := m.Update(keyMsg("down"))
+	m = updated.(Model)
+	assert.Equal(t, 2, m.cursor, "down should skip merged b2 and land on b3")
+
+	// Up should skip b2 (merged) and land back on b1
+	updated, _ = m.Update(keyMsg("up"))
+	m = updated.(Model)
+	assert.Equal(t, 0, m.cursor, "up should skip merged b2 and land on b1")
+}
+
+func TestNew_CursorSkipsMergedBranch(t *testing.T) {
+	nodes := makeNodes("b1", "b2", "b3")
+	nodes[0].Ref.PullRequest = &stack.PullRequestRef{Number: 1, Merged: true}
+	m := New(nodes, testTrunk, "0.0.1")
+	assert.Equal(t, 1, m.cursor, "cursor should skip merged b1 and start on b2")
+}
+
+func TestNew_CursorSkipsMergedCurrentBranch(t *testing.T) {
+	nodes := makeNodes("b1", "b2", "b3")
+	nodes[0].IsCurrent = true
+	nodes[0].Ref.PullRequest = &stack.PullRequestRef{Number: 1, Merged: true}
+	m := New(nodes, testTrunk, "0.0.1")
+	assert.Equal(t, 1, m.cursor, "cursor should not start on merged current branch")
+}
+
+func TestUpdate_EnterOnMergedDoesNothing(t *testing.T) {
+	// All non-merged so we can navigate, but force cursor onto a merged node
+	// by having b1 active and b2 merged and b3 active.
+	nodes := makeNodes("b1", "b2")
+	nodes[0].Ref.PullRequest = &stack.PullRequestRef{Number: 1, Merged: true}
+	m := New(nodes, testTrunk, "0.0.1")
+	// Cursor is on b2 (first non-merged). Manually set to b1 to test guard.
+	m.cursor = 0
+
+	updated, cmd := m.Update(keyMsg("enter"))
+	m = updated.(Model)
+	assert.Equal(t, "", m.CheckoutBranch(), "enter on merged branch should not set checkout")
+	assert.Nil(t, cmd, "enter on merged branch should not quit")
+}

@@ -454,12 +454,16 @@ func (m *Model) currentMode() actionMode {
 	return modeNone
 }
 
-// moveCursor moves the cursor by delta to the next node.
+// moveCursor moves the cursor by delta, skipping merged branches.
 func (m *Model) moveCursor(delta int) {
 	next := m.cursor + delta
-	if next >= 0 && next < len(m.nodes) {
-		m.cursor = next
-		m.ensureVisible()
+	for next >= 0 && next < len(m.nodes) {
+		if !m.nodes[next].Ref.IsMerged() {
+			m.cursor = next
+			m.ensureVisible()
+			return
+		}
+		next += delta
 	}
 }
 
@@ -863,6 +867,11 @@ func (m Model) handleMouseClick(screenX, screenY int) (tea.Model, tea.Cmd) {
 
 	result := shared.HandleClick(screenX, screenY, nodes, m.width, m.height, m.scrollOffset, shared.ShouldShowHeader(m.width, m.height), false)
 	if result.NodeIndex < 0 {
+		return m, nil
+	}
+
+	// Don't allow selecting merged branches.
+	if m.nodes[result.NodeIndex].Ref.IsMerged() {
 		return m, nil
 	}
 

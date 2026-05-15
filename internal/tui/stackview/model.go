@@ -83,12 +83,22 @@ func New(nodes []BranchNode, trunk stack.BranchRef, version string) Model {
 	h := help.New()
 	h.ShowAll = true
 
-	// Cursor starts at the current branch, or top of stack
+	// Cursor starts at the current branch, or first non-merged branch
 	cursor := 0
+	found := false
 	for i, n := range nodes {
-		if n.IsCurrent {
+		if n.IsCurrent && !n.Ref.IsMerged() {
 			cursor = i
+			found = true
 			break
+		}
+	}
+	if !found {
+		for i, n := range nodes {
+			if !n.Ref.IsMerged() {
+				cursor = i
+				break
+			}
 		}
 	}
 
@@ -124,17 +134,11 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, tea.Quit
 
 		case key.Matches(msg, keys.Up):
-			if m.cursor > 0 {
-				m.cursor--
-				m.ensureVisible()
-			}
+			m.moveCursor(-1)
 			return m, nil
 
 		case key.Matches(msg, keys.Down):
-			if m.cursor < len(m.nodes)-1 {
-				m.cursor++
-				m.ensureVisible()
-			}
+			m.moveCursor(1)
 			return m, nil
 
 		case key.Matches(msg, keys.ToggleCommits):
@@ -165,7 +169,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case key.Matches(msg, keys.Checkout):
 			if m.cursor >= 0 && m.cursor < len(m.nodes) {
 				node := m.nodes[m.cursor]
-				if !node.IsCurrent {
+				if !node.IsCurrent && !node.Ref.IsMerged() {
 					m.checkoutBranch = node.Ref.Branch
 					return m, tea.Quit
 				}
@@ -226,6 +230,11 @@ func (m Model) handleMouseClick(screenX, screenY int) (tea.Model, tea.Cmd) {
 		return m, nil
 	}
 
+	// Don't allow selecting merged branches.
+	if m.nodes[result.NodeIndex].Ref.IsMerged() {
+		return m, nil
+	}
+
 	m.cursor = result.NodeIndex
 
 	if result.OpenURL != "" {
@@ -246,6 +255,19 @@ func (m Model) handleMouseClick(screenX, screenY int) (tea.Model, tea.Cmd) {
 // nodeLineCount returns how many rendered lines a node occupies.
 func (m Model) nodeLineCount(idx int) int {
 	return shared.NodeLineCount(toBranchNodeData(m.nodes[idx]))
+}
+
+// moveCursor moves the cursor by delta, skipping merged branches.
+func (m *Model) moveCursor(delta int) {
+	next := m.cursor + delta
+	for next >= 0 && next < len(m.nodes) {
+		if !m.nodes[next].Ref.IsMerged() {
+			m.cursor = next
+			m.ensureVisible()
+			return
+		}
+		next += delta
+	}
 }
 
 // ensureVisible adjusts scroll offset so the cursor is visible.
