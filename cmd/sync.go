@@ -41,7 +41,7 @@ conflicts interactively.
 Use --prune to delete local branches for merged PRs. Stack metadata is
 preserved so that rebase and display logic continue to work correctly.
 If you are on a branch that would be pruned, your checkout is moved to
-the nearest active branch or the trunk.`,
+the first active branch in the stack, or the trunk if all are merged.`,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			return runSync(cfg, opts)
 		},
@@ -417,9 +417,6 @@ func runSync(cfg *config.Config, opts *syncOptions) error {
 				if err := git.DeleteBranch(name, true); err != nil {
 					cfg.Warningf("Failed to delete %s: %v", name, err)
 				} else {
-					// Also remove the remote-tracking ref so that
-					// `git checkout <name>` doesn't recreate the branch.
-					_ = git.DeleteTrackingRef(remote, name)
 					cfg.Successf("Pruned %s (merged)", name)
 					pruned++
 				}
@@ -430,6 +427,13 @@ func runSync(cfg *config.Config, opts *syncOptions) error {
 		} else if opts.prune {
 			cfg.Printf("")
 			cfg.Printf("No merged branches to prune")
+		}
+
+		// Clean up remote-tracking refs for all merged branches, even if
+		// the local branch was already deleted. This prevents
+		// `git checkout <name>` from resurrecting the branch.
+		for _, b := range merged {
+			_ = git.DeleteTrackingRef(remote, b.Branch)
 		}
 	}
 

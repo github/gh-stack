@@ -1035,12 +1035,17 @@ func TestSync_Prune_DeletesMergedBranches(t *testing.T) {
 	writeStackFile(t, tmpDir, s)
 
 	var deletedBranches []string
+	var deletedTrackingRefs []string
 
 	mock := newSyncMock(tmpDir, "b2")
 	mock.BranchExistsFn = func(name string) bool { return true }
 	mock.DeleteBranchFn = func(name string, force bool) error {
 		deletedBranches = append(deletedBranches, name)
 		assert.True(t, force, "should force-delete merged branch")
+		return nil
+	}
+	mock.DeleteTrackingRefFn = func(remote, branch string) error {
+		deletedTrackingRefs = append(deletedTrackingRefs, remote+"/"+branch)
 		return nil
 	}
 
@@ -1060,6 +1065,7 @@ func TestSync_Prune_DeletesMergedBranches(t *testing.T) {
 
 	assert.NoError(t, err)
 	assert.Equal(t, []string{"b1"}, deletedBranches)
+	assert.Equal(t, []string{"origin/b1"}, deletedTrackingRefs, "should delete remote-tracking ref for pruned branch")
 	assert.Contains(t, output, "Pruned b1 (merged)")
 	assert.Contains(t, output, "Pruned 1 merged branch")
 }
@@ -1087,6 +1093,12 @@ func TestSync_Prune_SkipsNonExistentBranches(t *testing.T) {
 		return nil
 	}
 
+	var deletedTrackingRefs []string
+	mock.DeleteTrackingRefFn = func(remote, branch string) error {
+		deletedTrackingRefs = append(deletedTrackingRefs, remote+"/"+branch)
+		return nil
+	}
+
 	restore := git.SetOps(mock)
 	defer restore()
 
@@ -1103,6 +1115,8 @@ func TestSync_Prune_SkipsNonExistentBranches(t *testing.T) {
 
 	assert.NoError(t, err)
 	assert.Contains(t, output, "No merged branches to prune")
+	// Tracking ref should still be cleaned up even though local branch is gone
+	assert.Equal(t, []string{"origin/b1"}, deletedTrackingRefs, "should delete tracking ref even when local branch is already gone")
 }
 
 // TestSync_Prune_SwitchesToLowestUnmergedBranch verifies that when the user is
