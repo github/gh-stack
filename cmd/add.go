@@ -34,10 +34,13 @@ stack prefix.`,
   $ gh stack add my-feature
 
   # Add a branch and commit staged changes
-  $ gh stack add -Am "Add user authentication"
+  $ gh stack add -Am "Add user authentication" my-feature
 
   # Auto-generate branch name from the commit message
-  $ gh stack add -m "Fix login bug"`,
+  $ gh stack add -m "Fix login bug"
+  
+  # Add a branch and open editor to write commit message
+  $ gh stack add -A my-feature`,
 		Args: cobra.MaximumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			return runAdd(cfg, opts, args)
