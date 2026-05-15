@@ -174,7 +174,9 @@ You can rebase stack branches from either the CLI or the GitHub web UI, but they
 | **Commit signing** | Commits are signed with your local Git committer config (GPG/SSH signing, if configured) | Commits retain the original author but the committer is set to whoever clicked the button — commits are **not** signed |
 | **Conflict resolution** | Interactive — you resolve conflicts in your editor, then `gh stack rebase --continue` | Not available if there are conflicts — you must rebase locally |
 
+:::note
 If commit signing matters for your project (e.g., branch protection rules require signed commits), use the CLI for rebases.
+:::
 
 ### Resolving conflicts
 
