@@ -152,6 +152,7 @@ Small, incidental fixes (e.g., fixing a typo you noticed) can go in the current 
 | Create PRs as ready for review | `gh stack submit --auto --open` |
 | Sync (fetch, rebase, push) | `gh stack sync` |
 | Sync with specific remote | `gh stack sync --remote origin` |
+| Sync and prune merged branches | `gh stack sync --prune` |
 | Rebase entire stack | `gh stack rebase` |
 | Rebase upstack only | `gh stack rebase --upstack` |
 | Continue after conflict | `gh stack rebase --continue` |
@@ -305,7 +306,12 @@ gh stack push
 ```bash
 # Single command: fetch, rebase, push, sync PR state
 gh stack sync
+
+# Sync and automatically clean up local branches for merged PRs
+gh stack sync --prune
 ```
+
+> **Note for agents:** In non-interactive environments, the prune prompt is not shown. Use `--prune` explicitly to delete local branches for merged PRs.
 
 ### Squash-merge recovery
 
@@ -615,6 +621,7 @@ gh stack sync [flags]
 | Flag | Description |
 |------|-------------|
 | `--remote <name>` | Remote to fetch from and push to (use if multiple remotes exist) |
+| `--prune` | Delete local branches for merged PRs |
 
 **What it does (in order):**
 
@@ -623,6 +630,7 @@ gh stack sync [flags]
 3. **Cascade rebase** all stack branches onto their updated parents (only if trunk moved). Handles merged PRs automatically. If a conflict is detected, **all branches are restored** to their pre-rebase state and the command exits with code 3 — see [Handle rebase conflicts](#handle-rebase-conflicts-agent-workflow) for the resolution workflow
 4. **Push** all active branches atomically
 5. **Sync PR state** from GitHub and report the status of each PR
+6. **Prune** — in interactive terminals, prompts to delete local branches for merged PRs. Use `--prune` to skip the prompt. In non-interactive environments, pruning only happens when `--prune` is passed explicitly
 
 **Output (stderr):**
 
@@ -632,6 +640,7 @@ gh stack sync [flags]
 - `✓ Pushed N branches`
 - `✓ PR #N (<branch>) — Open` per branch
 - `Merged: #N, #M` for merged branches
+- `✓ Pruned <branch> (merged)` per pruned branch (when pruning)
 - `✓ Stack synced`
 
 ---

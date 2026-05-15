@@ -295,15 +295,20 @@ Performs a safe, non-interactive synchronization of the entire stack:
 3. **Cascade rebase** — rebases all stack branches onto their updated parents (only if trunk moved). If a conflict is detected, all branches are restored to their original state, and you are advised to run `gh stack rebase` to resolve conflicts interactively.
 4. **Push** — pushes all branches (uses `--force-with-lease` if a rebase occurred).
 5. **Sync PRs** — syncs PR state from GitHub and reports the status of each PR.
+6. **Prune** — in interactive terminals, prompts to delete local branches for merged PRs. Use `--prune` to prune automatically.
 
 | Flag | Description |
 |------|-------------|
 | `--remote <name>` | Remote to fetch from and push to (defaults to auto-detected remote) |
+| `--prune` | Delete local branches for merged PRs |
 
 **Examples:**
 
 ```sh
 gh stack sync
+
+# Sync and automatically prune merged branches
+gh stack sync --prune
 ```
 
 ### `gh stack rebase`
