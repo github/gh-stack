@@ -36,6 +36,7 @@ type MockOps struct {
 	DiffStatFilesFn         func(string, string) ([]FileDiffStat, error)
 	DeleteBranchFn          func(string, bool) error
 	DeleteRemoteBranchFn    func(string, string) error
+	DeleteTrackingRefFn     func(string, string) error
 	ResetHardFn             func(string) error
 	SetUpstreamTrackingFn   func(string, string) error
 	MergeFFFn               func(string) error
@@ -283,6 +284,13 @@ func (m *MockOps) DeleteBranch(name string, force bool) error {
 func (m *MockOps) DeleteRemoteBranch(remote, branch string) error {
 	if m.DeleteRemoteBranchFn != nil {
 		return m.DeleteRemoteBranchFn(remote, branch)
+	}
+	return nil
+}
+
+func (m *MockOps) DeleteTrackingRef(remote, branch string) error {
+	if m.DeleteTrackingRefFn != nil {
+		return m.DeleteTrackingRefFn(remote, branch)
 	}
 	return nil
 }

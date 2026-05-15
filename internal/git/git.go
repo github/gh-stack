@@ -312,6 +312,11 @@ func DeleteRemoteBranch(remote, branch string) error {
 	return ops.DeleteRemoteBranch(remote, branch)
 }
 
+// DeleteTrackingRef deletes a local remote-tracking ref (e.g. refs/remotes/origin/branch).
+func DeleteTrackingRef(remote, branch string) error {
+	return ops.DeleteTrackingRef(remote, branch)
+}
+
 // ResetHard resets the current branch to the given ref.
 func ResetHard(ref string) error {
 	return ops.ResetHard(ref)

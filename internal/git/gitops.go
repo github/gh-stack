@@ -48,6 +48,7 @@ type Ops interface {
 	DiffStatFiles(base, head string) ([]FileDiffStat, error)
 	DeleteBranch(name string, force bool) error
 	DeleteRemoteBranch(remote, branch string) error
+	DeleteTrackingRef(remote, branch string) error
 	ResetHard(ref string) error
 	SetUpstreamTracking(branch, remote string) error
 	MergeFF(target string) error
@@ -483,6 +484,10 @@ func (d *defaultOps) DeleteBranch(name string, force bool) error {
 
 func (d *defaultOps) DeleteRemoteBranch(remote, branch string) error {
 	return runSilent("push", remote, "--delete", branch)
+}
+
+func (d *defaultOps) DeleteTrackingRef(remote, branch string) error {
+	return runSilent("branch", "-dr", remote+"/"+branch)
 }
 
 func (d *defaultOps) ResetHard(ref string) error {

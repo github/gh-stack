@@ -417,6 +417,9 @@ func runSync(cfg *config.Config, opts *syncOptions) error {
 				if err := git.DeleteBranch(name, true); err != nil {
 					cfg.Warningf("Failed to delete %s: %v", name, err)
 				} else {
+					// Also remove the remote-tracking ref so that
+					// `git checkout <name>` doesn't recreate the branch.
+					_ = git.DeleteTrackingRef(remote, name)
 					cfg.Successf("Pruned %s (merged)", name)
 					pruned++
 				}
