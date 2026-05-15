@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/cli/go-gh/v2/pkg/prompter"
 	"github.com/github/gh-stack/internal/config"
 	"github.com/github/gh-stack/internal/git"
 	"github.com/github/gh-stack/internal/modify"
@@ -349,7 +350,35 @@ func runSync(cfg *config.Config, opts *syncOptions) error {
 	}
 
 	// --- Step 6: Prune merged branches (optional) ---
-	if opts.prune {
+	doPrune := opts.prune
+	if !doPrune {
+		// --prune was not provided. If interactive, prompt.
+		merged := s.MergedBranches()
+		var prunableCount int
+		for _, b := range merged {
+			if git.BranchExists(b.Branch) {
+				prunableCount++
+			}
+		}
+		if prunableCount > 0 && cfg.IsInteractive() {
+			prompt := fmt.Sprintf("Prune %d merged %s?",
+				prunableCount, plural(prunableCount, "branch", "branches"))
+			confirmed, err := confirmPrune(cfg, prompt, true)
+			if err != nil {
+				if isInterruptError(err) {
+					printInterrupt(cfg)
+					// Save state before exiting so PR sync isn't lost.
+					_ = stack.Save(gitDir, sf)
+					return ErrSilent
+				}
+				// On any other prompt error, skip pruning silently.
+			} else {
+				doPrune = confirmed
+			}
+		}
+	}
+
+	if doPrune {
 		merged := s.MergedBranches()
 		var prunable []string
 		for _, b := range merged {
@@ -395,7 +424,7 @@ func runSync(cfg *config.Config, opts *syncOptions) error {
 			if pruned > 0 {
 				cfg.Successf("Pruned %d merged %s", pruned, plural(pruned, "branch", "branches"))
 			}
-		} else {
+		} else if opts.prune {
 			cfg.Printf("")
 			cfg.Printf("No merged branches to prune")
 		}
@@ -451,4 +480,13 @@ func short(sha string) string {
 		return sha[:7]
 	}
 	return sha
+}
+
+// confirmPrune asks the user to confirm pruning via ConfirmFn or a terminal prompt.
+func confirmPrune(cfg *config.Config, prompt string, defaultValue bool) (bool, error) {
+	if cfg.ConfirmFn != nil {
+		return cfg.ConfirmFn(prompt, defaultValue)
+	}
+	p := prompter.New(cfg.In, cfg.Out, cfg.Err)
+	return p.Confirm(prompt, defaultValue)
 }

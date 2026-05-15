@@ -1286,3 +1286,171 @@ func TestSync_Prune_DeleteFailureContinues(t *testing.T) {
 	assert.Contains(t, output, "Pruned b2 (merged)")
 	assert.Contains(t, output, "Pruned 1 merged branch")
 }
+
+// TestSync_InteractivePrune_PromptsAndPrunes verifies that when running in an
+// interactive terminal without --prune, the user is prompted and merged branches
+// are pruned when they confirm.
+func TestSync_InteractivePrune_PromptsAndPrunes(t *testing.T) {
+	s := stack.Stack{
+		Trunk: stack.BranchRef{Branch: "main"},
+		Branches: []stack.BranchRef{
+			{Branch: "b1", PullRequest: &stack.PullRequestRef{Number: 1, Merged: true}},
+			{Branch: "b2"},
+		},
+	}
+
+	tmpDir := t.TempDir()
+	writeStackFile(t, tmpDir, s)
+
+	var deletedBranches []string
+	var promptShown string
+
+	mock := newSyncMock(tmpDir, "b2")
+	mock.BranchExistsFn = func(name string) bool { return true }
+	mock.DeleteBranchFn = func(name string, force bool) error {
+		deletedBranches = append(deletedBranches, name)
+		return nil
+	}
+
+	restore := git.SetOps(mock)
+	defer restore()
+
+	cfg, _, errR := config.NewTestConfig()
+	cfg.ForceInteractive = true
+	cfg.ConfirmFn = func(prompt string, defaultValue bool) (bool, error) {
+		promptShown = prompt
+		assert.True(t, defaultValue, "default should be yes")
+		return true, nil // user confirms
+	}
+
+	cmd := SyncCmd(cfg)
+	// No --prune flag
+	cmd.SetOut(io.Discard)
+	cmd.SetErr(io.Discard)
+	err := cmd.Execute()
+
+	cfg.Err.Close()
+	errOut, _ := io.ReadAll(errR)
+	output := string(errOut)
+
+	assert.NoError(t, err)
+	assert.Contains(t, promptShown, "Prune 1 merged branch")
+	assert.Equal(t, []string{"b1"}, deletedBranches)
+	assert.Contains(t, output, "Pruned b1 (merged)")
+}
+
+// TestSync_InteractivePrune_UserDeclines verifies that when the user declines
+// the prune prompt, no branches are deleted.
+func TestSync_InteractivePrune_UserDeclines(t *testing.T) {
+	s := stack.Stack{
+		Trunk: stack.BranchRef{Branch: "main"},
+		Branches: []stack.BranchRef{
+			{Branch: "b1", PullRequest: &stack.PullRequestRef{Number: 1, Merged: true}},
+			{Branch: "b2"},
+		},
+	}
+
+	tmpDir := t.TempDir()
+	writeStackFile(t, tmpDir, s)
+
+	mock := newSyncMock(tmpDir, "b2")
+	mock.BranchExistsFn = func(name string) bool { return true }
+	mock.DeleteBranchFn = func(string, bool) error {
+		t.Fatal("DeleteBranch should not be called when user declines")
+		return nil
+	}
+
+	restore := git.SetOps(mock)
+	defer restore()
+
+	cfg, _, _ := config.NewTestConfig()
+	cfg.ForceInteractive = true
+	cfg.ConfirmFn = func(string, bool) (bool, error) {
+		return false, nil // user declines
+	}
+
+	cmd := SyncCmd(cfg)
+	cmd.SetOut(io.Discard)
+	cmd.SetErr(io.Discard)
+	err := cmd.Execute()
+
+	assert.NoError(t, err)
+}
+
+// TestSync_NonInteractive_NoPrunePrompt verifies that when the terminal is not
+// interactive and --prune is not set, no prompt is shown and no branches are deleted.
+func TestSync_NonInteractive_NoPrunePrompt(t *testing.T) {
+	s := stack.Stack{
+		Trunk: stack.BranchRef{Branch: "main"},
+		Branches: []stack.BranchRef{
+			{Branch: "b1", PullRequest: &stack.PullRequestRef{Number: 1, Merged: true}},
+			{Branch: "b2"},
+		},
+	}
+
+	tmpDir := t.TempDir()
+	writeStackFile(t, tmpDir, s)
+
+	mock := newSyncMock(tmpDir, "b2")
+	mock.BranchExistsFn = func(name string) bool { return true }
+	mock.DeleteBranchFn = func(string, bool) error {
+		t.Fatal("DeleteBranch should not be called in non-interactive mode without --prune")
+		return nil
+	}
+
+	restore := git.SetOps(mock)
+	defer restore()
+
+	cfg, _, _ := config.NewTestConfig()
+	// ForceInteractive is false by default — simulates non-interactive/CI/agent
+
+	cmd := SyncCmd(cfg)
+	cmd.SetOut(io.Discard)
+	cmd.SetErr(io.Discard)
+	err := cmd.Execute()
+
+	assert.NoError(t, err)
+}
+
+// TestSync_ExplicitPrune_SkipsPrompt verifies that --prune flag bypasses the
+// interactive prompt and prunes directly.
+func TestSync_ExplicitPrune_SkipsPrompt(t *testing.T) {
+	s := stack.Stack{
+		Trunk: stack.BranchRef{Branch: "main"},
+		Branches: []stack.BranchRef{
+			{Branch: "b1", PullRequest: &stack.PullRequestRef{Number: 1, Merged: true}},
+			{Branch: "b2"},
+		},
+	}
+
+	tmpDir := t.TempDir()
+	writeStackFile(t, tmpDir, s)
+
+	var deletedBranches []string
+
+	mock := newSyncMock(tmpDir, "b2")
+	mock.BranchExistsFn = func(name string) bool { return true }
+	mock.DeleteBranchFn = func(name string, force bool) error {
+		deletedBranches = append(deletedBranches, name)
+		return nil
+	}
+
+	restore := git.SetOps(mock)
+	defer restore()
+
+	cfg, _, _ := config.NewTestConfig()
+	cfg.ForceInteractive = true
+	cfg.ConfirmFn = func(string, bool) (bool, error) {
+		t.Fatal("ConfirmFn should not be called when --prune is explicit")
+		return false, nil
+	}
+
+	cmd := SyncCmd(cfg)
+	cmd.SetArgs([]string{"--prune"})
+	cmd.SetOut(io.Discard)
+	cmd.SetErr(io.Discard)
+	err := cmd.Execute()
+
+	assert.NoError(t, err)
+	assert.Equal(t, []string{"b1"}, deletedBranches)
+}
