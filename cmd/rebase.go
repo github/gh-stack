@@ -127,33 +127,7 @@ func runRebase(cfg *config.Config, opts *rebaseOptions) error {
 	}
 
 	// Fast-forward trunk so the cascade rebase targets the latest upstream.
-	trunk := s.Trunk.Branch
-	localSHA, remoteSHA := "", ""
-	trunkRefs, trunkErr := git.RevParseMulti([]string{trunk, remote + "/" + trunk})
-	if trunkErr == nil {
-		localSHA, remoteSHA = trunkRefs[0], trunkRefs[1]
-	}
-
-	if trunkErr == nil && localSHA != remoteSHA {
-		isAncestor, err := git.IsAncestor(localSHA, remoteSHA)
-		if err != nil {
-			cfg.Warningf("Could not determine fast-forward status for %s: %v", trunk, err)
-		} else if !isAncestor {
-			cfg.Warningf("Trunk %s has diverged from %s — skipping trunk update", trunk, remote)
-		} else if currentBranch == trunk {
-			if err := git.MergeFF(remote + "/" + trunk); err != nil {
-				cfg.Warningf("Failed to fast-forward %s: %v", trunk, err)
-			} else {
-				cfg.Successf("Trunk %s fast-forwarded to %s", trunk, short(remoteSHA))
-			}
-		} else {
-			if err := updateBranchRef(trunk, remoteSHA); err != nil {
-				cfg.Warningf("Failed to fast-forward %s: %v", trunk, err)
-			} else {
-				cfg.Successf("Trunk %s fast-forwarded to %s", trunk, short(remoteSHA))
-			}
-		}
-	}
+	fastForwardTrunk(cfg, s.Trunk.Branch, remote, currentBranch)
 
 	// Fast-forward stack branches that are behind their remote tracking branch.
 	fastForwardBranches(cfg, s, remote, currentBranch)
@@ -192,43 +166,16 @@ func runRebase(cfg *config.Config, opts *rebaseOptions) error {
 	// Sync PR state before rebase so we can detect merged PRs.
 	_ = syncStackPRs(cfg, s)
 
-	branchNames := make([]string, 0, len(s.Branches))
-	for _, b := range s.Branches {
-		// Merged branches that no longer exist locally have no ref to
-		// resolve. They are always skipped during rebase, but we must
-		// also exclude them here to avoid a rev-parse error.
-		if b.IsMerged() && !git.BranchExists(b.Branch) {
-			continue
-		}
-		branchNames = append(branchNames, b.Branch)
-	}
-	originalRefs, err := git.RevParseMap(branchNames)
-	if err != nil {
-		cfg.Errorf("failed to resolve branch SHAs: %s", err)
-		return ErrSilent
-	}
+	originalRefs := resolveOriginalRefs(s)
 
-	// Backfill originalRefs for merged branches that were deleted locally.
-	// The rebase loop uses originalRefs[br.Branch] as ontoOldBase; without
-	// a valid entry the subsequent --onto rebase would receive an empty ref.
-	for _, b := range s.Branches {
-		if b.IsMerged() && !git.BranchExists(b.Branch) {
-			if b.Head != "" {
-				originalRefs[b.Branch] = b.Head
-			}
-		}
-	}
-
-	// Track --onto rebase state for merged branches.
+	// Get --onto state from merged/queued branches below the rebase range.
+	// Ensures that when --upstack excludes skipped branches, we still check
+	// the immediate predecessor and use --onto if needed.
 	needsOnto := false
 	var ontoOldBase string
-
-	// Get --onto state from merged branches below the rebase range.
-	// Ensures that when --upstack excludes merged branches, we still check
-	// the immediate predecessor for a merged PR and use --onto if needed.
 	if startIdx > 0 {
 		prev := s.Branches[startIdx-1]
-		if prev.IsMerged() {
+		if prev.IsSkipped() {
 			if sha, ok := originalRefs[prev.Branch]; ok {
 				needsOnto = true
 				ontoOldBase = sha
@@ -236,127 +183,40 @@ func runRebase(cfg *config.Config, opts *rebaseOptions) error {
 		}
 	}
 
-	for i, br := range branchesToRebase {
-		var base string
-		absIdx := startIdx + i
-		if absIdx == 0 {
-			base = s.Trunk.Branch
-		} else {
-			base = s.Branches[absIdx-1].Branch
+	rebaseResult := cascadeRebase(cascadeRebaseOpts{
+		Cfg:          cfg,
+		Stack:        s,
+		Branches:     branchesToRebase,
+		StartAbsIdx:  startIdx,
+		OriginalRefs: originalRefs,
+		NeedsOnto:    needsOnto,
+		OntoOldBase:  ontoOldBase,
+	})
+
+	if rebaseResult.Conflicted {
+		cfg.Warningf("Rebasing %s onto %s — conflict", rebaseResult.ConflictBranch, rebaseResult.ConflictBase)
+
+		state := &rebaseState{
+			CurrentBranchIndex: rebaseResult.ConflictIdx,
+			ConflictBranch:     rebaseResult.ConflictBranch,
+			RemainingBranches:  rebaseResult.Remaining,
+			OriginalBranch:     currentBranch,
+			OriginalRefs:       originalRefs,
+			UseOnto:            rebaseResult.NeedsOnto,
+			OntoOldBase:        rebaseResult.OntoOldBase,
+		}
+		if err := saveRebaseState(gitDir, state); err != nil {
+			cfg.Warningf("failed to save rebase state: %s", err)
 		}
 
-		// Skip branches whose PRs have already been merged.
-		// Record state so subsequent branches can use --onto rebase.
-		if br.IsMerged() {
-			ontoOldBase = originalRefs[br.Branch]
-			needsOnto = true
-			cfg.Successf("Skipping %s (PR %s merged)", br.Branch, cfg.PRLink(br.PullRequest.Number, br.PullRequest.URL))
-			continue
-		}
+		printConflictDetails(cfg, rebaseResult.ConflictBase)
+		cfg.Printf("")
 
-		if needsOnto {
-			// Find the proper --onto target: the first non-merged ancestor, or trunk.
-			newBase := s.Trunk.Branch
-			for j := absIdx - 1; j >= 0; j-- {
-				b := s.Branches[j]
-				if !b.IsMerged() {
-					newBase = b.Branch
-					break
-				}
-			}
-
-			// If ontoOldBase is stale (not an ancestor of the branch), the
-			// branch was already rebased past it (e.g. by a previous run).
-			// Fall back to merge-base(newBase, branch) which gives the correct
-			// divergence point and avoids replaying already-applied commits.
-			actualOldBase := ontoOldBase
-			if isAnc, err := git.IsAncestor(ontoOldBase, br.Branch); err == nil && !isAnc {
-				if mb, err := git.MergeBase(newBase, br.Branch); err == nil {
-					actualOldBase = mb
-				}
-			}
-
-			if err := git.RebaseOnto(newBase, actualOldBase, br.Branch); err != nil {
-				cfg.Warningf("Rebasing %s onto %s — conflict", br.Branch, newBase)
-
-				remaining := make([]string, 0)
-				for j := i + 1; j < len(branchesToRebase); j++ {
-					remaining = append(remaining, branchesToRebase[j].Branch)
-				}
-
-				state := &rebaseState{
-					CurrentBranchIndex: absIdx,
-					ConflictBranch:     br.Branch,
-					RemainingBranches:  remaining,
-					OriginalBranch:     currentBranch,
-					OriginalRefs:       originalRefs,
-					UseOnto:            true,
-					OntoOldBase:        originalRefs[br.Branch],
-				}
-				if err := saveRebaseState(gitDir, state); err != nil {
-					cfg.Warningf("failed to save rebase state: %s", err)
-				}
-
-				printConflictDetails(cfg, newBase)
-				cfg.Printf("")
-
-				cfg.Printf("Resolve conflicts on %s, then run `%s`",
-					br.Branch, cfg.ColorCyan("gh stack rebase --continue"))
-				cfg.Printf("Or abort this operation with `%s`",
-					cfg.ColorCyan("gh stack rebase --abort"))
-				return ErrConflict
-			}
-
-			cfg.Successf("Rebased %s onto %s (adjusted for merged PR)", br.Branch, newBase)
-			// Keep --onto mode; update old base for the next branch.
-			ontoOldBase = originalRefs[br.Branch]
-		} else {
-			var rebaseErr error
-			if absIdx > 0 {
-				// Use --onto to replay only this branch's unique commits.
-				// Without --onto, git may try to replay commits shared with
-				// the parent, causing duplicate-patch conflicts when the
-				// parent's rebase rewrote those commits.
-				rebaseErr = git.RebaseOnto(base, originalRefs[base], br.Branch)
-			} else {
-				if err := git.CheckoutBranch(br.Branch); err != nil {
-					return fmt.Errorf("checking out %s: %w", br.Branch, err)
-				}
-				// Use regular rebase for the first branch.
-				rebaseErr = git.Rebase(base)
-			}
-
-			if rebaseErr != nil {
-				cfg.Warningf("Rebasing %s onto %s — conflict", br.Branch, base)
-
-				remaining := make([]string, 0)
-				for j := i + 1; j < len(branchesToRebase); j++ {
-					remaining = append(remaining, branchesToRebase[j].Branch)
-				}
-
-				state := &rebaseState{
-					CurrentBranchIndex: absIdx,
-					ConflictBranch:     br.Branch,
-					RemainingBranches:  remaining,
-					OriginalBranch:     currentBranch,
-					OriginalRefs:       originalRefs,
-				}
-				if err := saveRebaseState(gitDir, state); err != nil {
-					cfg.Warningf("failed to save rebase state: %s", err)
-				}
-
-				printConflictDetails(cfg, base)
-				cfg.Printf("")
-
-				cfg.Printf("Resolve conflicts on %s, then run `%s`",
-					br.Branch, cfg.ColorCyan("gh stack rebase --continue"))
-				cfg.Printf("Or abort this operation with `%s`",
-					cfg.ColorCyan("gh stack rebase --abort"))
-				return ErrConflict
-			}
-
-			cfg.Successf("Rebased %s onto %s", br.Branch, base)
-		}
+		cfg.Printf("Resolve conflicts on %s, then run `%s`",
+			rebaseResult.ConflictBranch, cfg.ColorCyan("gh stack rebase --continue"))
+		cfg.Printf("Or abort this operation with `%s`",
+			cfg.ColorCyan("gh stack rebase --abort"))
+		return ErrConflict
 	}
 
 	_ = git.CheckoutBranch(currentBranch)
@@ -431,10 +291,10 @@ func continueRebase(cfg *config.Config, gitDir string) error {
 
 	var baseBranch string
 	if state.UseOnto {
-		// The --onto path targets the first non-merged ancestor, or trunk.
+		// The --onto path targets the first non-skipped ancestor, or trunk.
 		baseBranch = s.Trunk.Branch
 		for j := state.CurrentBranchIndex - 1; j >= 0; j-- {
-			if !s.Branches[j].IsMerged() {
+			if !s.Branches[j].IsSkipped() {
 				baseBranch = s.Branches[j].Branch
 				break
 			}
@@ -446,106 +306,52 @@ func continueRebase(cfg *config.Config, gitDir string) error {
 	}
 	cfg.Successf("Rebased %s onto %s", conflictBranch, baseBranch)
 
-	for _, branchName := range state.RemainingBranches {
-		idx := s.IndexOf(branchName)
-		if idx < 0 {
-			return fmt.Errorf("branch %q from saved rebase state is no longer in the stack — the stack may have been modified since the rebase started; consider aborting with --abort", branchName)
+	// Rebase remaining branches using the shared cascade helper.
+	if len(state.RemainingBranches) > 0 {
+		// Validate all remaining branches still exist in the stack and
+		// build the BranchRef slice with correct absolute indices.
+		remainingRefs := make([]stack.BranchRef, 0, len(state.RemainingBranches))
+		startAbsIdx := -1
+		for _, name := range state.RemainingBranches {
+			idx := s.IndexOf(name)
+			if idx < 0 {
+				return fmt.Errorf("branch %q from saved rebase state is no longer in the stack — the stack may have been modified since the rebase started; consider aborting with --abort", name)
+			}
+			if startAbsIdx < 0 {
+				startAbsIdx = idx
+			}
+			remainingRefs = append(remainingRefs, s.Branches[idx])
 		}
 
-		// Skip branches whose PRs have already been merged.
-		br := s.Branches[idx]
-		if br.IsMerged() {
-			state.OntoOldBase = state.OriginalRefs[branchName]
-			state.UseOnto = true
-			cfg.Successf("Skipping %s (PR %s merged)", branchName, cfg.PRLink(br.PullRequest.Number, br.PullRequest.URL))
-			continue
-		}
+		result := cascadeRebase(cascadeRebaseOpts{
+			Cfg:          cfg,
+			Stack:        s,
+			Branches:     remainingRefs,
+			StartAbsIdx:  startAbsIdx,
+			OriginalRefs: state.OriginalRefs,
+			NeedsOnto:    state.UseOnto,
+			OntoOldBase:  state.OntoOldBase,
+		})
 
-		var base string
-		if idx == 0 {
-			base = s.Trunk.Branch
-		} else {
-			base = s.Branches[idx-1].Branch
-		}
+		if result.Conflicted {
+			cfg.Warningf("Rebasing %s onto %s — conflict", result.ConflictBranch, result.ConflictBase)
 
-		if state.UseOnto {
-			// Find the proper --onto target: first non-merged ancestor, or trunk.
-			newBase := s.Trunk.Branch
-			for j := idx - 1; j >= 0; j-- {
-				b := s.Branches[j]
-				if !b.IsMerged() {
-					newBase = b.Branch
-					break
-				}
+			state.CurrentBranchIndex = result.ConflictIdx
+			state.ConflictBranch = result.ConflictBranch
+			state.RemainingBranches = result.Remaining
+			state.UseOnto = result.NeedsOnto
+			state.OntoOldBase = result.OntoOldBase
+			if err := saveRebaseState(gitDir, state); err != nil {
+				cfg.Warningf("failed to save rebase state: %s", err)
 			}
 
-			if err := git.RebaseOnto(newBase, state.OntoOldBase, branchName); err != nil {
-				remainIdx := -1
-				for ri, rb := range state.RemainingBranches {
-					if rb == branchName {
-						remainIdx = ri
-						break
-					}
-				}
-				state.RemainingBranches = state.RemainingBranches[remainIdx+1:]
-				state.CurrentBranchIndex = idx
-				state.ConflictBranch = branchName
-				state.OntoOldBase = state.OriginalRefs[branchName]
-				if err := saveRebaseState(gitDir, state); err != nil {
-					cfg.Warningf("failed to save rebase state: %s", err)
-				}
-
-				cfg.Warningf("Rebasing %s onto %s — conflict", branchName, newBase)
-				printConflictDetails(cfg, newBase)
-				cfg.Printf("")
-				cfg.Printf("Resolve conflicts on %s, then run `%s`",
-					branchName, cfg.ColorCyan("gh stack rebase --continue"))
-				cfg.Printf("Or abort this operation with `%s`",
-					cfg.ColorCyan("gh stack rebase --abort"))
-				return ErrConflict
-			}
-
-			cfg.Successf("Rebased %s onto %s (adjusted for merged PR)", branchName, newBase)
-			state.OntoOldBase = state.OriginalRefs[branchName]
-		} else {
-			var rebaseErr error
-			if idx > 0 {
-				// Use --onto to replay only this branch's unique commits.
-				rebaseErr = git.RebaseOnto(base, state.OriginalRefs[base], branchName)
-			} else {
-				if err := git.CheckoutBranch(branchName); err != nil {
-					cfg.Errorf("checking out %s: %s", branchName, err)
-					return ErrSilent
-				}
-				rebaseErr = git.Rebase(base)
-			}
-
-			if rebaseErr != nil {
-				remainIdx := -1
-				for ri, rb := range state.RemainingBranches {
-					if rb == branchName {
-						remainIdx = ri
-						break
-					}
-				}
-				state.RemainingBranches = state.RemainingBranches[remainIdx+1:]
-				state.CurrentBranchIndex = idx
-				state.ConflictBranch = branchName
-				if err := saveRebaseState(gitDir, state); err != nil {
-					cfg.Warningf("failed to save rebase state: %s", err)
-				}
-
-				cfg.Warningf("Rebasing %s onto %s — conflict", branchName, base)
-				printConflictDetails(cfg, base)
-				cfg.Printf("")
-				cfg.Printf("Resolve conflicts on %s, then run `%s`",
-					branchName, cfg.ColorCyan("gh stack rebase --continue"))
-				cfg.Printf("Or abort this operation with `%s`",
-					cfg.ColorCyan("gh stack rebase --abort"))
-				return ErrConflict
-			}
-
-			cfg.Successf("Rebased %s onto %s", branchName, base)
+			printConflictDetails(cfg, result.ConflictBase)
+			cfg.Printf("")
+			cfg.Printf("Resolve conflicts on %s, then run `%s`",
+				result.ConflictBranch, cfg.ColorCyan("gh stack rebase --continue"))
+			cfg.Printf("Or abort this operation with `%s`",
+				cfg.ColorCyan("gh stack rebase --abort"))
+			return ErrConflict
 		}
 	}
 

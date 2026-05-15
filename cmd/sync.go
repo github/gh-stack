@@ -92,196 +92,57 @@ func runSync(cfg *config.Config, opts *syncOptions) error {
 
 	// --- Step 2: Fast-forward trunk ---
 	trunk := s.Trunk.Branch
-	trunkUpdated := false
-
-	localSHA, remoteSHA := "", ""
-	trunkRefs, trunkErr := git.RevParseMulti([]string{trunk, remote + "/" + trunk})
-	if trunkErr == nil {
-		localSHA, remoteSHA = trunkRefs[0], trunkRefs[1]
-	}
-
-	if trunkErr != nil {
-		cfg.Warningf("Could not compare trunk %s with remote — skipping trunk update", trunk)
-	} else if localSHA == remoteSHA {
-		cfg.Successf("Trunk %s is already up to date", trunk)
-	} else {
-		isAncestor, err := git.IsAncestor(localSHA, remoteSHA)
-		if err != nil {
-			cfg.Warningf("Could not determine fast-forward status for %s: %v", trunk, err)
-		} else if !isAncestor {
-			cfg.Warningf("Trunk %s has diverged from %s — skipping trunk update", trunk, remote)
-			cfg.Printf("  Local and remote %s have diverged. Resolve manually.", trunk)
-		} else {
-			// Fast-forward the trunk branch
-			if currentBranch == trunk {
-				if err := git.MergeFF(remote + "/" + trunk); err != nil {
-					cfg.Warningf("Failed to fast-forward %s: %v", trunk, err)
-				} else {
-					cfg.Successf("Trunk %s fast-forwarded to %s", trunk, short(remoteSHA))
-					trunkUpdated = true
-				}
-			} else {
-				if err := updateBranchRef(trunk, remoteSHA); err != nil {
-					cfg.Warningf("Failed to fast-forward %s: %v", trunk, err)
-				} else {
-					cfg.Successf("Trunk %s fast-forwarded to %s", trunk, short(remoteSHA))
-					trunkUpdated = true
-				}
-			}
-		}
-	}
+	trunkUpdated := fastForwardTrunk(cfg, trunk, remote, currentBranch)
 
 	// --- Step 2b: Fast-forward stack branches behind their remote tracking branch ---
 	updatedBranches := fastForwardBranches(cfg, s, remote, currentBranch)
 	branchesUpdated := len(updatedBranches) > 0
 
-	// --- Step 3: Cascade rebase (if trunk or any branch moved) ---
+	// --- Step 3: Cascade rebase ---
+	// Rebase if trunk or any branch moved, or if the stack is stale
+	// (branches not yet rebased onto their parent's current tip).
+	needsRebase := trunkUpdated || branchesUpdated || stackNeedsRebase(s)
 	rebased := false
-	if trunkUpdated || branchesUpdated {
+	if needsRebase {
 		cfg.Printf("")
 		cfg.Printf("Rebasing stack ...")
 
 		// Sync PR state to detect merged PRs before rebasing.
 		_ = syncStackPRs(cfg, s)
 
-		// Save original refs so we can restore on conflict.
-		// Merged branches that no longer exist locally have no ref to
-		// resolve. They are always skipped during rebase but we must
-		// also exclude them here to avoid a rev-parse error.
-		branchNames := make([]string, 0, len(s.Branches))
-		for _, b := range s.Branches {
-			if b.IsMerged() && !git.BranchExists(b.Branch) {
-				continue
+		originalRefs := resolveOriginalRefs(s)
+
+		result := cascadeRebase(cascadeRebaseOpts{
+			Cfg:          cfg,
+			Stack:        s,
+			Branches:     s.Branches,
+			StartAbsIdx:  0,
+			OriginalRefs: originalRefs,
+		})
+
+		if result.Conflicted {
+			// Abort and restore everything — sync is non-interactive.
+			if git.IsRebaseInProgress() {
+				_ = git.RebaseAbort()
 			}
-			branchNames = append(branchNames, b.Branch)
-		}
-		originalRefs, _ := git.RevParseMap(branchNames)
-
-		// Backfill originalRefs for merged branches that were deleted locally.
-		// The rebase loop uses originalRefs[br.Branch] as ontoOldBase; without
-		// a valid entry the subsequent --onto rebase would receive an empty ref.
-		for _, b := range s.Branches {
-			if b.IsMerged() && !git.BranchExists(b.Branch) {
-				if b.Head != "" {
-					if originalRefs == nil {
-						originalRefs = make(map[string]string)
-					}
-					originalRefs[b.Branch] = b.Head
-				}
-			}
-		}
-
-		needsOnto := false
-		var ontoOldBase string
-
-		conflicted := false
-		for i, br := range s.Branches {
-			var base string
-			if i == 0 {
-				base = trunk
-			} else {
-				base = s.Branches[i-1].Branch
-			}
-
-			// Skip branches whose PRs have already been merged.
-			if br.IsMerged() {
-				ontoOldBase = originalRefs[br.Branch]
-				needsOnto = true
-				cfg.Successf("Skipping %s (PR %s merged)", br.Branch, cfg.PRLink(br.PullRequest.Number, br.PullRequest.URL))
-				continue
-			}
-
-			// Skip branches whose PRs are currently in a merge queue.
-			if br.IsQueued() {
-				ontoOldBase = originalRefs[br.Branch]
-				needsOnto = true
-				cfg.Successf("Skipping %s (PR %s queued)", br.Branch, cfg.PRLink(br.PullRequest.Number, br.PullRequest.URL))
-				continue
-			}
-
-			if needsOnto {
-				// Find --onto target: first non-merged/queued ancestor, or trunk.
-				newBase := trunk
-				for j := i - 1; j >= 0; j-- {
-					b := s.Branches[j]
-					if !b.IsSkipped() {
-						newBase = b.Branch
-						break
-					}
-				}
-
-				// If ontoOldBase is stale (not an ancestor of the branch), the
-				// branch was already rebased past it (e.g. by a previous run).
-				// Fall back to merge-base(newBase, branch) to avoid replaying
-				// already-applied commits.
-				actualOldBase := ontoOldBase
-				if isAnc, err := git.IsAncestor(ontoOldBase, br.Branch); err == nil && !isAnc {
-					if mb, err := git.MergeBase(newBase, br.Branch); err == nil {
-						actualOldBase = mb
-					}
-				}
-
-				if err := git.RebaseOnto(newBase, actualOldBase, br.Branch); err != nil {
-					// Conflict detected — abort and restore everything
-					if git.IsRebaseInProgress() {
-						_ = git.RebaseAbort()
-					}
-					restoreErrors := restoreBranches(originalRefs)
-					_ = git.CheckoutBranch(currentBranch)
-
-					cfg.Errorf("Conflict detected rebasing %s onto %s", br.Branch, newBase)
-					reportRestoreStatus(cfg, restoreErrors)
-					cfg.Printf("  Run `%s` to resolve conflicts interactively.",
-						cfg.ColorCyan("gh stack rebase"))
-					conflicted = true
-					break
-				}
-
-				cfg.Successf("Rebased %s onto %s (adjusted for merged PR)", br.Branch, newBase)
-				ontoOldBase = originalRefs[br.Branch]
-			} else {
-				var rebaseErr error
-				if i > 0 {
-					// Use --onto to replay only this branch's unique commits.
-					rebaseErr = git.RebaseOnto(base, originalRefs[base], br.Branch)
-				} else {
-					if err := git.CheckoutBranch(br.Branch); err != nil {
-						cfg.Errorf("Failed to checkout %s: %v", br.Branch, err)
-						conflicted = true
-						break
-					}
-					rebaseErr = git.Rebase(base)
-				}
-
-				if rebaseErr != nil {
-					// Conflict detected — abort and restore everything
-					if git.IsRebaseInProgress() {
-						_ = git.RebaseAbort()
-					}
-					restoreErrors := restoreBranches(originalRefs)
-					_ = git.CheckoutBranch(currentBranch)
-
-					cfg.Errorf("Conflict detected rebasing %s onto %s", br.Branch, base)
-					reportRestoreStatus(cfg, restoreErrors)
-					cfg.Printf("  Run `%s` to resolve conflicts interactively.",
-						cfg.ColorCyan("gh stack rebase"))
-					conflicted = true
-					break
-				}
-
-				cfg.Successf("Rebased %s onto %s", br.Branch, base)
-			}
-		}
-
-		if !conflicted {
-			rebased = true
+			restoreErrors := restoreBranches(originalRefs)
 			_ = git.CheckoutBranch(currentBranch)
-		} else {
+
+			cfg.Errorf("Conflict detected rebasing %s onto %s", result.ConflictBranch, result.ConflictBase)
+			reportRestoreStatus(cfg, restoreErrors)
+			cfg.Printf("  Run `%s` to resolve conflicts interactively.",
+				cfg.ColorCyan("gh stack rebase"))
+
 			// Persist refreshed PR state even on conflict, then bail out
 			// before pushing or reporting success.
 			stack.SaveNonBlocking(gitDir, sf)
 			return ErrConflict
 		}
+
+		if result.Rebased {
+			rebased = true
+		}
+		_ = git.CheckoutBranch(currentBranch)
 	}
 
 	// --- Step 4: Push ---
@@ -447,11 +308,6 @@ func runSync(cfg *config.Config, opts *syncOptions) error {
 	cfg.Printf("")
 	cfg.Successf("Stack synced")
 	return nil
-}
-
-// updateBranchRef updates a branch ref to point to a new SHA (for branches not checked out).
-func updateBranchRef(branch, sha string) error {
-	return git.UpdateBranchRef(branch, sha)
 }
 
 // restoreBranches resets each branch to its original SHA, collecting any errors.

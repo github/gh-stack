@@ -625,3 +625,66 @@ func TestParsePRURL(t *testing.T) {
 		})
 	}
 }
+
+func TestStackNeedsRebase_AllCurrent(t *testing.T) {
+	s := &stack.Stack{
+		Trunk: stack.BranchRef{Branch: "main"},
+		Branches: []stack.BranchRef{
+			{Branch: "b1"},
+			{Branch: "b2"},
+		},
+	}
+
+	mock := &git.MockOps{
+		IsAncestorFn: func(a, d string) (bool, error) {
+			return true, nil
+		},
+	}
+	restore := git.SetOps(mock)
+	defer restore()
+
+	assert.False(t, stackNeedsRebase(s), "stack should not need rebase when all branches are current")
+}
+
+func TestStackNeedsRebase_FirstBranchStale(t *testing.T) {
+	s := &stack.Stack{
+		Trunk: stack.BranchRef{Branch: "main"},
+		Branches: []stack.BranchRef{
+			{Branch: "b1"},
+			{Branch: "b2"},
+		},
+	}
+
+	mock := &git.MockOps{
+		IsAncestorFn: func(a, d string) (bool, error) {
+			if a == "main" && d == "b1" {
+				return false, nil
+			}
+			return true, nil
+		},
+	}
+	restore := git.SetOps(mock)
+	defer restore()
+
+	assert.True(t, stackNeedsRebase(s), "stack should need rebase when first branch is stale")
+}
+
+func TestStackNeedsRebase_SkipsMergedBranches(t *testing.T) {
+	s := &stack.Stack{
+		Trunk: stack.BranchRef{Branch: "main"},
+		Branches: []stack.BranchRef{
+			{Branch: "b1", PullRequest: &stack.PullRequestRef{Merged: true}},
+			{Branch: "b2"},
+		},
+	}
+
+	mock := &git.MockOps{
+		IsAncestorFn: func(a, d string) (bool, error) {
+			return true, nil
+		},
+	}
+	restore := git.SetOps(mock)
+	defer restore()
+
+	assert.False(t, stackNeedsRebase(s), "should skip merged branches and find stack up to date")
+}
