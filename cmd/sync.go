@@ -14,6 +14,7 @@ import (
 
 type syncOptions struct {
 	remote string
+	prune  bool
 }
 
 func SyncCmd(cfg *config.Config) *cobra.Command {
@@ -34,13 +35,19 @@ This command performs a safe, non-interactive synchronization:
 
 If a rebase conflict is detected, all branches are restored to their
 original state and you are advised to run "gh stack rebase" to resolve
-conflicts interactively.`,
+conflicts interactively.
+
+Use --prune to delete local branches for merged PRs. Stack metadata is
+preserved so that rebase and display logic continue to work correctly.
+If you are on a branch that would be pruned, your checkout is moved to
+the nearest active branch or the trunk.`,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			return runSync(cfg, opts)
 		},
 	}
 
 	cmd.Flags().StringVar(&opts.remote, "remote", "", "Remote to fetch from and push to (defaults to auto-detected remote)")
+	cmd.Flags().BoolVar(&opts.prune, "prune", false, "Delete local branches for merged PRs")
 
 	return cmd
 }
@@ -341,7 +348,60 @@ func runSync(cfg *config.Config, opts *syncOptions) error {
 		cfg.Printf("Merged: %s", strings.Join(names, ", "))
 	}
 
-	// --- Step 6: Update base SHAs and save ---
+	// --- Step 6: Prune merged branches (optional) ---
+	if opts.prune {
+		merged := s.MergedBranches()
+		var prunable []string
+		for _, b := range merged {
+			if git.BranchExists(b.Branch) {
+				prunable = append(prunable, b.Branch)
+			}
+		}
+
+		if len(prunable) > 0 {
+			// If the current branch is being pruned, switch away first.
+			needsSwitch := false
+			for _, name := range prunable {
+				if name == currentBranch {
+					needsSwitch = true
+					break
+				}
+			}
+			if needsSwitch {
+				switchTarget := trunk
+				for _, b := range s.Branches {
+					if !b.IsSkipped() {
+						switchTarget = b.Branch
+						break
+					}
+				}
+				if err := git.CheckoutBranch(switchTarget); err != nil {
+					cfg.Warningf("Failed to switch from %s to %s: %v", currentBranch, switchTarget, err)
+				} else {
+					currentBranch = switchTarget
+				}
+			}
+
+			cfg.Printf("")
+			pruned := 0
+			for _, name := range prunable {
+				if err := git.DeleteBranch(name, true); err != nil {
+					cfg.Warningf("Failed to delete %s: %v", name, err)
+				} else {
+					cfg.Successf("Pruned %s (merged)", name)
+					pruned++
+				}
+			}
+			if pruned > 0 {
+				cfg.Successf("Pruned %d merged %s", pruned, plural(pruned, "branch", "branches"))
+			}
+		} else {
+			cfg.Printf("")
+			cfg.Printf("No merged branches to prune")
+		}
+	}
+
+	// --- Step 7: Update base SHAs and save ---
 	updateBaseSHAs(s)
 
 	if err := stack.Save(gitDir, sf); err != nil {

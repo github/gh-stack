@@ -1019,3 +1019,270 @@ func TestSync_MergedBranchDeletedFromRemote(t *testing.T) {
 	assert.Equal(t, "main", rebaseOntoCalls[0].newBase)
 	assert.Equal(t, "b1-stored-head-sha", rebaseOntoCalls[0].oldBase)
 }
+
+// TestSync_Prune_DeletesMergedBranches verifies that --prune deletes local
+// branches for merged PRs while keeping them in the stack metadata.
+func TestSync_Prune_DeletesMergedBranches(t *testing.T) {
+	s := stack.Stack{
+		Trunk: stack.BranchRef{Branch: "main"},
+		Branches: []stack.BranchRef{
+			{Branch: "b1", PullRequest: &stack.PullRequestRef{Number: 1, Merged: true}},
+			{Branch: "b2"},
+		},
+	}
+
+	tmpDir := t.TempDir()
+	writeStackFile(t, tmpDir, s)
+
+	var deletedBranches []string
+
+	mock := newSyncMock(tmpDir, "b2")
+	mock.BranchExistsFn = func(name string) bool { return true }
+	mock.DeleteBranchFn = func(name string, force bool) error {
+		deletedBranches = append(deletedBranches, name)
+		assert.True(t, force, "should force-delete merged branch")
+		return nil
+	}
+
+	restore := git.SetOps(mock)
+	defer restore()
+
+	cfg, _, errR := config.NewTestConfig()
+	cmd := SyncCmd(cfg)
+	cmd.SetArgs([]string{"--prune"})
+	cmd.SetOut(io.Discard)
+	cmd.SetErr(io.Discard)
+	err := cmd.Execute()
+
+	cfg.Err.Close()
+	errOut, _ := io.ReadAll(errR)
+	output := string(errOut)
+
+	assert.NoError(t, err)
+	assert.Equal(t, []string{"b1"}, deletedBranches)
+	assert.Contains(t, output, "Pruned b1 (merged)")
+	assert.Contains(t, output, "Pruned 1 merged branch")
+}
+
+// TestSync_Prune_SkipsNonExistentBranches verifies that --prune does not
+// attempt to delete branches that have already been removed locally.
+func TestSync_Prune_SkipsNonExistentBranches(t *testing.T) {
+	s := stack.Stack{
+		Trunk: stack.BranchRef{Branch: "main"},
+		Branches: []stack.BranchRef{
+			{Branch: "b1", Head: "sha-b1", PullRequest: &stack.PullRequestRef{Number: 1, Merged: true}},
+			{Branch: "b2"},
+		},
+	}
+
+	tmpDir := t.TempDir()
+	writeStackFile(t, tmpDir, s)
+
+	mock := newSyncMock(tmpDir, "b2")
+	mock.BranchExistsFn = func(name string) bool {
+		return name != "b1" // b1 already deleted
+	}
+	mock.DeleteBranchFn = func(string, bool) error {
+		t.Fatal("DeleteBranch should not be called for non-existent branches")
+		return nil
+	}
+
+	restore := git.SetOps(mock)
+	defer restore()
+
+	cfg, _, errR := config.NewTestConfig()
+	cmd := SyncCmd(cfg)
+	cmd.SetArgs([]string{"--prune"})
+	cmd.SetOut(io.Discard)
+	cmd.SetErr(io.Discard)
+	err := cmd.Execute()
+
+	cfg.Err.Close()
+	errOut, _ := io.ReadAll(errR)
+	output := string(errOut)
+
+	assert.NoError(t, err)
+	assert.Contains(t, output, "No merged branches to prune")
+}
+
+// TestSync_Prune_SwitchesToLowestUnmergedBranch verifies that when the user is
+// on a merged branch being pruned, checkout moves to the lowest active branch.
+func TestSync_Prune_SwitchesToLowestUnmergedBranch(t *testing.T) {
+	s := stack.Stack{
+		Trunk: stack.BranchRef{Branch: "main"},
+		Branches: []stack.BranchRef{
+			{Branch: "b1", PullRequest: &stack.PullRequestRef{Number: 1, Merged: true}},
+			{Branch: "b2"},
+			{Branch: "b3"},
+		},
+	}
+
+	tmpDir := t.TempDir()
+	writeStackFile(t, tmpDir, s)
+
+	var deletedBranches []string
+	var checkoutTarget string
+
+	mock := newSyncMock(tmpDir, "b1") // currently on merged branch
+	mock.BranchExistsFn = func(name string) bool { return true }
+	mock.CheckoutBranchFn = func(name string) error {
+		checkoutTarget = name
+		return nil
+	}
+	mock.DeleteBranchFn = func(name string, force bool) error {
+		deletedBranches = append(deletedBranches, name)
+		return nil
+	}
+
+	restore := git.SetOps(mock)
+	defer restore()
+
+	cfg, _, errR := config.NewTestConfig()
+	cmd := SyncCmd(cfg)
+	cmd.SetArgs([]string{"--prune"})
+	cmd.SetOut(io.Discard)
+	cmd.SetErr(io.Discard)
+	err := cmd.Execute()
+
+	cfg.Err.Close()
+	errOut, _ := io.ReadAll(errR)
+	output := string(errOut)
+
+	assert.NoError(t, err)
+	assert.Equal(t, []string{"b1"}, deletedBranches)
+	// Should have switched to b2 (first active branch), not trunk
+	assert.Equal(t, "b2", checkoutTarget)
+	assert.Contains(t, output, "Pruned b1 (merged)")
+}
+
+// TestSync_Prune_SwitchesToTrunkWhenAllMerged verifies that when all branches
+// are merged, checkout moves to the trunk.
+func TestSync_Prune_SwitchesToTrunkWhenAllMerged(t *testing.T) {
+	s := stack.Stack{
+		Trunk: stack.BranchRef{Branch: "main"},
+		Branches: []stack.BranchRef{
+			{Branch: "b1", PullRequest: &stack.PullRequestRef{Number: 1, Merged: true}},
+			{Branch: "b2", PullRequest: &stack.PullRequestRef{Number: 2, Merged: true}},
+		},
+	}
+
+	tmpDir := t.TempDir()
+	writeStackFile(t, tmpDir, s)
+
+	var deletedBranches []string
+	var checkoutTarget string
+
+	mock := newSyncMock(tmpDir, "b1") // currently on merged branch
+	mock.BranchExistsFn = func(name string) bool { return true }
+	mock.CheckoutBranchFn = func(name string) error {
+		checkoutTarget = name
+		return nil
+	}
+	mock.DeleteBranchFn = func(name string, force bool) error {
+		deletedBranches = append(deletedBranches, name)
+		return nil
+	}
+
+	restore := git.SetOps(mock)
+	defer restore()
+
+	cfg, _, errR := config.NewTestConfig()
+	cmd := SyncCmd(cfg)
+	cmd.SetArgs([]string{"--prune"})
+	cmd.SetOut(io.Discard)
+	cmd.SetErr(io.Discard)
+	err := cmd.Execute()
+
+	cfg.Err.Close()
+	errOut, _ := io.ReadAll(errR)
+	output := string(errOut)
+
+	assert.NoError(t, err)
+	assert.Equal(t, []string{"b1", "b2"}, deletedBranches)
+	// Should have switched to trunk since all branches are merged
+	assert.Equal(t, "main", checkoutTarget)
+	assert.Contains(t, output, "Pruned 2 merged branches")
+}
+
+// TestSync_NoPrune_DoesNotDeleteBranches verifies that without --prune,
+// merged branches are not deleted (default behavior is unchanged).
+func TestSync_NoPrune_DoesNotDeleteBranches(t *testing.T) {
+	s := stack.Stack{
+		Trunk: stack.BranchRef{Branch: "main"},
+		Branches: []stack.BranchRef{
+			{Branch: "b1", PullRequest: &stack.PullRequestRef{Number: 1, Merged: true}},
+			{Branch: "b2"},
+		},
+	}
+
+	tmpDir := t.TempDir()
+	writeStackFile(t, tmpDir, s)
+
+	mock := newSyncMock(tmpDir, "b2")
+	mock.BranchExistsFn = func(name string) bool { return true }
+	mock.DeleteBranchFn = func(string, bool) error {
+		t.Fatal("DeleteBranch should not be called without --prune")
+		return nil
+	}
+
+	restore := git.SetOps(mock)
+	defer restore()
+
+	cfg, _, _ := config.NewTestConfig()
+	cmd := SyncCmd(cfg)
+	// No --prune flag
+	cmd.SetOut(io.Discard)
+	cmd.SetErr(io.Discard)
+	err := cmd.Execute()
+
+	assert.NoError(t, err)
+}
+
+// TestSync_Prune_DeleteFailureContinues verifies that a failed branch deletion
+// logs a warning and does not abort the sync.
+func TestSync_Prune_DeleteFailureContinues(t *testing.T) {
+	s := stack.Stack{
+		Trunk: stack.BranchRef{Branch: "main"},
+		Branches: []stack.BranchRef{
+			{Branch: "b1", PullRequest: &stack.PullRequestRef{Number: 1, Merged: true}},
+			{Branch: "b2", PullRequest: &stack.PullRequestRef{Number: 2, Merged: true}},
+			{Branch: "b3"},
+		},
+	}
+
+	tmpDir := t.TempDir()
+	writeStackFile(t, tmpDir, s)
+
+	var deletedBranches []string
+
+	mock := newSyncMock(tmpDir, "b3")
+	mock.BranchExistsFn = func(name string) bool { return true }
+	mock.DeleteBranchFn = func(name string, force bool) error {
+		if name == "b1" {
+			return fmt.Errorf("permission denied")
+		}
+		deletedBranches = append(deletedBranches, name)
+		return nil
+	}
+
+	restore := git.SetOps(mock)
+	defer restore()
+
+	cfg, _, errR := config.NewTestConfig()
+	cmd := SyncCmd(cfg)
+	cmd.SetArgs([]string{"--prune"})
+	cmd.SetOut(io.Discard)
+	cmd.SetErr(io.Discard)
+	err := cmd.Execute()
+
+	cfg.Err.Close()
+	errOut, _ := io.ReadAll(errR)
+	output := string(errOut)
+
+	assert.NoError(t, err)
+	// b1 failed, b2 succeeded
+	assert.Equal(t, []string{"b2"}, deletedBranches)
+	assert.Contains(t, output, "Failed to delete b1")
+	assert.Contains(t, output, "Pruned b2 (merged)")
+	assert.Contains(t, output, "Pruned 1 merged branch")
+}
