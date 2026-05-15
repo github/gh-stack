@@ -454,18 +454,6 @@ gh stack unstack
 gh stack unstack --local
 ```
 
-### `gh stack merge`
-
-Merge a stack of PRs.
-
-```
-gh stack merge <pr>
-```
-
-Merges the specified PR and all PRs below it in the stack.
-
-> **Note:** This command is not yet implemented. Running it prints a notice.
-
 ### Navigation
 
 Move between branches in the current stack without having to remember branch names.
