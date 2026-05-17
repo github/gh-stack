@@ -106,6 +106,83 @@ func TestSync_TrunkAlreadyUpToDate(t *testing.T) {
 	assert.False(t, pushCalls[0].force, "push should not use force when no rebase occurred")
 }
 
+// TestSync_TrunkUpToDate_StackStale verifies that when trunk is already up to
+// date locally (no FF needed) but the stack branches haven't been rebased onto
+// the current trunk, sync still performs the cascade rebase. This is the core
+// bug fix — previously sync would skip the rebase entirely in this scenario.
+func TestSync_TrunkUpToDate_StackStale(t *testing.T) {
+	s := stack.Stack{
+		Trunk: stack.BranchRef{Branch: "main"},
+		Branches: []stack.BranchRef{
+			{Branch: "b1"},
+			{Branch: "b2"},
+		},
+	}
+
+	tmpDir := t.TempDir()
+	writeStackFile(t, tmpDir, s)
+
+	var rebaseCalls []rebaseCall
+	var pushCalls []pushCall
+
+	mock := newSyncMock(tmpDir, "b1")
+	// Trunk is already up to date — same SHA locally and remotely.
+	mock.RevParseFn = func(ref string) (string, error) {
+		if ref == "main" || ref == "origin/main" {
+			return "aaa111aaa111", nil
+		}
+		if strings.HasPrefix(ref, "origin/") {
+			return "sha-" + strings.TrimPrefix(ref, "origin/"), nil
+		}
+		return "sha-" + ref, nil
+	}
+	// Stack branches are NOT rebased onto trunk — parent is not an ancestor.
+	mock.IsAncestorFn = func(a, d string) (bool, error) {
+		// main is NOT an ancestor of b1 → stack is stale
+		if a == "main" && d == "b1" {
+			return false, nil
+		}
+		return true, nil
+	}
+	mock.CheckoutBranchFn = func(string) error { return nil }
+	mock.RebaseFn = func(base string) error {
+		rebaseCalls = append(rebaseCalls, rebaseCall{branch: "(rebase)" + base})
+		return nil
+	}
+	mock.RebaseOntoFn = func(newBase, oldBase, branch string) error {
+		rebaseCalls = append(rebaseCalls, rebaseCall{newBase, oldBase, branch})
+		return nil
+	}
+	mock.PushFn = func(remote string, branches []string, force, atomic bool) error {
+		pushCalls = append(pushCalls, pushCall{remote, branches, force, atomic})
+		return nil
+	}
+
+	restore := git.SetOps(mock)
+	defer restore()
+
+	cfg, _, errR := config.NewTestConfig()
+	cmd := SyncCmd(cfg)
+	cmd.SetOut(io.Discard)
+	cmd.SetErr(io.Discard)
+	err := cmd.Execute()
+
+	cfg.Err.Close()
+	errOut, _ := io.ReadAll(errR)
+	output := string(errOut)
+
+	assert.NoError(t, err)
+	assert.Contains(t, output, "up to date")
+
+	// Rebase SHOULD occur even though trunk was already up to date,
+	// because the stack branches are stale (not rebased onto trunk).
+	assert.NotEmpty(t, rebaseCalls, "rebase should occur when stack is stale even if trunk is up to date")
+
+	// Push should use force since rebase occurred
+	require.Len(t, pushCalls, 1)
+	assert.True(t, pushCalls[0].force, "push should use force-with-lease after rebase")
+}
+
 // TestSync_TrunkFastForward_TriggersRebase verifies that when trunk is behind
 // origin/trunk, it fast-forwards and triggers a cascade rebase with force push.
 func TestSync_TrunkFastForward_TriggersRebase(t *testing.T) {
@@ -277,11 +354,23 @@ func TestSync_TrunkDiverged(t *testing.T) {
 		if ref == "origin/main" {
 			return "remote-sha", nil
 		}
+		// Stack branches: local and remote have same SHA (no branch FF needed)
+		if strings.HasPrefix(ref, "origin/") {
+			return "sha-" + strings.TrimPrefix(ref, "origin/"), nil
+		}
 		return "sha-" + ref, nil
 	}
-	// Neither is ancestor of the other → diverged
+	// Neither is ancestor of the other → diverged (for trunk FF check)
+	// But stack branches DO have local trunk as ancestor (for stackNeedsRebase)
 	mock.IsAncestorFn = func(a, d string) (bool, error) {
-		return false, nil
+		if a == "local-sha" && d == "remote-sha" {
+			return false, nil
+		}
+		if a == "remote-sha" && d == "local-sha" {
+			return false, nil
+		}
+		// Stack branches have their parent as ancestor
+		return true, nil
 	}
 	mock.RebaseOntoFn = func(newBase, oldBase, branch string) error {
 		rebaseCalls = append(rebaseCalls, rebaseCall{newBase, oldBase, branch})

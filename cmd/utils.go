@@ -611,6 +611,250 @@ func fastForwardBranches(cfg *config.Config, s *stack.Stack, remote, currentBran
 	return updated
 }
 
+// resolveOriginalRefs builds a map from branch name to current SHA for all
+// branches in the stack. Merged branches that no longer exist locally are
+// backfilled from the stack metadata. This map is used as the "before" state
+// for cascade rebases and conflict recovery.
+func resolveOriginalRefs(s *stack.Stack) map[string]string {
+	branchNames := make([]string, 0, len(s.Branches))
+	for _, b := range s.Branches {
+		if b.IsMerged() && !git.BranchExists(b.Branch) {
+			continue
+		}
+		branchNames = append(branchNames, b.Branch)
+	}
+	originalRefs, _ := git.RevParseMap(branchNames)
+
+	// Backfill merged branches that were deleted locally.
+	for _, b := range s.Branches {
+		if b.IsMerged() && !git.BranchExists(b.Branch) {
+			if b.Head != "" {
+				if originalRefs == nil {
+					originalRefs = make(map[string]string)
+				}
+				originalRefs[b.Branch] = b.Head
+			}
+		}
+	}
+	return originalRefs
+}
+
+// fastForwardTrunk fast-forwards the trunk branch to match its remote tracking
+// branch. Returns true if trunk was updated.
+func fastForwardTrunk(cfg *config.Config, trunk, remote, currentBranch string) bool {
+	localSHA, remoteSHA := "", ""
+	trunkRefs, trunkErr := git.RevParseMulti([]string{trunk, remote + "/" + trunk})
+	if trunkErr == nil {
+		localSHA, remoteSHA = trunkRefs[0], trunkRefs[1]
+	}
+
+	if trunkErr != nil {
+		cfg.Warningf("Could not compare trunk %s with remote — skipping trunk update", trunk)
+		return false
+	}
+
+	if localSHA == remoteSHA {
+		cfg.Successf("Trunk %s is already up to date", trunk)
+		return false
+	}
+
+	isAncestor, err := git.IsAncestor(localSHA, remoteSHA)
+	if err != nil {
+		cfg.Warningf("Could not determine fast-forward status for %s: %v", trunk, err)
+		return false
+	}
+	if !isAncestor {
+		cfg.Warningf("Trunk %s has diverged from %s — skipping trunk update", trunk, remote)
+		cfg.Printf("  Local and remote %s have diverged. Resolve manually.", trunk)
+		return false
+	}
+
+	if currentBranch == trunk {
+		if err := git.MergeFF(remote + "/" + trunk); err != nil {
+			cfg.Warningf("Failed to fast-forward %s: %v", trunk, err)
+			return false
+		}
+	} else {
+		if err := git.UpdateBranchRef(trunk, remoteSHA); err != nil {
+			cfg.Warningf("Failed to fast-forward %s: %v", trunk, err)
+			return false
+		}
+	}
+
+	cfg.Successf("Trunk %s fast-forwarded to %s", trunk, short(remoteSHA))
+	return true
+}
+
+// cascadeRebaseOpts holds parameters for a cascade rebase across a range of
+// stack branches.
+type cascadeRebaseOpts struct {
+	Cfg          *config.Config
+	Stack        *stack.Stack
+	Branches     []stack.BranchRef // the range of branches to rebase
+	StartAbsIdx  int               // index of Branches[0] in Stack.Branches
+	OriginalRefs map[string]string
+	NeedsOnto    bool
+	OntoOldBase  string
+}
+
+// cascadeRebaseResult describes the outcome of a cascade rebase.
+type cascadeRebaseResult struct {
+	Rebased        bool     // at least one branch was successfully rebased
+	Conflicted     bool     // a conflict was detected
+	ConflictIdx    int      // absolute index in Stack.Branches of the conflicting branch
+	ConflictBranch string   // name of the conflicting branch
+	ConflictBase   string   // base branch we were rebasing onto
+	Remaining      []string // branch names after the conflict point
+	NeedsOnto      bool     // --onto state at the conflict point (for --continue)
+	OntoOldBase    string   // ontoOldBase at the conflict point (for --continue)
+}
+
+// cascadeRebase performs a cascade rebase across the given branch range. It
+// stops at the first conflict and returns a result describing what happened.
+// The caller is responsible for conflict recovery (abort+restore or save state).
+func cascadeRebase(opts cascadeRebaseOpts) cascadeRebaseResult {
+	s := opts.Stack
+	cfg := opts.Cfg
+	needsOnto := opts.NeedsOnto
+	ontoOldBase := opts.OntoOldBase
+	originalRefs := opts.OriginalRefs
+	result := cascadeRebaseResult{}
+
+	for i, br := range opts.Branches {
+		absIdx := opts.StartAbsIdx + i
+
+		var base string
+		if absIdx == 0 {
+			base = s.Trunk.Branch
+		} else {
+			base = s.Branches[absIdx-1].Branch
+		}
+
+		// Skip merged and queued branches.
+		if br.IsSkipped() {
+			ontoOldBase = originalRefs[br.Branch]
+			needsOnto = true
+			if br.IsMerged() {
+				cfg.Successf("Skipping %s (PR %s merged)", br.Branch, cfg.PRLink(br.PullRequest.Number, br.PullRequest.URL))
+			} else if br.IsQueued() {
+				cfg.Successf("Skipping %s (PR %s queued)", br.Branch, cfg.PRLink(br.PullRequest.Number, br.PullRequest.URL))
+			}
+			continue
+		}
+
+		if needsOnto {
+			// Find --onto target: first non-skipped ancestor, or trunk.
+			newBase := s.Trunk.Branch
+			for j := absIdx - 1; j >= 0; j-- {
+				if !s.Branches[j].IsSkipped() {
+					newBase = s.Branches[j].Branch
+					break
+				}
+			}
+
+			// If ontoOldBase is stale (not an ancestor of the branch), the
+			// branch was already rebased past it. Fall back to
+			// merge-base(newBase, branch) to avoid replaying already-applied
+			// commits.
+			actualOldBase := ontoOldBase
+			if isAnc, err := git.IsAncestor(ontoOldBase, br.Branch); err == nil && !isAnc {
+				if mb, err := git.MergeBase(newBase, br.Branch); err == nil {
+					actualOldBase = mb
+				}
+			}
+
+			if err := git.RebaseOnto(newBase, actualOldBase, br.Branch); err != nil {
+				remaining := make([]string, 0, len(opts.Branches)-i-1)
+				for j := i + 1; j < len(opts.Branches); j++ {
+					remaining = append(remaining, opts.Branches[j].Branch)
+				}
+				return cascadeRebaseResult{
+					Rebased:        result.Rebased,
+					Conflicted:     true,
+					ConflictIdx:    absIdx,
+					ConflictBranch: br.Branch,
+					ConflictBase:   newBase,
+					Remaining:      remaining,
+					NeedsOnto:      true,
+					OntoOldBase:    originalRefs[br.Branch],
+				}
+			}
+
+			cfg.Successf("Rebased %s onto %s (adjusted for merged PR)", br.Branch, newBase)
+			result.Rebased = true
+			ontoOldBase = originalRefs[br.Branch]
+		} else {
+			var rebaseErr error
+			if absIdx > 0 {
+				rebaseErr = git.RebaseOnto(base, originalRefs[base], br.Branch)
+			} else {
+				if err := git.CheckoutBranch(br.Branch); err != nil {
+					remaining := make([]string, 0, len(opts.Branches)-i-1)
+					for j := i + 1; j < len(opts.Branches); j++ {
+						remaining = append(remaining, opts.Branches[j].Branch)
+					}
+					return cascadeRebaseResult{
+						Rebased:        result.Rebased,
+						Conflicted:     true,
+						ConflictIdx:    absIdx,
+						ConflictBranch: br.Branch,
+						ConflictBase:   base,
+						Remaining:      remaining,
+					}
+				}
+				rebaseErr = git.Rebase(base)
+			}
+
+			if rebaseErr != nil {
+				remaining := make([]string, 0, len(opts.Branches)-i-1)
+				for j := i + 1; j < len(opts.Branches); j++ {
+					remaining = append(remaining, opts.Branches[j].Branch)
+				}
+				return cascadeRebaseResult{
+					Rebased:        result.Rebased,
+					Conflicted:     true,
+					ConflictIdx:    absIdx,
+					ConflictBranch: br.Branch,
+					ConflictBase:   base,
+					Remaining:      remaining,
+					NeedsOnto:      false,
+					OntoOldBase:    originalRefs[br.Branch],
+				}
+			}
+
+			cfg.Successf("Rebased %s onto %s", br.Branch, base)
+			result.Rebased = true
+		}
+	}
+
+	return result
+}
+
+// stackNeedsRebase returns true if any active branch in the stack is not based
+// on its parent's current tip. This detects when the stack needs rebasing even
+// if trunk was not updated in the current run.
+func stackNeedsRebase(s *stack.Stack) bool {
+	trunk := s.Trunk.Branch
+	for i, br := range s.Branches {
+		if br.IsSkipped() {
+			continue
+		}
+		// Find the nearest non-skipped parent.
+		parent := trunk
+		for j := i - 1; j >= 0; j-- {
+			if !s.Branches[j].IsSkipped() {
+				parent = s.Branches[j].Branch
+				break
+			}
+		}
+		isAnc, err := git.IsAncestor(parent, br.Branch)
+		if err != nil || !isAnc {
+			return true
+		}
+	}
+	return false
+}
+
 // resolvePR resolves a user-provided target to a stack and branch using
 // waterfall logic: PR URL → PR number → branch name.
 func resolvePR(cfg *config.Config, sf *stack.StackFile, target string) (*stack.Stack, *stack.BranchRef, error) {
