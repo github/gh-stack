@@ -12,6 +12,11 @@ import (
 	"time"
 )
 
+// RebaseOpts holds optional parameters for git rebase operations.
+type RebaseOpts struct {
+	CommitterDateIsAuthorDate bool
+}
+
 // Ops defines the interface for git operations used by commands.
 // The package-level functions are the default production implementation.
 // Tests can substitute a mock via SetOps().
@@ -27,13 +32,13 @@ type Ops interface {
 	CreateBranch(name, base string) error
 	Push(remote string, branches []string, force, atomic bool) error
 	ResolveRemote(branch string) (string, error)
-	Rebase(base string) error
+	Rebase(base string, opts RebaseOpts) error
 	EnableRerere() error
 	IsRerereEnabled() (bool, error)
 	IsRerereDeclined() (bool, error)
 	SaveRerereDeclined() error
-	RebaseOnto(newBase, oldBase, branch string) error
-	RebaseContinue() error
+	RebaseOnto(newBase, oldBase, branch string, opts RebaseOpts) error
+	RebaseContinue(opts RebaseOpts) error
 	RebaseAbort() error
 	IsRebaseInProgress() bool
 	ConflictedFiles() ([]string, error)
@@ -201,12 +206,17 @@ func (d *defaultOps) ResolveRemote(branch string) (string, error) {
 	return "", fmt.Errorf("no remotes configured")
 }
 
-func (d *defaultOps) Rebase(base string) error {
-	err := runSilent("rebase", base)
+func (d *defaultOps) Rebase(base string, opts RebaseOpts) error {
+	args := []string{"rebase"}
+	if opts.CommitterDateIsAuthorDate {
+		args = append(args, "--committer-date-is-author-date")
+	}
+	args = append(args, base)
+	err := runSilent(args...)
 	if err == nil {
 		return nil
 	}
-	return tryAutoResolveRebase(err)
+	return tryAutoResolveRebase(err, opts)
 }
 
 func (d *defaultOps) EnableRerere() error {
@@ -237,20 +247,25 @@ func (d *defaultOps) SaveRerereDeclined() error {
 	return runSilent("config", "gh-stack.rerere-declined", "true")
 }
 
-func (d *defaultOps) RebaseOnto(newBase, oldBase, branch string) error {
-	err := runSilent("rebase", "--onto", newBase, oldBase, branch)
+func (d *defaultOps) RebaseOnto(newBase, oldBase, branch string, opts RebaseOpts) error {
+	args := []string{"rebase"}
+	if opts.CommitterDateIsAuthorDate {
+		args = append(args, "--committer-date-is-author-date")
+	}
+	args = append(args, "--onto", newBase, oldBase, branch)
+	err := runSilent(args...)
 	if err == nil {
 		return nil
 	}
-	return tryAutoResolveRebase(err)
+	return tryAutoResolveRebase(err, opts)
 }
 
-func (d *defaultOps) RebaseContinue() error {
-	err := rebaseContinueOnce()
+func (d *defaultOps) RebaseContinue(opts RebaseOpts) error {
+	err := rebaseContinueOnce(opts)
 	if err == nil {
 		return nil
 	}
-	return tryAutoResolveRebase(err)
+	return tryAutoResolveRebase(err, opts)
 }
 
 func (d *defaultOps) RebaseAbort() error {

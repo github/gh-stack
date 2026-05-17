@@ -2,6 +2,7 @@ package cmd
 
 import (
 	"encoding/json"
+	"fmt"
 	"io"
 	"os"
 	"path/filepath"
@@ -73,11 +74,11 @@ func TestRebase_CascadeRebase(t *testing.T) {
 		currentCheckedOut = name
 		return nil
 	}
-	mock.RebaseFn = func(base string) error {
+	mock.RebaseFn = func(base string, opts git.RebaseOpts) error {
 		allRebaseCalls = append(allRebaseCalls, rebaseCall{newBase: base, oldBase: "", branch: currentCheckedOut})
 		return nil
 	}
-	mock.RebaseOntoFn = func(newBase, oldBase, branch string) error {
+	mock.RebaseOntoFn = func(newBase, oldBase, branch string, opts git.RebaseOpts) error {
 		allRebaseCalls = append(allRebaseCalls, rebaseCall{newBase, oldBase, branch})
 		return nil
 	}
@@ -140,7 +141,7 @@ func TestRebase_MergedBranch_UsesOnto(t *testing.T) {
 		}
 		return "default-sha", nil
 	}
-	mock.RebaseOntoFn = func(newBase, oldBase, branch string) error {
+	mock.RebaseOntoFn = func(newBase, oldBase, branch string, opts git.RebaseOpts) error {
 		rebaseCalls = append(rebaseCalls, rebaseCall{newBase, oldBase, branch})
 		return nil
 	}
@@ -205,7 +206,7 @@ func TestRebase_OntoPropagatesToSubsequentBranches(t *testing.T) {
 		}
 		return "default-sha", nil
 	}
-	mock.RebaseOntoFn = func(newBase, oldBase, branch string) error {
+	mock.RebaseOntoFn = func(newBase, oldBase, branch string, opts git.RebaseOpts) error {
 		rebaseCalls = append(rebaseCalls, rebaseCall{newBase, oldBase, branch})
 		return nil
 	}
@@ -290,7 +291,7 @@ func TestRebase_StaleOntoOldBase_FallsBackToMergeBase(t *testing.T) {
 		}
 		return "default-mergebase", nil
 	}
-	mock.RebaseOntoFn = func(newBase, oldBase, branch string) error {
+	mock.RebaseOntoFn = func(newBase, oldBase, branch string, opts git.RebaseOpts) error {
 		rebaseCalls = append(rebaseCalls, rebaseCall{newBase, oldBase, branch})
 		return nil
 	}
@@ -336,8 +337,8 @@ func TestRebase_ConflictSavesState(t *testing.T) {
 
 	mock := newRebaseMock(tmpDir, "b1")
 	mock.CheckoutBranchFn = func(string) error { return nil }
-	mock.RebaseFn = func(string) error { return nil } // b1 succeeds
-	mock.RebaseOntoFn = func(newBase, oldBase, branch string) error {
+	mock.RebaseFn = func(string, git.RebaseOpts) error { return nil } // b1 succeeds
+	mock.RebaseOntoFn = func(newBase, oldBase, branch string, opts git.RebaseOpts) error {
 		if branch == "b2" {
 			return assert.AnError // conflict on b2
 		}
@@ -493,11 +494,11 @@ func TestRebase_DownstackOnly(t *testing.T) {
 		currentCheckedOut = name
 		return nil
 	}
-	mock.RebaseFn = func(base string) error {
+	mock.RebaseFn = func(base string, opts git.RebaseOpts) error {
 		allRebaseCalls = append(allRebaseCalls, rebaseCall{newBase: base, oldBase: "", branch: currentCheckedOut})
 		return nil
 	}
-	mock.RebaseOntoFn = func(newBase, oldBase, branch string) error {
+	mock.RebaseOntoFn = func(newBase, oldBase, branch string, opts git.RebaseOpts) error {
 		allRebaseCalls = append(allRebaseCalls, rebaseCall{newBase, oldBase, branch})
 		return nil
 	}
@@ -545,11 +546,11 @@ func TestRebase_UpstackOnly(t *testing.T) {
 		currentCheckedOut = name
 		return nil
 	}
-	mock.RebaseFn = func(base string) error {
+	mock.RebaseFn = func(base string, opts git.RebaseOpts) error {
 		allRebaseCalls = append(allRebaseCalls, rebaseCall{newBase: base, oldBase: "", branch: currentCheckedOut})
 		return nil
 	}
-	mock.RebaseOntoFn = func(newBase, oldBase, branch string) error {
+	mock.RebaseOntoFn = func(newBase, oldBase, branch string, opts git.RebaseOpts) error {
 		allRebaseCalls = append(allRebaseCalls, rebaseCall{newBase, oldBase, branch})
 		return nil
 	}
@@ -598,11 +599,11 @@ func TestRebase_UpstackWithMergedBranchBelow(t *testing.T) {
 		return nil
 	}
 	mock.BranchExistsFn = func(name string) bool { return true }
-	mock.RebaseFn = func(base string) error {
+	mock.RebaseFn = func(base string, opts git.RebaseOpts) error {
 		allRebaseCalls = append(allRebaseCalls, rebaseCall{newBase: base, oldBase: "", branch: currentCheckedOut})
 		return nil
 	}
-	mock.RebaseOntoFn = func(newBase, oldBase, branch string) error {
+	mock.RebaseOntoFn = func(newBase, oldBase, branch string, opts git.RebaseOpts) error {
 		allRebaseCalls = append(allRebaseCalls, rebaseCall{newBase, oldBase, branch})
 		return nil
 	}
@@ -652,7 +653,7 @@ func TestRebase_SkipsMergedBranches(t *testing.T) {
 	var rebaseCalls []rebaseCall
 
 	mock := newRebaseMock(tmpDir, "b2")
-	mock.RebaseOntoFn = func(newBase, oldBase, branch string) error {
+	mock.RebaseOntoFn = func(newBase, oldBase, branch string, opts git.RebaseOpts) error {
 		rebaseCalls = append(rebaseCalls, rebaseCall{newBase, oldBase, branch})
 		return nil
 	}
@@ -752,11 +753,11 @@ func TestRebase_Continue_RebasesRemainingBranches(t *testing.T) {
 
 	mock := newRebaseMock(tmpDir, "b2")
 	mock.IsRebaseInProgressFn = func() bool { return true }
-	mock.RebaseContinueFn = func() error {
+	mock.RebaseContinueFn = func(opts git.RebaseOpts) error {
 		rebaseContinueCalled = true
 		return nil
 	}
-	mock.RebaseOntoFn = func(newBase, oldBase, branch string) error {
+	mock.RebaseOntoFn = func(newBase, oldBase, branch string, opts git.RebaseOpts) error {
 		rebaseCalls = append(rebaseCalls, rebaseCall{newBase, oldBase, branch})
 		return nil
 	}
@@ -828,7 +829,7 @@ func TestRebase_Continue_OntoMode(t *testing.T) {
 
 	mock := newRebaseMock(tmpDir, "b3")
 	mock.IsRebaseInProgressFn = func() bool { return true }
-	mock.RebaseContinueFn = func() error {
+	mock.RebaseContinueFn = func(opts git.RebaseOpts) error {
 		rebaseContinueCalled = true
 		return nil
 	}
@@ -887,8 +888,8 @@ func TestRebase_Continue_ConflictOnRemaining(t *testing.T) {
 
 	mock := newRebaseMock(tmpDir, "b2")
 	mock.IsRebaseInProgressFn = func() bool { return true }
-	mock.RebaseContinueFn = func() error { return nil }
-	mock.RebaseOntoFn = func(newBase, oldBase, branch string) error {
+	mock.RebaseContinueFn = func(opts git.RebaseOpts) error { return nil }
+	mock.RebaseOntoFn = func(newBase, oldBase, branch string, opts git.RebaseOpts) error {
 		if branch == "b3" {
 			return assert.AnError // conflict on b3
 		}
@@ -1046,11 +1047,11 @@ func TestRebase_FastForwardsBranchFromRemote(t *testing.T) {
 		return nil
 	}
 	mock.CheckoutBranchFn = func(string) error { return nil }
-	mock.RebaseFn = func(base string) error {
+	mock.RebaseFn = func(base string, opts git.RebaseOpts) error {
 		allRebaseCalls = append(allRebaseCalls, rebaseCall{newBase: base})
 		return nil
 	}
-	mock.RebaseOntoFn = func(newBase, oldBase, branch string) error {
+	mock.RebaseOntoFn = func(newBase, oldBase, branch string, opts git.RebaseOpts) error {
 		allRebaseCalls = append(allRebaseCalls, rebaseCall{newBase, oldBase, branch})
 		return nil
 	}
@@ -1107,7 +1108,7 @@ func TestRebase_BranchAlreadyUpToDate_NoFF(t *testing.T) {
 		return nil
 	}
 	mock.CheckoutBranchFn = func(string) error { return nil }
-	mock.RebaseFn = func(string) error { return nil }
+	mock.RebaseFn = func(string, git.RebaseOpts) error { return nil }
 
 	restore := git.SetOps(mock)
 	defer restore()
@@ -1164,7 +1165,7 @@ func TestRebase_BranchDiverged_NoFF(t *testing.T) {
 		return nil
 	}
 	mock.CheckoutBranchFn = func(string) error { return nil }
-	mock.RebaseFn = func(string) error { return nil }
+	mock.RebaseFn = func(string, git.RebaseOpts) error { return nil }
 
 	restore := git.SetOps(mock)
 	defer restore()
@@ -1215,7 +1216,7 @@ func TestRebase_SkipsMergedBranchesNotExistingLocally(t *testing.T) {
 		}
 		return shas, nil
 	}
-	mock.RebaseOntoFn = func(newBase, oldBase, branch string) error {
+	mock.RebaseOntoFn = func(newBase, oldBase, branch string, opts git.RebaseOpts) error {
 		rebaseCalls = append(rebaseCalls, rebaseCall{newBase, oldBase, branch})
 		return nil
 	}
@@ -1242,4 +1243,240 @@ func TestRebase_SkipsMergedBranchesNotExistingLocally(t *testing.T) {
 	assert.Equal(t, "b2", rebaseCalls[0].branch)
 	assert.Equal(t, "main", rebaseCalls[0].newBase)
 	assert.Equal(t, "b1-stored-head-sha", rebaseCalls[0].oldBase)
+}
+
+// TestRebase_CommitterDateIsAuthorDate verifies that when
+// --committer-date-is-author-date is passed, it is forwarded to all rebase
+// calls in the cascade.
+func TestRebase_CommitterDateIsAuthorDate(t *testing.T) {
+	s := stack.Stack{
+		Trunk: stack.BranchRef{Branch: "main"},
+		Branches: []stack.BranchRef{
+			{Branch: "b1"},
+			{Branch: "b2"},
+			{Branch: "b3"},
+		},
+	}
+
+	tmpDir := t.TempDir()
+	writeStackFile(t, tmpDir, s)
+
+	var receivedOpts []git.RebaseOpts
+	var currentCheckedOut string
+
+	mock := newRebaseMock(tmpDir, "b2")
+	mock.CheckoutBranchFn = func(name string) error {
+		currentCheckedOut = name
+		return nil
+	}
+	mock.RebaseFn = func(base string, opts git.RebaseOpts) error {
+		receivedOpts = append(receivedOpts, opts)
+		_ = currentCheckedOut
+		return nil
+	}
+	mock.RebaseOntoFn = func(newBase, oldBase, branch string, opts git.RebaseOpts) error {
+		receivedOpts = append(receivedOpts, opts)
+		return nil
+	}
+
+	restore := git.SetOps(mock)
+	defer restore()
+
+	cfg, _, errR := config.NewTestConfig()
+	cmd := RebaseCmd(cfg)
+	cmd.SetOut(io.Discard)
+	cmd.SetErr(io.Discard)
+	cmd.SetArgs([]string{"--committer-date-is-author-date"})
+	err := cmd.Execute()
+
+	cfg.Err.Close()
+	errOut, _ := io.ReadAll(errR)
+	output := string(errOut)
+
+	assert.NoError(t, err)
+	assert.Contains(t, output, "rebased locally")
+
+	// All 3 rebase calls should have CommitterDateIsAuthorDate set.
+	require.Len(t, receivedOpts, 3)
+	for i, opts := range receivedOpts {
+		assert.True(t, opts.CommitterDateIsAuthorDate,
+			"rebase call %d should have CommitterDateIsAuthorDate=true", i)
+	}
+}
+
+// TestRebase_PreserveDatesAlias verifies that --preserve-dates is an alias
+// for --committer-date-is-author-date.
+func TestRebase_PreserveDatesAlias(t *testing.T) {
+	s := stack.Stack{
+		Trunk: stack.BranchRef{Branch: "main"},
+		Branches: []stack.BranchRef{
+			{Branch: "b1"},
+		},
+	}
+
+	tmpDir := t.TempDir()
+	writeStackFile(t, tmpDir, s)
+
+	var receivedOpts []git.RebaseOpts
+
+	mock := newRebaseMock(tmpDir, "b1")
+	mock.CheckoutBranchFn = func(string) error { return nil }
+	mock.RebaseFn = func(base string, opts git.RebaseOpts) error {
+		receivedOpts = append(receivedOpts, opts)
+		return nil
+	}
+
+	restore := git.SetOps(mock)
+	defer restore()
+
+	cfg, _, _ := config.NewTestConfig()
+	cmd := RebaseCmd(cfg)
+	cmd.SetOut(io.Discard)
+	cmd.SetErr(io.Discard)
+	cmd.SetArgs([]string{"--preserve-dates"})
+	err := cmd.Execute()
+
+	assert.NoError(t, err)
+	require.Len(t, receivedOpts, 1)
+	assert.True(t, receivedOpts[0].CommitterDateIsAuthorDate,
+		"--preserve-dates should set CommitterDateIsAuthorDate=true")
+}
+
+// TestRebase_StateRoundTrip_CommitterDateIsAuthorDate verifies that
+// CommitterDateIsAuthorDate is persisted and restored in rebase state.
+func TestRebase_StateRoundTrip_CommitterDateIsAuthorDate(t *testing.T) {
+	tmpDir := t.TempDir()
+
+	original := &rebaseState{
+		CurrentBranchIndex: 1,
+		ConflictBranch:     "b2",
+		RemainingBranches:  []string{"b3"},
+		OriginalBranch:     "b1",
+		OriginalRefs: map[string]string{
+			"b1": "sha-b1",
+			"b2": "sha-b2",
+			"b3": "sha-b3",
+		},
+		CommitterDateIsAuthorDate: true,
+	}
+
+	err := saveRebaseState(tmpDir, original)
+	require.NoError(t, err)
+
+	loaded, err := loadRebaseState(tmpDir)
+	require.NoError(t, err)
+
+	assert.Equal(t, true, loaded.CommitterDateIsAuthorDate)
+}
+
+// TestRebase_Continue_PreservesCommitterDateFlag verifies that --continue
+// restores the committer-date-is-author-date flag from saved state and
+// passes it to subsequent rebase calls.
+func TestRebase_Continue_PreservesCommitterDateFlag(t *testing.T) {
+	s := stack.Stack{
+		Trunk: stack.BranchRef{Branch: "main"},
+		Branches: []stack.BranchRef{
+			{Branch: "b1"},
+			{Branch: "b2"},
+			{Branch: "b3"},
+		},
+	}
+
+	tmpDir := t.TempDir()
+	writeStackFile(t, tmpDir, s)
+
+	// State: b2 had a conflict, b3 remains. Flag was set.
+	state := &rebaseState{
+		CurrentBranchIndex: 1,
+		ConflictBranch:     "b2",
+		RemainingBranches:  []string{"b3"},
+		OriginalBranch:     "b1",
+		OriginalRefs: map[string]string{
+			"main": "main-orig-sha",
+			"b1":   "b1-orig-sha",
+			"b2":   "b2-orig-sha",
+			"b3":   "b3-orig-sha",
+		},
+		CommitterDateIsAuthorDate: true,
+	}
+	require.NoError(t, saveRebaseState(tmpDir, state))
+
+	var continueCalled bool
+	var continueOpts git.RebaseOpts
+	var rebaseOntoOpts []git.RebaseOpts
+
+	mock := newRebaseMock(tmpDir, "b2")
+	mock.CheckoutBranchFn = func(string) error { return nil }
+	mock.IsRebaseInProgressFn = func() bool { return continueCalled == false }
+	mock.RebaseContinueFn = func(opts git.RebaseOpts) error {
+		continueCalled = true
+		continueOpts = opts
+		return nil
+	}
+	mock.RebaseOntoFn = func(newBase, oldBase, branch string, opts git.RebaseOpts) error {
+		rebaseOntoOpts = append(rebaseOntoOpts, opts)
+		return nil
+	}
+
+	restore := git.SetOps(mock)
+	defer restore()
+
+	cfg, _, _ := config.NewTestConfig()
+	cmd := RebaseCmd(cfg)
+	cmd.SetOut(io.Discard)
+	cmd.SetErr(io.Discard)
+	cmd.SetArgs([]string{"--continue"})
+	err := cmd.Execute()
+
+	assert.NoError(t, err)
+	assert.True(t, continueCalled)
+	assert.True(t, continueOpts.CommitterDateIsAuthorDate,
+		"RebaseContinue should receive CommitterDateIsAuthorDate=true from saved state")
+	require.Len(t, rebaseOntoOpts, 1)
+	assert.True(t, rebaseOntoOpts[0].CommitterDateIsAuthorDate,
+		"remaining cascade rebase should receive CommitterDateIsAuthorDate=true from saved state")
+}
+
+// TestRebase_ConflictSavesCommitterDateFlag verifies that when a conflict
+// occurs with --committer-date-is-author-date active, the flag is persisted
+// in the saved state.
+func TestRebase_ConflictSavesCommitterDateFlag(t *testing.T) {
+	s := stack.Stack{
+		Trunk: stack.BranchRef{Branch: "main"},
+		Branches: []stack.BranchRef{
+			{Branch: "b1"},
+			{Branch: "b2"},
+		},
+	}
+
+	tmpDir := t.TempDir()
+	writeStackFile(t, tmpDir, s)
+
+	mock := newRebaseMock(tmpDir, "b1")
+	mock.CheckoutBranchFn = func(string) error { return nil }
+	mock.RebaseFn = func(base string, opts git.RebaseOpts) error {
+		return nil // b1 succeeds
+	}
+	mock.RebaseOntoFn = func(newBase, oldBase, branch string, opts git.RebaseOpts) error {
+		if branch == "b2" {
+			return fmt.Errorf("conflict")
+		}
+		return nil
+	}
+
+	restore := git.SetOps(mock)
+	defer restore()
+
+	cfg, _, _ := config.NewTestConfig()
+	cmd := RebaseCmd(cfg)
+	cmd.SetOut(io.Discard)
+	cmd.SetErr(io.Discard)
+	cmd.SetArgs([]string{"--committer-date-is-author-date"})
+	_ = cmd.Execute()
+
+	// Load the saved state and verify the flag is persisted.
+	loaded, err := loadRebaseState(tmpDir)
+	require.NoError(t, err)
+	assert.True(t, loaded.CommitterDateIsAuthorDate,
+		"saved rebase state should preserve CommitterDateIsAuthorDate flag")
 }

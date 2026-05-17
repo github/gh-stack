@@ -65,8 +65,13 @@ func runInteractive(args ...string) error {
 }
 
 // rebaseContinueOnce runs a single git rebase --continue without auto-resolve.
-func rebaseContinueOnce() error {
-	cmd := exec.Command("git", "rebase", "--continue")
+func rebaseContinueOnce(opts RebaseOpts) error {
+	args := []string{"rebase"}
+	if opts.CommitterDateIsAuthorDate {
+		args = append(args, "--committer-date-is-author-date")
+	}
+	args = append(args, "--continue")
+	cmd := exec.Command("git", args...)
 	cmd.Env = append(os.Environ(), "GIT_EDITOR=true")
 	return cmd.Run()
 }
@@ -75,7 +80,7 @@ func rebaseContinueOnce() error {
 // from a failed rebase. If so, it auto-continues the rebase (potentially
 // multiple times for multi-commit rebases). Returns originalErr if any
 // conflicts remain that need manual resolution.
-func tryAutoResolveRebase(originalErr error) error {
+func tryAutoResolveRebase(originalErr error, opts RebaseOpts) error {
 	for i := 0; i < 1000; i++ {
 		if !IsRebaseInProgress() {
 			return nil
@@ -88,7 +93,7 @@ func tryAutoResolveRebase(originalErr error) error {
 			return originalErr
 		}
 		// Rerere resolved all conflicts — auto-continue.
-		if rebaseContinueOnce() == nil {
+		if rebaseContinueOnce(opts) == nil {
 			return nil
 		}
 		// Continue hit another conflicting commit; loop to check
@@ -160,8 +165,8 @@ func ResolveRemote(branch string) (string, error) {
 // Rebase rebases the current branch onto the given base.
 // If rerere resolves all conflicts automatically, the rebase continues
 // without user intervention.
-func Rebase(base string) error {
-	return ops.Rebase(base)
+func Rebase(base string, opts RebaseOpts) error {
+	return ops.Rebase(base, opts)
 }
 
 // EnableRerere enables git rerere (reuse recorded resolution) and
@@ -194,8 +199,8 @@ func SaveRerereDeclined() error {
 // which commits have already been applied.
 // If rerere resolves all conflicts automatically, the rebase continues
 // without user intervention.
-func RebaseOnto(newBase, oldBase, branch string) error {
-	return ops.RebaseOnto(newBase, oldBase, branch)
+func RebaseOnto(newBase, oldBase, branch string, opts RebaseOpts) error {
+	return ops.RebaseOnto(newBase, oldBase, branch, opts)
 }
 
 // RebaseContinue continues an in-progress rebase.
@@ -203,8 +208,8 @@ func RebaseOnto(newBase, oldBase, branch string) error {
 // for the commit message, which would cause the command to hang.
 // If rerere resolves subsequent conflicts automatically, the rebase continues
 // without user intervention.
-func RebaseContinue() error {
-	return ops.RebaseContinue()
+func RebaseContinue(opts RebaseOpts) error {
+	return ops.RebaseContinue(opts)
 }
 
 // RebaseAbort aborts an in-progress rebase.

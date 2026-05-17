@@ -54,7 +54,7 @@ func newApplyMock(gitDir string, branchSHAs map[string]string) *git.MockOps {
 		IsAncestorFn:        func(a, d string) (bool, error) { return false, nil },
 		MergeBaseFn:          func(a, b string) (string, error) { return "merge-base", nil },
 		CheckoutBranchFn:     func(string) error { return nil },
-		RebaseOntoFn:         func(string, string, string) error { return nil },
+		RebaseOntoFn:         func(string, string, string, git.RebaseOpts) error { return nil },
 		IsRebaseInProgressFn: func() bool { return false },
 		RenameBranchFn:       func(string, string) error { return nil },
 		LogRangeFn: func(base, head string) ([]git.CommitInfo, error) {
@@ -235,7 +235,7 @@ func TestApplyPlan_Drop(t *testing.T) {
 
 	var rebaseCalls []rebaseCall
 	mock := newApplyMock(gitDir, branchSHAs)
-	mock.RebaseOntoFn = func(newBase, oldBase, branch string) error {
+	mock.RebaseOntoFn = func(newBase, oldBase, branch string, opts git.RebaseOpts) error {
 		rebaseCalls = append(rebaseCalls, rebaseCall{newBase, oldBase, branch})
 		return nil
 	}
@@ -379,7 +379,7 @@ func TestApplyPlan_FoldUp(t *testing.T) {
 		cherryPickCalls = append(cherryPickCalls, shas)
 		return nil
 	}
-	mock.RebaseOntoFn = func(newBase, oldBase, branch string) error {
+	mock.RebaseOntoFn = func(newBase, oldBase, branch string, opts git.RebaseOpts) error {
 		rebaseCalls = append(rebaseCalls, rebaseCall{newBase, oldBase, branch})
 		return nil
 	}
@@ -504,7 +504,7 @@ func TestApplyPlan_Reorder(t *testing.T) {
 	var rebaseCalls []rebaseCall
 
 	mock := newApplyMock(gitDir, branchSHAs)
-	mock.RebaseOntoFn = func(newBase, oldBase, branch string) error {
+	mock.RebaseOntoFn = func(newBase, oldBase, branch string, opts git.RebaseOpts) error {
 		rebaseCalls = append(rebaseCalls, rebaseCall{newBase, oldBase, branch})
 		return nil
 	}
@@ -600,7 +600,7 @@ func TestApplyPlan_MixedDropAndFold(t *testing.T) {
 		}
 		return nil, nil
 	}
-	mock.RebaseOntoFn = func(newBase, oldBase, branch string) error {
+	mock.RebaseOntoFn = func(newBase, oldBase, branch string, opts git.RebaseOpts) error {
 		rebaseCalls = append(rebaseCalls, rebaseCall{newBase, oldBase, branch})
 		return nil
 	}
@@ -667,7 +667,7 @@ func TestApplyPlan_ConflictDuringRebase(t *testing.T) {
 	}
 
 	mock := newApplyMock(gitDir, branchSHAs)
-	mock.RebaseOntoFn = func(newBase, oldBase, branch string) error {
+	mock.RebaseOntoFn = func(newBase, oldBase, branch string, opts git.RebaseOpts) error {
 		if branch == "B" {
 			return assert.AnError
 		}
@@ -810,10 +810,10 @@ func TestContinueApply_MultiStackFindsCorrectStack(t *testing.T) {
 		"main": "sha-main", "A": "sha-A", "B": "sha-B", "C": "sha-C",
 	})
 	mock.IsRebaseInProgressFn = func() bool { return true }
-	mock.RebaseContinueFn = func() error { return nil }
+	mock.RebaseContinueFn = func(opts git.RebaseOpts) error { return nil }
 
 	var rebasedBranches []string
-	mock.RebaseOntoFn = func(newBase, oldBase, branch string) error {
+	mock.RebaseOntoFn = func(newBase, oldBase, branch string, opts git.RebaseOpts) error {
 		rebasedBranches = append(rebasedBranches, branch)
 		return nil
 	}
@@ -960,7 +960,7 @@ func TestApplyPlan_NoChanges(t *testing.T) {
 	}
 
 	var rebaseCalls int
-	mock.RebaseOntoFn = func(string, string, string) error {
+	mock.RebaseOntoFn = func(string, string, string, git.RebaseOpts) error {
 		rebaseCalls++
 		return nil
 	}
@@ -1068,11 +1068,11 @@ func TestContinueApply(t *testing.T) {
 		CurrentBranchFn: func() (string, error) { return "B", nil },
 		BranchExistsFn:  func(string) bool { return true },
 		IsRebaseInProgressFn: func() bool { return true },
-		RebaseContinueFn: func() error {
+		RebaseContinueFn: func(git.RebaseOpts) error {
 			rebaseContinueCalled = true
 			return nil
 		},
-		RebaseOntoFn: func(newBase, oldBase, branch string) error {
+		RebaseOntoFn: func(newBase, oldBase, branch string, opts git.RebaseOpts) error {
 			rebaseCalls = append(rebaseCalls, rebaseCall{newBase, oldBase, branch})
 			return nil
 		},

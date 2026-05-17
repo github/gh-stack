@@ -15,13 +15,13 @@ type MockOps struct {
 	CreateBranchFn          func(string, string) error
 	PushFn                  func(string, []string, bool, bool) error
 	ResolveRemoteFn         func(string) (string, error)
-	RebaseFn                func(string) error
+	RebaseFn                func(string, RebaseOpts) error
 	EnableRerereFn          func() error
 	IsRerereEnabledFn       func() (bool, error)
 	IsRerereDeclinedFn      func() (bool, error)
 	SaveRerereDeclinedFn    func() error
-	RebaseOntoFn            func(string, string, string) error
-	RebaseContinueFn        func() error
+	RebaseOntoFn            func(string, string, string, RebaseOpts) error
+	RebaseContinueFn        func(RebaseOpts) error
 	RebaseAbortFn           func() error
 	IsRebaseInProgressFn    func() bool
 	ConflictedFilesFn       func() ([]string, error)
@@ -132,9 +132,9 @@ func (m *MockOps) ResolveRemote(branch string) (string, error) {
 	return "origin", nil
 }
 
-func (m *MockOps) Rebase(base string) error {
+func (m *MockOps) Rebase(base string, opts RebaseOpts) error {
 	if m.RebaseFn != nil {
-		return m.RebaseFn(base)
+		return m.RebaseFn(base, opts)
 	}
 	return nil
 }
@@ -167,16 +167,16 @@ func (m *MockOps) SaveRerereDeclined() error {
 	return nil
 }
 
-func (m *MockOps) RebaseOnto(newBase, oldBase, branch string) error {
+func (m *MockOps) RebaseOnto(newBase, oldBase, branch string, opts RebaseOpts) error {
 	if m.RebaseOntoFn != nil {
-		return m.RebaseOntoFn(newBase, oldBase, branch)
+		return m.RebaseOntoFn(newBase, oldBase, branch, opts)
 	}
 	return nil
 }
 
-func (m *MockOps) RebaseContinue() error {
+func (m *MockOps) RebaseContinue(opts RebaseOpts) error {
 	if m.RebaseContinueFn != nil {
-		return m.RebaseContinueFn()
+		return m.RebaseContinueFn(opts)
 	}
 	return nil
 }
