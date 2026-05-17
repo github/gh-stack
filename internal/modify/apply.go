@@ -458,7 +458,7 @@ func ApplyPlan(
 			}
 		}
 
-		if err := git.RebaseOnto(newBase, oldBase, b.Branch); err != nil {
+		if err := git.RebaseOnto(newBase, oldBase, b.Branch, git.RebaseOpts{}); err != nil {
 			conflict := &modifyview.ConflictInfo{
 				Branch: b.Branch,
 			}
@@ -575,7 +575,7 @@ func ContinueApply(
 	} else {
 		// Rebase conflict
 		if git.IsRebaseInProgress() {
-			if err := git.RebaseContinue(); err != nil {
+			if err := git.RebaseContinue(git.RebaseOpts{}); err != nil {
 				return fmt.Errorf("rebase continue failed — resolve remaining conflicts and try again: %w", err)
 			}
 		}
@@ -622,7 +622,7 @@ func ContinueApply(
 			}
 		}
 
-		if err := git.RebaseOnto(newBase, oldBase, b.Branch); err != nil {
+		if err := git.RebaseOnto(newBase, oldBase, b.Branch, git.RebaseOpts{}); err != nil {
 			// Another conflict — update state and bail
 			remaining := make([]string, 0)
 			foundCurrent := false
