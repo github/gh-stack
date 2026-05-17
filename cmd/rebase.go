@@ -16,22 +16,24 @@ import (
 )
 
 type rebaseOptions struct {
-	branch    string
-	downstack bool
-	upstack   bool
-	cont      bool
-	abort     bool
-	remote    string
+	branch                    string
+	downstack                 bool
+	upstack                   bool
+	cont                      bool
+	abort                     bool
+	remote                    string
+	committerDateIsAuthorDate bool
 }
 
 type rebaseState struct {
-	CurrentBranchIndex int               `json:"currentBranchIndex"`
-	ConflictBranch     string            `json:"conflictBranch"`
-	RemainingBranches  []string          `json:"remainingBranches"`
-	OriginalBranch     string            `json:"originalBranch"`
-	OriginalRefs       map[string]string `json:"originalRefs"`
-	UseOnto            bool              `json:"useOnto,omitempty"`
-	OntoOldBase        string            `json:"ontoOldBase,omitempty"`
+	CurrentBranchIndex        int               `json:"currentBranchIndex"`
+	ConflictBranch            string            `json:"conflictBranch"`
+	RemainingBranches         []string          `json:"remainingBranches"`
+	OriginalBranch            string            `json:"originalBranch"`
+	OriginalRefs              map[string]string `json:"originalRefs"`
+	UseOnto                   bool              `json:"useOnto,omitempty"`
+	OntoOldBase               string            `json:"ontoOldBase,omitempty"`
+	CommitterDateIsAuthorDate bool              `json:"committerDateIsAuthorDate,omitempty"`
 }
 
 const rebaseStateFile = "gh-stack-rebase-state"
@@ -74,6 +76,8 @@ layer in its commit history, rebasing if necessary.`,
 	cmd.Flags().BoolVar(&opts.cont, "continue", false, "Continue rebase after resolving conflicts")
 	cmd.Flags().BoolVar(&opts.abort, "abort", false, "Abort rebase and restore all branches")
 	cmd.Flags().StringVar(&opts.remote, "remote", "", "Remote to fetch from (defaults to auto-detected remote)")
+	cmd.Flags().BoolVar(&opts.committerDateIsAuthorDate, "committer-date-is-author-date", false, "Preserve commit dates as the same as author dates")
+	cmd.Flags().BoolVar(&opts.committerDateIsAuthorDate, "preserve-dates", false, "Alias for --committer-date-is-author-date")
 
 	return cmd
 }
@@ -187,13 +191,14 @@ func runRebase(cfg *config.Config, opts *rebaseOptions) error {
 	}
 
 	rebaseResult := cascadeRebase(cascadeRebaseOpts{
-		Cfg:          cfg,
-		Stack:        s,
-		Branches:     branchesToRebase,
-		StartAbsIdx:  startIdx,
-		OriginalRefs: originalRefs,
-		NeedsOnto:    needsOnto,
-		OntoOldBase:  ontoOldBase,
+		Cfg:                       cfg,
+		Stack:                     s,
+		Branches:                  branchesToRebase,
+		StartAbsIdx:               startIdx,
+		OriginalRefs:              originalRefs,
+		NeedsOnto:                 needsOnto,
+		OntoOldBase:               ontoOldBase,
+		CommitterDateIsAuthorDate: opts.committerDateIsAuthorDate,
 	})
 
 	if rebaseResult.Err != nil {
@@ -205,13 +210,14 @@ func runRebase(cfg *config.Config, opts *rebaseOptions) error {
 		cfg.Warningf("Rebasing %s onto %s — conflict", rebaseResult.ConflictBranch, rebaseResult.ConflictBase)
 
 		state := &rebaseState{
-			CurrentBranchIndex: rebaseResult.ConflictIdx,
-			ConflictBranch:     rebaseResult.ConflictBranch,
-			RemainingBranches:  rebaseResult.Remaining,
-			OriginalBranch:     currentBranch,
-			OriginalRefs:       originalRefs,
-			UseOnto:            rebaseResult.NeedsOnto,
-			OntoOldBase:        rebaseResult.OntoOldBase,
+			CurrentBranchIndex:        rebaseResult.ConflictIdx,
+			ConflictBranch:            rebaseResult.ConflictBranch,
+			RemainingBranches:         rebaseResult.Remaining,
+			OriginalBranch:            currentBranch,
+			OriginalRefs:              originalRefs,
+			UseOnto:                   rebaseResult.NeedsOnto,
+			OntoOldBase:               rebaseResult.OntoOldBase,
+			CommitterDateIsAuthorDate: opts.committerDateIsAuthorDate,
 		}
 		if err := saveRebaseState(gitDir, state); err != nil {
 			cfg.Warningf("failed to save rebase state: %s", err)
@@ -292,7 +298,8 @@ func continueRebase(cfg *config.Config, gitDir string) error {
 		conflictBranch, s.Branches[len(s.Branches)-1].Branch)
 
 	if git.IsRebaseInProgress() {
-		if err := git.RebaseContinue(); err != nil {
+		rebaseOpts := git.RebaseOpts{CommitterDateIsAuthorDate: state.CommitterDateIsAuthorDate}
+		if err := git.RebaseContinue(rebaseOpts); err != nil {
 			return fmt.Errorf("rebase continue failed — resolve remaining conflicts and try again: %w", err)
 		}
 	}
@@ -334,13 +341,14 @@ func continueRebase(cfg *config.Config, gitDir string) error {
 		}
 
 		result := cascadeRebase(cascadeRebaseOpts{
-			Cfg:          cfg,
-			Stack:        s,
-			Branches:     remainingRefs,
-			StartAbsIdx:  startAbsIdx,
-			OriginalRefs: state.OriginalRefs,
-			NeedsOnto:    state.UseOnto,
-			OntoOldBase:  state.OntoOldBase,
+			Cfg:                       cfg,
+			Stack:                     s,
+			Branches:                  remainingRefs,
+			StartAbsIdx:               startAbsIdx,
+			OriginalRefs:              state.OriginalRefs,
+			NeedsOnto:                 state.UseOnto,
+			OntoOldBase:               state.OntoOldBase,
+			CommitterDateIsAuthorDate: state.CommitterDateIsAuthorDate,
 		})
 
 		if result.Err != nil {

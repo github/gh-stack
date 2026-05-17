@@ -688,13 +688,14 @@ func fastForwardTrunk(cfg *config.Config, trunk, remote, currentBranch string) b
 // cascadeRebaseOpts holds parameters for a cascade rebase across a range of
 // stack branches.
 type cascadeRebaseOpts struct {
-	Cfg          *config.Config
-	Stack        *stack.Stack
-	Branches     []stack.BranchRef // the range of branches to rebase
-	StartAbsIdx  int               // index of Branches[0] in Stack.Branches
-	OriginalRefs map[string]string
-	NeedsOnto    bool
-	OntoOldBase  string
+	Cfg                       *config.Config
+	Stack                     *stack.Stack
+	Branches                  []stack.BranchRef // the range of branches to rebase
+	StartAbsIdx               int               // index of Branches[0] in Stack.Branches
+	OriginalRefs              map[string]string
+	NeedsOnto                 bool
+	OntoOldBase               string
+	CommitterDateIsAuthorDate bool
 }
 
 // cascadeRebaseResult describes the outcome of a cascade rebase.
@@ -720,6 +721,7 @@ func cascadeRebase(opts cascadeRebaseOpts) cascadeRebaseResult {
 	ontoOldBase := opts.OntoOldBase
 	originalRefs := opts.OriginalRefs
 	result := cascadeRebaseResult{}
+	rebaseOpts := git.RebaseOpts{CommitterDateIsAuthorDate: opts.CommitterDateIsAuthorDate}
 
 	for i, br := range opts.Branches {
 		absIdx := opts.StartAbsIdx + i
@@ -764,7 +766,7 @@ func cascadeRebase(opts cascadeRebaseOpts) cascadeRebaseResult {
 				}
 			}
 
-			if err := git.RebaseOnto(newBase, actualOldBase, br.Branch); err != nil {
+			if err := git.RebaseOnto(newBase, actualOldBase, br.Branch, rebaseOpts); err != nil {
 				remaining := make([]string, 0, len(opts.Branches)-i-1)
 				for j := i + 1; j < len(opts.Branches); j++ {
 					remaining = append(remaining, opts.Branches[j].Branch)
@@ -787,7 +789,7 @@ func cascadeRebase(opts cascadeRebaseOpts) cascadeRebaseResult {
 		} else {
 			var rebaseErr error
 			if absIdx > 0 {
-				rebaseErr = git.RebaseOnto(base, originalRefs[base], br.Branch)
+				rebaseErr = git.RebaseOnto(base, originalRefs[base], br.Branch, rebaseOpts)
 			} else {
 				if err := git.CheckoutBranch(br.Branch); err != nil {
 					return cascadeRebaseResult{
@@ -795,7 +797,7 @@ func cascadeRebase(opts cascadeRebaseOpts) cascadeRebaseResult {
 						Err:     fmt.Errorf("checking out %s: %w", br.Branch, err),
 					}
 				}
-				rebaseErr = git.Rebase(base)
+				rebaseErr = git.Rebase(base, rebaseOpts)
 			}
 
 			if rebaseErr != nil {

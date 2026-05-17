@@ -71,11 +71,11 @@ func TestSync_TrunkAlreadyUpToDate(t *testing.T) {
 		}
 		return "sha-" + ref, nil
 	}
-	mock.RebaseOntoFn = func(newBase, oldBase, branch string) error {
+	mock.RebaseOntoFn = func(newBase, oldBase, branch string, opts git.RebaseOpts) error {
 		rebaseCalls = append(rebaseCalls, rebaseCall{newBase, oldBase, branch})
 		return nil
 	}
-	mock.RebaseFn = func(base string) error {
+	mock.RebaseFn = func(base string, opts git.RebaseOpts) error {
 		rebaseCalls = append(rebaseCalls, rebaseCall{branch: "rebase-" + base})
 		return nil
 	}
@@ -145,11 +145,11 @@ func TestSync_TrunkUpToDate_StackStale(t *testing.T) {
 		return true, nil
 	}
 	mock.CheckoutBranchFn = func(string) error { return nil }
-	mock.RebaseFn = func(base string) error {
+	mock.RebaseFn = func(base string, opts git.RebaseOpts) error {
 		rebaseCalls = append(rebaseCalls, rebaseCall{branch: "(rebase)" + base})
 		return nil
 	}
-	mock.RebaseOntoFn = func(newBase, oldBase, branch string) error {
+	mock.RebaseOntoFn = func(newBase, oldBase, branch string, opts git.RebaseOpts) error {
 		rebaseCalls = append(rebaseCalls, rebaseCall{newBase, oldBase, branch})
 		return nil
 	}
@@ -228,11 +228,11 @@ func TestSync_TrunkFastForward_TriggersRebase(t *testing.T) {
 		return nil
 	}
 	mock.CheckoutBranchFn = func(string) error { return nil }
-	mock.RebaseFn = func(base string) error {
+	mock.RebaseFn = func(base string, opts git.RebaseOpts) error {
 		rebaseCalls = append(rebaseCalls, rebaseCall{branch: "(rebase)" + base})
 		return nil
 	}
-	mock.RebaseOntoFn = func(newBase, oldBase, branch string) error {
+	mock.RebaseOntoFn = func(newBase, oldBase, branch string, opts git.RebaseOpts) error {
 		rebaseCalls = append(rebaseCalls, rebaseCall{newBase, oldBase, branch})
 		return nil
 	}
@@ -309,8 +309,8 @@ func TestSync_TrunkFastForward_WhenOnTrunk(t *testing.T) {
 		return nil
 	}
 	mock.CheckoutBranchFn = func(string) error { return nil }
-	mock.RebaseFn = func(string) error { return nil }
-	mock.RebaseOntoFn = func(string, string, string) error { return nil }
+	mock.RebaseFn = func(string, git.RebaseOpts) error { return nil }
+	mock.RebaseOntoFn = func(string, string, string, git.RebaseOpts) error { return nil }
 
 	restore := git.SetOps(mock)
 	defer restore()
@@ -372,7 +372,7 @@ func TestSync_TrunkDiverged(t *testing.T) {
 		// Stack branches have their parent as ancestor
 		return true, nil
 	}
-	mock.RebaseOntoFn = func(newBase, oldBase, branch string) error {
+	mock.RebaseOntoFn = func(newBase, oldBase, branch string, opts git.RebaseOpts) error {
 		rebaseCalls = append(rebaseCalls, rebaseCall{newBase, oldBase, branch})
 		return nil
 	}
@@ -442,8 +442,8 @@ func TestSync_RebaseConflict_RestoresAll(t *testing.T) {
 		currentBranch = name
 		return nil
 	}
-	mock.RebaseFn = func(string) error { return nil } // b1 succeeds
-	mock.RebaseOntoFn = func(newBase, oldBase, branch string) error {
+	mock.RebaseFn = func(string, git.RebaseOpts) error { return nil } // b1 succeeds
+	mock.RebaseOntoFn = func(newBase, oldBase, branch string, opts git.RebaseOpts) error {
 		if branch == "b2" {
 			return fmt.Errorf("conflict")
 		}
@@ -509,11 +509,11 @@ func TestSync_NoRebaseWhenTrunkDidntMove(t *testing.T) {
 	mock.RevParseFn = func(ref string) (string, error) {
 		return "same-sha", nil
 	}
-	mock.RebaseFn = func(string) error {
+	mock.RebaseFn = func(string, git.RebaseOpts) error {
 		rebaseCount++
 		return nil
 	}
-	mock.RebaseOntoFn = func(string, string, string) error {
+	mock.RebaseOntoFn = func(string, string, string, git.RebaseOpts) error {
 		rebaseOntoCount++
 		return nil
 	}
@@ -563,8 +563,8 @@ func TestSync_PushForceFlagDependsOnRebase(t *testing.T) {
 
 			mock := newSyncMock(tmpDir, "b1")
 			mock.CheckoutBranchFn = func(string) error { return nil }
-			mock.RebaseFn = func(string) error { return nil }
-			mock.RebaseOntoFn = func(string, string, string) error { return nil }
+			mock.RebaseFn = func(string, git.RebaseOpts) error { return nil }
+			mock.RebaseOntoFn = func(string, string, string, git.RebaseOpts) error { return nil }
 
 			if tt.trunkMoved {
 				mock.RevParseFn = func(ref string) (string, error) {
@@ -662,7 +662,7 @@ func TestSync_MergedBranch_UsesOnto(t *testing.T) {
 	}
 	mock.UpdateBranchRefFn = func(string, string) error { return nil }
 	mock.CheckoutBranchFn = func(string) error { return nil }
-	mock.RebaseOntoFn = func(newBase, oldBase, branch string) error {
+	mock.RebaseOntoFn = func(newBase, oldBase, branch string, opts git.RebaseOpts) error {
 		rebaseOntoCalls = append(rebaseOntoCalls, rebaseCall{newBase, oldBase, branch})
 		return nil
 	}
@@ -754,7 +754,7 @@ func TestSync_StaleOntoOldBase_FallsBackToMergeBase(t *testing.T) {
 	}
 	mock.UpdateBranchRefFn = func(string, string) error { return nil }
 	mock.CheckoutBranchFn = func(string) error { return nil }
-	mock.RebaseOntoFn = func(newBase, oldBase, branch string) error {
+	mock.RebaseOntoFn = func(newBase, oldBase, branch string, opts git.RebaseOpts) error {
 		rebaseOntoCalls = append(rebaseOntoCalls, rebaseCall{newBase, oldBase, branch})
 		return nil
 	}
@@ -817,8 +817,8 @@ func TestSync_PushFailureAfterRebase(t *testing.T) {
 	}
 	mock.UpdateBranchRefFn = func(string, string) error { return nil }
 	mock.CheckoutBranchFn = func(string) error { return nil }
-	mock.RebaseFn = func(string) error { return nil }
-	mock.RebaseOntoFn = func(string, string, string) error { return nil }
+	mock.RebaseFn = func(string, git.RebaseOpts) error { return nil }
+	mock.RebaseOntoFn = func(string, string, string, git.RebaseOpts) error { return nil }
 	mock.PushFn = func(remote string, branches []string, force, atomic bool) error {
 		pushCalls = append(pushCalls, pushCall{remote, branches, force, atomic})
 		return fmt.Errorf("network error: connection refused")
@@ -891,11 +891,11 @@ func TestSync_BranchFastForward_TriggersRebase(t *testing.T) {
 		return nil
 	}
 	mock.CheckoutBranchFn = func(string) error { return nil }
-	mock.RebaseFn = func(base string) error {
+	mock.RebaseFn = func(base string, opts git.RebaseOpts) error {
 		rebaseCalls = append(rebaseCalls, rebaseCall{branch: "(rebase)" + base})
 		return nil
 	}
-	mock.RebaseOntoFn = func(newBase, oldBase, branch string) error {
+	mock.RebaseOntoFn = func(newBase, oldBase, branch string, opts git.RebaseOpts) error {
 		rebaseCalls = append(rebaseCalls, rebaseCall{newBase, oldBase, branch})
 		return nil
 	}
@@ -984,11 +984,11 @@ func TestSync_BranchFastForward_WithTrunkUpdate(t *testing.T) {
 		return nil
 	}
 	mock.CheckoutBranchFn = func(string) error { return nil }
-	mock.RebaseFn = func(base string) error {
+	mock.RebaseFn = func(base string, opts git.RebaseOpts) error {
 		rebaseCalls2 = append(rebaseCalls2, rebaseCall{branch: "(rebase)" + base})
 		return nil
 	}
-	mock.RebaseOntoFn = func(newBase, oldBase, branch string) error {
+	mock.RebaseOntoFn = func(newBase, oldBase, branch string, opts git.RebaseOpts) error {
 		rebaseCalls2 = append(rebaseCalls2, rebaseCall{newBase, oldBase, branch})
 		return nil
 	}
@@ -1080,7 +1080,7 @@ func TestSync_MergedBranchDeletedFromRemote(t *testing.T) {
 	}
 	mock.UpdateBranchRefFn = func(string, string) error { return nil }
 	mock.CheckoutBranchFn = func(string) error { return nil }
-	mock.RebaseOntoFn = func(newBase, oldBase, branch string) error {
+	mock.RebaseOntoFn = func(newBase, oldBase, branch string, opts git.RebaseOpts) error {
 		rebaseOntoCalls = append(rebaseOntoCalls, rebaseCall{newBase, oldBase, branch})
 		return nil
 	}
