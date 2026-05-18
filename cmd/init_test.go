@@ -581,7 +581,7 @@ func TestInit_WhatsNext_Fresh(t *testing.T) {
 	output := collectOutput(cfg, outR, errR)
 
 	assert.Contains(t, output, "Created stack")
-	assert.Contains(t, output, "main → my-feature")
+	assert.Contains(t, output, "main ← my-feature")
 	assert.Contains(t, output, "top of stack")
 	assert.Contains(t, output, "What's next:")
 	assert.Contains(t, output, "gh stack add")

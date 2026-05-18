@@ -3,7 +3,6 @@ package cmd
 import (
 	"fmt"
 
-	"github.com/cli/go-gh/v2/pkg/prompter"
 	"github.com/github/gh-stack/internal/branch"
 	"github.com/github/gh-stack/internal/config"
 	"github.com/github/gh-stack/internal/git"
@@ -146,9 +145,14 @@ func runAdd(cfg *config.Config, opts *addOptions, args []string) error {
 		if s.Numbered && s.Prefix != "" {
 			branchName = branch.NextNumberedName(s.Prefix, existingBranches)
 		} else {
-			p := prompter.New(cfg.In, cfg.Out, cfg.Err)
+			// Pre-fill the prompt with the prefix so the user can see
+			// (and optionally edit) the full branch name.
+			prefill := ""
+			if s.Prefix != "" {
+				prefill = s.Prefix + "/"
+			}
 			for {
-				input, err := p.Input("Enter a name for the new branch", "")
+				input, err := inputWithPrefill(cfg, "Enter a name for the new branch:", prefill)
 				if err != nil {
 					if isInterruptError(err) {
 						printInterrupt(cfg)
@@ -160,7 +164,7 @@ func runAdd(cfg *config.Config, opts *addOptions, args []string) error {
 					cfg.Warningf("branch name cannot be empty, please try again")
 					continue
 				}
-				branchName = applyPrefix(cfg, s.Prefix, input)
+				branchName = input
 				break
 			}
 		}
