@@ -321,6 +321,117 @@ func TestAdd_NothingToCommit(t *testing.T) {
 	assert.Contains(t, output, "no changes to commit")
 }
 
+func TestAdd_PromptPrefillsPrefix(t *testing.T) {
+	gitDir := t.TempDir()
+	saveStack(t, gitDir, stack.Stack{
+		Prefix:   "feat",
+		Trunk:    stack.BranchRef{Branch: "main"},
+		Branches: []stack.BranchRef{{Branch: "feat/01"}},
+	})
+
+	var createdBranch string
+	restore := git.SetOps(&git.MockOps{
+		GitDirFn:        func() (string, error) { return gitDir, nil },
+		CurrentBranchFn: func() (string, error) { return "feat/01", nil },
+		CreateBranchFn: func(name, base string) error {
+			createdBranch = name
+			return nil
+		},
+		CheckoutBranchFn: func(name string) error { return nil },
+		RevParseFn:       func(ref string) (string, error) { return "abc", nil },
+	})
+	defer restore()
+
+	cfg, outR, errR := config.NewTestConfig()
+
+	var gotDefault string
+	cfg.InputFn = func(prompt, defaultValue string) (string, error) {
+		gotDefault = defaultValue
+		return "feat/my-branch", nil
+	}
+
+	err := runAdd(cfg, &addOptions{}, nil)
+	output := collectOutput(cfg, outR, errR)
+
+	require.NoError(t, err)
+	require.NotContains(t, output, "\u2717", "unexpected error")
+	assert.Equal(t, "feat/", gotDefault, "prompt should pre-fill prefix/")
+	assert.Equal(t, "feat/my-branch", createdBranch, "full input should be used as branch name")
+}
+
+func TestAdd_PromptNoPrefixEmptyDefault(t *testing.T) {
+	gitDir := t.TempDir()
+	saveStack(t, gitDir, stack.Stack{
+		Trunk:    stack.BranchRef{Branch: "main"},
+		Branches: []stack.BranchRef{{Branch: "b1"}},
+	})
+
+	var createdBranch string
+	restore := git.SetOps(&git.MockOps{
+		GitDirFn:        func() (string, error) { return gitDir, nil },
+		CurrentBranchFn: func() (string, error) { return "b1", nil },
+		CreateBranchFn: func(name, base string) error {
+			createdBranch = name
+			return nil
+		},
+		CheckoutBranchFn: func(name string) error { return nil },
+		RevParseFn:       func(ref string) (string, error) { return "abc", nil },
+	})
+	defer restore()
+
+	cfg, outR, errR := config.NewTestConfig()
+
+	var gotDefault string
+	cfg.InputFn = func(prompt, defaultValue string) (string, error) {
+		gotDefault = defaultValue
+		return "my-branch", nil
+	}
+
+	err := runAdd(cfg, &addOptions{}, nil)
+	output := collectOutput(cfg, outR, errR)
+
+	require.NoError(t, err)
+	require.NotContains(t, output, "\u2717", "unexpected error")
+	assert.Equal(t, "", gotDefault, "prompt should have empty default when no prefix")
+	assert.Equal(t, "my-branch", createdBranch, "input should be used as-is")
+}
+
+func TestAdd_PromptUserModifiesPrefix(t *testing.T) {
+	gitDir := t.TempDir()
+	saveStack(t, gitDir, stack.Stack{
+		Prefix:   "feat",
+		Trunk:    stack.BranchRef{Branch: "main"},
+		Branches: []stack.BranchRef{{Branch: "feat/01"}},
+	})
+
+	var createdBranch string
+	restore := git.SetOps(&git.MockOps{
+		GitDirFn:        func() (string, error) { return gitDir, nil },
+		CurrentBranchFn: func() (string, error) { return "feat/01", nil },
+		CreateBranchFn: func(name, base string) error {
+			createdBranch = name
+			return nil
+		},
+		CheckoutBranchFn: func(name string) error { return nil },
+		RevParseFn:       func(ref string) (string, error) { return "abc", nil },
+	})
+	defer restore()
+
+	cfg, outR, errR := config.NewTestConfig()
+
+	cfg.InputFn = func(prompt, defaultValue string) (string, error) {
+		// Simulate user changing the prefix entirely
+		return "custom/other-name", nil
+	}
+
+	err := runAdd(cfg, &addOptions{}, nil)
+	output := collectOutput(cfg, outR, errR)
+
+	require.NoError(t, err)
+	require.NotContains(t, output, "\u2717", "unexpected error")
+	assert.Equal(t, "custom/other-name", createdBranch, "user-modified input should be used verbatim")
+}
+
 func TestAdd_FromTrunk(t *testing.T) {
 	gitDir := t.TempDir()
 	saveStack(t, gitDir, stack.Stack{
