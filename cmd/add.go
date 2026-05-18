@@ -3,13 +3,11 @@ package cmd
 import (
 	"fmt"
 
-	"github.com/AlecAivazis/survey/v2/terminal"
 	"github.com/github/gh-stack/internal/branch"
 	"github.com/github/gh-stack/internal/config"
 	"github.com/github/gh-stack/internal/git"
 	"github.com/github/gh-stack/internal/modify"
 	"github.com/github/gh-stack/internal/stack"
-	"github.com/mgutz/ansi"
 	"github.com/spf13/cobra"
 )
 
@@ -154,7 +152,7 @@ func runAdd(cfg *config.Config, opts *addOptions, args []string) error {
 				prefill = s.Prefix + "/"
 			}
 			for {
-				input, err := inputWithPrefill(cfg, "Enter a name for the new branch", prefill)
+				input, err := inputWithPrefill(cfg, "Enter a name for the new branch:", prefill)
 				if err != nil {
 					if isInterruptError(err) {
 						printInterrupt(cfg)
@@ -281,35 +279,4 @@ func applyPrefix(cfg *config.Config, prefix, name string) string {
 		cfg.Infof("Branch name prefixed: %s", name)
 	}
 	return name
-}
-
-// inputWithPrefill prompts the user for text input with the given prefill
-// already editable in the input field. Unlike survey.Input's Default (which
-// shows in parentheses), this places the prefill text directly in the
-// editable line so the user can append to or modify it.
-func inputWithPrefill(cfg *config.Config, prompt, prefill string) (string, error) {
-	if cfg.InputFn != nil {
-		return cfg.InputFn(prompt, prefill)
-	}
-
-	stdio := terminal.Stdio{In: cfg.In, Out: cfg.Out, Err: cfg.Err}
-	rr := terminal.NewRuneReader(stdio)
-	_ = rr.SetTermMode()
-	defer func() { _ = rr.RestoreTermMode() }()
-
-	// Render the prompt in survey style: green bold "?" + bold message
-	icon := "?"
-	if cfg.Terminal.IsColorEnabled() {
-		icon = ansi.Color("?", "green+hb")
-	}
-	fmt.Fprintf(cfg.Out, "%s %s ", icon, prompt)
-
-	line, err := rr.ReadLineWithDefault(0, []rune(prefill))
-	// Move to a new line after the input
-	fmt.Fprintln(cfg.Out)
-
-	if err != nil {
-		return "", err
-	}
-	return string(line), nil
 }

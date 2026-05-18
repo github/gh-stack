@@ -344,8 +344,9 @@ func TestAdd_PromptPrefillsPrefix(t *testing.T) {
 
 	cfg, outR, errR := config.NewTestConfig()
 
-	var gotDefault string
+	var gotPrompt, gotDefault string
 	cfg.InputFn = func(prompt, defaultValue string) (string, error) {
+		gotPrompt = prompt
 		gotDefault = defaultValue
 		return "feat/my-branch", nil
 	}
@@ -355,6 +356,7 @@ func TestAdd_PromptPrefillsPrefix(t *testing.T) {
 
 	require.NoError(t, err)
 	require.NotContains(t, output, "\u2717", "unexpected error")
+	assert.Contains(t, gotPrompt, ":", "prompt should end with a colon")
 	assert.Equal(t, "feat/", gotDefault, "prompt should pre-fill prefix/")
 	assert.Equal(t, "feat/my-branch", createdBranch, "full input should be used as branch name")
 }
