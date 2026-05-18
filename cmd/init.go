@@ -482,12 +482,12 @@ func detectPrefix(branches []string) string {
 func printWhatsNext(cfg *config.Config, s *stack.Stack, branches []string, hasAdopted bool, prCount int) {
 	lastBranch := branches[len(branches)-1]
 
-	// Build the chain: main → branch1 → branch2
+	// Build the chain: main ← branch1 ← branch2
 	parts := []string{s.Trunk.Branch}
 	for _, b := range s.Branches {
 		parts = append(parts, b.Branch)
 	}
-	chain := strings.Join(parts, " → ")
+	chain := strings.Join(parts, " ← ")
 
 	// Success line
 	if hasAdopted {
