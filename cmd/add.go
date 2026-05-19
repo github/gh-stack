@@ -180,10 +180,9 @@ func runAdd(cfg *config.Config, opts *addOptions, args []string) error {
 		return ErrInvalidArgs
 	}
 
-	if git.BranchExists(branchName) {
-		cfg.Errorf("branch %q already exists", branchName)
-		return ErrInvalidArgs
-	}
+	// If the branch already exists in git but is not part of any stack,
+	// adopt it instead of erroring. This mirrors the init command's behavior.
+	adopted := git.BranchExists(branchName)
 
 	// Stage changes before creating the branch so we can fail early if
 	// there's nothing to commit (avoids leaving an empty orphan branch).
@@ -193,10 +192,12 @@ func runAdd(cfg *config.Config, opts *addOptions, args []string) error {
 		}
 	}
 
-	// Create the new branch from the current HEAD and check it out
-	if err := git.CreateBranch(branchName, currentBranch); err != nil {
-		cfg.Errorf("failed to create branch: %s", err)
-		return ErrSilent
+	if !adopted {
+		// Create the new branch from the current HEAD and check it out
+		if err := git.CreateBranch(branchName, currentBranch); err != nil {
+			cfg.Errorf("failed to create branch: %s", err)
+			return ErrSilent
+		}
 	}
 
 	if err := git.CheckoutBranch(branchName); err != nil {
@@ -227,10 +228,18 @@ func runAdd(cfg *config.Config, opts *addOptions, args []string) error {
 
 	// Print summary
 	position := len(s.Branches)
-	if commitSHA != "" {
-		cfg.Successf("Created branch %s (layer %d) with commit %s", cfg.ColorBold(branchName), position, commitSHA)
+	if adopted {
+		if commitSHA != "" {
+			cfg.Successf("Adopted branch %s (layer %d) with commit %s", cfg.ColorBold(branchName), position, commitSHA)
+		} else {
+			cfg.Successf("Adopted existing branch %q into the stack", branchName)
+		}
 	} else {
-		cfg.Successf("Created and checked out branch %q", branchName)
+		if commitSHA != "" {
+			cfg.Successf("Created branch %s (layer %d) with commit %s", cfg.ColorBold(branchName), position, commitSHA)
+		} else {
+			cfg.Successf("Created and checked out branch %q", branchName)
+		}
 	}
 
 	return nil

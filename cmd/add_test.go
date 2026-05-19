@@ -474,3 +474,118 @@ func TestAdd_FromTrunk(t *testing.T) {
 	names := sf.Stacks[0].BranchNames()
 	assert.Equal(t, "newbranch", names[len(names)-1], "new branch should be appended to stack")
 }
+
+func TestAdd_AdoptsExistingBranch(t *testing.T) {
+	gitDir := t.TempDir()
+	saveStack(t, gitDir, stack.Stack{
+		Trunk:    stack.BranchRef{Branch: "main"},
+		Branches: []stack.BranchRef{{Branch: "b1"}},
+	})
+
+	createBranchCalled := false
+	var checkedOut string
+	restore := git.SetOps(&git.MockOps{
+		GitDirFn:        func() (string, error) { return gitDir, nil },
+		CurrentBranchFn: func() (string, error) { return "b1", nil },
+		BranchExistsFn:  func(name string) bool { return name == "existing-branch" },
+		CreateBranchFn: func(name, base string) error {
+			createBranchCalled = true
+			return nil
+		},
+		CheckoutBranchFn: func(name string) error {
+			checkedOut = name
+			return nil
+		},
+		RevParseFn: func(ref string) (string, error) { return "abc", nil },
+	})
+	defer restore()
+
+	cfg, outR, errR := config.NewTestConfig()
+	err := runAdd(cfg, &addOptions{}, []string{"existing-branch"})
+	output := collectOutput(cfg, outR, errR)
+
+	require.NoError(t, err)
+	require.NotContains(t, output, "\u2717", "unexpected error")
+	assert.False(t, createBranchCalled, "CreateBranch should NOT be called for existing branch")
+	assert.Equal(t, "existing-branch", checkedOut, "should checkout the existing branch")
+	assert.Contains(t, output, "Adopted")
+
+	sf, err := stack.Load(gitDir)
+	require.NoError(t, err)
+	names := sf.Stacks[0].BranchNames()
+	assert.Equal(t, "existing-branch", names[len(names)-1], "adopted branch appended to stack")
+}
+
+func TestAdd_RejectsExistingBranchInStack(t *testing.T) {
+	gitDir := t.TempDir()
+	// Two stacks: the current one and another that owns "taken-branch"
+	sf := &stack.StackFile{
+		SchemaVersion: 1,
+		Stacks: []stack.Stack{
+			{
+				Trunk:    stack.BranchRef{Branch: "main"},
+				Branches: []stack.BranchRef{{Branch: "b1"}},
+			},
+			{
+				Trunk:    stack.BranchRef{Branch: "main"},
+				Branches: []stack.BranchRef{{Branch: "taken-branch"}},
+			},
+		},
+	}
+	require.NoError(t, stack.Save(gitDir, sf), "saving seed stacks")
+
+	restore := git.SetOps(&git.MockOps{
+		GitDirFn:        func() (string, error) { return gitDir, nil },
+		CurrentBranchFn: func() (string, error) { return "b1", nil },
+		BranchExistsFn:  func(name string) bool { return name == "taken-branch" },
+	})
+	defer restore()
+
+	cfg, outR, errR := config.NewTestConfig()
+	runAdd(cfg, &addOptions{}, []string{"taken-branch"})
+	output := collectOutput(cfg, outR, errR)
+
+	assert.Contains(t, output, "already exists in the stack")
+}
+
+func TestAdd_AdoptsExistingBranchWithCommit(t *testing.T) {
+	gitDir := t.TempDir()
+	saveStack(t, gitDir, stack.Stack{
+		Trunk:    stack.BranchRef{Branch: "main"},
+		Branches: []stack.BranchRef{{Branch: "b1"}},
+	})
+
+	createBranchCalled := false
+	commitCalled := false
+	restore := git.SetOps(&git.MockOps{
+		GitDirFn:        func() (string, error) { return gitDir, nil },
+		CurrentBranchFn: func() (string, error) { return "b1", nil },
+		BranchExistsFn:  func(name string) bool { return name == "existing-branch" },
+		RevParseMultiFn: func(refs []string) ([]string, error) {
+			return []string{"aaa", "bbb"}, nil // different SHAs = branch has commits
+		},
+		CreateBranchFn: func(name, base string) error {
+			createBranchCalled = true
+			return nil
+		},
+		CheckoutBranchFn:   func(name string) error { return nil },
+		RevParseFn:         func(ref string) (string, error) { return "abc", nil },
+		StageAllFn:         func() error { return nil },
+		HasStagedChangesFn: func() bool { return true },
+		CommitFn: func(msg string) (string, error) {
+			commitCalled = true
+			return "def1234567890", nil
+		},
+	})
+	defer restore()
+
+	cfg, outR, errR := config.NewTestConfig()
+	err := runAdd(cfg, &addOptions{stageAll: true, message: "new commit"}, []string{"existing-branch"})
+	output := collectOutput(cfg, outR, errR)
+
+	require.NoError(t, err)
+	require.NotContains(t, output, "\u2717", "unexpected error")
+	assert.False(t, createBranchCalled, "CreateBranch should NOT be called")
+	assert.True(t, commitCalled, "Commit should be called on the adopted branch")
+	assert.Contains(t, output, "Adopted")
+}
