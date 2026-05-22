@@ -1262,8 +1262,8 @@ func TestApplyPlan_PendingSubmitForRemoteStack(t *testing.T) {
 		ID:    "remote-stack-123",
 		Trunk: stack.BranchRef{Branch: "main"},
 		Branches: []stack.BranchRef{
-			{Branch: "A"},
-			{Branch: "B"},
+			{Branch: "A", PullRequest: &stack.PullRequestRef{Number: 1}},
+			{Branch: "B", PullRequest: &stack.PullRequestRef{Number: 2}},
 		},
 	}
 
@@ -1277,7 +1277,7 @@ func TestApplyPlan_PendingSubmitForRemoteStack(t *testing.T) {
 	}
 
 	mock := newApplyMock(gitDir, branchSHAs)
-	mock.IsAncestorFn = func(a, d string) (bool, error) { return true, nil }
+	mock.IsAncestorFn = func(a, d string) (bool, error) { return false, nil }
 	mock.MergeBaseFn = func(a, b string) (string, error) {
 		if a == "main" && b == "A" {
 			return branchSHAs["main"], nil
@@ -1295,16 +1295,19 @@ func TestApplyPlan_PendingSubmitForRemoteStack(t *testing.T) {
 	defer cfg.Out.Close()
 	defer cfg.Err.Close()
 
+	// Reverse nodes so position differs → triggers rebase of PR branches
 	nodes := makeNodes(&sf.Stacks[0])
+	nodes[0], nodes[1] = nodes[1], nodes[0]
 
-	_, _, err := ApplyPlan(cfg, gitDir, &sf.Stacks[0], sf, nodes, "A", noopUpdateBaseSHAs)
+	result, _, err := ApplyPlan(cfg, gitDir, &sf.Stacks[0], sf, nodes, "A", noopUpdateBaseSHAs)
 	require.NoError(t, err)
 
-	// Remote stack should transition to "pending_submit"
+	// Remote stack with PR branches affected should transition to "pending_submit"
 	state, loadErr := LoadState(gitDir)
 	require.NoError(t, loadErr)
 	require.NotNil(t, state)
 	assert.Equal(t, "pending_submit", state.Phase)
+	assert.True(t, result.NeedsSubmit, "NeedsSubmit should be true when PR branches are affected")
 }
 
 func TestApplyPlan_ClearsStateForLocalStack(t *testing.T) {
@@ -1343,6 +1346,111 @@ func TestApplyPlan_ClearsStateForLocalStack(t *testing.T) {
 
 	// Local stack (no ID) should clear the state file
 	assert.False(t, StateExists(gitDir))
+}
+
+func TestApplyPlan_ClearsStateForRemoteStackWithNoPRBranches(t *testing.T) {
+	// Remote stack (has ID) but branches have no PRs — local-only modify
+	s := stack.Stack{
+		ID:    "remote-stack-456",
+		Trunk: stack.BranchRef{Branch: "main"},
+		Branches: []stack.BranchRef{
+			{Branch: "A"},
+			{Branch: "B"},
+		},
+	}
+
+	gitDir := t.TempDir()
+	sf := writeTestStackFile(t, gitDir, s)
+
+	branchSHAs := map[string]string{
+		"main": "sha-main",
+		"A":    "sha-A",
+		"B":    "sha-B",
+	}
+
+	mock := newApplyMock(gitDir, branchSHAs)
+	mock.IsAncestorFn = func(a, d string) (bool, error) { return true, nil }
+	mock.MergeBaseFn = func(a, b string) (string, error) {
+		if a == "main" && b == "A" {
+			return branchSHAs["main"], nil
+		}
+		if a == "A" && b == "B" {
+			return branchSHAs["A"], nil
+		}
+		return "merge-base", nil
+	}
+
+	restore := git.SetOps(mock)
+	defer restore()
+
+	cfg, _, _ := config.NewTestConfig()
+	defer cfg.Out.Close()
+	defer cfg.Err.Close()
+
+	nodes := makeNodes(&sf.Stacks[0])
+
+	result, _, err := ApplyPlan(cfg, gitDir, &sf.Stacks[0], sf, nodes, "A", noopUpdateBaseSHAs)
+	require.NoError(t, err)
+
+	// Remote stack but no PR branches affected → state should be cleared
+	assert.False(t, StateExists(gitDir), "state file should be cleared when no PR branches are affected")
+	assert.False(t, result.NeedsSubmit, "NeedsSubmit should be false when no PR branches are affected")
+}
+
+func TestApplyPlan_PendingSubmitOnlyWhenPRBranchesAffected(t *testing.T) {
+	// Stack with one PR branch (A) and one local branch (B).
+	// Only rename the local branch B — PRs should not be affected.
+	s := stack.Stack{
+		ID:    "remote-stack-789",
+		Trunk: stack.BranchRef{Branch: "main"},
+		Branches: []stack.BranchRef{
+			{Branch: "A", PullRequest: &stack.PullRequestRef{Number: 1}},
+			{Branch: "B"},
+		},
+	}
+
+	gitDir := t.TempDir()
+	sf := writeTestStackFile(t, gitDir, s)
+
+	branchSHAs := map[string]string{
+		"main": "sha-main",
+		"A":    "sha-A",
+		"B":    "sha-B",
+	}
+
+	mock := newApplyMock(gitDir, branchSHAs)
+	mock.IsAncestorFn = func(a, d string) (bool, error) { return true, nil }
+	mock.MergeBaseFn = func(a, b string) (string, error) {
+		if a == "main" && b == "A" {
+			return branchSHAs["main"], nil
+		}
+		if a == "A" && b == "B" || a == "A" && b == "B-renamed" {
+			return branchSHAs["A"], nil
+		}
+		return "merge-base", nil
+	}
+	mock.RenameBranchFn = func(old, newName string) error { return nil }
+
+	restore := git.SetOps(mock)
+	defer restore()
+
+	cfg, _, _ := config.NewTestConfig()
+	defer cfg.Out.Close()
+	defer cfg.Err.Close()
+
+	nodes := makeNodes(&sf.Stacks[0])
+	// Rename only the non-PR branch B
+	nodes[1].PendingAction = &modifyview.PendingAction{
+		Type:    modifyview.ActionRename,
+		NewName: "B-renamed",
+	}
+
+	result, _, err := ApplyPlan(cfg, gitDir, &sf.Stacks[0], sf, nodes, "A", noopUpdateBaseSHAs)
+	require.NoError(t, err)
+
+	// Only non-PR branch was renamed — should clear state, not pending submit
+	assert.False(t, StateExists(gitDir), "state file should be cleared when only non-PR branches are renamed")
+	assert.False(t, result.NeedsSubmit, "NeedsSubmit should be false when only non-PR branches are affected")
 }
 
 // ─── resolveCheckoutBranch ──────────────────────────────────────────────────

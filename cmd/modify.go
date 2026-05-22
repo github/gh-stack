@@ -149,13 +149,13 @@ func runModify(cfg *config.Config) error {
 	}
 
 	// Print success summary
-	printModifySuccess(cfg, applyResult, s.ID != "")
+	printModifySuccess(cfg, applyResult)
 
 	return nil
 }
 
 // printModifySuccess prints a summary of what was applied.
-func printModifySuccess(cfg *config.Config, result *modifyview.ApplyResult, hasRemoteStack bool) {
+func printModifySuccess(cfg *config.Config, result *modifyview.ApplyResult) {
 	if result == nil {
 		return
 	}
@@ -178,7 +178,7 @@ func printModifySuccess(cfg *config.Config, result *modifyview.ApplyResult, hasR
 	}
 
 	cfg.Printf("")
-	if hasRemoteStack {
+	if result.NeedsSubmit {
 		cfg.Printf("Run `%s` to push your changes and update the stack of PRs on GitHub",
 			cfg.ColorCyan("gh stack submit"))
 	}
