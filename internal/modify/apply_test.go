@@ -1794,3 +1794,233 @@ func TestApplyPlan_Rename_ChecksOutNewName(t *testing.T) {
 	// Should check out new-A, not A
 	assert.Equal(t, "new-A", lastCheckout)
 }
+
+// ─── BuildPlan: Insert ──────────────────────────────────────────────────────
+
+func TestBuildPlan_Insert(t *testing.T) {
+	t.Run("insert below produces insert_below action", func(t *testing.T) {
+		nodes := []modifyview.ModifyBranchNode{
+			{
+				BranchNode:       stackview.BranchNode{Ref: stack.BranchRef{Branch: "A"}},
+				OriginalPosition: 0,
+			},
+			{
+				BranchNode:       stackview.BranchNode{Ref: stack.BranchRef{Branch: "new-branch"}},
+				OriginalPosition: -1,
+				IsInserted:       true,
+				PendingAction:    &modifyview.PendingAction{Type: modifyview.ActionInsertBelow, NewName: "new-branch"},
+			},
+			{
+				BranchNode:       stackview.BranchNode{Ref: stack.BranchRef{Branch: "B"}},
+				OriginalPosition: 1,
+			},
+		}
+		plan := BuildPlan(nodes)
+		require.Len(t, plan, 1)
+		assert.Equal(t, "insert_below", plan[0].Type)
+		assert.Equal(t, "new-branch", plan[0].Branch)
+		assert.Equal(t, "new-branch", plan[0].NewName)
+		assert.Equal(t, 1, plan[0].NewPosition)
+	})
+
+	t.Run("insert above produces insert_above action", func(t *testing.T) {
+		nodes := []modifyview.ModifyBranchNode{
+			{
+				BranchNode:       stackview.BranchNode{Ref: stack.BranchRef{Branch: "new-branch"}},
+				OriginalPosition: -1,
+				IsInserted:       true,
+				PendingAction:    &modifyview.PendingAction{Type: modifyview.ActionInsertAbove, NewName: "new-branch"},
+			},
+			{
+				BranchNode:       stackview.BranchNode{Ref: stack.BranchRef{Branch: "A"}},
+				OriginalPosition: 0,
+			},
+		}
+		plan := BuildPlan(nodes)
+		require.Len(t, plan, 1)
+		assert.Equal(t, "insert_above", plan[0].Type)
+		assert.Equal(t, "new-branch", plan[0].NewName)
+		assert.Equal(t, 0, plan[0].NewPosition)
+	})
+}
+
+// ─── ApplyPlan: Insert ──────────────────────────────────────────────────────
+
+func TestApplyPlan_Insert(t *testing.T) {
+	s := stack.Stack{
+		Trunk: stack.BranchRef{Branch: "main"},
+		Branches: []stack.BranchRef{
+			{Branch: "A"},
+			{Branch: "B"},
+		},
+	}
+
+	gitDir := t.TempDir()
+	sf := writeTestStackFile(t, gitDir, s)
+
+	branchSHAs := map[string]string{
+		"main": "sha-main",
+		"A":    "sha-A",
+		"B":    "sha-B",
+	}
+
+	var createCalls []struct{ name, base string }
+	mock := newApplyMock(gitDir, branchSHAs)
+	mock.CreateBranchFn = func(name, base string) error {
+		createCalls = append(createCalls, struct{ name, base string }{name, base})
+		return nil
+	}
+
+	restore := git.SetOps(mock)
+	defer restore()
+
+	cfg, _, _ := config.NewTestConfig()
+	defer cfg.Out.Close()
+	defer cfg.Err.Close()
+
+	// Insert "new-branch" between A and B (at position 1 in stack order)
+	nodes := makeNodes(&sf.Stacks[0])
+	insertNode := modifyview.ModifyBranchNode{
+		BranchNode: stackview.BranchNode{
+			Ref:      stack.BranchRef{Branch: "new-branch"},
+			IsLinear: true,
+		},
+		PendingAction:    &modifyview.PendingAction{Type: modifyview.ActionInsertBelow, NewName: "new-branch"},
+		OriginalPosition: -1,
+		IsInserted:       true,
+	}
+	// Insert between A(0) and B(1)
+	allNodes := []modifyview.ModifyBranchNode{nodes[0], insertNode, nodes[1]}
+
+	result, conflict, err := ApplyPlan(cfg, gitDir, &sf.Stacks[0], sf, allNodes, "A", noopUpdateBaseSHAs)
+	require.NoError(t, err)
+	assert.Nil(t, conflict)
+	require.NotNil(t, result)
+
+	// Branch should have been created
+	require.Len(t, createCalls, 1)
+	assert.Equal(t, "new-branch", createCalls[0].name)
+	assert.Equal(t, "A", createCalls[0].base)
+
+	// Stack should now have 3 branches: A, new-branch, B
+	require.Len(t, sf.Stacks[0].Branches, 3)
+	assert.Equal(t, "A", sf.Stacks[0].Branches[0].Branch)
+	assert.Equal(t, "new-branch", sf.Stacks[0].Branches[1].Branch)
+	assert.Equal(t, "B", sf.Stacks[0].Branches[2].Branch)
+
+	// new-branch should be in InsertedBranches
+	require.Len(t, result.InsertedBranches, 1)
+	assert.Equal(t, "new-branch", result.InsertedBranches[0])
+}
+
+func TestApplyPlan_InsertAtStart(t *testing.T) {
+	s := stack.Stack{
+		Trunk: stack.BranchRef{Branch: "main"},
+		Branches: []stack.BranchRef{
+			{Branch: "A"},
+			{Branch: "B"},
+		},
+	}
+
+	gitDir := t.TempDir()
+	sf := writeTestStackFile(t, gitDir, s)
+
+	branchSHAs := map[string]string{
+		"main": "sha-main",
+		"A":    "sha-A",
+		"B":    "sha-B",
+	}
+
+	var createCalls []struct{ name, base string }
+	mock := newApplyMock(gitDir, branchSHAs)
+	mock.CreateBranchFn = func(name, base string) error {
+		createCalls = append(createCalls, struct{ name, base string }{name, base})
+		return nil
+	}
+
+	restore := git.SetOps(mock)
+	defer restore()
+
+	cfg, _, _ := config.NewTestConfig()
+	defer cfg.Out.Close()
+	defer cfg.Err.Close()
+
+	// Insert "new-branch" at the start (before A)
+	nodes := makeNodes(&sf.Stacks[0])
+	insertNode := modifyview.ModifyBranchNode{
+		BranchNode: stackview.BranchNode{
+			Ref:      stack.BranchRef{Branch: "new-branch"},
+			IsLinear: true,
+		},
+		PendingAction:    &modifyview.PendingAction{Type: modifyview.ActionInsertAbove, NewName: "new-branch"},
+		OriginalPosition: -1,
+		IsInserted:       true,
+	}
+	allNodes := []modifyview.ModifyBranchNode{insertNode, nodes[0], nodes[1]}
+
+	result, conflict, err := ApplyPlan(cfg, gitDir, &sf.Stacks[0], sf, allNodes, "A", noopUpdateBaseSHAs)
+	require.NoError(t, err)
+	assert.Nil(t, conflict)
+	require.NotNil(t, result)
+
+	// Branch should be created from trunk
+	require.Len(t, createCalls, 1)
+	assert.Equal(t, "new-branch", createCalls[0].name)
+	assert.Equal(t, "main", createCalls[0].base)
+
+	// Stack should now have 3 branches: new-branch, A, B
+	require.Len(t, sf.Stacks[0].Branches, 3)
+	assert.Equal(t, "new-branch", sf.Stacks[0].Branches[0].Branch)
+	assert.Equal(t, "A", sf.Stacks[0].Branches[1].Branch)
+	assert.Equal(t, "B", sf.Stacks[0].Branches[2].Branch)
+}
+
+func TestApplyPlan_InsertAffectsPRs(t *testing.T) {
+	s := stack.Stack{
+		ID:    "test-id",
+		Trunk: stack.BranchRef{Branch: "main"},
+		Branches: []stack.BranchRef{
+			{Branch: "A"},
+			{Branch: "B", PullRequest: &stack.PullRequestRef{Number: 42}},
+		},
+	}
+
+	gitDir := t.TempDir()
+	sf := writeTestStackFile(t, gitDir, s)
+
+	branchSHAs := map[string]string{
+		"main": "sha-main",
+		"A":    "sha-A",
+		"B":    "sha-B",
+	}
+
+	mock := newApplyMock(gitDir, branchSHAs)
+	mock.CreateBranchFn = func(name, base string) error { return nil }
+
+	restore := git.SetOps(mock)
+	defer restore()
+
+	cfg, _, _ := config.NewTestConfig()
+	defer cfg.Out.Close()
+	defer cfg.Err.Close()
+
+	// Insert between A and B — B has a PR, so base changes → affectsPRs
+	nodes := makeNodes(&sf.Stacks[0])
+	insertNode := modifyview.ModifyBranchNode{
+		BranchNode: stackview.BranchNode{
+			Ref:      stack.BranchRef{Branch: "new-branch"},
+			IsLinear: true,
+		},
+		PendingAction:    &modifyview.PendingAction{Type: modifyview.ActionInsertBelow, NewName: "new-branch"},
+		OriginalPosition: -1,
+		IsInserted:       true,
+	}
+	allNodes := []modifyview.ModifyBranchNode{nodes[0], insertNode, nodes[1]}
+
+	result, _, err := ApplyPlan(cfg, gitDir, &sf.Stacks[0], sf, allNodes, "A", noopUpdateBaseSHAs)
+	require.NoError(t, err)
+	require.NotNil(t, result)
+
+	// Should need submit because insertion changes the base of a branch with PR
+	assert.True(t, result.NeedsSubmit, "inserting before a branch with a PR should trigger NeedsSubmit")
+}

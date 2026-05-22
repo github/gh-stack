@@ -13,7 +13,7 @@ func renderHelpOverlay(width, height int) string {
 	title := helpTitleStyle.Render("Modify Stack")
 	b.WriteString(title)
 	b.WriteString("\n")
-	b.WriteString(helpDescStyle.Render("Restructure your stack by dropping, folding, renaming, or reordering branches."))
+	b.WriteString(helpDescStyle.Render("Restructure your stack by dropping, folding, inserting, renaming, or reordering branches."))
 	b.WriteString("\n")
 
 	sections := []struct {
@@ -25,8 +25,12 @@ func renderHelpOverlay(width, height int) string {
 			"Remove a branch and its commits from the stack.\nThe local branch is preserved; the PR stays open on GitHub.",
 		},
 		{
-			"Fold up / down (u / d)",
-			"Merge a branch's commits into an adjacent branch.\nFold up absorbs into the branch above; fold down into the branch below.",
+			"Fold down / up (d / u)",
+			"Merge a branch's commits into an adjacent branch.\nFold down absorbs into the branch below; fold up into the branch above.",
+		},
+		{
+			"Insert below / above (i / I)",
+			"Insert a new empty branch into the stack.\nLowercase i inserts below the cursor; uppercase I inserts above.",
 		},
 		{
 			"Rename (r)",

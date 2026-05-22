@@ -8,15 +8,18 @@ var (
 	foldBadge   = lipgloss.NewStyle().Foreground(lipgloss.Color("3"))  // yellow
 	renameBadge = lipgloss.NewStyle().Foreground(lipgloss.Color("14")) // cyan
 	moveBadge   = lipgloss.NewStyle().Foreground(lipgloss.Color("5"))  // magenta/purple
+	insertBadge = lipgloss.NewStyle().Foreground(lipgloss.Color("2"))  // green
 
-	// Branch name overrides for drop/fold
-	dropBranchStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("1")).Strikethrough(true) // red strikethrough
-	foldBranchStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("3")).Strikethrough(true) // yellow strikethrough
+	// Branch name overrides for drop/fold/insert
+	dropBranchStyle   = lipgloss.NewStyle().Foreground(lipgloss.Color("1")).Strikethrough(true) // red strikethrough
+	foldBranchStyle   = lipgloss.NewStyle().Foreground(lipgloss.Color("3")).Strikethrough(true) // yellow strikethrough
+	insertBranchStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("2"))                     // green
 
-	// Connector color overrides for drop/fold/move
-	dropConnectorStyle  = lipgloss.NewStyle().Foreground(lipgloss.Color("1"))   // red
-	foldConnectorStyle  = lipgloss.NewStyle().Foreground(lipgloss.Color("3"))   // yellow
-	movedConnectorStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("5"))   // magenta/purple
+	// Connector color overrides for drop/fold/move/insert
+	dropConnectorStyle   = lipgloss.NewStyle().Foreground(lipgloss.Color("1")) // red
+	foldConnectorStyle   = lipgloss.NewStyle().Foreground(lipgloss.Color("3")) // yellow
+	movedConnectorStyle  = lipgloss.NewStyle().Foreground(lipgloss.Color("5")) // magenta/purple
+	insertConnectorStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("2")) // green
 
 	// Status line styles
 	statusBarStyle   = lipgloss.NewStyle().Foreground(lipgloss.Color("8"))

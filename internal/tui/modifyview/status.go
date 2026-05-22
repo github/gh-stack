@@ -10,7 +10,7 @@ import (
 // pendingChangeSummary returns a summary string of all pending changes.
 // E.g. "Pending: 1 drop, 1 fold, 2 moves, 1 rename"
 func pendingChangeSummary(nodes []ModifyBranchNode) string {
-	var drops, foldDowns, foldUps, moves, renames int
+	var drops, foldDowns, foldUps, moves, renames, inserts int
 
 	for _, n := range nodes {
 		if n.PendingAction == nil {
@@ -27,17 +27,25 @@ func pendingChangeSummary(nodes []ModifyBranchNode) string {
 			moves++
 		case ActionRename:
 			renames++
+		case ActionInsertBelow, ActionInsertAbove:
+			inserts++
 		}
 	}
 
-	// Also count nodes that have moved from their original position
-	for i, n := range nodes {
-		if !n.Removed && n.PendingAction == nil && n.OriginalPosition != i {
+	// Also count nodes that have moved from their original position.
+	// Skip inserted nodes — they shift indices of other nodes.
+	effectiveIdx := 0
+	for _, n := range nodes {
+		if n.IsInserted {
+			continue
+		}
+		if !n.Removed && n.PendingAction == nil && n.OriginalPosition != effectiveIdx {
 			moves++
 		}
+		effectiveIdx++
 	}
 
-	if drops == 0 && foldDowns == 0 && foldUps == 0 && moves == 0 && renames == 0 {
+	if drops == 0 && foldDowns == 0 && foldUps == 0 && moves == 0 && renames == 0 && inserts == 0 {
 		return ""
 	}
 
@@ -48,6 +56,9 @@ func pendingChangeSummary(nodes []ModifyBranchNode) string {
 	folds := foldDowns + foldUps
 	if folds > 0 {
 		parts = append(parts, fmt.Sprintf("%d %s", folds, pluralize(folds, "fold", "folds")))
+	}
+	if inserts > 0 {
+		parts = append(parts, fmt.Sprintf("%d %s", inserts, pluralize(inserts, "insert", "inserts")))
 	}
 	if moves > 0 {
 		parts = append(parts, fmt.Sprintf("%d %s", moves, pluralize(moves, "move", "moves")))

@@ -52,9 +52,18 @@ func BuildSnapshot(s *stack.Stack) (Snapshot, error) {
 func BuildPlan(nodes []modifyview.ModifyBranchNode) []Action {
 	var plan []Action
 
+	// When computing move detection, skip inserted nodes since they
+	// shift the indices of existing nodes.
+	effectiveIdx := 0
 	for i, n := range nodes {
-		if n.PendingAction == nil && n.OriginalPosition == i && !n.Removed {
-			continue
+		if n.IsInserted {
+			// Inserted nodes always have a PendingAction — handle below
+		} else {
+			if n.PendingAction == nil && n.OriginalPosition == effectiveIdx && !n.Removed {
+				effectiveIdx++
+				continue
+			}
+			effectiveIdx++
 		}
 
 		if n.Removed {
@@ -69,10 +78,14 @@ func BuildPlan(nodes []modifyview.ModifyBranchNode) []Action {
 			if n.PendingAction.Type == modifyview.ActionRename {
 				action.NewName = n.PendingAction.NewName
 			}
+			if n.PendingAction.Type == modifyview.ActionInsertBelow || n.PendingAction.Type == modifyview.ActionInsertAbove {
+				action.NewName = n.PendingAction.NewName
+				action.NewPosition = i
+			}
 			plan = append(plan, action)
 		}
 
-		if n.OriginalPosition != i && n.PendingAction == nil {
+		if !n.IsInserted && n.OriginalPosition != i && n.PendingAction == nil {
 			plan = append(plan, Action{
 				Type:        "move",
 				Branch:      n.Ref.Branch,
@@ -216,7 +229,116 @@ func ApplyPlan(
 		}
 	}
 
-	// Step 2: Folds — absorb one branch's commits into an adjacent branch.
+	// Step 2: Inserts — create new branches and add to stack metadata.
+	// Process in order so positions are stable. The node's position in the
+	// non-removed list determines the parent branch.
+	for _, n := range nodes {
+		if n.PendingAction == nil {
+			continue
+		}
+		if n.PendingAction.Type != modifyview.ActionInsertBelow && n.PendingAction.Type != modifyview.ActionInsertAbove {
+			continue
+		}
+
+		newName := n.PendingAction.NewName
+
+		// Determine the parent branch: find the position of this node among
+		// the non-removed, non-merged nodes in the apply-order list, then
+		// look at the branch just before it (toward trunk).
+		var parentBranch string
+		insertPos := -1
+
+		// Build the active branch order from the stack (as of now, after renames)
+		activeIdx := 0
+		for _, b := range s.Branches {
+			if b.IsMerged() {
+				continue
+			}
+			if b.Branch == newName {
+				// already added in a previous iteration — skip
+				break
+			}
+			activeIdx++
+		}
+
+		// Determine where in s.Branches the new branch should go.
+		// Walk the non-removed nodes to find the relative position.
+		nonRemovedPos := 0
+		for _, other := range nodes {
+			if other.Removed || other.Ref.IsMerged() {
+				continue
+			}
+			if other.Ref.Branch == newName {
+				insertPos = nonRemovedPos
+				break
+			}
+			nonRemovedPos++
+		}
+
+		if insertPos <= 0 {
+			parentBranch = s.Trunk.Branch
+		} else {
+			// Find the branch at insertPos-1 among active branches
+			activeCount := 0
+			for _, b := range s.Branches {
+				if b.IsMerged() {
+					continue
+				}
+				if activeCount == insertPos-1 {
+					parentBranch = b.Branch
+					break
+				}
+				activeCount++
+			}
+			if parentBranch == "" {
+				parentBranch = s.Trunk.Branch
+			}
+		}
+
+		// Create the git branch at the parent's tip
+		if err := git.CreateBranch(newName, parentBranch); err != nil {
+			unwindErr := Unwind(cfg, gitDir, snapshot, stackIndex, sf, plan)
+			if unwindErr != nil {
+				return nil, nil, fmt.Errorf("creating branch %s failed (%v) and unwind failed (%v)", newName, err, unwindErr)
+			}
+			return nil, nil, fmt.Errorf("creating branch %s from %s: %w", newName, parentBranch, err)
+		}
+
+		// Insert BranchRef into s.Branches at the correct position
+		newRef := stack.BranchRef{Branch: newName}
+		targetIdx := len(s.Branches) // default: append at end
+		if insertPos >= 0 {
+			// Map the active position back to s.Branches index
+			activeCount := 0
+			for j, b := range s.Branches {
+				if b.IsMerged() {
+					continue
+				}
+				if activeCount == insertPos {
+					targetIdx = j
+					break
+				}
+				activeCount++
+			}
+		}
+		s.Branches = append(s.Branches, stack.BranchRef{})
+		copy(s.Branches[targetIdx+1:], s.Branches[targetIdx:])
+		s.Branches[targetIdx] = newRef
+
+		// Check if the branch above the insertion point has a PR —
+		// its base changes, so we need a submit
+		if targetIdx < len(s.Branches)-1 {
+			above := s.Branches[targetIdx+1]
+			if above.PullRequest != nil {
+				affectsPRs = true
+			}
+		}
+
+		result.InsertedBranches = append(result.InsertedBranches, newName)
+		cfg.Successf("Inserted %s after %s", newName, parentBranch)
+	}
+
+	// Step 3: Folds — absorb one branch's commits into an adjacent branch.
 	//
 	// Fold-down: cherry-pick the folded branch's commits onto the target below.
 	//   The target is below in the stack (closer to trunk), so it doesn't
@@ -347,7 +469,7 @@ func ApplyPlan(
 		}
 	}
 
-	// Step 3: Drops — remove from stack metadata
+	// Step 4: Drops — remove from stack metadata
 	// Process in reverse order to preserve indices
 	for i := len(nodes) - 1; i >= 0; i-- {
 		n := nodes[i]
@@ -373,7 +495,7 @@ func ApplyPlan(
 		cfg.Successf("Dropped %s from stack", dropBranch)
 	}
 
-	// Step 4: Reorder — build the desired branch order from the remaining nodes
+	// Step 5: Reorder — build the desired branch order from the remaining nodes
 	desiredOrder := make([]string, 0)
 	for _, n := range nodes {
 		if n.Removed {
@@ -439,7 +561,7 @@ func ApplyPlan(
 		s.Branches = newBranches
 	}
 
-	// Step 5: Cascading rebase — rebase each active branch onto its new parent.
+	// Step 6: Cascading rebase — rebase each active branch onto its new parent.
 	// Use the original parent tip SHA as the oldBase for --onto, so that only
 	// the branch's own commits are replayed onto the new parent.
 	for i, b := range s.Branches {

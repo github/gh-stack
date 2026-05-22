@@ -8,11 +8,13 @@ import (
 type ActionType string
 
 const (
-	ActionDrop     ActionType = "drop"
-	ActionFoldDown ActionType = "fold_down"
-	ActionFoldUp   ActionType = "fold_up"
-	ActionMove     ActionType = "move"
-	ActionRename   ActionType = "rename"
+	ActionDrop        ActionType = "drop"
+	ActionFoldDown    ActionType = "fold_down"
+	ActionFoldUp      ActionType = "fold_up"
+	ActionMove        ActionType = "move"
+	ActionRename      ActionType = "rename"
+	ActionInsertBelow ActionType = "insert_below"
+	ActionInsertAbove ActionType = "insert_above"
 )
 
 // PendingAction represents a staged modification on a branch.
@@ -39,16 +41,18 @@ type ModifyBranchNode struct {
 	PendingAction    *PendingAction
 	OriginalPosition int
 	Removed          bool // true if this branch has been dropped or folded
+	IsInserted       bool // true if this branch was inserted during modify (not yet in git)
 }
 
 // ApplyResult holds the outcome of applying modifications.
 type ApplyResult struct {
-	Success         bool
-	DroppedPRs      []DroppedPR
-	RenamedBranches []RenamedBranch
-	MovedBranches   int
-	NeedsSubmit     bool // true when the modify affected branches with PRs
-	Message         string
+	Success          bool
+	DroppedPRs       []DroppedPR
+	RenamedBranches  []RenamedBranch
+	InsertedBranches []string
+	MovedBranches    int
+	NeedsSubmit      bool // true when the modify affected branches with PRs
+	Message          string
 }
 
 // DroppedPR records a PR that was dropped from the stack.

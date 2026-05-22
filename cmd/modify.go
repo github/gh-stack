@@ -29,6 +29,7 @@ func ModifyCmd(cfg *config.Config) *cobra.Command {
 Operations available:
   • Drop branches from the stack
   • Fold branches into adjacent branches
+  • Insert new branches into the stack
   • Reorder branches
   • Rename branches
 
@@ -166,6 +167,10 @@ func printModifySuccess(cfg *config.Config, result *modifyview.ApplyResult) {
 
 	for _, r := range result.RenamedBranches {
 		cfg.Printf("  Renamed: %s → %s", r.OldName, r.NewName)
+	}
+
+	for _, name := range result.InsertedBranches {
+		cfg.Printf("  Inserted: %s", name)
 	}
 
 	for _, d := range result.DroppedPRs {

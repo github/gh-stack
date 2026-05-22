@@ -16,10 +16,10 @@ const MinHeightForHeader = 25
 const MinWidthForShortcuts = 65
 
 // MinWidthForHeader is the minimum width to show the header at all.
-const MinWidthForHeader = 50
+const MinWidthForHeader = 53
 
 // MinWidthForArt is the minimum width to show ASCII art in the header.
-const MinWidthForArt = 88
+const MinWidthForArt = 96
 
 // ShortcutEntry represents a keyboard shortcut for the header.
 type ShortcutEntry struct {

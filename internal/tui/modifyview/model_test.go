@@ -774,3 +774,387 @@ func TestCursorNavigation_SkipsMergedBranches(t *testing.T) {
 	m = sendKey(t, m, runeKey('k'))
 	assert.Equal(t, 0, m.cursor, "up should skip merged branch")
 }
+
+// --- Insert tests ---
+
+// simulateInsert enters insert mode, types a branch name, and presses Enter.
+func simulateInsert(t *testing.T, m Model, name string) Model {
+	t.Helper()
+	require.True(t, m.insertMode, "expected insert mode to be active")
+	for _, r := range name {
+		m = sendKey(t, m, runeKey(r))
+	}
+	m = sendKey(t, m, tea.KeyMsg{Type: tea.KeyEnter})
+	return m
+}
+
+func TestInsertBelow(t *testing.T) {
+	nodes := []ModifyBranchNode{
+		makeNode("a", true, 0),
+		makeNode("b", false, 1),
+		makeNode("c", false, 2),
+	}
+	m := New(nodes, testTrunk, "1.0.0")
+	require.Equal(t, 0, m.cursor) // cursor on a
+
+	// Press 'i' to insert below
+	m = sendKey(t, m, runeKey('i'))
+	require.True(t, m.insertMode, "should enter insert mode")
+	assert.Equal(t, ActionInsertBelow, m.insertDirection)
+
+	// Type a branch name and confirm
+	m = simulateInsert(t, m, "new-branch")
+	require.False(t, m.insertMode, "should exit insert mode")
+
+	// New node should be at index 1 (below cursor at 0)
+	require.Len(t, m.nodes, 4)
+	assert.Equal(t, "a", m.nodes[0].Ref.Branch)
+	assert.Equal(t, "new-branch", m.nodes[1].Ref.Branch)
+	assert.True(t, m.nodes[1].IsInserted)
+	assert.NotNil(t, m.nodes[1].PendingAction)
+	assert.Equal(t, ActionInsertBelow, m.nodes[1].PendingAction.Type)
+	assert.Equal(t, "new-branch", m.nodes[1].PendingAction.NewName)
+	assert.Equal(t, "b", m.nodes[2].Ref.Branch)
+	assert.Equal(t, "c", m.nodes[3].Ref.Branch)
+
+	// Cursor should be on the new node
+	assert.Equal(t, 1, m.cursor)
+}
+
+func TestInsertAbove(t *testing.T) {
+	nodes := []ModifyBranchNode{
+		makeNode("a", false, 0),
+		makeNode("b", true, 1),
+		makeNode("c", false, 2),
+	}
+	m := New(nodes, testTrunk, "1.0.0")
+	require.Equal(t, 1, m.cursor) // cursor on b
+
+	// Press 'I' (shift+i) to insert above
+	m = sendKey(t, m, runeKey('I'))
+	require.True(t, m.insertMode, "should enter insert mode")
+	assert.Equal(t, ActionInsertAbove, m.insertDirection)
+
+	// Type a branch name and confirm
+	m = simulateInsert(t, m, "above-b")
+	require.False(t, m.insertMode, "should exit insert mode")
+
+	// New node should be at index 1 (above cursor which was at 1)
+	require.Len(t, m.nodes, 4)
+	assert.Equal(t, "a", m.nodes[0].Ref.Branch)
+	assert.Equal(t, "above-b", m.nodes[1].Ref.Branch)
+	assert.True(t, m.nodes[1].IsInserted)
+	assert.NotNil(t, m.nodes[1].PendingAction)
+	assert.Equal(t, ActionInsertAbove, m.nodes[1].PendingAction.Type)
+	assert.Equal(t, "b", m.nodes[2].Ref.Branch)
+	assert.Equal(t, "c", m.nodes[3].Ref.Branch)
+
+	// Cursor should be on the new node
+	assert.Equal(t, 1, m.cursor)
+}
+
+func TestInsertAtTop(t *testing.T) {
+	nodes := []ModifyBranchNode{
+		makeNode("a", true, 0),
+		makeNode("b", false, 1),
+	}
+	m := New(nodes, testTrunk, "1.0.0")
+	require.Equal(t, 0, m.cursor)
+
+	// Insert above the top — new node becomes index 0
+	m = sendKey(t, m, runeKey('I'))
+	m = simulateInsert(t, m, "top")
+
+	require.Len(t, m.nodes, 3)
+	assert.Equal(t, "top", m.nodes[0].Ref.Branch)
+	assert.True(t, m.nodes[0].IsInserted)
+	assert.Equal(t, "a", m.nodes[1].Ref.Branch)
+	assert.Equal(t, "b", m.nodes[2].Ref.Branch)
+	assert.Equal(t, 0, m.cursor)
+}
+
+func TestInsertAtBottom(t *testing.T) {
+	nodes := []ModifyBranchNode{
+		makeNode("a", false, 0),
+		makeNode("b", true, 1),
+	}
+	m := New(nodes, testTrunk, "1.0.0")
+	// Move cursor to bottom
+	m = sendKey(t, m, runeKey('j'))
+	// cursor already starts at 1 (b is current)
+	require.Equal(t, 1, m.cursor)
+
+	// Insert below the bottom — new node appended
+	m = sendKey(t, m, runeKey('i'))
+	m = simulateInsert(t, m, "bottom")
+
+	require.Len(t, m.nodes, 3)
+	assert.Equal(t, "a", m.nodes[0].Ref.Branch)
+	assert.Equal(t, "b", m.nodes[1].Ref.Branch)
+	assert.Equal(t, "bottom", m.nodes[2].Ref.Branch)
+	assert.True(t, m.nodes[2].IsInserted)
+	assert.Equal(t, 2, m.cursor)
+}
+
+func TestUndoInsert(t *testing.T) {
+	nodes := []ModifyBranchNode{
+		makeNode("a", true, 0),
+		makeNode("b", false, 1),
+		makeNode("c", false, 2),
+	}
+	m := New(nodes, testTrunk, "1.0.0")
+
+	// Insert below a
+	m = sendKey(t, m, runeKey('i'))
+	m = simulateInsert(t, m, "new-branch")
+	require.Len(t, m.nodes, 4)
+	assert.Equal(t, 1, m.cursor)
+
+	// Undo
+	m = sendKey(t, m, runeKey('z'))
+	require.Len(t, m.nodes, 3, "inserted node should be removed")
+	assert.Equal(t, "a", m.nodes[0].Ref.Branch)
+	assert.Equal(t, "b", m.nodes[1].Ref.Branch)
+	assert.Equal(t, "c", m.nodes[2].Ref.Branch)
+}
+
+func TestInsertBlockedInReorderMode(t *testing.T) {
+	nodes := []ModifyBranchNode{
+		makeNode("a", true, 0),
+		makeNode("b", false, 1),
+		makeNode("c", false, 2),
+	}
+	m := New(nodes, testTrunk, "1.0.0")
+
+	// Reorder: move a down
+	m = sendKey(t, m, runeKey('J'))
+	assert.Equal(t, modeReorder, m.currentMode())
+
+	// Try insert below → should be blocked
+	m = sendKey(t, m, runeKey('i'))
+	assert.False(t, m.insertMode)
+	assert.True(t, m.statusIsError)
+	assert.Contains(t, m.statusMessage, "undo")
+
+	// Try insert above → should be blocked
+	m = sendKey(t, m, runeKey('I'))
+	assert.False(t, m.insertMode)
+	assert.True(t, m.statusIsError)
+	assert.Contains(t, m.statusMessage, "undo")
+}
+
+func TestReorderBlockedAfterInsert(t *testing.T) {
+	nodes := []ModifyBranchNode{
+		makeNode("a", true, 0),
+		makeNode("b", false, 1),
+		makeNode("c", false, 2),
+	}
+	m := New(nodes, testTrunk, "1.0.0")
+
+	// Insert
+	m = sendKey(t, m, runeKey('i'))
+	m = simulateInsert(t, m, "new-branch")
+	assert.Equal(t, modeStructure, m.currentMode())
+
+	// Try reorder → should be blocked
+	m = sendKey(t, m, runeKey('J'))
+	assert.True(t, m.statusIsError)
+	assert.Contains(t, m.statusMessage, "undo")
+}
+
+func TestInsertCannotInsertOnMergedBranch(t *testing.T) {
+	nodes := []ModifyBranchNode{
+		makeMergedNode("merged", 0),
+		makeNode("active", true, 1),
+	}
+	m := New(nodes, testTrunk, "1.0.0")
+
+	// Force cursor to merged node
+	m.cursor = 0
+	m = sendKey(t, m, runeKey('i'))
+	assert.False(t, m.insertMode)
+	assert.True(t, m.statusIsError)
+	assert.Contains(t, m.statusMessage, "merged")
+}
+
+func TestInsertCancelledWithEscape(t *testing.T) {
+	nodes := []ModifyBranchNode{
+		makeNode("a", true, 0),
+		makeNode("b", false, 1),
+	}
+	m := New(nodes, testTrunk, "1.0.0")
+
+	// Start insert
+	m = sendKey(t, m, runeKey('i'))
+	require.True(t, m.insertMode)
+
+	// Cancel with Escape
+	m = sendKey(t, m, tea.KeyMsg{Type: tea.KeyEscape})
+	assert.False(t, m.insertMode)
+	assert.Len(t, m.nodes, 2, "no node should be added on cancel")
+}
+
+func TestInsertEmptyNameCancels(t *testing.T) {
+	nodes := []ModifyBranchNode{
+		makeNode("a", true, 0),
+		makeNode("b", false, 1),
+	}
+	m := New(nodes, testTrunk, "1.0.0")
+
+	// Start insert, press Enter with empty input
+	m = sendKey(t, m, runeKey('i'))
+	require.True(t, m.insertMode)
+	m = sendKey(t, m, tea.KeyMsg{Type: tea.KeyEnter})
+	assert.False(t, m.insertMode)
+	assert.Len(t, m.nodes, 2, "no node should be added on empty input")
+}
+
+func TestInsertDuplicateNameBlocked(t *testing.T) {
+	nodes := []ModifyBranchNode{
+		makeNode("a", true, 0),
+		makeNode("b", false, 1),
+	}
+	m := New(nodes, testTrunk, "1.0.0")
+
+	// Try to insert with existing branch name "b"
+	m = sendKey(t, m, runeKey('i'))
+	require.True(t, m.insertMode)
+	m = simulateInsert(t, m, "b")
+	// Should still be in insert mode with an error
+	assert.True(t, m.insertMode, "should stay in insert mode on validation error")
+	assert.True(t, m.statusIsError)
+	assert.Contains(t, m.statusMessage, "already used")
+}
+
+func TestInsertCountedInPendingSummary(t *testing.T) {
+	nodes := []ModifyBranchNode{
+		{
+			BranchNode:       stackview.BranchNode{Ref: stack.BranchRef{Branch: "new"}},
+			OriginalPosition: -1,
+			IsInserted:       true,
+			PendingAction:    &PendingAction{Type: ActionInsertBelow, NewName: "new"},
+		},
+		{
+			BranchNode:       stackview.BranchNode{Ref: stack.BranchRef{Branch: "b"}},
+			OriginalPosition: 0,
+		},
+	}
+
+	result := pendingChangeSummary(nodes)
+	assert.Equal(t, "Pending: 1 insert", result)
+}
+
+func TestInsertPluralInPendingSummary(t *testing.T) {
+	nodes := []ModifyBranchNode{
+		{
+			BranchNode:       stackview.BranchNode{Ref: stack.BranchRef{Branch: "new1"}},
+			OriginalPosition: -1,
+			IsInserted:       true,
+			PendingAction:    &PendingAction{Type: ActionInsertBelow, NewName: "new1"},
+		},
+		{
+			BranchNode:       stackview.BranchNode{Ref: stack.BranchRef{Branch: "b"}},
+			OriginalPosition: 0,
+		},
+		{
+			BranchNode:       stackview.BranchNode{Ref: stack.BranchRef{Branch: "new2"}},
+			OriginalPosition: -1,
+			IsInserted:       true,
+			PendingAction:    &PendingAction{Type: ActionInsertAbove, NewName: "new2"},
+		},
+	}
+
+	result := pendingChangeSummary(nodes)
+	assert.Equal(t, "Pending: 2 inserts", result)
+}
+
+func TestInsertMixedWithOtherActions(t *testing.T) {
+	nodes := []ModifyBranchNode{
+		makeNode("a", true, 0),
+		makeNode("b", false, 1),
+		makeNode("c", false, 2),
+	}
+	m := New(nodes, testTrunk, "1.0.0")
+
+	// Drop a
+	m = sendKey(t, m, runeKey('x'))
+	require.NotNil(t, m.nodes[0].PendingAction)
+	assert.Equal(t, ActionDrop, m.nodes[0].PendingAction.Type)
+
+	// Move cursor to b and insert below it
+	m = sendKey(t, m, runeKey('j'))
+	m = sendKey(t, m, runeKey('i'))
+	m = simulateInsert(t, m, "new-branch")
+
+	// Should now have 4 nodes: a(dropped), b, new-branch, c
+	require.Len(t, m.nodes, 4)
+	assert.Equal(t, modeStructure, m.currentMode())
+	assert.Equal(t, ActionDrop, m.nodes[0].PendingAction.Type)
+	assert.Equal(t, "new-branch", m.nodes[2].Ref.Branch)
+	assert.True(t, m.nodes[2].IsInserted)
+}
+
+func TestInsertOnRemovedBranchDoesNothing(t *testing.T) {
+	nodes := []ModifyBranchNode{
+		makeNode("a", true, 0),
+		makeNode("b", false, 1),
+		makeNode("c", false, 2),
+	}
+	m := New(nodes, testTrunk, "1.0.0")
+
+	// Drop a
+	m = sendKey(t, m, runeKey('x'))
+	require.True(t, m.nodes[0].Removed)
+
+	// Force cursor back to removed node and try to insert
+	m.cursor = 0
+	prevLen := len(m.nodes)
+	m = sendKey(t, m, runeKey('i'))
+	assert.False(t, m.insertMode, "should not enter insert mode on removed branch")
+	assert.Len(t, m.nodes, prevLen)
+}
+
+func TestCurrentModeStructureAfterInsert(t *testing.T) {
+	nodes := []ModifyBranchNode{
+		makeNode("a", true, 0),
+		makeNode("b", false, 1),
+	}
+	m := New(nodes, testTrunk, "1.0.0")
+	assert.Equal(t, modeNone, m.currentMode())
+
+	// Insert
+	m = sendKey(t, m, runeKey('i'))
+	m = simulateInsert(t, m, "new-branch")
+	assert.Equal(t, modeStructure, m.currentMode())
+}
+
+func TestApplyWithInsert(t *testing.T) {
+	nodes := []ModifyBranchNode{
+		makeNode("a", true, 0),
+		makeNode("b", false, 1),
+	}
+	m := New(nodes, testTrunk, "1.0.0")
+
+	// Insert a branch
+	m = sendKey(t, m, runeKey('i'))
+	m = simulateInsert(t, m, "new-branch")
+
+	// Apply should be accepted
+	m = sendKey(t, m, tea.KeyMsg{Type: tea.KeyCtrlS})
+	assert.True(t, m.applyRequested)
+}
+
+func TestInsertAnnotation(t *testing.T) {
+	node := ModifyBranchNode{
+		BranchNode: stackview.BranchNode{
+			Ref: stack.BranchRef{Branch: "new-branch"},
+		},
+		PendingAction:    &PendingAction{Type: ActionInsertBelow, NewName: "new-branch"},
+		OriginalPosition: -1,
+		IsInserted:       true,
+	}
+
+	annotation := nodeAnnotation(node, 0)
+	require.NotNil(t, annotation)
+	assert.Equal(t, "✚ insert", annotation.Text)
+}
