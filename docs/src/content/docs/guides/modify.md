@@ -3,7 +3,7 @@ title: Restructuring Stacks
 description: How to use `gh stack modify` to restructure a stack.
 ---
 
-`gh stack modify` provides an interactive terminal UI for restructuring a stack locally. You can drop, fold, rename, and reorder branches and then apply all your changes at once.
+`gh stack modify` provides an interactive terminal UI for restructuring a stack locally. You can drop, fold, insert, rename, and reorder branches and then apply all your changes at once.
 
 ![The modify stack terminal UI](../../../assets/screenshots/modify-stack-tui.png)
 
@@ -12,6 +12,7 @@ description: How to use `gh stack modify` to restructure a stack.
 Use `modify` when you need to:
 - **Remove** a branch from the stack
 - **Combine** two branches into one
+- **Insert** a new branch into the stack
 - **Rename** a branch
 - **Reorder** branches
 
@@ -46,13 +47,17 @@ Absorbs the selected branch's commits into the branch below it (toward trunk) vi
 
 Absorbs the selected branch's commits into the branch above it (away from trunk). Since the branch above already contains the folded branch's commits in its history, this is handled by adjusting what is considered the first unique commit for the branch. The folded branch is removed from the stack.
 
+### Insert below / above (`i` / `I`)
+
+Inserts a new empty branch into the stack at the cursor position. Lowercase `i` inserts below the cursor (toward trunk); uppercase `I` inserts above the cursor (away from trunk). An inline prompt appears to enter the new branch name. The branch is created at apply time, pointing at the parent branch's tip.
+
 ### Rename (`r`)
 
 Opens an inline prompt to enter a new name for the branch. The branch is renamed locally and in the stack metadata. On the next `submit`, the new branch name is pushed to GitHub.
 
 ### Reorder (`Shift+↑`/`Shift+↓`)
 
-Moves the selected branch up (away from trunk) or down (toward trunk) in the stack. A cascading rebase adjusts all affected branches. Note: reordering and structural changes (drop/fold/rename) cannot be mixed in the same session.
+Moves the selected branch up (away from trunk) or down (toward trunk) in the stack. A cascading rebase adjusts all affected branches. Note: reordering and structural changes (drop/fold/insert/rename) cannot be mixed in the same session.
 
 ### Undo (`z`)
 
@@ -60,7 +65,7 @@ Reverses the most recent staged action. You can undo multiple times to step back
 
 ## Applying changes
 
-Press `Ctrl+S` to apply all staged changes. Nothing is modified until you save. The apply phase renames branches, folds/drops branches, and runs a cascading rebase to create a linear commit history with the desired stack state.
+Press `Ctrl+S` to apply all staged changes. Nothing is modified until you save. The apply phase renames branches, inserts new branches, folds/drops branches, and runs a cascading rebase to create a linear commit history with the desired stack state.
 
 ### Handling conflicts
 
@@ -94,8 +99,7 @@ This also works if `modify` was interrupted (e.g., terminal crash). A pre-modify
 ## Limitations
 
 - Cannot modify merged branches (they are locked)
-- Cannot add new branches (use `gh stack add` instead)
 - Cannot split a branch into multiple branches
 - Cannot move branches between different stacks
 - Requires an interactive terminal
-- Reordering and structural changes (drop/fold/rename) cannot be mixed in the same session
+- Reordering and structural changes (drop/fold/insert/rename) cannot be mixed in the same session

@@ -192,6 +192,8 @@ The command checks these conditions before opening the TUI:
 | Drop | `x` | Remove branch and its commits from stack. Local branch and associated PR are preserved. |
 | Fold down | `d` | Absorb commits into branch below (toward trunk). Folded branch removed from stack. |
 | Fold up | `u` | Absorb commits into branch above (away from trunk). Folded branch removed from stack. |
+| Insert below | `i` | Insert a new empty branch below the cursor (toward trunk). |
+| Insert above | `I` | Insert a new empty branch above the cursor (away from trunk). |
 | Move down | `Shift+↓` | Reorder branch down (toward trunk) in the stack |
 | Move up | `Shift+↑` | Reorder branch up (away from trunk) in the stack |
 | Rename | `r` | Rename the branch (opens inline prompt) |
@@ -199,7 +201,7 @@ The command checks these conditions before opening the TUI:
 
 **Apply phase:**
 
-When you press `Ctrl+S`, the staged changes are applied by renaming branches, folding/dropping branches, and running a cascading rebase to create a linear commit history with the desired stack state.
+When you press `Ctrl+S`, the staged changes are applied by renaming branches, inserting new branches, folding/dropping branches, and running a cascading rebase to create a linear commit history with the desired stack state.
 
 If a rebase conflict occurs, you can:
 - Resolve conflicts, stage files, and run `gh stack modify --continue`
@@ -234,7 +236,7 @@ You must have a branch from the stack checked out locally. The command targets t
 
 Deletes the stack on GitHub first, if it exists, then removes it from local tracking. If the remote deletion fails, the local state is left untouched so you can retry. Use `--local` to skip the remote deletion and only remove local tracking.
 
-This is useful when you need to restructure a stack — remove a branch, reorder branches, rename branches, or make other large changes. After unstacking, use `gh stack init` to re-create the stack with the desired structure — existing branches are adopted automatically.
+This is useful when you need to restructure a stack — remove a branch, insert a branch, reorder branches, rename branches, or make other large changes. After unstacking, use `gh stack init` to re-create the stack with the desired structure — existing branches are adopted automatically.
 
 | Flag | Description |
 |------|-------------|

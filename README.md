@@ -245,7 +245,7 @@ Interactively restructure the current stack.
 gh stack modify [flags]
 ```
 
-Opens a terminal UI for restructuring a stack. You can rename, drop, reorder, and fold branches into adjacent ones. All the changes are staged during the preview and applied at once on save.
+Opens a terminal UI for restructuring a stack. You can drop, fold, insert, rename, and reorder branches. All the changes are staged during the preview and applied at once on save.
 
 If the stack of PRs has been created on GitHub, run `gh stack submit` afterwards to push the changes and recreate the stack.
 
@@ -259,6 +259,7 @@ If the stack of PRs has been created on GitHub, run `gh stack submit` afterwards
 - **Drop** (`x`): Remove a branch and its commits from the stack. Local branch and associated PR are preserved.
 - **Fold down** (`d`): Absorb a branch's commits into the branch below (toward trunk). Folded branch removed from stack.
 - **Fold up** (`u`): Absorb a branch's commits into the branch above (away from trunk). Folded branch removed from stack.
+- **Insert** (`i`/`I`): Insert a new empty branch into the stack. `i` inserts below the cursor; `I` inserts above.
 - **Reorder** (`Shift+↑`/`Shift+↓`): Move a branch up (away from trunk) or down (toward trunk) in the stack.
 - **Rename** (`r`): Rename a branch locally and in the stack metadata.
 - **Undo** (`z`): Undo the last staged action.
@@ -272,7 +273,8 @@ If the stack of PRs has been created on GitHub, run `gh stack submit` afterwards
 | `c` | View commits |
 | `x` | Drop branch |
 | `r` | Rename branch |
-| `u/d` | Fold branch up/down |
+| `i/I` | Insert branch below/above |
+| `d/u` | Fold branch down/up |
 | `Shift+↑`/`Shift+↓` | Move branch up/down |
 | `z` | Undo last action |
 | `Ctrl+S` | Apply all changes |

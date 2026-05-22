@@ -299,7 +299,7 @@ All branches in a stack should be part of the same feature or project. If you ne
 
 ## Restructuring a Stack
 
-When you need to change the composition of a stack — remove a branch, combine branches, change the order, or rename a branch — use `gh stack modify`:
+When you need to change the composition of a stack — remove a branch, combine branches, insert a new branch, change the order, or rename a branch — use `gh stack modify`:
 
 ```sh
 # Open the modify TUI
@@ -309,6 +309,8 @@ gh stack modify
 #   x     → drop a branch
 #   d     → fold down (into branch below)
 #   u     → fold up (into branch above)
+#   i     → insert below
+#   I     → insert above
 #   Shift+↑/↓ → reorder
 #   r     → rename
 #   z     → undo

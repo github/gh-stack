@@ -93,7 +93,7 @@ Commits created by a server-side rebase are **not signed**. If your repository r
 
 ## Unstacking
 
-If you want to reorder or reorganize the PRs in a stack, you must first dissolve the stack and then re-create it. You can unstack PRs from the UI.
+If you want to reorder or reorganize the PRs in a stack from the UI, you must first dissolve the stack and then re-create it. For CLI users, `gh stack modify` provides an interactive way to [restructure a stack](/gh-stack/guides/modify/) — including reordering, inserting, dropping, and renaming branches — without needing to dissolve it.
 
 ### Dissolving the Entire Stack
 
