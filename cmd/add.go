@@ -85,7 +85,8 @@ func runAdd(cfg *config.Config, opts *addOptions, args []string) error {
 	// idx < 0 means we're on the trunk — that's allowed (we'll create
 	// a new branch from it). Only block if we're in the middle of the stack.
 	if idx >= 0 && idx < len(s.Branches)-1 {
-		cfg.Errorf("can only add branches on top of the stack; run `%s` to switch to %q", cfg.ColorCyan("gh stack top"), s.Branches[len(s.Branches)-1].Branch)
+		cfg.Errorf("can only add branches to the top of the stack; run `%s` then `%s`", cfg.ColorCyan("gh stack top"), cfg.ColorCyan("gh stack add"))
+		cfg.Printf("Or to restructure your stack and insert a branch, use `%s`", cfg.ColorCyan("gh stack modify"))
 		return ErrInvalidArgs
 	}
 

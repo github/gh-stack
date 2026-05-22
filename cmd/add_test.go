@@ -78,6 +78,7 @@ func TestAdd_OnlyAllowedOnTopOfStack(t *testing.T) {
 	output := collectOutput(cfg, outR, errR)
 
 	assert.Contains(t, output, "top of the stack")
+	assert.Contains(t, output, "gh stack modify")
 }
 
 func TestAdd_MutuallyExclusiveFlags(t *testing.T) {
