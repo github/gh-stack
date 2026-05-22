@@ -495,8 +495,13 @@ func ApplyPlan(
 		result.MovedBranches++
 	}
 
-	// Restore original branch
-	_ = git.CheckoutBranch(currentBranch)
+	// Check out the best branch — the original if it's still in the stack,
+	// otherwise the nearest surviving branch.
+	targetBranch := resolveCheckoutBranch(currentBranch, plan, snapshot, s)
+	_ = git.CheckoutBranch(targetBranch)
+	if targetBranch != currentBranch {
+		cfg.Printf("Switched to %s (original branch %s is no longer in the stack)", targetBranch, currentBranch)
+	}
 
 	// Update base SHAs
 	updateBaseSHAs(s)
@@ -518,6 +523,103 @@ func ApplyPlan(
 	}
 
 	return result, nil, nil
+}
+
+// resolveCheckoutBranch determines which branch to check out after a modify
+// operation completes. If the user's original branch was dropped, folded, or
+// renamed, this returns the most appropriate surviving branch.
+func resolveCheckoutBranch(originalBranch string, plan []Action, snapshot Snapshot, s *stack.Stack) string {
+	// Check if the original branch is still in the stack — quick exit.
+	if s.IndexOf(originalBranch) >= 0 {
+		return originalBranch
+	}
+
+	// Scan the plan for an action that targeted the original branch.
+	for _, a := range plan {
+		if a.Branch != originalBranch {
+			continue
+		}
+
+		switch a.Type {
+		case "rename":
+			if a.NewName != "" && s.IndexOf(a.NewName) >= 0 {
+				return a.NewName
+			}
+
+		case "fold_down":
+			// Fold-down merges into the branch below in the original order.
+			if target := adjacentSnapshotBranch(snapshot, originalBranch, -1); target != "" {
+				if s.IndexOf(target) >= 0 {
+					return target
+				}
+			}
+
+		case "fold_up":
+			// Fold-up merges into the branch above in the original order.
+			if target := adjacentSnapshotBranch(snapshot, originalBranch, +1); target != "" {
+				if s.IndexOf(target) >= 0 {
+					return target
+				}
+			}
+
+		case "drop":
+			// Prefer the branch that was directly above in the original order,
+			// then fall back to the one below.
+			if above := nearestSurvivingBranch(snapshot, originalBranch, s); above != "" {
+				return above
+			}
+		}
+	}
+
+	// Fallback: topmost branch in the stack.
+	if len(s.Branches) > 0 {
+		return s.Branches[len(s.Branches)-1].Branch
+	}
+	return originalBranch
+}
+
+// adjacentSnapshotBranch returns the branch adjacent to target in the snapshot.
+// direction -1 means below (toward trunk), +1 means above (away from trunk).
+func adjacentSnapshotBranch(snapshot Snapshot, target string, direction int) string {
+	for i, bs := range snapshot.Branches {
+		if bs.Name == target {
+			adj := i + direction
+			if adj >= 0 && adj < len(snapshot.Branches) {
+				return snapshot.Branches[adj].Name
+			}
+			return ""
+		}
+	}
+	return ""
+}
+
+// nearestSurvivingBranch finds the closest branch to the dropped branch that
+// still exists in the stack. Prefers the branch above (higher index), then below.
+func nearestSurvivingBranch(snapshot Snapshot, dropped string, s *stack.Stack) string {
+	pos := -1
+	for i, bs := range snapshot.Branches {
+		if bs.Name == dropped {
+			pos = i
+			break
+		}
+	}
+	if pos < 0 {
+		return ""
+	}
+
+	// Search above first (higher indices = away from trunk)
+	for i := pos + 1; i < len(snapshot.Branches); i++ {
+		if s.IndexOf(snapshot.Branches[i].Name) >= 0 {
+			return snapshot.Branches[i].Name
+		}
+	}
+	// Then below (lower indices = toward trunk)
+	for i := pos - 1; i >= 0; i-- {
+		if s.IndexOf(snapshot.Branches[i].Name) >= 0 {
+			return snapshot.Branches[i].Name
+		}
+	}
+	return ""
 }
 
 // ContinueApply resumes a modify operation after the user resolves a rebase conflict.
@@ -657,9 +759,13 @@ func ContinueApply(
 		cfg.Successf("Rebased %s onto %s", branchName, newBase)
 	}
 
-	// All rebases done — restore original branch
+	// All rebases done — check out the best branch
 	if state.OriginalBranch != "" {
-		_ = git.CheckoutBranch(state.OriginalBranch)
+		targetBranch := resolveCheckoutBranch(state.OriginalBranch, state.Plan, state.Snapshot, s)
+		_ = git.CheckoutBranch(targetBranch)
+		if targetBranch != state.OriginalBranch {
+			cfg.Printf("Switched to %s (original branch %s is no longer in the stack)", targetBranch, state.OriginalBranch)
+		}
 	}
 
 	// Update base SHAs

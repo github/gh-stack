@@ -1344,3 +1344,299 @@ func TestApplyPlan_ClearsStateForLocalStack(t *testing.T) {
 	// Local stack (no ID) should clear the state file
 	assert.False(t, StateExists(gitDir))
 }
+
+// ─── resolveCheckoutBranch ──────────────────────────────────────────────────
+
+func TestResolveCheckoutBranch_StillInStack(t *testing.T) {
+	s := &stack.Stack{
+		Trunk:    stack.BranchRef{Branch: "main"},
+		Branches: []stack.BranchRef{{Branch: "A"}, {Branch: "B"}},
+	}
+	snapshot := Snapshot{
+		Branches: []BranchSnapshot{{Name: "A", Position: 0}, {Name: "B", Position: 1}},
+	}
+
+	result := resolveCheckoutBranch("A", nil, snapshot, s)
+	assert.Equal(t, "A", result)
+}
+
+func TestResolveCheckoutBranch_Renamed(t *testing.T) {
+	s := &stack.Stack{
+		Trunk:    stack.BranchRef{Branch: "main"},
+		Branches: []stack.BranchRef{{Branch: "new-A"}, {Branch: "B"}},
+	}
+	snapshot := Snapshot{
+		Branches: []BranchSnapshot{{Name: "A", Position: 0}, {Name: "B", Position: 1}},
+	}
+	plan := []Action{{Type: "rename", Branch: "A", NewName: "new-A"}}
+
+	result := resolveCheckoutBranch("A", plan, snapshot, s)
+	assert.Equal(t, "new-A", result)
+}
+
+func TestResolveCheckoutBranch_FoldDown(t *testing.T) {
+	// B is folded down into A. After fold, stack has [A, C].
+	s := &stack.Stack{
+		Trunk:    stack.BranchRef{Branch: "main"},
+		Branches: []stack.BranchRef{{Branch: "A"}, {Branch: "C"}},
+	}
+	snapshot := Snapshot{
+		Branches: []BranchSnapshot{
+			{Name: "A", Position: 0},
+			{Name: "B", Position: 1},
+			{Name: "C", Position: 2},
+		},
+	}
+	plan := []Action{{Type: "fold_down", Branch: "B"}}
+
+	result := resolveCheckoutBranch("B", plan, snapshot, s)
+	assert.Equal(t, "A", result)
+}
+
+func TestResolveCheckoutBranch_FoldUp(t *testing.T) {
+	// B is folded up into C. After fold, stack has [A, C].
+	s := &stack.Stack{
+		Trunk:    stack.BranchRef{Branch: "main"},
+		Branches: []stack.BranchRef{{Branch: "A"}, {Branch: "C"}},
+	}
+	snapshot := Snapshot{
+		Branches: []BranchSnapshot{
+			{Name: "A", Position: 0},
+			{Name: "B", Position: 1},
+			{Name: "C", Position: 2},
+		},
+	}
+	plan := []Action{{Type: "fold_up", Branch: "B"}}
+
+	result := resolveCheckoutBranch("B", plan, snapshot, s)
+	assert.Equal(t, "C", result)
+}
+
+func TestResolveCheckoutBranch_Dropped_HasAbove(t *testing.T) {
+	// B is dropped. Stack has [A, C]. Should pick C (above B).
+	s := &stack.Stack{
+		Trunk:    stack.BranchRef{Branch: "main"},
+		Branches: []stack.BranchRef{{Branch: "A"}, {Branch: "C"}},
+	}
+	snapshot := Snapshot{
+		Branches: []BranchSnapshot{
+			{Name: "A", Position: 0},
+			{Name: "B", Position: 1},
+			{Name: "C", Position: 2},
+		},
+	}
+	plan := []Action{{Type: "drop", Branch: "B"}}
+
+	result := resolveCheckoutBranch("B", plan, snapshot, s)
+	assert.Equal(t, "C", result)
+}
+
+func TestResolveCheckoutBranch_Dropped_TopBranch(t *testing.T) {
+	// C (topmost) is dropped. Stack has [A, B]. Should pick B (below C).
+	s := &stack.Stack{
+		Trunk:    stack.BranchRef{Branch: "main"},
+		Branches: []stack.BranchRef{{Branch: "A"}, {Branch: "B"}},
+	}
+	snapshot := Snapshot{
+		Branches: []BranchSnapshot{
+			{Name: "A", Position: 0},
+			{Name: "B", Position: 1},
+			{Name: "C", Position: 2},
+		},
+	}
+	plan := []Action{{Type: "drop", Branch: "C"}}
+
+	result := resolveCheckoutBranch("C", plan, snapshot, s)
+	assert.Equal(t, "B", result)
+}
+
+func TestResolveCheckoutBranch_Dropped_MultipleDropped(t *testing.T) {
+	// B and C both dropped. Stack has [A, D]. Original on B → should pick D (nearest above).
+	s := &stack.Stack{
+		Trunk:    stack.BranchRef{Branch: "main"},
+		Branches: []stack.BranchRef{{Branch: "A"}, {Branch: "D"}},
+	}
+	snapshot := Snapshot{
+		Branches: []BranchSnapshot{
+			{Name: "A", Position: 0},
+			{Name: "B", Position: 1},
+			{Name: "C", Position: 2},
+			{Name: "D", Position: 3},
+		},
+	}
+	plan := []Action{
+		{Type: "drop", Branch: "B"},
+		{Type: "drop", Branch: "C"},
+	}
+
+	result := resolveCheckoutBranch("B", plan, snapshot, s)
+	assert.Equal(t, "D", result)
+}
+
+func TestResolveCheckoutBranch_Fallback_EmptyStack(t *testing.T) {
+	// All branches removed — falls back to original (no crash).
+	s := &stack.Stack{
+		Trunk:    stack.BranchRef{Branch: "main"},
+		Branches: []stack.BranchRef{},
+	}
+	snapshot := Snapshot{
+		Branches: []BranchSnapshot{{Name: "A", Position: 0}},
+	}
+	plan := []Action{{Type: "drop", Branch: "A"}}
+
+	result := resolveCheckoutBranch("A", plan, snapshot, s)
+	// No surviving branches → returns original as last resort
+	assert.Equal(t, "A", result)
+}
+
+func TestResolveCheckoutBranch_Fallback_TopBranch(t *testing.T) {
+	// Original branch not in plan and not in stack → fallback to topmost.
+	s := &stack.Stack{
+		Trunk:    stack.BranchRef{Branch: "main"},
+		Branches: []stack.BranchRef{{Branch: "X"}, {Branch: "Y"}},
+	}
+	snapshot := Snapshot{
+		Branches: []BranchSnapshot{{Name: "A", Position: 0}},
+	}
+
+	result := resolveCheckoutBranch("A", nil, snapshot, s)
+	assert.Equal(t, "Y", result)
+}
+
+// ─── ApplyPlan: Checkout behavior after drop ────────────────────────────────
+
+func TestApplyPlan_Drop_ChecksOutNearestBranch(t *testing.T) {
+	s := stack.Stack{
+		Trunk: stack.BranchRef{Branch: "main"},
+		Branches: []stack.BranchRef{
+			{Branch: "A"},
+			{Branch: "B"},
+			{Branch: "C"},
+		},
+	}
+
+	gitDir := t.TempDir()
+	sf := writeTestStackFile(t, gitDir, s)
+
+	branchSHAs := map[string]string{
+		"main": "sha-main",
+		"A":    "sha-A",
+		"B":    "sha-B",
+		"C":    "sha-C",
+	}
+
+	var lastCheckout string
+	mock := newApplyMock(gitDir, branchSHAs)
+	mock.CheckoutBranchFn = func(name string) error {
+		lastCheckout = name
+		return nil
+	}
+
+	restore := git.SetOps(mock)
+	defer restore()
+
+	cfg, _, _ := config.NewTestConfig()
+	defer cfg.Out.Close()
+	defer cfg.Err.Close()
+
+	// Drop B, user was on B
+	nodes := makeNodes(&sf.Stacks[0])
+	nodes[1].PendingAction = &modifyview.PendingAction{Type: modifyview.ActionDrop}
+	nodes[1].Removed = true
+
+	_, _, err := ApplyPlan(cfg, gitDir, &sf.Stacks[0], sf, nodes, "B", noopUpdateBaseSHAs)
+	require.NoError(t, err)
+
+	// Should check out C (branch above B), not B
+	assert.Equal(t, "C", lastCheckout)
+}
+
+func TestApplyPlan_FoldDown_ChecksOutTarget(t *testing.T) {
+	s := stack.Stack{
+		Trunk: stack.BranchRef{Branch: "main"},
+		Branches: []stack.BranchRef{
+			{Branch: "A"},
+			{Branch: "B"},
+		},
+	}
+
+	gitDir := t.TempDir()
+	sf := writeTestStackFile(t, gitDir, s)
+
+	branchSHAs := map[string]string{
+		"main": "sha-main",
+		"A":    "sha-A",
+		"B":    "sha-B",
+	}
+
+	var lastCheckout string
+	mock := newApplyMock(gitDir, branchSHAs)
+	mock.CheckoutBranchFn = func(name string) error {
+		lastCheckout = name
+		return nil
+	}
+	mock.LogRangeFn = func(base, head string) ([]git.CommitInfo, error) {
+		return []git.CommitInfo{{SHA: "commit-1"}}, nil
+	}
+
+	restore := git.SetOps(mock)
+	defer restore()
+
+	cfg, _, _ := config.NewTestConfig()
+	defer cfg.Out.Close()
+	defer cfg.Err.Close()
+
+	// Fold B down into A, user was on B
+	nodes := makeNodes(&sf.Stacks[0])
+	nodes[1].PendingAction = &modifyview.PendingAction{Type: modifyview.ActionFoldDown}
+	nodes[1].Removed = true
+
+	_, _, err := ApplyPlan(cfg, gitDir, &sf.Stacks[0], sf, nodes, "B", noopUpdateBaseSHAs)
+	require.NoError(t, err)
+
+	// Should check out A (fold target), not B
+	assert.Equal(t, "A", lastCheckout)
+}
+
+func TestApplyPlan_Rename_ChecksOutNewName(t *testing.T) {
+	s := stack.Stack{
+		Trunk: stack.BranchRef{Branch: "main"},
+		Branches: []stack.BranchRef{
+			{Branch: "A"},
+			{Branch: "B"},
+		},
+	}
+
+	gitDir := t.TempDir()
+	sf := writeTestStackFile(t, gitDir, s)
+
+	branchSHAs := map[string]string{
+		"main": "sha-main",
+		"A":    "sha-A",
+		"B":    "sha-B",
+	}
+
+	var lastCheckout string
+	mock := newApplyMock(gitDir, branchSHAs)
+	mock.CheckoutBranchFn = func(name string) error {
+		lastCheckout = name
+		return nil
+	}
+
+	restore := git.SetOps(mock)
+	defer restore()
+
+	cfg, _, _ := config.NewTestConfig()
+	defer cfg.Out.Close()
+	defer cfg.Err.Close()
+
+	// Rename A to new-A, user was on A
+	nodes := makeNodes(&sf.Stacks[0])
+	nodes[0].PendingAction = &modifyview.PendingAction{Type: modifyview.ActionRename, NewName: "new-A"}
+
+	_, _, err := ApplyPlan(cfg, gitDir, &sf.Stacks[0], sf, nodes, "A", noopUpdateBaseSHAs)
+	require.NoError(t, err)
+
+	// Should check out new-A, not A
+	assert.Equal(t, "new-A", lastCheckout)
+}
