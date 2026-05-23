@@ -1158,3 +1158,193 @@ func TestInsertAnnotation(t *testing.T) {
 	require.NotNil(t, annotation)
 	assert.Equal(t, "✚ insert", annotation.Text)
 }
+
+// --- Bug fix tests: insert should not cause false "moved" annotations ---
+
+func TestInsertDoesNotShowMovedAnnotation(t *testing.T) {
+	nodes := []ModifyBranchNode{
+		makeNode("a", false, 0),
+		makeNode("b", true, 1),
+		makeNode("c", false, 2),
+	}
+	m := New(nodes, testTrunk, "1.0.0")
+
+	// Insert below b (cursor at 1)
+	m = sendKey(t, m, runeKey('i'))
+	m = simulateInsert(t, m, "new-branch")
+
+	// Nodes are now: a(0), b(1), new-branch(inserted), c(2)
+	// Verify c does NOT have a "moved" annotation
+	require.Len(t, m.nodes, 4)
+	assert.Equal(t, "c", m.nodes[3].Ref.Branch)
+
+	// Use effectiveIdx=2 for c (skipping the inserted node)
+	annotation := nodeAnnotation(m.nodes[3], 2)
+	assert.Nil(t, annotation, "c should not show a moved annotation after insert")
+
+	// Also verify a and b have no annotation
+	assert.Nil(t, nodeAnnotation(m.nodes[0], 0), "a should have no annotation")
+	assert.Nil(t, nodeAnnotation(m.nodes[1], 1), "b should have no annotation")
+}
+
+// --- Bug fix tests: header branch count excludes inserts ---
+
+func TestBranchCountExcludesInserts(t *testing.T) {
+	nodes := []ModifyBranchNode{
+		makeNode("a", true, 0),
+		makeNode("b", false, 1),
+		makeNode("c", false, 2),
+	}
+	m := New(nodes, testTrunk, "1.0.0")
+	m.width = 120
+	m.height = 40
+
+	// Branch count should be 3
+	cfg := m.buildHeaderConfig()
+	assert.Contains(t, cfg.InfoLines[1].Label, "3 branches")
+
+	// Insert a branch
+	m = sendKey(t, m, runeKey('i'))
+	m = simulateInsert(t, m, "new-branch")
+
+	// Branch count should still be 3 (not 4)
+	cfg = m.buildHeaderConfig()
+	assert.Contains(t, cfg.InfoLines[1].Label, "3 branches")
+}
+
+// --- Bug fix tests: operations blocked on inserted nodes ---
+
+func TestCannotRenameInsertedBranch(t *testing.T) {
+	nodes := []ModifyBranchNode{
+		makeNode("a", true, 0),
+		makeNode("b", false, 1),
+	}
+	m := New(nodes, testTrunk, "1.0.0")
+
+	// Insert a branch and cursor lands on it
+	m = sendKey(t, m, runeKey('i'))
+	m = simulateInsert(t, m, "new-branch")
+	require.Equal(t, 1, m.cursor)
+	require.True(t, m.nodes[1].IsInserted)
+
+	// Rename the inserted branch — should update the insert name directly
+	m = sendKey(t, m, runeKey('r'))
+	require.True(t, m.renameMode, "should enter rename mode on inserted branch")
+
+	// Clear existing text and type new name
+	m = sendKey(t, m, tea.KeyMsg{Type: tea.KeyCtrlU}) // clear line
+	for _, r := range "better-name" {
+		m = sendKey(t, m, runeKey(r))
+	}
+	m = sendKey(t, m, tea.KeyMsg{Type: tea.KeyEnter})
+	assert.False(t, m.renameMode)
+
+	// The node's branch name and insert action should be updated
+	assert.Equal(t, "better-name", m.nodes[1].Ref.Branch)
+	assert.True(t, m.nodes[1].IsInserted, "should still be marked as inserted")
+	assert.Equal(t, ActionInsertBelow, m.nodes[1].PendingAction.Type, "action type should still be insert")
+	assert.Equal(t, "better-name", m.nodes[1].PendingAction.NewName)
+
+	// No separate rename action in the undo stack — only the original insert
+	for _, a := range m.actionStack {
+		assert.NotEqual(t, ActionRename, a.Type, "should not have a rename action in undo stack")
+	}
+}
+
+func TestCannotFoldInsertedBranch(t *testing.T) {
+	nodes := []ModifyBranchNode{
+		makeNode("a", true, 0),
+		makeNode("b", false, 1),
+	}
+	m := New(nodes, testTrunk, "1.0.0")
+
+	// Insert a branch
+	m = sendKey(t, m, runeKey('i'))
+	m = simulateInsert(t, m, "new-branch")
+	require.True(t, m.nodes[1].IsInserted)
+
+	// Try fold down → should be blocked
+	m = sendKey(t, m, runeKey('d'))
+	assert.True(t, m.statusIsError)
+	assert.Contains(t, m.statusMessage, "inserted")
+
+	// Try fold up → should be blocked
+	m = sendKey(t, m, runeKey('u'))
+	assert.True(t, m.statusIsError)
+	assert.Contains(t, m.statusMessage, "inserted")
+}
+
+func TestDropInsertedBranchRemovesIt(t *testing.T) {
+	nodes := []ModifyBranchNode{
+		makeNode("a", true, 0),
+		makeNode("b", false, 1),
+		makeNode("c", false, 2),
+	}
+	m := New(nodes, testTrunk, "1.0.0")
+
+	// Insert a branch below a
+	m = sendKey(t, m, runeKey('i'))
+	m = simulateInsert(t, m, "new-branch")
+	require.Len(t, m.nodes, 4)
+	require.True(t, m.nodes[1].IsInserted)
+
+	// Drop (x) the inserted branch → should remove it entirely
+	m = sendKey(t, m, runeKey('x'))
+	assert.Len(t, m.nodes, 3, "inserted node should be removed")
+	assert.Equal(t, "a", m.nodes[0].Ref.Branch)
+	assert.Equal(t, "b", m.nodes[1].Ref.Branch)
+	assert.Equal(t, "c", m.nodes[2].Ref.Branch)
+}
+
+func TestDropInsertedBranchCanBeUndone(t *testing.T) {
+	nodes := []ModifyBranchNode{
+		makeNode("a", true, 0),
+		makeNode("b", false, 1),
+	}
+	m := New(nodes, testTrunk, "1.0.0")
+
+	// Insert, then drop it
+	m = sendKey(t, m, runeKey('i'))
+	m = simulateInsert(t, m, "new-branch")
+	require.Len(t, m.nodes, 3)
+
+	m = sendKey(t, m, runeKey('x'))
+	require.Len(t, m.nodes, 2)
+	require.Empty(t, m.actionStack, "undo stack should be empty after dropping an insert")
+
+	// Dropping an inserted branch cancels the insert — undo stack should
+	// no longer contain the insert action. Pressing z undoes whatever came
+	// before the insert (i.e., nothing), not the drop itself.
+	m = sendKey(t, m, runeKey('z'))
+	assert.Len(t, m.nodes, 2, "undo should not re-insert — the drop cancelled the insert")
+	assert.Equal(t, "Nothing to undo", m.statusMessage)
+}
+
+func TestCannotDropAllOriginalBranchesWithInsert(t *testing.T) {
+	nodes := []ModifyBranchNode{
+		makeNode("a", true, 0),
+		makeNode("b", false, 1),
+	}
+	m := New(nodes, testTrunk, "1.0.0")
+
+	// Insert a new branch
+	m = sendKey(t, m, runeKey('i'))
+	m = simulateInsert(t, m, "new-branch")
+	require.Len(t, m.nodes, 3)
+
+	// Drop a
+	m.cursor = 0
+	m = sendKey(t, m, runeKey('x'))
+	require.NotNil(t, m.nodes[0].PendingAction)
+	assert.Equal(t, ActionDrop, m.nodes[0].PendingAction.Type)
+
+	// Move to b and try to drop it — should be refused since only
+	// the inserted branch would remain
+	m = sendKey(t, m, runeKey('j'))
+	m = sendKey(t, m, runeKey('j'))
+	require.Equal(t, "b", m.nodes[2].Ref.Branch)
+	m = sendKey(t, m, runeKey('x'))
+	assert.Nil(t, m.nodes[2].PendingAction, "should not be able to drop the last original branch")
+	assert.True(t, m.statusIsError)
+	assert.Contains(t, m.statusMessage, "last branch")
+}
