@@ -209,7 +209,7 @@ If a rebase conflict occurs, the operation pauses and prints the conflicted file
 | `--continue` | Continue the rebase after resolving conflicts |
 | `--abort` | Abort the rebase and restore all branches to their pre-rebase state |
 | `--remote <name>` | Remote to fetch from (defaults to auto-detected remote) |
-| `--committer-date-is-author-date` | Preserve commit dates as the same as author dates. Alias: `--preserve-dates` |
+| `--committer-date-is-author-date` | Set the committer date to the author date during rebase. Alias: `--preserve-dates` |
 
 | Argument | Description |
 |----------|-------------|
