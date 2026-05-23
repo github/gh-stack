@@ -718,6 +718,8 @@ func (m *Model) toggleDrop() {
 		// Check if any other branch has a fold targeting this branch.
 		// A fold-up targets the branch above (lower index), fold-down
 		// targets the branch below (higher index).
+		// Also check if dropping this branch would cause a fold to
+		// retarget to an inserted branch.
 		for i, other := range m.nodes {
 			if other.PendingAction == nil || i == m.cursor {
 				continue
@@ -727,6 +729,25 @@ func (m *Model) toggleDrop() {
 				for j := i - 1; j >= 0; j-- {
 					if !m.nodes[j].Removed && !m.nodes[j].Ref.IsMerged() {
 						if j == m.cursor {
+							// This branch is the current target. Check what the
+							// next target would be after dropping it.
+							nextTarget := -1
+							for k := j - 1; k >= 0; k-- {
+								if !m.nodes[k].Removed && !m.nodes[k].Ref.IsMerged() {
+									nextTarget = k
+									break
+								}
+							}
+							if nextTarget < 0 {
+								m.statusMessage = fmt.Sprintf("Cannot drop: %s is folding into this branch", other.Ref.Branch)
+								m.statusIsError = true
+								return
+							}
+							if m.nodes[nextTarget].IsInserted {
+								m.statusMessage = fmt.Sprintf("Cannot drop: %s would fold into an inserted branch", other.Ref.Branch)
+								m.statusIsError = true
+								return
+							}
 							m.statusMessage = fmt.Sprintf("Cannot drop: %s is folding into this branch", other.Ref.Branch)
 							m.statusIsError = true
 							return
@@ -740,6 +761,25 @@ func (m *Model) toggleDrop() {
 				for j := i + 1; j < len(m.nodes); j++ {
 					if !m.nodes[j].Removed && !m.nodes[j].Ref.IsMerged() {
 						if j == m.cursor {
+							// This branch is the current target. Check what the
+							// next target would be after dropping it.
+							nextTarget := -1
+							for k := j + 1; k < len(m.nodes); k++ {
+								if !m.nodes[k].Removed && !m.nodes[k].Ref.IsMerged() {
+									nextTarget = k
+									break
+								}
+							}
+							if nextTarget < 0 {
+								m.statusMessage = fmt.Sprintf("Cannot drop: %s is folding into this branch", other.Ref.Branch)
+								m.statusIsError = true
+								return
+							}
+							if m.nodes[nextTarget].IsInserted {
+								m.statusMessage = fmt.Sprintf("Cannot drop: %s would fold into an inserted branch", other.Ref.Branch)
+								m.statusIsError = true
+								return
+							}
 							m.statusMessage = fmt.Sprintf("Cannot drop: %s is folding into this branch", other.Ref.Branch)
 							m.statusIsError = true
 							return
@@ -816,6 +856,38 @@ func (m *Model) fold(action ActionType) {
 		return
 	}
 
+	// Check if the current node is the target of another fold — folding
+	// a branch that is receiving commits from another fold is not allowed.
+	for i, other := range m.nodes {
+		if other.PendingAction == nil || i == m.cursor {
+			continue
+		}
+		if other.PendingAction.Type == ActionFoldUp {
+			for j := i - 1; j >= 0; j-- {
+				if !m.nodes[j].Removed && !m.nodes[j].Ref.IsMerged() {
+					if j == m.cursor {
+						m.statusMessage = fmt.Sprintf("Cannot fold: %s is folding into this branch", other.Ref.Branch)
+						m.statusIsError = true
+						return
+					}
+					break
+				}
+			}
+		}
+		if other.PendingAction.Type == ActionFoldDown {
+			for j := i + 1; j < len(m.nodes); j++ {
+				if !m.nodes[j].Removed && !m.nodes[j].Ref.IsMerged() {
+					if j == m.cursor {
+						m.statusMessage = fmt.Sprintf("Cannot fold: %s is folding into this branch", other.Ref.Branch)
+						m.statusIsError = true
+						return
+					}
+					break
+				}
+			}
+		}
+	}
+
 	// Find the target branch
 	var targetIdx int
 	var found bool
@@ -834,6 +906,11 @@ func (m *Model) fold(action ActionType) {
 			m.statusIsError = true
 			return
 		}
+		if m.nodes[targetIdx].IsInserted {
+			m.statusMessage = "Cannot fold into an inserted branch"
+			m.statusIsError = true
+			return
+		}
 	} else {
 		// Fold up: target is the previous non-removed, non-merged node away from trunk (lower index)
 		for i := m.cursor - 1; i >= 0; i-- {
@@ -848,6 +925,19 @@ func (m *Model) fold(action ActionType) {
 			m.statusIsError = true
 			return
 		}
+		if m.nodes[targetIdx].IsInserted {
+			m.statusMessage = "Cannot fold into an inserted branch"
+			m.statusIsError = true
+			return
+		}
+	}
+
+	// Check if the target is already folding (mutual fold / chain fold)
+	target := &m.nodes[targetIdx]
+	if target.PendingAction != nil && (target.PendingAction.Type == ActionFoldDown || target.PendingAction.Type == ActionFoldUp) {
+		m.statusMessage = fmt.Sprintf("Cannot fold: %s is already folding in the opposite direction", target.Ref.Branch)
+		m.statusIsError = true
+		return
 	}
 
 	// Check if this would remove the last active original branch
@@ -911,6 +1001,44 @@ func (m *Model) startInsert(direction ActionType) {
 	}
 	if node.Removed {
 		return
+	}
+
+	// Compute where the node would be inserted
+	insertIdx := m.cursor
+	if direction == ActionInsertBelow {
+		insertIdx = m.cursor + 1
+	}
+
+	// Check if inserting here would place the new branch between a
+	// folding branch and its target, making it the new fold target.
+	for i, other := range m.nodes {
+		if other.PendingAction == nil {
+			continue
+		}
+		if other.PendingAction.Type == ActionFoldDown {
+			for j := i + 1; j < len(m.nodes); j++ {
+				if !m.nodes[j].Removed && !m.nodes[j].Ref.IsMerged() {
+					if insertIdx > i && insertIdx <= j {
+						m.statusMessage = fmt.Sprintf("Cannot insert here: %s is folding into %s", other.Ref.Branch, m.nodes[j].Ref.Branch)
+						m.statusIsError = true
+						return
+					}
+					break
+				}
+			}
+		}
+		if other.PendingAction.Type == ActionFoldUp {
+			for j := i - 1; j >= 0; j-- {
+				if !m.nodes[j].Removed && !m.nodes[j].Ref.IsMerged() {
+					if insertIdx > j && insertIdx <= i {
+						m.statusMessage = fmt.Sprintf("Cannot insert here: %s is folding into %s", other.Ref.Branch, m.nodes[j].Ref.Branch)
+						m.statusIsError = true
+						return
+					}
+					break
+				}
+			}
+		}
 	}
 
 	m.insertMode = true

@@ -205,11 +205,10 @@ func TestCannotFoldLastBranch(t *testing.T) {
 
 // --- Mutual fold test ---
 
-func TestMutualFoldBlocked(t *testing.T) {
+func TestFoldTargetOfFoldBlocked(t *testing.T) {
 	// With 3 nodes A(0), B(1), C(2): fold B down into C, then try
-	// to fold C up. Since B is removed the target search for fold-up
-	// skips B and finds A. The fold into A would leave only 1 active
-	// branch (A) so it IS allowed (active >= 1). Verify the behavior.
+	// to fold C up. C is the target of B's fold, so C should not
+	// be allowed to fold.
 	nodes := []ModifyBranchNode{
 		makeNode("a", false, 0),
 		makeNode("b", true, 1),
@@ -227,21 +226,11 @@ func TestMutualFoldBlocked(t *testing.T) {
 	m = sendKey(t, m, runeKey('j'))
 	require.Equal(t, 2, m.cursor)
 
-	// Try fold C up — B is removed so target becomes A.
-	// With only 2 nodes removed (B, C), A is the only active → active=1 (passes guard).
+	// Try fold C up — C is the target of B's fold-down, so blocked
 	m = sendKey(t, m, runeKey('u'))
-	require.NotNil(t, m.nodes[2].PendingAction, "C should fold up into A since B is skipped")
-	assert.Equal(t, ActionFoldUp, m.nodes[2].PendingAction.Type)
-	assert.True(t, m.nodes[2].Removed)
-
-	// Verify only A remains active
-	active := 0
-	for _, n := range m.nodes {
-		if !n.Removed {
-			active++
-		}
-	}
-	assert.Equal(t, 1, active, "only A should remain active")
+	assert.Nil(t, m.nodes[2].PendingAction, "C should not fold because B is folding into it")
+	assert.True(t, m.statusIsError)
+	assert.Contains(t, m.statusMessage, "folding into this branch")
 }
 
 // --- Mode exclusivity tests ---
@@ -1347,4 +1336,221 @@ func TestCannotDropAllOriginalBranchesWithInsert(t *testing.T) {
 	assert.Nil(t, m.nodes[2].PendingAction, "should not be able to drop the last original branch")
 	assert.True(t, m.statusIsError)
 	assert.Contains(t, m.statusMessage, "last branch")
+}
+
+func TestCannotFoldIntoInsertedBranch(t *testing.T) {
+	nodes := []ModifyBranchNode{
+		makeNode("a", true, 0),
+		makeNode("b", false, 1),
+		makeNode("c", false, 2),
+	}
+	m := New(nodes, testTrunk, "1.0.0")
+
+	// Insert below a
+	m = sendKey(t, m, runeKey('i'))
+	m = simulateInsert(t, m, "new-branch")
+	// nodes: a(0), new-branch(1, inserted), b(2), c(3)
+	require.True(t, m.nodes[1].IsInserted)
+
+	// Move cursor to a and try fold down — target would be the inserted branch
+	m.cursor = 0
+	m = sendKey(t, m, runeKey('d'))
+	assert.Nil(t, m.nodes[0].PendingAction, "should not fold into an inserted branch")
+	assert.True(t, m.statusIsError)
+	assert.Contains(t, m.statusMessage, "inserted")
+}
+
+func TestCannotFoldUpIntoInsertedBranch(t *testing.T) {
+	nodes := []ModifyBranchNode{
+		makeNode("a", false, 0),
+		makeNode("b", true, 1),
+		makeNode("c", false, 2),
+	}
+	m := New(nodes, testTrunk, "1.0.0")
+
+	// Insert above b (at index 1)
+	m = sendKey(t, m, runeKey('I'))
+	m = simulateInsert(t, m, "new-branch")
+	// nodes: a(0), new-branch(1, inserted), b(2), c(3)
+	require.True(t, m.nodes[1].IsInserted)
+
+	// Move cursor to b and try fold up — target would be the inserted branch
+	m.cursor = 2
+	m = sendKey(t, m, runeKey('u'))
+	assert.Nil(t, m.nodes[2].PendingAction, "should not fold up into an inserted branch")
+	assert.True(t, m.statusIsError)
+	assert.Contains(t, m.statusMessage, "inserted")
+}
+
+func TestDropBlockedWhenFoldWouldRetargetToInserted(t *testing.T) {
+	nodes := []ModifyBranchNode{
+		makeNode("a", false, 0),
+		makeNode("b", true, 1),
+		makeNode("c", false, 2),
+	}
+	m := New(nodes, testTrunk, "1.0.0")
+
+	// Fold a down into b
+	m.cursor = 0
+	m = sendKey(t, m, runeKey('d'))
+	require.NotNil(t, m.nodes[0].PendingAction)
+	assert.Equal(t, ActionFoldDown, m.nodes[0].PendingAction.Type)
+
+	// Insert between b and c
+	m.cursor = 1
+	m = sendKey(t, m, runeKey('i'))
+	m = simulateInsert(t, m, "new-branch")
+	// nodes: a(0, fold-down), b(1), new-branch(2, inserted), c(3)
+
+	// Try to drop b — fold-down on a currently targets b.
+	// If b is dropped, fold target shifts to new-branch (inserted) → block
+	m.cursor = 1
+	m = sendKey(t, m, runeKey('x'))
+	assert.Nil(t, m.nodes[1].PendingAction, "drop should be blocked")
+	assert.True(t, m.statusIsError)
+	assert.Contains(t, m.statusMessage, "fold")
+}
+
+func TestCannotMutualFold(t *testing.T) {
+	// Scenario: a folds down into b, then try to fold b up.
+	// Since a is Removed after folding, b's fold-up target skips a.
+	// But b is the target of a's fold — so b should not be allowed to fold.
+	nodes := []ModifyBranchNode{
+		makeNode("a", false, 0),
+		makeNode("b", true, 1),
+		makeNode("c", false, 2),
+	}
+	m := New(nodes, testTrunk, "1.0.0")
+
+	// Fold a down (target = b)
+	m.cursor = 0
+	m = sendKey(t, m, runeKey('d'))
+	require.NotNil(t, m.nodes[0].PendingAction)
+	assert.Equal(t, ActionFoldDown, m.nodes[0].PendingAction.Type)
+
+	// Move to b — b is the target of a's fold.
+	// Try to fold b up — should be blocked because a is folding into b.
+	m.cursor = 1
+	m = sendKey(t, m, runeKey('u'))
+	assert.Nil(t, m.nodes[1].PendingAction, "should not fold a branch that is receiving a fold")
+	assert.True(t, m.statusIsError)
+	assert.Contains(t, m.statusMessage, "folding into this branch")
+}
+
+func TestCannotMutualFold_FourNodes(t *testing.T) {
+	nodes := []ModifyBranchNode{
+		makeNode("a", false, 0),
+		makeNode("b", false, 1),
+		makeNode("c", true, 2),
+		makeNode("d", false, 3),
+	}
+	m := New(nodes, testTrunk, "1.0.0")
+
+	// Fold c down into d
+	m.cursor = 2
+	m = sendKey(t, m, runeKey('d'))
+	require.NotNil(t, m.nodes[2].PendingAction)
+	assert.Equal(t, ActionFoldDown, m.nodes[2].PendingAction.Type)
+
+	// Now try fold d up — d is c's fold target, so d can't fold
+	m.cursor = 3
+	m = sendKey(t, m, runeKey('u'))
+	assert.Nil(t, m.nodes[3].PendingAction, "should not fold a branch that is receiving a fold")
+	assert.True(t, m.statusIsError)
+	assert.Contains(t, m.statusMessage, "folding into this branch")
+
+	// But folding d down should still work (it's not mutual)
+	m = sendKey(t, m, runeKey('d'))
+	// d has no branch below, so this should fail with "No branch below"
+	assert.True(t, m.statusIsError)
+}
+
+func TestCannotFoldTargetOfFold(t *testing.T) {
+	// b folds up into a, then try to fold a down — a is receiving b's fold
+	nodes := []ModifyBranchNode{
+		makeNode("a", false, 0),
+		makeNode("b", true, 1),
+		makeNode("c", false, 2),
+	}
+	m := New(nodes, testTrunk, "1.0.0")
+
+	// Fold b up into a
+	m.cursor = 1
+	m = sendKey(t, m, runeKey('u'))
+	require.NotNil(t, m.nodes[1].PendingAction)
+	assert.Equal(t, ActionFoldUp, m.nodes[1].PendingAction.Type)
+
+	// Try to fold a down — a is b's fold target, should be blocked
+	m.cursor = 0
+	m = sendKey(t, m, runeKey('d'))
+	assert.Nil(t, m.nodes[0].PendingAction, "should not fold a branch that is receiving a fold")
+	assert.True(t, m.statusIsError)
+	assert.Contains(t, m.statusMessage, "folding into this branch")
+}
+
+func TestInsertBlockedBetweenFoldDownAndTarget(t *testing.T) {
+	nodes := []ModifyBranchNode{
+		makeNode("a", false, 0),
+		makeNode("b", true, 1),
+		makeNode("c", false, 2),
+	}
+	m := New(nodes, testTrunk, "1.0.0")
+
+	// Fold a down into b
+	m.cursor = 0
+	m = sendKey(t, m, runeKey('d'))
+	require.NotNil(t, m.nodes[0].PendingAction)
+	assert.Equal(t, ActionFoldDown, m.nodes[0].PendingAction.Type)
+
+	// Try inserting above b (between a and b) — should be blocked immediately
+	m.cursor = 1
+	m = sendKey(t, m, runeKey('I'))
+	assert.False(t, m.insertMode, "should not enter insert mode")
+	assert.True(t, m.statusIsError)
+	assert.Contains(t, m.statusMessage, "folding")
+}
+
+func TestInsertBlockedBetweenFoldUpAndTarget(t *testing.T) {
+	nodes := []ModifyBranchNode{
+		makeNode("a", false, 0),
+		makeNode("b", true, 1),
+		makeNode("c", false, 2),
+	}
+	m := New(nodes, testTrunk, "1.0.0")
+
+	// Fold b up into a
+	m.cursor = 1
+	m = sendKey(t, m, runeKey('u'))
+	require.NotNil(t, m.nodes[1].PendingAction)
+	assert.Equal(t, ActionFoldUp, m.nodes[1].PendingAction.Type)
+
+	// Try inserting below a (between a and b) — should be blocked immediately
+	m.cursor = 0
+	m = sendKey(t, m, runeKey('i'))
+	assert.False(t, m.insertMode, "should not enter insert mode")
+	assert.True(t, m.statusIsError)
+	assert.Contains(t, m.statusMessage, "folding")
+}
+
+func TestInsertAllowedOutsideFoldRange(t *testing.T) {
+	nodes := []ModifyBranchNode{
+		makeNode("a", false, 0),
+		makeNode("b", true, 1),
+		makeNode("c", false, 2),
+		makeNode("d", false, 3),
+	}
+	m := New(nodes, testTrunk, "1.0.0")
+
+	// Fold a down into b
+	m.cursor = 0
+	m = sendKey(t, m, runeKey('d'))
+	require.NotNil(t, m.nodes[0].PendingAction)
+
+	// Inserting below c (between c and d) should be fine — outside fold range
+	m.cursor = 2
+	m = sendKey(t, m, runeKey('i'))
+	m = simulateInsert(t, m, "new-branch")
+	assert.False(t, m.insertMode, "should succeed")
+	assert.Len(t, m.nodes, 5)
+	assert.Equal(t, "new-branch", m.nodes[3].Ref.Branch)
 }
