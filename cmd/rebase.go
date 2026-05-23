@@ -166,7 +166,10 @@ func runRebase(cfg *config.Config, opts *rebaseOptions) error {
 	// Sync PR state before rebase so we can detect merged PRs.
 	_ = syncStackPRs(cfg, s)
 
-	originalRefs := resolveOriginalRefs(s)
+	originalRefs, err := resolveOriginalRefs(s)
+	if err != nil {
+		return fmt.Errorf("resolving branch refs: %w", err)
+	}
 
 	// Get --onto state from merged/queued branches below the rebase range.
 	// Ensures that when --upstack excludes skipped branches, we still check
@@ -192,6 +195,11 @@ func runRebase(cfg *config.Config, opts *rebaseOptions) error {
 		NeedsOnto:    needsOnto,
 		OntoOldBase:  ontoOldBase,
 	})
+
+	if rebaseResult.Err != nil {
+		cfg.Errorf("%v", rebaseResult.Err)
+		return ErrSilent
+	}
 
 	if rebaseResult.Conflicted {
 		cfg.Warningf("Rebasing %s onto %s — conflict", rebaseResult.ConflictBranch, rebaseResult.ConflictBase)
@@ -308,17 +316,19 @@ func continueRebase(cfg *config.Config, gitDir string) error {
 
 	// Rebase remaining branches using the shared cascade helper.
 	if len(state.RemainingBranches) > 0 {
-		// Validate all remaining branches still exist in the stack and
-		// build the BranchRef slice with correct absolute indices.
+		// Validate all remaining branches still exist in the stack,
+		// are in contiguous ascending order, and build the BranchRef slice.
 		remainingRefs := make([]stack.BranchRef, 0, len(state.RemainingBranches))
 		startAbsIdx := -1
-		for _, name := range state.RemainingBranches {
+		for i, name := range state.RemainingBranches {
 			idx := s.IndexOf(name)
 			if idx < 0 {
 				return fmt.Errorf("branch %q from saved rebase state is no longer in the stack — the stack may have been modified since the rebase started; consider aborting with --abort", name)
 			}
 			if startAbsIdx < 0 {
 				startAbsIdx = idx
+			} else if idx != startAbsIdx+i {
+				return fmt.Errorf("branch %q is at stack index %d, expected %d — the stack may have been reordered since the rebase started; consider aborting with --abort", name, idx, startAbsIdx+i)
 			}
 			remainingRefs = append(remainingRefs, s.Branches[idx])
 		}
@@ -332,6 +342,11 @@ func continueRebase(cfg *config.Config, gitDir string) error {
 			NeedsOnto:    state.UseOnto,
 			OntoOldBase:  state.OntoOldBase,
 		})
+
+		if result.Err != nil {
+			cfg.Errorf("%v", result.Err)
+			return ErrSilent
+		}
 
 		if result.Conflicted {
 			cfg.Warningf("Rebasing %s onto %s — conflict", result.ConflictBranch, result.ConflictBase)

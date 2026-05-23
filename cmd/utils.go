@@ -615,7 +615,7 @@ func fastForwardBranches(cfg *config.Config, s *stack.Stack, remote, currentBran
 // branches in the stack. Merged branches that no longer exist locally are
 // backfilled from the stack metadata. This map is used as the "before" state
 // for cascade rebases and conflict recovery.
-func resolveOriginalRefs(s *stack.Stack) map[string]string {
+func resolveOriginalRefs(s *stack.Stack) (map[string]string, error) {
 	branchNames := make([]string, 0, len(s.Branches))
 	for _, b := range s.Branches {
 		if b.IsMerged() && !git.BranchExists(b.Branch) {
@@ -623,20 +623,20 @@ func resolveOriginalRefs(s *stack.Stack) map[string]string {
 		}
 		branchNames = append(branchNames, b.Branch)
 	}
-	originalRefs, _ := git.RevParseMap(branchNames)
+	originalRefs, err := git.RevParseMap(branchNames)
+	if err != nil {
+		return nil, fmt.Errorf("resolving branch SHAs: %w", err)
+	}
 
 	// Backfill merged branches that were deleted locally.
 	for _, b := range s.Branches {
 		if b.IsMerged() && !git.BranchExists(b.Branch) {
 			if b.Head != "" {
-				if originalRefs == nil {
-					originalRefs = make(map[string]string)
-				}
 				originalRefs[b.Branch] = b.Head
 			}
 		}
 	}
-	return originalRefs
+	return originalRefs, nil
 }
 
 // fastForwardTrunk fast-forwards the trunk branch to match its remote tracking
@@ -700,7 +700,8 @@ type cascadeRebaseOpts struct {
 // cascadeRebaseResult describes the outcome of a cascade rebase.
 type cascadeRebaseResult struct {
 	Rebased        bool     // at least one branch was successfully rebased
-	Conflicted     bool     // a conflict was detected
+	Conflicted     bool     // a rebase conflict was detected (recoverable via --continue)
+	Err            error    // a fatal error occurred (not recoverable via --continue)
 	ConflictIdx    int      // absolute index in Stack.Branches of the conflicting branch
 	ConflictBranch string   // name of the conflicting branch
 	ConflictBase   string   // base branch we were rebasing onto
@@ -789,17 +790,9 @@ func cascadeRebase(opts cascadeRebaseOpts) cascadeRebaseResult {
 				rebaseErr = git.RebaseOnto(base, originalRefs[base], br.Branch)
 			} else {
 				if err := git.CheckoutBranch(br.Branch); err != nil {
-					remaining := make([]string, 0, len(opts.Branches)-i-1)
-					for j := i + 1; j < len(opts.Branches); j++ {
-						remaining = append(remaining, opts.Branches[j].Branch)
-					}
 					return cascadeRebaseResult{
-						Rebased:        result.Rebased,
-						Conflicted:     true,
-						ConflictIdx:    absIdx,
-						ConflictBranch: br.Branch,
-						ConflictBase:   base,
-						Remaining:      remaining,
+						Rebased: result.Rebased,
+						Err:     fmt.Errorf("checking out %s: %w", br.Branch, err),
 					}
 				}
 				rebaseErr = git.Rebase(base)

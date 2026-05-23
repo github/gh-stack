@@ -110,37 +110,47 @@ func runSync(cfg *config.Config, opts *syncOptions) error {
 		// Sync PR state to detect merged PRs before rebasing.
 		_ = syncStackPRs(cfg, s)
 
-		originalRefs := resolveOriginalRefs(s)
+		originalRefs, err := resolveOriginalRefs(s)
+		if err != nil {
+			cfg.Warningf("Could not resolve branch SHAs — skipping rebase: %v", err)
+		} else {
+			result := cascadeRebase(cascadeRebaseOpts{
+				Cfg:          cfg,
+				Stack:        s,
+				Branches:     s.Branches,
+				StartAbsIdx:  0,
+				OriginalRefs: originalRefs,
+			})
 
-		result := cascadeRebase(cascadeRebaseOpts{
-			Cfg:          cfg,
-			Stack:        s,
-			Branches:     s.Branches,
-			StartAbsIdx:  0,
-			OriginalRefs: originalRefs,
-		})
-
-		if result.Conflicted {
-			// Abort and restore everything — sync is non-interactive.
-			if git.IsRebaseInProgress() {
-				_ = git.RebaseAbort()
+			if result.Err != nil {
+				cfg.Errorf("%v", result.Err)
+				_ = git.CheckoutBranch(currentBranch)
+				stack.SaveNonBlocking(gitDir, sf)
+				return ErrSilent
 			}
-			restoreErrors := restoreBranches(originalRefs)
-			_ = git.CheckoutBranch(currentBranch)
 
-			cfg.Errorf("Conflict detected rebasing %s onto %s", result.ConflictBranch, result.ConflictBase)
-			reportRestoreStatus(cfg, restoreErrors)
-			cfg.Printf("  Run `%s` to resolve conflicts interactively.",
-				cfg.ColorCyan("gh stack rebase"))
+			if result.Conflicted {
+				// Abort and restore everything — sync is non-interactive.
+				if git.IsRebaseInProgress() {
+					_ = git.RebaseAbort()
+				}
+				restoreErrors := restoreBranches(originalRefs)
+				_ = git.CheckoutBranch(currentBranch)
 
-			// Persist refreshed PR state even on conflict, then bail out
-			// before pushing or reporting success.
-			stack.SaveNonBlocking(gitDir, sf)
-			return ErrConflict
-		}
+				cfg.Errorf("Conflict detected rebasing %s onto %s", result.ConflictBranch, result.ConflictBase)
+				reportRestoreStatus(cfg, restoreErrors)
+				cfg.Printf("  Run `%s` to resolve conflicts interactively.",
+					cfg.ColorCyan("gh stack rebase"))
 
-		if result.Rebased {
-			rebased = true
+				// Persist refreshed PR state even on conflict, then bail out
+				// before pushing or reporting success.
+				stack.SaveNonBlocking(gitDir, sf)
+				return ErrConflict
+			}
+
+			if result.Rebased {
+				rebased = true
+			}
 		}
 		_ = git.CheckoutBranch(currentBranch)
 	}
