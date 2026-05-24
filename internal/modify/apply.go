@@ -1004,9 +1004,9 @@ func Unwind(cfg *config.Config, gitDir string, snapshot Snapshot, stackIndex int
 		}
 	}
 
-	// Clean up branches created by renames during the partial apply
+	// Clean up branches created by renames or inserts during the partial apply
 	for _, action := range plan {
-		if action.Type == "rename" && action.NewName != "" {
+		if action.NewName != "" && (action.Type == "rename" || action.Type == "insert_below" || action.Type == "insert_above") {
 			if !snapshotNames[action.NewName] && git.BranchExists(action.NewName) {
 				_ = git.DeleteBranch(action.NewName, true)
 			}
