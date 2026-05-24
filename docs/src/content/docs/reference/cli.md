@@ -505,6 +505,16 @@ gh stack bottom
 
 Checks out the branch closest to the trunk.
 
+### `gh stack trunk`
+
+Jump to the trunk branch.
+
+```sh
+gh stack trunk
+```
+
+Checks out the trunk branch of the current stack (e.g., `main`). You must be on a branch that is part of a stack.
+
 ---
 
 ## Utilities

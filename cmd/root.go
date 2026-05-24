@@ -128,6 +128,10 @@ locally, then push to GitHub to create your stack of PRs.`,
 	bottomCmd.GroupID = "nav"
 	root.AddCommand(bottomCmd)
 
+	trunkCmd := TrunkCmd(cfg)
+	trunkCmd.GroupID = "nav"
+	root.AddCommand(trunkCmd)
+
 	// Utility commands
 	aliasCmd := AliasCmd(cfg)
 	aliasCmd.GroupID = "utils"

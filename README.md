@@ -475,6 +475,7 @@ gh stack up [n]      # Move up n branches (default 1)
 gh stack down [n]    # Move down n branches (default 1)
 gh stack top         # Jump to the top of the stack
 gh stack bottom      # Jump to the bottom of the stack
+gh stack trunk       # Jump to the trunk branch
 gh stack switch      # Interactively pick a branch to switch to
 ```
 
@@ -488,6 +489,7 @@ gh stack up 3        # move up three layers
 gh stack down
 gh stack top
 gh stack bottom
+gh stack trunk       # jump to the trunk branch (e.g., main)
 gh stack switch      # shows an interactive picker
 ```
 
