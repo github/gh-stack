@@ -85,7 +85,7 @@ func inputWithPrefill(cfg *config.Config, prompt, prefill string) (string, error
 	_ = rr.SetTermMode()
 	defer func() { _ = rr.RestoreTermMode() }()
 
-	// Render the prompt in survey style: green bold "?" + bold message
+	// Render the prompt in survey style: green bold "?" + message
 	icon := "?"
 	useColor := cfg.Terminal.IsColorEnabled()
 	if useColor {
