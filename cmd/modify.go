@@ -33,7 +33,8 @@ Operations available:
   • Rename branches
 
 All changes are staged in the TUI and applied together when you press Ctrl+S.
-After applying, run 'gh stack submit' to push changes and recreate the stack on GitHub.`,
+If your changes affect branches with pull requests, run 'gh stack submit'
+afterward to push changes, update PRs, and recreate the stack on GitHub.`,
 		Example: `  # Open the interactive TUI to restructure the stack
   $ gh stack modify
 
