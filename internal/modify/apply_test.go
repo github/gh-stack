@@ -1503,6 +1503,52 @@ func TestResolveCheckoutBranch_Fallback_TopBranch(t *testing.T) {
 	assert.Equal(t, "Y", result)
 }
 
+func TestResolveCheckoutBranch_FoldDown_TargetRenamed(t *testing.T) {
+	// B is folded down into A, and A is renamed to new-A in the same operation.
+	// After apply, stack has [new-A, C].
+	s := &stack.Stack{
+		Trunk:    stack.BranchRef{Branch: "main"},
+		Branches: []stack.BranchRef{{Branch: "new-A"}, {Branch: "C"}},
+	}
+	snapshot := Snapshot{
+		Branches: []BranchSnapshot{
+			{Name: "A", Position: 0},
+			{Name: "B", Position: 1},
+			{Name: "C", Position: 2},
+		},
+	}
+	plan := []Action{
+		{Type: "rename", Branch: "A", NewName: "new-A"},
+		{Type: "fold_down", Branch: "B"},
+	}
+
+	result := resolveCheckoutBranch("B", plan, snapshot, s)
+	assert.Equal(t, "new-A", result)
+}
+
+func TestResolveCheckoutBranch_Dropped_NeighborRenamed(t *testing.T) {
+	// B is dropped, and C (above) is renamed to new-C in the same operation.
+	// After apply, stack has [A, new-C].
+	s := &stack.Stack{
+		Trunk:    stack.BranchRef{Branch: "main"},
+		Branches: []stack.BranchRef{{Branch: "A"}, {Branch: "new-C"}},
+	}
+	snapshot := Snapshot{
+		Branches: []BranchSnapshot{
+			{Name: "A", Position: 0},
+			{Name: "B", Position: 1},
+			{Name: "C", Position: 2},
+		},
+	}
+	plan := []Action{
+		{Type: "rename", Branch: "C", NewName: "new-C"},
+		{Type: "drop", Branch: "B"},
+	}
+
+	result := resolveCheckoutBranch("B", plan, snapshot, s)
+	assert.Equal(t, "new-C", result)
+}
+
 // ─── ApplyPlan: Checkout behavior after drop ────────────────────────────────
 
 func TestApplyPlan_Drop_ChecksOutNearestBranch(t *testing.T) {

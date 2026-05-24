@@ -499,9 +499,9 @@ func ApplyPlan(
 	// otherwise the nearest surviving branch.
 	targetBranch := resolveCheckoutBranch(currentBranch, plan, snapshot, s)
 	if err := git.CheckoutBranch(targetBranch); err == nil {
-	if targetBranch != currentBranch {
-		cfg.Printf("Switched to %s (original branch %s is no longer in the stack)", targetBranch, currentBranch)
-	}
+		if targetBranch != currentBranch {
+			cfg.Printf("Switched to %s (original branch %s is no longer in the stack)", targetBranch, currentBranch)
+		}
 	}
 
 	// Update base SHAs
@@ -535,6 +535,24 @@ func resolveCheckoutBranch(originalBranch string, plan []Action, snapshot Snapsh
 		return originalBranch
 	}
 
+	// Build a rename map (old name → new name) so we can translate snapshot
+	// neighbor names that may have been renamed in the same modify operation.
+	renames := make(map[string]string)
+	for _, a := range plan {
+		if a.Type == "rename" && a.NewName != "" {
+			renames[a.Branch] = a.NewName
+		}
+	}
+
+	// resolvedName returns the post-rename name for a branch, or the
+	// original name if it wasn't renamed.
+	resolvedName := func(name string) string {
+		if newName, ok := renames[name]; ok {
+			return newName
+		}
+		return name
+	}
+
 	// Scan the plan for an action that targeted the original branch.
 	for _, a := range plan {
 		if a.Branch != originalBranch {
@@ -550,24 +568,26 @@ func resolveCheckoutBranch(originalBranch string, plan []Action, snapshot Snapsh
 		case "fold_down":
 			// Fold-down merges into the branch below in the original order.
 			if target := adjacentSnapshotBranch(snapshot, originalBranch, -1); target != "" {
-				if s.IndexOf(target) >= 0 {
-					return target
+				resolved := resolvedName(target)
+				if s.IndexOf(resolved) >= 0 {
+					return resolved
 				}
 			}
 
 		case "fold_up":
 			// Fold-up merges into the branch above in the original order.
 			if target := adjacentSnapshotBranch(snapshot, originalBranch, +1); target != "" {
-				if s.IndexOf(target) >= 0 {
-					return target
+				resolved := resolvedName(target)
+				if s.IndexOf(resolved) >= 0 {
+					return resolved
 				}
 			}
 
 		case "drop":
 			// Prefer the branch that was directly above in the original order,
 			// then fall back to the one below.
-			if above := nearestSurvivingBranch(snapshot, originalBranch, s); above != "" {
-				return above
+			if nearest := nearestSurvivingBranch(snapshot, originalBranch, s, resolvedName); nearest != "" {
+				return nearest
 			}
 		}
 	}
@@ -596,7 +616,8 @@ func adjacentSnapshotBranch(snapshot Snapshot, target string, direction int) str
 
 // nearestSurvivingBranch finds the closest branch to the dropped branch that
 // still exists in the stack. Prefers the branch above (higher index), then below.
-func nearestSurvivingBranch(snapshot Snapshot, dropped string, s *stack.Stack) string {
+// resolvedName translates snapshot names through any renames from the same operation.
+func nearestSurvivingBranch(snapshot Snapshot, dropped string, s *stack.Stack, resolvedName func(string) string) string {
 	pos := -1
 	for i, bs := range snapshot.Branches {
 		if bs.Name == dropped {
@@ -610,14 +631,16 @@ func nearestSurvivingBranch(snapshot Snapshot, dropped string, s *stack.Stack) s
 
 	// Search above first (higher indices = away from trunk)
 	for i := pos + 1; i < len(snapshot.Branches); i++ {
-		if s.IndexOf(snapshot.Branches[i].Name) >= 0 {
-			return snapshot.Branches[i].Name
+		name := resolvedName(snapshot.Branches[i].Name)
+		if s.IndexOf(name) >= 0 {
+			return name
 		}
 	}
 	// Then below (lower indices = toward trunk)
 	for i := pos - 1; i >= 0; i-- {
-		if s.IndexOf(snapshot.Branches[i].Name) >= 0 {
-			return snapshot.Branches[i].Name
+		name := resolvedName(snapshot.Branches[i].Name)
+		if s.IndexOf(name) >= 0 {
+			return name
 		}
 	}
 	return ""
@@ -764,8 +787,8 @@ func ContinueApply(
 	if state.OriginalBranch != "" {
 		targetBranch := resolveCheckoutBranch(state.OriginalBranch, state.Plan, state.Snapshot, s)
 		if err := git.CheckoutBranch(targetBranch); err == nil {
-		if targetBranch != state.OriginalBranch {
-			cfg.Printf("Switched to %s (original branch %s is no longer in the stack)", targetBranch, state.OriginalBranch)
+			if targetBranch != state.OriginalBranch {
+				cfg.Printf("Switched to %s (original branch %s is no longer in the stack)", targetBranch, state.OriginalBranch)
 			}
 		}
 	}
