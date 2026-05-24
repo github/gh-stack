@@ -248,19 +248,6 @@ func ApplyPlan(
 		var parentBranch string
 		insertPos := -1
 
-		// Build the active branch order from the stack (as of now, after renames)
-		activeIdx := 0
-		for _, b := range s.Branches {
-			if b.IsMerged() {
-				continue
-			}
-			if b.Branch == newName {
-				// already added in a previous iteration — skip
-				break
-			}
-			activeIdx++
-		}
-
 		// Determine where in s.Branches the new branch should go.
 		// Walk the non-removed nodes to find the relative position.
 		nonRemovedPos := 0
