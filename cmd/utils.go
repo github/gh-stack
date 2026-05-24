@@ -82,7 +82,9 @@ func inputWithPrefill(cfg *config.Config, prompt, prefill string) (string, error
 
 	stdio := terminal.Stdio{In: cfg.In, Out: cfg.Out, Err: cfg.Err}
 	rr := terminal.NewRuneReader(stdio)
-	_ = rr.SetTermMode()
+	if err := rr.SetTermMode(); err != nil {
+		return "", fmt.Errorf("failed to set terminal mode: %w", err)
+	}
 	defer func() { _ = rr.RestoreTermMode() }()
 
 	// Render the prompt in survey style: green bold "?" + message
