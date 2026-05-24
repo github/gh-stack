@@ -498,9 +498,10 @@ func ApplyPlan(
 	// Check out the best branch — the original if it's still in the stack,
 	// otherwise the nearest surviving branch.
 	targetBranch := resolveCheckoutBranch(currentBranch, plan, snapshot, s)
-	_ = git.CheckoutBranch(targetBranch)
+	if err := git.CheckoutBranch(targetBranch); err == nil {
 	if targetBranch != currentBranch {
 		cfg.Printf("Switched to %s (original branch %s is no longer in the stack)", targetBranch, currentBranch)
+	}
 	}
 
 	// Update base SHAs
@@ -762,9 +763,10 @@ func ContinueApply(
 	// All rebases done — check out the best branch
 	if state.OriginalBranch != "" {
 		targetBranch := resolveCheckoutBranch(state.OriginalBranch, state.Plan, state.Snapshot, s)
-		_ = git.CheckoutBranch(targetBranch)
+		if err := git.CheckoutBranch(targetBranch); err == nil {
 		if targetBranch != state.OriginalBranch {
 			cfg.Printf("Switched to %s (original branch %s is no longer in the stack)", targetBranch, state.OriginalBranch)
+			}
 		}
 	}
 
