@@ -542,9 +542,10 @@ func TestAdd_RejectsExistingBranchInStack(t *testing.T) {
 	defer restore()
 
 	cfg, outR, errR := config.NewTestConfig()
-	runAdd(cfg, &addOptions{}, []string{"taken-branch"})
+	err := runAdd(cfg, &addOptions{}, []string{"taken-branch"})
 	output := collectOutput(cfg, outR, errR)
 
+	assert.ErrorIs(t, err, ErrInvalidArgs)
 	assert.Contains(t, output, "already exists in the stack")
 }
 
