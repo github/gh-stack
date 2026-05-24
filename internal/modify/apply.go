@@ -539,13 +539,16 @@ func ApplyPlan(
 		if err := SaveState(gitDir, stateFile); err != nil {
 			cfg.Warningf("failed to update modify state: %s", err)
 		}
-	} else {
-		ClearState(gitDir)
 	}
 
 	// Save stack metadata — this must succeed since git refs have been rewritten
 	if err := stack.SaveWithLock(gitDir, sf, lock); err != nil {
 		return nil, nil, fmt.Errorf("saving stack metadata: %w", err)
+	}
+
+	// Clear state after metadata save succeeds to preserve --abort recovery
+	if !needsSubmit {
+		ClearState(gitDir)
 	}
 
 	return result, nil, nil
@@ -842,13 +845,16 @@ func ContinueApply(
 		if err := SaveState(gitDir, state); err != nil {
 			cfg.Warningf("failed to update modify state: %s", err)
 		}
-	} else {
-		ClearState(gitDir)
 	}
 
 	// Save stack metadata
 	if err := stack.SaveWithLock(gitDir, sf, lock); err != nil {
 		cfg.Warningf("failed to save stack: %v", err)
+	}
+
+	// Clear state after metadata save succeeds to preserve --abort recovery
+	if !needsSubmit {
+		ClearState(gitDir)
 	}
 
 	cfg.Successf("Stack modified successfully")
