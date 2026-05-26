@@ -1,6 +1,8 @@
 package cmd
 
 import (
+	"errors"
+
 	"github.com/github/gh-stack/internal/config"
 	"github.com/github/gh-stack/internal/git"
 	"github.com/spf13/cobra"
@@ -26,6 +28,9 @@ You must be on a branch that is part of a stack.`,
 func runTrunk(cfg *config.Config) error {
 	result, err := loadStack(cfg, "")
 	if err != nil {
+		if errors.Is(err, errInterrupt) {
+			return ErrSilent
+		}
 		return ErrNotInStack
 	}
 	s := result.Stack

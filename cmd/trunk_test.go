@@ -3,7 +3,6 @@ package cmd
 import (
 	"fmt"
 	"io"
-	"os"
 	"testing"
 
 	"github.com/github/gh-stack/internal/config"
@@ -125,7 +124,7 @@ func TestTrunk_NotInStack(t *testing.T) {
 	cmd.SetErr(io.Discard)
 	err := cmd.Execute()
 
-	assert.Error(t, err)
+	assert.ErrorIs(t, err, ErrNotInStack)
 }
 
 func TestTrunk_CheckoutFailure(t *testing.T) {
@@ -154,6 +153,7 @@ func TestTrunk_CheckoutFailure(t *testing.T) {
 	err := cmd.Execute()
 
 	assert.Error(t, err)
+	assert.ErrorContains(t, err, "checkout failed")
 }
 
 func TestTrunk_CustomTrunkBranch(t *testing.T) {
@@ -202,9 +202,6 @@ func TestTrunk_RejectsArgs(t *testing.T) {
 	}
 	restore := git.SetOps(mock)
 	defer restore()
-
-	// Suppress cobra's automatic os.Exit on error for test
-	_ = os.Stderr
 
 	cfg, _, _ := config.NewTestConfig()
 	cmd := TrunkCmd(cfg)
