@@ -137,6 +137,8 @@ func ApplyPlan(
 
 	result := &modifyview.ApplyResult{Success: true}
 
+	// Track whether any action affects a branch with a PR.
+	affectsPRs := false
 	// Collect original refs for rebase --onto, including trunk
 	branchNames := make([]string, 0, len(s.Branches)+1)
 	branchNames = append(branchNames, s.Trunk.Branch)
@@ -207,6 +209,9 @@ func ApplyPlan(
 				OldName: oldName,
 				NewName: newName,
 			})
+			if n.Ref.PullRequest != nil {
+				affectsPRs = true
+			}
 			cfg.Successf("Renamed %s → %s", oldName, newName)
 		}
 	}
@@ -255,6 +260,15 @@ func ApplyPlan(
 
 		baseBranch := s.ActiveBaseBranch(foldBranch)
 
+		// Check if fold source or target has a PR
+		if n.Ref.PullRequest != nil {
+			affectsPRs = true
+		}
+		targetIdx := s.IndexOf(targetBranch)
+		if targetIdx >= 0 && s.Branches[targetIdx].PullRequest != nil {
+			affectsPRs = true
+		}
+
 		if n.PendingAction.Type == modifyview.ActionFoldDown {
 			// Fold-down: cherry-pick the folded branch's commits onto the target.
 			commits, err := git.LogRange(baseBranch, foldBranch)
@@ -301,6 +315,7 @@ func ApplyPlan(
 					stateFile.RemainingBranches = remaining
 					stateFile.OriginalBranch = currentBranch
 					stateFile.OriginalRefs = originalParentTips
+					stateFile.AffectsPRs = affectsPRs
 					if saveErr := SaveState(gitDir, stateFile); saveErr != nil {
 						cfg.Warningf("failed to save conflict state: %v", saveErr)
 					}
@@ -351,6 +366,7 @@ func ApplyPlan(
 				Branch:   dropBranch,
 				PRNumber: n.Ref.PullRequest.Number,
 			})
+			affectsPRs = true
 		}
 
 		s.Branches = append(s.Branches[:dropIdx], s.Branches[dropIdx+1:]...)
@@ -466,6 +482,10 @@ func ApplyPlan(
 				conflict.ConflictedFiles = files
 			}
 
+			if b.PullRequest != nil {
+				affectsPRs = true
+			}
+
 			// Save conflict state so --continue can resume
 			remaining := make([]string, 0)
 			for j := i + 1; j < len(s.Branches); j++ {
@@ -479,6 +499,7 @@ func ApplyPlan(
 			stateFile.RemainingBranches = remaining
 			stateFile.OriginalBranch = currentBranch
 			stateFile.OriginalRefs = originalParentTips
+			stateFile.AffectsPRs = affectsPRs
 			if saveErr := SaveState(gitDir, stateFile); saveErr != nil {
 				cfg.Warningf("failed to save conflict state: %v", saveErr)
 			}
@@ -492,6 +513,9 @@ func ApplyPlan(
 		}
 
 		cfg.Successf("Rebased %s onto %s", b.Branch, newBase)
+		if b.PullRequest != nil {
+			affectsPRs = true
+		}
 		result.MovedBranches++
 	}
 
@@ -507,20 +531,23 @@ func ApplyPlan(
 	// Update base SHAs
 	updateBaseSHAs(s)
 
-	// Update state file phase
-	if s.ID != "" {
+	// Update state file phase — only require submit when PRs are affected
+	result.NeedsSubmit = s.ID != "" && affectsPRs
+	if result.NeedsSubmit {
 		stateFile.Phase = PhasePendingSubmit
 		if err := SaveState(gitDir, stateFile); err != nil {
 			cfg.Warningf("failed to update modify state: %s", err)
 		}
-	} else {
-		// No remote stack — clear the state file
-		ClearState(gitDir)
 	}
 
 	// Save stack metadata — this must succeed since git refs have been rewritten
 	if err := stack.SaveWithLock(gitDir, sf, lock); err != nil {
 		return nil, nil, fmt.Errorf("saving stack metadata: %w", err)
+	}
+
+	// Clear state after metadata save succeeds to preserve --abort recovery
+	if !result.NeedsSubmit {
+		ClearState(gitDir)
 	}
 
 	return result, nil, nil
@@ -686,6 +713,14 @@ func ContinueApply(
 		return fmt.Errorf("stack at index %d not found (stack file may have changed)", state.StackIndex)
 	}
 
+	// Carry forward whether any prior actions already affected PRs
+	affectsPRs := state.AffectsPRs
+
+	// Check the conflict branch itself
+	if idx := s.IndexOf(state.ConflictBranch); idx >= 0 && s.Branches[idx].PullRequest != nil {
+		affectsPRs = true
+	}
+
 	// Finish the in-progress git operation (rebase or cherry-pick)
 	if state.ConflictType == "cherry_pick" {
 		if err := git.CherryPickContinue(); err != nil {
@@ -763,6 +798,7 @@ func ContinueApply(
 			}
 			state.ConflictBranch = branchName
 			state.RemainingBranches = remaining
+			state.AffectsPRs = affectsPRs
 			_ = SaveState(gitDir, state)
 
 			cfg.Warningf("Conflict rebasing %s", branchName)
@@ -781,8 +817,10 @@ func ContinueApply(
 		}
 
 		cfg.Successf("Rebased %s onto %s", branchName, newBase)
+		if b.PullRequest != nil {
+			affectsPRs = true
+		}
 	}
-
 	// All rebases done — check out the best branch
 	if state.OriginalBranch != "" {
 		targetBranch := resolveCheckoutBranch(state.OriginalBranch, state.Plan, state.Snapshot, s)
@@ -796,8 +834,9 @@ func ContinueApply(
 	// Update base SHAs
 	updateBaseSHAs(s)
 
-	// Transition to pending_submit or clear
-	if s.ID != "" {
+	// Transition to pending_submit only when PRs are affected
+	needsSubmit := s.ID != "" && affectsPRs
+	if needsSubmit {
 		state.Phase = PhasePendingSubmit
 		state.ConflictBranch = ""
 		state.RemainingBranches = nil
@@ -805,8 +844,6 @@ func ContinueApply(
 		if err := SaveState(gitDir, state); err != nil {
 			cfg.Warningf("failed to update modify state: %s", err)
 		}
-	} else {
-		ClearState(gitDir)
 	}
 
 	// Save stack metadata
@@ -814,8 +851,13 @@ func ContinueApply(
 		cfg.Warningf("failed to save stack: %v", err)
 	}
 
+	// Clear state after metadata save succeeds to preserve --abort recovery
+	if !needsSubmit {
+		ClearState(gitDir)
+	}
+
 	cfg.Successf("Stack modified successfully")
-	if state.PriorRemoteStackID != "" {
+	if needsSubmit {
 		cfg.Printf("")
 		cfg.Printf("Run `%s` to push your changes and update the stack of PRs on GitHub",
 			cfg.ColorCyan("gh stack submit"))

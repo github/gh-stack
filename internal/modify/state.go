@@ -39,6 +39,11 @@ type StateFile struct {
 	// Cherry-pick conflict context — which fold was in progress
 	FoldBranch string `json:"fold_branch,omitempty"` // branch being folded
 	FoldTarget string `json:"fold_target,omitempty"` // branch receiving the cherry-pick
+
+	// AffectsPRs records whether any action so far has affected a branch with
+	// a PR.  Persisted across conflict boundaries so ContinueApply can combine
+	// it with checks on remaining branches.
+	AffectsPRs bool `json:"affects_prs,omitempty"`
 }
 
 // Snapshot captures the pre-modify state for unwind/recovery.

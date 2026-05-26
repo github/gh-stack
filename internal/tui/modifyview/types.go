@@ -47,6 +47,7 @@ type ApplyResult struct {
 	DroppedPRs      []DroppedPR
 	RenamedBranches []RenamedBranch
 	MovedBranches   int
+	NeedsSubmit     bool // true when the modify affected branches with PRs
 	Message         string
 }
 
