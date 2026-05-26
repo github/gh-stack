@@ -532,9 +532,8 @@ func ApplyPlan(
 	updateBaseSHAs(s)
 
 	// Update state file phase — only require submit when PRs are affected
-	needsSubmit := s.ID != "" && affectsPRs
-	result.NeedsSubmit = needsSubmit
-	if needsSubmit {
+	result.NeedsSubmit = s.ID != "" && affectsPRs
+	if result.NeedsSubmit {
 		stateFile.Phase = PhasePendingSubmit
 		if err := SaveState(gitDir, stateFile); err != nil {
 			cfg.Warningf("failed to update modify state: %s", err)
@@ -547,7 +546,7 @@ func ApplyPlan(
 	}
 
 	// Clear state after metadata save succeeds to preserve --abort recovery
-	if !needsSubmit {
+	if !result.NeedsSubmit {
 		ClearState(gitDir)
 	}
 
