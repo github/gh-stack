@@ -159,8 +159,7 @@ func runInit(cfg *config.Config, opts *initOptions) error {
 	} else if opts.numbered {
 		// === NUMBERED PATH (unchanged) ===
 		if opts.prefix == "" && cfg.IsInteractive() {
-			p := prompter.New(cfg.In, cfg.Out, cfg.Err)
-			prefixInput, err := p.Input("Enter a branch prefix (required for --numbered)", "")
+			prefixInput, err := inputWithPrefill(cfg, "Enter a branch prefix (required for --numbered):", "")
 			if err != nil {
 				if isInterruptError(err) {
 					printInterrupt(cfg)
@@ -377,7 +376,7 @@ func runInteractiveInit(cfg *config.Config, sf *stack.StackFile, trunk, currentB
 			branchName = currentBranch
 		} else {
 			// Create a new branch — fall through to input prompt
-			name, err := promptBranchName(cfg, p, opts.prefix)
+			name, err := promptBranchName(cfg, opts.prefix)
 			if err != nil {
 				return nil, false, err
 			}
@@ -385,7 +384,7 @@ func runInteractiveInit(cfg *config.Config, sf *stack.StackFile, trunk, currentB
 		}
 	} else {
 		// On trunk or detached HEAD — prompt for name directly
-		name, err := promptBranchName(cfg, p, opts.prefix)
+		name, err := promptBranchName(cfg, opts.prefix)
 		if err != nil {
 			return nil, false, err
 		}
@@ -430,14 +429,16 @@ func runInteractiveInit(cfg *config.Config, sf *stack.StackFile, trunk, currentB
 	return []string{branchName}, wasAdopted, nil
 }
 
-// promptBranchName prompts the user for a branch name, applying the
-// explicit --prefix if set.
-func promptBranchName(cfg *config.Config, p *prompter.Prompter, prefix string) (string, error) {
-	prompt := "What's the name of the first branch?"
+// promptBranchName prompts the user for a branch name, pre-filling the
+// prefix in the input when set so the user can see and edit the full name.
+func promptBranchName(cfg *config.Config, prefix string) (string, error) {
+	prefill := ""
+	prompt := "What's the name of the first branch:"
 	if prefix != "" {
-		prompt = fmt.Sprintf("Enter a name for the first branch (will be prefixed with %s/)", prefix)
+		prompt = "Enter a name for the first branch:"
+		prefill = prefix + "/"
 	}
-	branchName, err := p.Input(prompt, "")
+	branchName, err := inputWithPrefill(cfg, prompt, prefill)
 	if err != nil {
 		if isInterruptError(err) {
 			printInterrupt(cfg)
@@ -450,9 +451,6 @@ func promptBranchName(cfg *config.Config, p *prompter.Prompter, prefix string) (
 	if branchName == "" {
 		cfg.Errorf("branch name cannot be empty")
 		return "", ErrInvalidArgs
-	}
-	if prefix != "" {
-		branchName = prefix + "/" + branchName
 	}
 	return branchName, nil
 }
@@ -484,12 +482,12 @@ func detectPrefix(branches []string) string {
 func printWhatsNext(cfg *config.Config, s *stack.Stack, branches []string, hasAdopted bool, prCount int) {
 	lastBranch := branches[len(branches)-1]
 
-	// Build the chain: main → branch1 → branch2
+	// Build the chain: main ← branch1 ← branch2
 	parts := []string{s.Trunk.Branch}
 	for _, b := range s.Branches {
 		parts = append(parts, b.Branch)
 	}
-	chain := strings.Join(parts, " → ")
+	chain := strings.Join(parts, " ← ")
 
 	// Success line
 	if hasAdopted {

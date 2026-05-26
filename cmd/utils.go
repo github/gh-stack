@@ -14,6 +14,7 @@ import (
 	"github.com/github/gh-stack/internal/git"
 	"github.com/github/gh-stack/internal/github"
 	"github.com/github/gh-stack/internal/stack"
+	"github.com/mgutz/ansi"
 )
 
 // ErrSilent indicates the error has already been printed to the user.
@@ -67,6 +68,49 @@ func isInterruptError(err error) bool {
 func printInterrupt(cfg *config.Config) {
 	fmt.Fprintln(cfg.Err)
 	cfg.Infof("Received interrupt, aborting operation")
+}
+
+// inputWithPrefill prompts the user for text input with the given prefill
+// already editable in the input field. Unlike survey.Input's Default (which
+// shows in parentheses), this places the prefill text directly in the
+// editable line so the user can append to or modify it. The user's input
+// is rendered in cyan for visual distinction from the prompt message.
+func inputWithPrefill(cfg *config.Config, prompt, prefill string) (string, error) {
+	if cfg.InputFn != nil {
+		return cfg.InputFn(prompt, prefill)
+	}
+
+	stdio := terminal.Stdio{In: cfg.In, Out: cfg.Out, Err: cfg.Err}
+	rr := terminal.NewRuneReader(stdio)
+	if err := rr.SetTermMode(); err != nil {
+		return "", fmt.Errorf("failed to set terminal mode: %w", err)
+	}
+	defer func() { _ = rr.RestoreTermMode() }()
+
+	// Render the prompt in survey style: green bold "?" + message
+	icon := "?"
+	useColor := cfg.Terminal.IsColorEnabled()
+	if useColor {
+		icon = ansi.Color("?", "green+hb")
+	}
+	fmt.Fprintf(cfg.Out, "%s %s ", icon, prompt)
+
+	// Set cyan color for the user's input text
+	if useColor {
+		fmt.Fprint(cfg.Out, ansi.ColorCode("cyan"))
+	}
+
+	line, err := rr.ReadLineWithDefault(0, []rune(prefill))
+
+	// Reset color after input
+	if useColor {
+		fmt.Fprint(cfg.Out, ansi.ColorCode("reset"))
+	}
+
+	if err != nil {
+		return "", err
+	}
+	return string(line), nil
 }
 
 // selectPromptPageSize matches the PageSize used by the go-gh prompter.

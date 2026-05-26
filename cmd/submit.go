@@ -281,8 +281,7 @@ func createPR(cfg *config.Config, client github.ClientOps, s *stack.Stack, i int
 	title, commitBody := defaultPRTitleBody(baseBranch, b.Branch)
 	originalTitle := title
 	if !opts.auto && cfg.IsInteractive() {
-		p := prompter.New(cfg.In, cfg.Out, cfg.Err)
-		input, err := p.Input(fmt.Sprintf("Title for PR (branch %s):", b.Branch), title)
+		input, err := inputWithPrefill(cfg, fmt.Sprintf("Title for PR (branch %s):", b.Branch), title)
 		if err != nil {
 			if isInterruptError(err) {
 				return errInterrupt
