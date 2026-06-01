@@ -298,6 +298,265 @@ func TestLink_Create422(t *testing.T) {
 	assert.Contains(t, output, "must form a stack")
 }
 
+// --- PR eligibility tests ---
+
+func TestLink_RejectsMergedPR(t *testing.T) {
+	cfg, _, errR := config.NewTestConfig()
+	cfg.GitHubClientOverride = &github.MockClient{
+		FindPRByNumberFn: func(n int) (*github.PullRequest, error) {
+			return &github.PullRequest{
+				Number:      n,
+				State:       "MERGED",
+				HeadRefName: fmt.Sprintf("branch-%d", n),
+				BaseRefName: "main",
+				URL:         fmt.Sprintf("https://github.com/o/r/pull/%d", n),
+				Merged:      true,
+			}, nil
+		},
+	}
+
+	cmd := LinkCmd(cfg)
+	cmd.SetArgs([]string{"10", "20"})
+	cmd.SetOut(io.Discard)
+	cmd.SetErr(io.Discard)
+	err := cmd.Execute()
+
+	cfg.Err.Close()
+	errOut, _ := io.ReadAll(errR)
+	output := string(errOut)
+
+	assert.ErrorIs(t, err, ErrInvalidArgs)
+	assert.Contains(t, output, "cannot be added to a stack")
+	assert.Contains(t, output, "merged")
+}
+
+func TestLink_RejectsClosedPR(t *testing.T) {
+	cfg, _, errR := config.NewTestConfig()
+	cfg.GitHubClientOverride = &github.MockClient{
+		FindPRByNumberFn: func(n int) (*github.PullRequest, error) {
+			return &github.PullRequest{
+				Number:      n,
+				State:       "CLOSED",
+				HeadRefName: fmt.Sprintf("branch-%d", n),
+				BaseRefName: "main",
+				URL:         fmt.Sprintf("https://github.com/o/r/pull/%d", n),
+			}, nil
+		},
+	}
+
+	cmd := LinkCmd(cfg)
+	cmd.SetArgs([]string{"10", "20"})
+	cmd.SetOut(io.Discard)
+	cmd.SetErr(io.Discard)
+	err := cmd.Execute()
+
+	cfg.Err.Close()
+	errOut, _ := io.ReadAll(errR)
+	output := string(errOut)
+
+	assert.ErrorIs(t, err, ErrInvalidArgs)
+	assert.Contains(t, output, "cannot be added to a stack")
+	assert.Contains(t, output, "closed")
+}
+
+func TestLink_RejectsQueuedPR(t *testing.T) {
+	cfg, _, errR := config.NewTestConfig()
+	cfg.GitHubClientOverride = &github.MockClient{
+		FindPRByNumberFn: func(n int) (*github.PullRequest, error) {
+			pr := &github.PullRequest{
+				Number:      n,
+				State:       "OPEN",
+				HeadRefName: fmt.Sprintf("branch-%d", n),
+				BaseRefName: "main",
+				URL:         fmt.Sprintf("https://github.com/o/r/pull/%d", n),
+			}
+			if n == 20 {
+				pr.MergeQueueEntry = &github.MergeQueueEntry{ID: "MQE_123"}
+			}
+			return pr, nil
+		},
+		ListStacksFn: func() ([]github.RemoteStack, error) {
+			return []github.RemoteStack{}, nil
+		},
+		CreateStackFn: func([]int) (int, error) {
+			t.Fatal("CreateStack should not be called for ineligible PRs")
+			return 0, nil
+		},
+	}
+
+	cmd := LinkCmd(cfg)
+	cmd.SetArgs([]string{"10", "20"})
+	cmd.SetOut(io.Discard)
+	cmd.SetErr(io.Discard)
+	err := cmd.Execute()
+
+	cfg.Err.Close()
+	errOut, _ := io.ReadAll(errR)
+	output := string(errOut)
+
+	assert.ErrorIs(t, err, ErrInvalidArgs)
+	assert.Contains(t, output, "cannot be added to a stack")
+	assert.Contains(t, output, "queued for merge")
+}
+
+func TestLink_RejectsAutoMergeEnabledPR(t *testing.T) {
+	cfg, _, errR := config.NewTestConfig()
+	cfg.GitHubClientOverride = &github.MockClient{
+		FindPRByNumberFn: func(n int) (*github.PullRequest, error) {
+			pr := &github.PullRequest{
+				Number:      n,
+				State:       "OPEN",
+				HeadRefName: fmt.Sprintf("branch-%d", n),
+				BaseRefName: "main",
+				URL:         fmt.Sprintf("https://github.com/o/r/pull/%d", n),
+			}
+			if n == 10 {
+				pr.AutoMergeRequest = &github.AutoMergeRequest{EnabledAt: "2024-01-01T00:00:00Z"}
+			}
+			return pr, nil
+		},
+		ListStacksFn: func() ([]github.RemoteStack, error) {
+			return []github.RemoteStack{}, nil
+		},
+		CreateStackFn: func([]int) (int, error) {
+			t.Fatal("CreateStack should not be called for ineligible PRs")
+			return 0, nil
+		},
+	}
+
+	cmd := LinkCmd(cfg)
+	cmd.SetArgs([]string{"10", "20"})
+	cmd.SetOut(io.Discard)
+	cmd.SetErr(io.Discard)
+	err := cmd.Execute()
+
+	cfg.Err.Close()
+	errOut, _ := io.ReadAll(errR)
+	output := string(errOut)
+
+	assert.ErrorIs(t, err, ErrInvalidArgs)
+	assert.Contains(t, output, "cannot be added to a stack")
+	assert.Contains(t, output, "auto-merge")
+}
+
+func TestLink_RejectsQueuedPR_ByBranch(t *testing.T) {
+	restore := git.SetOps(newLinkGitMock("feature-a", "feature-b"))
+	defer restore()
+
+	cfg, _, errR := config.NewTestConfig()
+	cfg.GitHubClientOverride = &github.MockClient{
+		FindPRForBranchFn: func(branch string) (*github.PullRequest, error) {
+			pr := &github.PullRequest{
+				Number:      10,
+				HeadRefName: branch,
+				BaseRefName: "main",
+				URL:         "https://github.com/o/r/pull/10",
+			}
+			if branch == "feature-b" {
+				pr.Number = 20
+				pr.URL = "https://github.com/o/r/pull/20"
+				pr.MergeQueueEntry = &github.MergeQueueEntry{ID: "MQE_456"}
+			}
+			return pr, nil
+		},
+	}
+
+	cmd := LinkCmd(cfg)
+	cmd.SetArgs([]string{"feature-a", "feature-b"})
+	cmd.SetOut(io.Discard)
+	cmd.SetErr(io.Discard)
+	err := cmd.Execute()
+
+	cfg.Err.Close()
+	errOut, _ := io.ReadAll(errR)
+	output := string(errOut)
+
+	assert.ErrorIs(t, err, ErrInvalidArgs)
+	assert.Contains(t, output, "cannot be added to a stack")
+	assert.Contains(t, output, "queued for merge")
+}
+
+func TestLink_RejectsAutoMergePR_ByBranch(t *testing.T) {
+	restore := git.SetOps(newLinkGitMock("feature-a", "feature-b"))
+	defer restore()
+
+	cfg, _, errR := config.NewTestConfig()
+	cfg.GitHubClientOverride = &github.MockClient{
+		FindPRForBranchFn: func(branch string) (*github.PullRequest, error) {
+			if branch == "feature-a" {
+				return &github.PullRequest{
+					Number:           10,
+					HeadRefName:      branch,
+					BaseRefName:      "main",
+					URL:              "https://github.com/o/r/pull/10",
+					AutoMergeRequest: &github.AutoMergeRequest{EnabledAt: "2024-01-01T00:00:00Z"},
+				}, nil
+			}
+			return &github.PullRequest{
+				Number:      20,
+				HeadRefName: branch,
+				BaseRefName: "main",
+				URL:         "https://github.com/o/r/pull/20",
+			}, nil
+		},
+	}
+
+	cmd := LinkCmd(cfg)
+	cmd.SetArgs([]string{"feature-a", "feature-b"})
+	cmd.SetOut(io.Discard)
+	cmd.SetErr(io.Discard)
+	err := cmd.Execute()
+
+	cfg.Err.Close()
+	errOut, _ := io.ReadAll(errR)
+	output := string(errOut)
+
+	assert.ErrorIs(t, err, ErrInvalidArgs)
+	assert.Contains(t, output, "cannot be added to a stack")
+	assert.Contains(t, output, "auto-merge")
+}
+
+func TestLink_ReportsMultipleIneligiblePRs(t *testing.T) {
+	cfg, _, errR := config.NewTestConfig()
+	cfg.GitHubClientOverride = &github.MockClient{
+		FindPRByNumberFn: func(n int) (*github.PullRequest, error) {
+			pr := &github.PullRequest{
+				Number:      n,
+				State:       "OPEN",
+				HeadRefName: fmt.Sprintf("branch-%d", n),
+				BaseRefName: "main",
+				URL:         fmt.Sprintf("https://github.com/o/r/pull/%d", n),
+			}
+			switch n {
+			case 10:
+				pr.State = "MERGED"
+				pr.Merged = true
+			case 20:
+				pr.MergeQueueEntry = &github.MergeQueueEntry{ID: "MQE_789"}
+			case 30:
+				pr.AutoMergeRequest = &github.AutoMergeRequest{EnabledAt: "2024-01-01T00:00:00Z"}
+			}
+			return pr, nil
+		},
+	}
+
+	cmd := LinkCmd(cfg)
+	cmd.SetArgs([]string{"10", "20", "30"})
+	cmd.SetOut(io.Discard)
+	cmd.SetErr(io.Discard)
+	err := cmd.Execute()
+
+	cfg.Err.Close()
+	errOut, _ := io.ReadAll(errR)
+	output := string(errOut)
+
+	assert.ErrorIs(t, err, ErrInvalidArgs)
+	// All three invalid PRs should be reported
+	assert.Contains(t, output, "merged")
+	assert.Contains(t, output, "queued for merge")
+	assert.Contains(t, output, "auto-merge")
+}
+
 // --- Branch name tests ---
 
 func TestLink_BranchNames_AllHavePRs(t *testing.T) {

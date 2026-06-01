@@ -48,6 +48,26 @@ func TestPullRequest_IsQueued(t *testing.T) {
 	})
 }
 
+func TestPullRequest_IsAutoMergeEnabled(t *testing.T) {
+	t.Run("not enabled when AutoMergeRequest is nil", func(t *testing.T) {
+		pr := &PullRequest{Number: 1}
+		assert.False(t, pr.IsAutoMergeEnabled())
+	})
+
+	t.Run("enabled when AutoMergeRequest is present", func(t *testing.T) {
+		pr := &PullRequest{
+			Number:           1,
+			AutoMergeRequest: &AutoMergeRequest{EnabledAt: "2024-01-01T00:00:00Z"},
+		}
+		assert.True(t, pr.IsAutoMergeEnabled())
+	})
+
+	t.Run("nil receiver is safe", func(t *testing.T) {
+		var pr *PullRequest
+		assert.False(t, pr.IsAutoMergeEnabled())
+	})
+}
+
 func TestToGraphQLInt(t *testing.T) {
 	t.Run("in range", func(t *testing.T) {
 		got, err := toGraphQLInt(123)

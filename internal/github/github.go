@@ -16,22 +16,35 @@ type MergeQueueEntry struct {
 	ID string `graphql:"id"`
 }
 
+// AutoMergeRequest represents an auto-merge configuration on a PR.
+// When the GraphQL field autoMergeRequest is null (auto-merge not enabled),
+// the pointer will be nil.
+type AutoMergeRequest struct {
+	EnabledAt string `graphql:"enabledAt"`
+}
+
 // PullRequest represents a GitHub pull request.
 type PullRequest struct {
-	ID              string           `graphql:"id"`
-	Number          int              `graphql:"number"`
-	State           string           `graphql:"state"`
-	URL             string           `graphql:"url"`
-	HeadRefName     string           `graphql:"headRefName"`
-	BaseRefName     string           `graphql:"baseRefName"`
-	IsDraft         bool             `graphql:"isDraft"`
-	Merged          bool             `graphql:"merged"`
-	MergeQueueEntry *MergeQueueEntry `graphql:"mergeQueueEntry"`
+	ID               string            `graphql:"id"`
+	Number           int               `graphql:"number"`
+	State            string            `graphql:"state"`
+	URL              string            `graphql:"url"`
+	HeadRefName      string            `graphql:"headRefName"`
+	BaseRefName      string            `graphql:"baseRefName"`
+	IsDraft          bool              `graphql:"isDraft"`
+	Merged           bool              `graphql:"merged"`
+	MergeQueueEntry  *MergeQueueEntry  `graphql:"mergeQueueEntry"`
+	AutoMergeRequest *AutoMergeRequest `graphql:"autoMergeRequest"`
 }
 
 // IsQueued reports whether the pull request is currently in a merge queue.
 func (pr *PullRequest) IsQueued() bool {
 	return pr != nil && pr.MergeQueueEntry != nil && pr.MergeQueueEntry.ID != ""
+}
+
+// IsAutoMergeEnabled reports whether the pull request has auto-merge enabled.
+func (pr *PullRequest) IsAutoMergeEnabled() bool {
+	return pr != nil && pr.AutoMergeRequest != nil
 }
 
 // Client wraps GitHub API operations.
@@ -85,12 +98,13 @@ func (c *Client) FindPRForBranch(branch string) (*PullRequest, error) {
 		Repository struct {
 			PullRequests struct {
 				Nodes []struct {
-					ID              string           `graphql:"id"`
-					Number          int              `graphql:"number"`
-					URL             string           `graphql:"url"`
-					BaseRefName     string           `graphql:"baseRefName"`
-					IsDraft         bool             `graphql:"isDraft"`
-					MergeQueueEntry *MergeQueueEntry `graphql:"mergeQueueEntry"`
+					ID               string            `graphql:"id"`
+					Number           int               `graphql:"number"`
+					URL              string            `graphql:"url"`
+					BaseRefName      string            `graphql:"baseRefName"`
+					IsDraft          bool              `graphql:"isDraft"`
+					MergeQueueEntry  *MergeQueueEntry  `graphql:"mergeQueueEntry"`
+					AutoMergeRequest *AutoMergeRequest `graphql:"autoMergeRequest"`
 				}
 			} `graphql:"pullRequests(headRefName: $head, states: [OPEN], first: 1)"`
 		} `graphql:"repository(owner: $owner, name: $name)"`
@@ -113,12 +127,13 @@ func (c *Client) FindPRForBranch(branch string) (*PullRequest, error) {
 
 	n := nodes[0]
 	return &PullRequest{
-		ID:              n.ID,
-		Number:          n.Number,
-		URL:             n.URL,
-		BaseRefName:     n.BaseRefName,
-		IsDraft:         n.IsDraft,
-		MergeQueueEntry: n.MergeQueueEntry,
+		ID:               n.ID,
+		Number:           n.Number,
+		URL:              n.URL,
+		BaseRefName:      n.BaseRefName,
+		IsDraft:          n.IsDraft,
+		MergeQueueEntry:  n.MergeQueueEntry,
+		AutoMergeRequest: n.AutoMergeRequest,
 	}, nil
 }
 
@@ -296,15 +311,16 @@ func (c *Client) FindPRByNumber(number int) (*PullRequest, error) {
 	var query struct {
 		Repository struct {
 			PullRequest struct {
-				ID              string           `graphql:"id"`
-				Number          int              `graphql:"number"`
-				State           string           `graphql:"state"`
-				URL             string           `graphql:"url"`
-				HeadRefName     string           `graphql:"headRefName"`
-				BaseRefName     string           `graphql:"baseRefName"`
-				IsDraft         bool             `graphql:"isDraft"`
-				Merged          bool             `graphql:"merged"`
-				MergeQueueEntry *MergeQueueEntry `graphql:"mergeQueueEntry"`
+				ID               string            `graphql:"id"`
+				Number           int               `graphql:"number"`
+				State            string            `graphql:"state"`
+				URL              string            `graphql:"url"`
+				HeadRefName      string            `graphql:"headRefName"`
+				BaseRefName      string            `graphql:"baseRefName"`
+				IsDraft          bool              `graphql:"isDraft"`
+				Merged           bool              `graphql:"merged"`
+				MergeQueueEntry  *MergeQueueEntry  `graphql:"mergeQueueEntry"`
+				AutoMergeRequest *AutoMergeRequest `graphql:"autoMergeRequest"`
 			} `graphql:"pullRequest(number: $number)"`
 		} `graphql:"repository(owner: $owner, name: $name)"`
 	}
@@ -324,15 +340,16 @@ func (c *Client) FindPRByNumber(number int) (*PullRequest, error) {
 		return nil, nil
 	}
 	return &PullRequest{
-		ID:              n.ID,
-		Number:          n.Number,
-		State:           n.State,
-		URL:             n.URL,
-		HeadRefName:     n.HeadRefName,
-		BaseRefName:     n.BaseRefName,
-		IsDraft:         n.IsDraft,
-		Merged:          n.Merged,
-		MergeQueueEntry: n.MergeQueueEntry,
+		ID:               n.ID,
+		Number:           n.Number,
+		State:            n.State,
+		URL:              n.URL,
+		HeadRefName:      n.HeadRefName,
+		BaseRefName:      n.BaseRefName,
+		IsDraft:          n.IsDraft,
+		Merged:           n.Merged,
+		MergeQueueEntry:  n.MergeQueueEntry,
+		AutoMergeRequest: n.AutoMergeRequest,
 	}, nil
 }
 

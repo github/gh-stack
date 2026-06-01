@@ -68,10 +68,11 @@ the new PRs (existing PRs are never removed).`,
 
 // resolvedArg holds the result of resolving a single CLI argument to a PR.
 type resolvedArg struct {
-	branch   string // head branch name
-	prNumber int    // PR number
-	prURL    string // PR URL (for display)
-	created  bool   // true if we created this PR (skip base-fix re-fetch)
+	branch   string              // head branch name
+	prNumber int                 // PR number
+	prURL    string              // PR URL (for display)
+	created  bool                // true if we created this PR (skip base-fix re-fetch)
+	pr       *github.PullRequest // full PR data (only set for existing PRs)
 }
 
 func runLink(cfg *config.Config, opts *linkOptions, args []string) error {
@@ -95,6 +96,12 @@ func runLink(cfg *config.Config, opts *linkOptions, args []string) error {
 	cfg.Printf("Looking up PRs for %d %s...", len(args), plural(len(args), "branch", "branches"))
 	found, err := findExistingPRs(cfg, client, args)
 	if err != nil {
+		return err
+	}
+
+	// Phase 2b: Validate that all found PRs are eligible to be added to a stack.
+	// Only open/draft PRs without auto-merge enabled are allowed.
+	if err := validatePREligibility(cfg, found); err != nil {
 		return err
 	}
 
@@ -238,6 +245,7 @@ func findExistingPR(cfg *config.Config, client github.ClientOps, arg string) (*r
 				branch:   pr.HeadRefName,
 				prNumber: pr.Number,
 				prURL:    pr.URL,
+				pr:       pr,
 			}, nil
 		}
 		// PR doesn't exist — fall through to branch name lookup
@@ -255,10 +263,45 @@ func findExistingPR(cfg *config.Config, client github.ClientOps, arg string) (*r
 			branch:   arg,
 			prNumber: pr.Number,
 			prURL:    pr.URL,
+			pr:       pr,
 		}, nil
 	}
 
 	return nil, nil // needs PR creation
+}
+
+// validatePREligibility checks that all found PRs are eligible to be added
+// to a stack. Only open or draft PRs without auto-merge enabled are allowed.
+// Merged, closed, queued, and auto-merge-enabled PRs are rejected.
+// Reports all invalid PRs at once before returning.
+func validatePREligibility(cfg *config.Config, found []*resolvedArg) error {
+	invalid := 0
+	for _, r := range found {
+		if r == nil || r.pr == nil {
+			continue
+		}
+		pr := r.pr
+		reason := ""
+		switch {
+		case pr.State == "MERGED":
+			reason = "it has been merged"
+		case pr.State == "CLOSED":
+			reason = "it is closed"
+		case pr.IsQueued():
+			reason = "it is queued for merge"
+		case pr.IsAutoMergeEnabled():
+			reason = "it has auto-merge enabled"
+		}
+		if reason != "" {
+			cfg.Errorf("PR %s cannot be added to a stack: %s",
+				cfg.PRLink(r.prNumber, r.prURL), reason)
+			invalid++
+		}
+	}
+	if invalid > 0 {
+		return ErrInvalidArgs
+	}
+	return nil
 }
 
 // listStacksSafe fetches all stacks, handling the 404 "not enabled" case.
