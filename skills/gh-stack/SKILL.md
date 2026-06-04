@@ -55,7 +55,7 @@ git config remote.pushDefault origin     # if multiple remotes exist (skips remo
 1. **Always supply branch names as positional arguments** to `init`, `add`, and `checkout`. Running these commands without arguments triggers interactive prompts.
 2. **When a prefix is set, pass only the suffix to `add`.** `gh stack add auth` with prefix `feat` → `feat/auth`. Passing `feat/auth` creates `feat/feat/auth`.
 3. **Always use `--auto` with `gh stack submit`** to auto-generate PR titles. Without `--auto`, `submit` prompts for a title for each new PR.
-4. **Always use `--json` with `gh stack view`.** Without `--json`, the command launches an interactive TUI that cannot be operated by agents. There is no other appropriate flag — always pass `--json`.
+4. **Always use `--json` with `gh stack view`.** Without `--json`, the command launches an interactive TUI that cannot be operated by agents. There is no other appropriate flag — always pass `--json`. Never run `gh stack watch`; it is an interactive-only TUI with no non-interactive mode — use `gh stack view --json` instead.
 5. **Use `--remote <name>` when multiple remotes are configured**, or pre-configure `git config remote.pushDefault origin`. Without this, `push`, `submit`, `sync`, `link`, and `checkout` trigger an interactive remote picker.
 6. **Avoid branches shared across multiple stacks.** If a branch belongs to multiple stacks, commands exit with code 6. Check out a non-shared branch first.
 7. **Plan your stack layers by dependency order before writing code.** Foundational changes (models, APIs, shared utilities) go in lower branches; dependent changes (UI, consumers) go in higher branches. Think through the dependency chain before running `gh stack init`.
@@ -65,6 +65,7 @@ git config remote.pushDefault origin     # if multiple remotes exist (skips remo
 
 **Never do any of the following — each triggers an interactive prompt or TUI that will hang:**
 - ❌ `gh stack view` or `gh stack view --short` — always use `gh stack view --json`
+- ❌ `gh stack watch` — interactive-only TUI with no JSON or non-interactive mode; use `gh stack view --json`
 - ❌ `gh stack submit` without `--auto` — always use `gh stack submit --auto`
 - ❌ `gh stack init` without branch arguments — always provide branch names
 - ❌ `gh stack add` without a branch name — always provide a branch name
