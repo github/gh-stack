@@ -158,6 +158,7 @@ func TestCheckout_NumericTarget_StacksNotAvailable(t *testing.T) {
 	require.NoError(t, stack.Save(gitDir, &stack.StackFile{SchemaVersion: 1, Stacks: []stack.Stack{}}))
 
 	cfg, outR, errR := config.NewTestConfig()
+	setTestTokenForHost(cfg, "gho_test_oauth_token")
 	cfg.GitHubClientOverride = &github.MockClient{
 		ListStacksFn: func() ([]github.RemoteStack, error) {
 			return nil, &api.HTTPError{StatusCode: 404, Message: "Not Found"}

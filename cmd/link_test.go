@@ -244,6 +244,7 @@ func TestLink_DuplicateArgs(t *testing.T) {
 
 func TestLink_StacksUnavailable(t *testing.T) {
 	cfg, _, errR := config.NewTestConfig()
+	setTestTokenForHost(cfg, "gho_test_oauth_token")
 	cfg.GitHubClientOverride = &github.MockClient{
 		FindPRByNumberFn: func(n int) (*github.PullRequest, error) {
 			return &github.PullRequest{Number: n, HeadRefName: "b", BaseRefName: "main"}, nil

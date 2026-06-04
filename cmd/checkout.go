@@ -183,7 +183,7 @@ func checkoutRemoteStack(cfg *config.Config, sf *stack.StackFile, gitDir string,
 	if err != nil {
 		var httpErr *api.HTTPError
 		if errors.As(err, &httpErr) && httpErr.StatusCode == 404 {
-			cfg.Errorf("Stacked PRs are not enabled for this repository")
+			warnStacksUnavailableOrPAT(cfg)
 			return nil, "", ErrAPIFailure
 		}
 		cfg.Errorf("failed to list stacks: %v", err)
