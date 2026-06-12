@@ -135,13 +135,13 @@ gh stack view --json
 
 ### `gh stack checkout`
 
-Check out a stack from a pull request number or branch name.
+Check out a stack from a pull request number, URL, or branch name.
 
 ```sh
-gh stack checkout [<pr-number> | <branch>]
+gh stack checkout [<pr-number> | <pr-url> | <branch>]
 ```
 
-When a PR number is provided (e.g., `123`), the command fetches the stack on GitHub, pulls the branches, and sets up the stack locally. If the stack already exists locally and matches, it switches to the branch. If the local and remote stacks have different compositions, you'll be prompted to resolve the conflict.
+When a PR number or URL is provided (e.g., `123` or `https://github.com/owner/repo/pull/123`), the command fetches the stack on GitHub, pulls the branches, and sets up the stack locally. If the stack already exists locally and matches, it switches to the branch. If the local and remote stacks have different compositions, you'll be prompted to resolve the conflict.
 
 When a branch name is provided, the command resolves it against locally tracked stacks only.
 
@@ -152,6 +152,9 @@ When run without arguments in an interactive terminal, shows a menu of all local
 ```sh
 # Check out a stack by PR number
 gh stack checkout 42
+
+# Check out a stack by PR URL
+gh stack checkout https://github.com/owner/repo/pull/42
 
 # Check out a stack by branch name (local only)
 gh stack checkout feature-auth
@@ -391,7 +394,7 @@ Link PRs into a stack on GitHub without local tracking.
 gh stack link [flags] <branch-or-pr> <branch-or-pr> [...]
 ```
 
-Creates or updates a stack on GitHub from branch names or PR numbers. This command does not create or modify any `gh-stack` local tracking state. It is designed for users who manage branches with other tools locally (e.g., jj, Sapling, git-town) and want to simply open a stack of PRs.
+Creates or updates a stack on GitHub from branch names or PR numbers/URLs. This command does not create or modify any `gh-stack` local tracking state. It is designed for users who manage branches with other tools locally (e.g., jj, Sapling, git-town) and want to simply open a stack of PRs.
 
 Arguments are provided in stack order (bottom to top). Branch arguments are automatically pushed to the remote before creating or looking up PRs. For branches that already have open PRs, those PRs are used. For branches without PRs, new PRs are created automatically with the correct base branch chaining. Existing PRs whose base branch doesn't match the expected chain are corrected automatically.
 
@@ -411,6 +414,9 @@ gh stack link feature-auth feature-api feature-ui
 
 # Link existing PRs by number
 gh stack link 10 20 30
+
+# Link existing PRs by URL
+gh stack link https://github.com/owner/repo/pull/10 https://github.com/owner/repo/pull/20
 
 # Add branches to an existing stack of PRs
 gh stack link 42 43 feature-auth feature-ui
