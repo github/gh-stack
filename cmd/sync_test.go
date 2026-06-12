@@ -28,6 +28,7 @@ func newSyncMock(tmpDir string, currentBranch string) *git.MockOps {
 	return &git.MockOps{
 		GitDirFn:        func() (string, error) { return tmpDir, nil },
 		CurrentBranchFn: func() (string, error) { return currentBranch, nil },
+		BranchExistsFn:  func(name string) bool { return true },
 		RevParseFn: func(ref string) (string, error) {
 			// Default: origin/<branch> returns same SHA as <branch> (no FF needed)
 			if strings.HasPrefix(ref, "origin/") {
@@ -401,6 +402,51 @@ func TestSync_TrunkDiverged(t *testing.T) {
 	// Push should happen without force (no rebase occurred)
 	require.Len(t, pushCalls, 1)
 	assert.False(t, pushCalls[0].force, "push should not use force when no rebase")
+}
+
+// TestSync_NoLocalTrunk_SkipsSilently verifies that when the trunk branch
+// does not exist locally (only origin/main exists), sync skips the
+// fast-forward silently without emitting a warning.
+func TestSync_NoLocalTrunk_SkipsSilently(t *testing.T) {
+	s := stack.Stack{
+		Trunk: stack.BranchRef{Branch: "main"},
+		Branches: []stack.BranchRef{
+			{Branch: "b1"},
+		},
+	}
+
+	tmpDir := t.TempDir()
+	writeStackFile(t, tmpDir, s)
+
+	var pushCalls []pushCall
+
+	mock := newSyncMock(tmpDir, "b1")
+	// Trunk does not exist locally.
+	mock.BranchExistsFn = func(name string) bool { return name != "main" }
+	mock.PushFn = func(remote string, branches []string, force, atomic bool) error {
+		pushCalls = append(pushCalls, pushCall{remote, branches, force, atomic})
+		return nil
+	}
+
+	restore := git.SetOps(mock)
+	defer restore()
+
+	cfg, _, errR := config.NewTestConfig()
+	cmd := SyncCmd(cfg)
+	cmd.SetOut(io.Discard)
+	cmd.SetErr(io.Discard)
+	err := cmd.Execute()
+
+	cfg.Err.Close()
+	errOut, _ := io.ReadAll(errR)
+	output := string(errOut)
+
+	assert.NoError(t, err)
+	assert.NotContains(t, output, "Could not compare trunk")
+	assert.NotContains(t, output, "skipping trunk update")
+
+	// Push should still happen
+	require.Len(t, pushCalls, 1)
 }
 
 // TestSync_RebaseConflict_RestoresAll verifies that when a rebase conflict
