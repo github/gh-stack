@@ -25,7 +25,7 @@ func LinkCmd(cfg *config.Config) *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "link <branch-or-pr> <branch-or-pr> [<branch-or-pr>...]",
 		Short: "Link PRs into a stack on GitHub without local tracking",
-		Long: `Create or update a stack on GitHub from branch names or PR numbers.
+		Long: `Create or update a stack on GitHub from branch names, PR numbers, or PR URLs.
 
 This command does not rely on gh-stack local tracking state. It is
 designed for users who manage branches with external tools (e.g. jj,
@@ -33,9 +33,11 @@ Sapling, ghstack, git-town, etc...) and want to use GitHub stacked
 PRs without adopting local stack tracking.
 
 Arguments are provided in stack order (bottom to top). Each argument
-can be a branch name or a PR number. For numeric arguments, the
+can be a branch name, a PR number, or a PR URL (e.g.
+https://github.com/owner/repo/pull/123). For numeric arguments, the
 command first checks if a PR with that number exists; if not, it
-treats the argument as a branch name.
+treats the argument as a branch name. PR URLs are always resolved
+as pull requests (never as branch names).
 
 Branch arguments are automatically pushed to the remote before
 creating or looking up PRs. For branches that already have open PRs,
@@ -50,6 +52,9 @@ the new PRs (existing PRs are never removed).`,
 
   # Link existing PRs by number
   $ gh stack link 41 42 43
+
+  # Link existing PRs by URL
+  $ gh stack link https://github.com/owner/repo/pull/41 https://github.com/owner/repo/pull/42
 
   # Specify a custom base branch for stack
   $ gh stack link --base develop auth-layer api-routes`,
@@ -233,6 +238,27 @@ func findExistingPRs(cfg *config.Config, client github.ClientOps, args []string)
 // findExistingPR looks up an existing PR for a single arg.
 // Returns nil if the arg is a branch with no open PR.
 func findExistingPR(cfg *config.Config, client github.ClientOps, arg string) (*resolvedArg, error) {
+	// If the arg is a PR URL, extract the number and look it up.
+	// Unlike numeric args, a URL can never be a valid branch name,
+	// so we error instead of falling through to branch lookup.
+	if n, ok := parsePRURL(arg); ok {
+		pr, err := client.FindPRByNumber(n)
+		if err != nil {
+			cfg.Errorf("failed to look up PR #%d: %v", n, err)
+			return nil, ErrAPIFailure
+		}
+		if pr == nil {
+			cfg.Errorf("PR #%d not found", n)
+			return nil, ErrInvalidArgs
+		}
+		return &resolvedArg{
+			branch:   pr.HeadRefName,
+			prNumber: pr.Number,
+			prURL:    pr.URL,
+			pr:       pr,
+		}, nil
+	}
+
 	// If numeric, try as PR number first
 	if n, err := strconv.Atoi(arg); err == nil && n > 0 {
 		pr, err := client.FindPRByNumber(n)

@@ -1566,3 +1566,106 @@ func TestLink_PRNumbers_NoTemplateUsesFooter(t *testing.T) {
 	assert.NoError(t, err)
 	assert.Contains(t, capturedBody, "GitHub Stacks CLI", "footer should be present when no template")
 }
+
+// --- PR URL tests ---
+
+func TestLink_PRURLs_CreateNewStack(t *testing.T) {
+	var createdPRs []int
+	cfg, _, errR := config.NewTestConfig()
+	cfg.GitHubClientOverride = &github.MockClient{
+		FindPRByNumberFn: func(n int) (*github.PullRequest, error) {
+			return &github.PullRequest{
+				Number:      n,
+				HeadRefName: fmt.Sprintf("branch-%d", n),
+				BaseRefName: "main",
+				URL:         fmt.Sprintf("https://github.com/o/r/pull/%d", n),
+			}, nil
+		},
+		ListStacksFn: func() ([]github.RemoteStack, error) {
+			return []github.RemoteStack{}, nil
+		},
+		CreateStackFn: func(prNumbers []int) (int, error) {
+			createdPRs = prNumbers
+			return 42, nil
+		},
+	}
+
+	cmd := LinkCmd(cfg)
+	cmd.SetArgs([]string{
+		"https://github.com/o/r/pull/10",
+		"https://github.com/o/r/pull/20",
+		"https://github.com/o/r/pull/30",
+	})
+	cmd.SetOut(io.Discard)
+	cmd.SetErr(io.Discard)
+	err := cmd.Execute()
+
+	cfg.Err.Close()
+	errOut, _ := io.ReadAll(errR)
+	output := string(errOut)
+
+	assert.NoError(t, err)
+	assert.Equal(t, []int{10, 20, 30}, createdPRs)
+	assert.Contains(t, output, "Created stack with 3 PRs")
+}
+
+func TestLink_PRURLs_NotFound(t *testing.T) {
+	cfg, _, errR := config.NewTestConfig()
+	cfg.GitHubClientOverride = &github.MockClient{
+		FindPRByNumberFn: func(n int) (*github.PullRequest, error) {
+			return nil, nil // PR not found
+		},
+	}
+
+	cmd := LinkCmd(cfg)
+	cmd.SetArgs([]string{
+		"https://github.com/o/r/pull/999",
+		"https://github.com/o/r/pull/1000",
+	})
+	cmd.SetOut(io.Discard)
+	cmd.SetErr(io.Discard)
+	err := cmd.Execute()
+
+	cfg.Err.Close()
+	errOut, _ := io.ReadAll(errR)
+	output := string(errOut)
+
+	assert.ErrorIs(t, err, ErrInvalidArgs)
+	assert.Contains(t, output, "PR #999 not found")
+}
+
+func TestLink_MixedURLsAndNumbers(t *testing.T) {
+	var createdPRs []int
+	cfg, _, errR := config.NewTestConfig()
+	cfg.GitHubClientOverride = &github.MockClient{
+		FindPRByNumberFn: func(n int) (*github.PullRequest, error) {
+			return &github.PullRequest{
+				Number:      n,
+				HeadRefName: fmt.Sprintf("branch-%d", n),
+				BaseRefName: "main",
+				URL:         fmt.Sprintf("https://github.com/o/r/pull/%d", n),
+			}, nil
+		},
+		ListStacksFn: func() ([]github.RemoteStack, error) {
+			return []github.RemoteStack{}, nil
+		},
+		CreateStackFn: func(prNumbers []int) (int, error) {
+			createdPRs = prNumbers
+			return 42, nil
+		},
+	}
+
+	cmd := LinkCmd(cfg)
+	cmd.SetArgs([]string{"10", "https://github.com/o/r/pull/20", "30"})
+	cmd.SetOut(io.Discard)
+	cmd.SetErr(io.Discard)
+	err := cmd.Execute()
+
+	cfg.Err.Close()
+	errOut, _ := io.ReadAll(errR)
+	output := string(errOut)
+
+	assert.NoError(t, err)
+	assert.Equal(t, []int{10, 20, 30}, createdPRs)
+	assert.Contains(t, output, "Created stack with 3 PRs")
+}
