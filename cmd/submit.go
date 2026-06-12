@@ -247,6 +247,18 @@ func ensurePR(cfg *config.Config, client github.ClientOps, s *stack.Stack, i int
 		}
 	}
 
+	// Disable auto-merge before adding this PR to a stack. A PR with
+	// auto-merge enabled would merge on its own, breaking the stack.
+	if pr.IsAutoMergeEnabled() {
+		if err := client.DisableAutoMerge(pr.ID); err != nil {
+			cfg.Warningf("failed to disable auto-merge for PR %s: %v",
+				cfg.PRLink(pr.Number, pr.URL), err)
+		} else {
+			cfg.Warningf("Disabled auto-merge for PR %s (incompatible with stacked PRs)",
+				cfg.PRLink(pr.Number, pr.URL))
+		}
+	}
+
 	if pr.BaseRefName != baseBranch {
 		if s.ID != "" {
 			// Stack API owns base relationships — can't update directly.

@@ -1800,3 +1800,166 @@ func TestSubmit_PreflightCheck_FinegrainedPAT_BailsOut(t *testing.T) {
 	assert.ErrorIs(t, err, ErrStacksUnavailable)
 	assert.Contains(t, output, "Personal access tokens are not supported by gh stack")
 }
+
+func TestSubmit_DisablesAutoMergeOnExistingPR(t *testing.T) {
+	s := stack.Stack{
+		Trunk: stack.BranchRef{Branch: "main"},
+		Branches: []stack.BranchRef{
+			{Branch: "b1"},
+			{Branch: "b2"},
+		},
+	}
+
+	tmpDir := t.TempDir()
+	writeStackFile(t, tmpDir, s)
+
+	mock := newSubmitMock(tmpDir, "b1")
+	mock.LogRangeFn = func(base, head string) ([]git.CommitInfo, error) {
+		return []git.CommitInfo{{Subject: "commit for " + head}}, nil
+	}
+	restore := git.SetOps(mock)
+	defer restore()
+
+	var disabledAutoMergePRIDs []string
+
+	cfg, _, errR := config.NewTestConfig()
+	cfg.GitHubClientOverride = &github.MockClient{
+		FindPRForBranchFn: func(branch string) (*github.PullRequest, error) {
+			switch branch {
+			case "b1":
+				return &github.PullRequest{
+					Number: 10, ID: "PR_10",
+					URL:         "https://github.com/owner/repo/pull/10",
+					BaseRefName: "main", HeadRefName: "b1",
+				}, nil
+			case "b2":
+				return &github.PullRequest{
+					Number: 20, ID: "PR_20",
+					URL:              "https://github.com/owner/repo/pull/20",
+					BaseRefName:      "b1", HeadRefName: "b2",
+					AutoMergeRequest: &github.AutoMergeRequest{EnabledAt: "2024-01-01T00:00:00Z"},
+				}, nil
+			}
+			return nil, nil
+		},
+		DisableAutoMergeFn: func(prID string) error {
+			disabledAutoMergePRIDs = append(disabledAutoMergePRIDs, prID)
+			return nil
+		},
+		CreateStackFn: func(prNumbers []int) (int, error) {
+			return 42, nil
+		},
+	}
+
+	cmd := SubmitCmd(cfg)
+	cmd.SetArgs([]string{"--auto"})
+	cmd.SetOut(io.Discard)
+	cmd.SetErr(io.Discard)
+	err := cmd.Execute()
+
+	cfg.Err.Close()
+	errOut, _ := io.ReadAll(errR)
+	output := string(errOut)
+
+	assert.NoError(t, err)
+	assert.Equal(t, []string{"PR_20"}, disabledAutoMergePRIDs)
+	assert.Contains(t, output, "Disabled auto-merge")
+	assert.Contains(t, output, "incompatible with stacked PRs")
+}
+
+func TestSubmit_DisableAutoMergeFailure_ContinuesWithWarning(t *testing.T) {
+	s := stack.Stack{
+		Trunk: stack.BranchRef{Branch: "main"},
+		Branches: []stack.BranchRef{
+			{Branch: "b1"},
+		},
+	}
+
+	tmpDir := t.TempDir()
+	writeStackFile(t, tmpDir, s)
+
+	mock := newSubmitMock(tmpDir, "b1")
+	mock.LogRangeFn = func(base, head string) ([]git.CommitInfo, error) {
+		return []git.CommitInfo{{Subject: "commit"}}, nil
+	}
+	restore := git.SetOps(mock)
+	defer restore()
+
+	cfg, _, errR := config.NewTestConfig()
+	cfg.GitHubClientOverride = &github.MockClient{
+		FindPRForBranchFn: func(branch string) (*github.PullRequest, error) {
+			return &github.PullRequest{
+				Number: 10, ID: "PR_10",
+				URL:              "https://github.com/owner/repo/pull/10",
+				BaseRefName:      "main", HeadRefName: "b1",
+				AutoMergeRequest: &github.AutoMergeRequest{EnabledAt: "2024-01-01T00:00:00Z"},
+			}, nil
+		},
+		DisableAutoMergeFn: func(prID string) error {
+			return fmt.Errorf("permission denied")
+		},
+		CreateStackFn: func(prNumbers []int) (int, error) {
+			return 42, nil
+		},
+	}
+
+	cmd := SubmitCmd(cfg)
+	cmd.SetArgs([]string{"--auto"})
+	cmd.SetOut(io.Discard)
+	cmd.SetErr(io.Discard)
+	err := cmd.Execute()
+
+	cfg.Err.Close()
+	errOut, _ := io.ReadAll(errR)
+	output := string(errOut)
+
+	// Submit should succeed even if disable-auto-merge fails
+	assert.NoError(t, err)
+	assert.Contains(t, output, "failed to disable auto-merge")
+	assert.Contains(t, output, "permission denied")
+}
+
+func TestSubmit_NoAutoMerge_SkipsDisable(t *testing.T) {
+	s := stack.Stack{
+		Trunk: stack.BranchRef{Branch: "main"},
+		Branches: []stack.BranchRef{
+			{Branch: "b1"},
+		},
+	}
+
+	tmpDir := t.TempDir()
+	writeStackFile(t, tmpDir, s)
+
+	mock := newSubmitMock(tmpDir, "b1")
+	mock.LogRangeFn = func(base, head string) ([]git.CommitInfo, error) {
+		return []git.CommitInfo{{Subject: "commit"}}, nil
+	}
+	restore := git.SetOps(mock)
+	defer restore()
+
+	cfg, _, _ := config.NewTestConfig()
+	cfg.GitHubClientOverride = &github.MockClient{
+		FindPRForBranchFn: func(branch string) (*github.PullRequest, error) {
+			return &github.PullRequest{
+				Number: 10, ID: "PR_10",
+				URL:         "https://github.com/owner/repo/pull/10",
+				BaseRefName: "main", HeadRefName: "b1",
+			}, nil
+		},
+		DisableAutoMergeFn: func(prID string) error {
+			t.Fatal("DisableAutoMerge should not be called when auto-merge is not enabled")
+			return nil
+		},
+		CreateStackFn: func(prNumbers []int) (int, error) {
+			return 42, nil
+		},
+	}
+
+	cmd := SubmitCmd(cfg)
+	cmd.SetArgs([]string{"--auto"})
+	cmd.SetOut(io.Discard)
+	cmd.SetErr(io.Discard)
+	err := cmd.Execute()
+
+	assert.NoError(t, err)
+}

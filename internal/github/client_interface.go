@@ -10,6 +10,7 @@ type ClientOps interface {
 	CreatePR(base, head, title, body string, draft bool) (*PullRequest, error)
 	UpdatePRBase(number int, base string) error
 	MarkPRReadyForReview(prID string) error
+	DisableAutoMerge(prID string) error
 	ListStacks() ([]RemoteStack, error)
 	CreateStack(prNumbers []int) (int, error)
 	UpdateStack(stackID string, prNumbers []int) error

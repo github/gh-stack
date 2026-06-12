@@ -228,6 +228,33 @@ func (c *Client) MarkPRReadyForReview(prID string) error {
 	return nil
 }
 
+// DisableAutoMerge disables auto-merge on a pull request.
+func (c *Client) DisableAutoMerge(prID string) error {
+	var mutation struct {
+		DisablePullRequestAutoMerge struct {
+			PullRequest struct {
+				ID string
+			}
+		} `graphql:"disablePullRequestAutoMerge(input: $input)"`
+	}
+
+	type DisablePullRequestAutoMergeInput struct {
+		PullRequestID string `json:"pullRequestId"`
+	}
+
+	variables := map[string]interface{}{
+		"input": DisablePullRequestAutoMergeInput{
+			PullRequestID: prID,
+		},
+	}
+
+	if err := c.gql.Mutate("DisablePullRequestAutoMerge", &mutation, variables); err != nil {
+		return fmt.Errorf("disabling auto-merge: %w", err)
+	}
+
+	return nil
+}
+
 func (c *Client) repositoryID() (string, error) {
 	var query struct {
 		Repository struct {
