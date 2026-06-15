@@ -149,13 +149,6 @@ func runInit(cfg *config.Config, opts *initOptions) error {
 			return err
 		}
 
-		// Prefix detection (only when --prefix not explicitly set)
-		if opts.prefix == "" {
-			if detected := detectPrefix(branches); detected != "" {
-				opts.prefix = detected
-			}
-		}
-
 	} else if opts.numbered {
 		// === NUMBERED PATH (unchanged) ===
 		if opts.prefix == "" && cfg.IsInteractive() {
@@ -453,29 +446,6 @@ func promptBranchName(cfg *config.Config, prefix string) (string, error) {
 		return "", ErrInvalidArgs
 	}
 	return branchName, nil
-}
-
-// detectPrefix finds a common prefix across branches by splitting each
-// at its last slash. Returns the prefix (without trailing slash) if all
-// branches share the same one, or "" otherwise.
-func detectPrefix(branches []string) string {
-	if len(branches) == 0 {
-		return ""
-	}
-	var common string
-	for i, b := range branches {
-		lastSlash := strings.LastIndex(b, "/")
-		if lastSlash <= 0 {
-			return "" // no slash or leading slash — no prefix
-		}
-		prefix := b[:lastSlash]
-		if i == 0 {
-			common = prefix
-		} else if prefix != common {
-			return "" // different prefixes
-		}
-	}
-	return common
 }
 
 // printWhatsNext prints the scenario-aware "What's next" block after init.

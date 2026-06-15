@@ -465,7 +465,9 @@ func TestInit_ImplicitAdopt_Mixed(t *testing.T) {
 }
 
 func TestInit_PrefixDetection_ArgsCommonPrefix(t *testing.T) {
-	// Scenario 9: args all share prefix → set silently
+	// Explicit branch names with a common prefix should NOT auto-detect
+	// a prefix — the slash is part of the branch name, not a convention.
+	// Users who want a prefix should use --prefix.
 	gitDir := t.TempDir()
 	restore := git.SetOps(&git.MockOps{
 		GitDirFn:        func() (string, error) { return gitDir, nil },
@@ -481,7 +483,7 @@ func TestInit_PrefixDetection_ArgsCommonPrefix(t *testing.T) {
 
 	require.NoError(t, err)
 	sf, _ := stack.Load(gitDir)
-	assert.Equal(t, "feat", sf.Stacks[0].Prefix)
+	assert.Equal(t, "", sf.Stacks[0].Prefix)
 }
 
 func TestInit_PrefixDetection_ArgsMixedPrefix(t *testing.T) {
@@ -525,7 +527,8 @@ func TestInit_PrefixDetection_ArgsNoSlash(t *testing.T) {
 }
 
 func TestInit_PrefixDetection_NestedPrefix(t *testing.T) {
-	// Scenario 6: sameen/feat/x → prefix "sameen/feat"
+	// Explicit branch names with nested slashes should NOT auto-detect
+	// a prefix — the user typed the full branch name deliberately.
 	gitDir := t.TempDir()
 	restore := git.SetOps(&git.MockOps{
 		GitDirFn:        func() (string, error) { return gitDir, nil },
@@ -541,7 +544,7 @@ func TestInit_PrefixDetection_NestedPrefix(t *testing.T) {
 
 	require.NoError(t, err)
 	sf, _ := stack.Load(gitDir)
-	assert.Equal(t, "sameen/feat", sf.Stacks[0].Prefix)
+	assert.Equal(t, "", sf.Stacks[0].Prefix)
 }
 
 func TestInit_ExplicitPrefixSkipsDetection(t *testing.T) {
@@ -794,27 +797,4 @@ func TestInit_TwoPassValidation_InvalidRefName(t *testing.T) {
 	assert.ErrorIs(t, err, ErrInvalidArgs)
 	assert.Contains(t, output, "invalid branch name")
 	assert.Empty(t, created, "no branches should be created when an arg has an invalid ref name")
-}
-
-func TestDetectPrefix(t *testing.T) {
-	tests := []struct {
-		name     string
-		branches []string
-		want     string
-	}{
-		{"common prefix", []string{"feat/a", "feat/b", "feat/c"}, "feat"},
-		{"nested prefix", []string{"sameen/feat/a", "sameen/feat/b"}, "sameen/feat"},
-		{"mixed prefixes", []string{"feat/a", "bug/b"}, ""},
-		{"no slashes", []string{"auth", "api", "ui"}, ""},
-		{"empty list", []string{}, ""},
-		{"single branch with slash", []string{"feat/x"}, "feat"},
-		{"single branch no slash", []string{"auth"}, ""},
-		{"leading slash only", []string{"/x"}, ""},
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			got := detectPrefix(tt.branches)
-			assert.Equal(t, tt.want, got)
-		})
-	}
 }
