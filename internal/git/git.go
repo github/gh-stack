@@ -190,6 +190,22 @@ func SaveRerereDeclined() error {
 	return ops.SaveRerereDeclined()
 }
 
+// GetSavedRemote returns the remote saved via gh-stack.remote git config,
+// or an empty string if none is saved.
+func GetSavedRemote() (string, error) {
+	return ops.GetSavedRemote()
+}
+
+// SaveRemote persists the given remote name to gh-stack.remote git config.
+func SaveRemote(remote string) error {
+	return ops.SaveRemote(remote)
+}
+
+// ClearRemote removes the gh-stack.remote git config entry.
+func ClearRemote() error {
+	return ops.ClearRemote()
+}
+
 // RebaseOnto rebases a branch using the three-argument form:
 //
 //	git rebase --onto <newBase> <oldBase> <branch>

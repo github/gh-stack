@@ -37,6 +37,9 @@ type Ops interface {
 	IsRerereEnabled() (bool, error)
 	IsRerereDeclined() (bool, error)
 	SaveRerereDeclined() error
+	GetSavedRemote() (string, error)
+	SaveRemote(remote string) error
+	ClearRemote() error
 	RebaseOnto(newBase, oldBase, branch string, opts RebaseOpts) error
 	RebaseContinue(opts RebaseOpts) error
 	RebaseAbort() error
@@ -197,9 +200,10 @@ func (d *defaultOps) Push(remote string, branches []string, force, atomic bool) 
 
 // ResolveRemote determines the remote for pushing a branch. It checks git
 // config keys in priority order (branch.<name>.pushRemote, remote.pushDefault,
-// branch.<name>.remote), then falls back to listing all remotes. If exactly
-// one remote exists it is returned. If multiple exist, ErrMultipleRemotes is
-// returned with the list attached. If none exist, a plain error is returned.
+// branch.<name>.remote), then checks the gh-stack.remote saved preference,
+// then falls back to listing all remotes. If exactly one remote exists it is
+// returned. If multiple exist, ErrMultipleRemotes is returned with the list
+// attached. If none exist, a plain error is returned.
 func (d *defaultOps) ResolveRemote(branch string) (string, error) {
 	candidates := []string{
 		"branch." + branch + ".pushRemote",
@@ -211,6 +215,11 @@ func (d *defaultOps) ResolveRemote(branch string) (string, error) {
 		if err == nil && out != "" {
 			return out, nil
 		}
+	}
+
+	// Check gh-stack saved remote preference.
+	if saved, err := d.GetSavedRemote(); err == nil && saved != "" {
+		return saved, nil
 	}
 
 	out, err := run("remote")
@@ -266,6 +275,22 @@ func (d *defaultOps) IsRerereDeclined() (bool, error) {
 
 func (d *defaultOps) SaveRerereDeclined() error {
 	return runSilent("config", "gh-stack.rerere-declined", "true")
+}
+
+func (d *defaultOps) GetSavedRemote() (string, error) {
+	out, err := run("config", "--get", "gh-stack.remote")
+	if err != nil {
+		return "", err
+	}
+	return out, nil
+}
+
+func (d *defaultOps) SaveRemote(remote string) error {
+	return runSilent("config", "gh-stack.remote", remote)
+}
+
+func (d *defaultOps) ClearRemote() error {
+	return runSilent("config", "--unset", "gh-stack.remote")
 }
 
 func (d *defaultOps) RebaseOnto(newBase, oldBase, branch string, opts RebaseOpts) error {

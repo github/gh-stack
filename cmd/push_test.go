@@ -301,3 +301,106 @@ func TestPush_DoesNotCreatePRs(t *testing.T) {
 	assert.NoError(t, err)
 	assert.False(t, createPRCalled, "push should not create PRs")
 }
+
+func TestPickRemote_SavesWhenConfirmed(t *testing.T) {
+	savedRemote := ""
+	restore := git.SetOps(&git.MockOps{
+		ResolveRemoteFn: func(string) (string, error) {
+			return "", &git.ErrMultipleRemotes{Remotes: []string{"origin", "upstream"}}
+		},
+		SaveRemoteFn: func(r string) error {
+			savedRemote = r
+			return nil
+		},
+	})
+	defer restore()
+
+	cfg, outR, errR := config.NewTestConfig()
+	cfg.ForceInteractive = true
+	cfg.SelectFn = func(prompt, defaultValue string, options []string) (int, error) {
+		return 1, nil // select "upstream"
+	}
+	cfg.ConfirmFn = func(prompt string, defaultValue bool) (bool, error) {
+		assert.Contains(t, prompt, "upstream")
+		assert.True(t, defaultValue)
+		return true, nil
+	}
+
+	remote, err := pickRemote(cfg, "my-branch", "")
+	output := collectOutput(cfg, outR, errR)
+
+	assert.NoError(t, err)
+	assert.Equal(t, "upstream", remote)
+	assert.Equal(t, "upstream", savedRemote)
+	assert.Contains(t, output, "Saved")
+	assert.Contains(t, output, "git config gh-stack.remote")
+	assert.Contains(t, output, "git config --unset gh-stack.remote")
+}
+
+func TestPickRemote_SkipsSaveWhenDeclined(t *testing.T) {
+	saveCalled := false
+	restore := git.SetOps(&git.MockOps{
+		ResolveRemoteFn: func(string) (string, error) {
+			return "", &git.ErrMultipleRemotes{Remotes: []string{"origin", "upstream"}}
+		},
+		SaveRemoteFn: func(string) error {
+			saveCalled = true
+			return nil
+		},
+	})
+	defer restore()
+
+	cfg, outR, errR := config.NewTestConfig()
+	cfg.ForceInteractive = true
+	cfg.SelectFn = func(prompt, defaultValue string, options []string) (int, error) {
+		return 0, nil // select "origin"
+	}
+	cfg.ConfirmFn = func(prompt string, defaultValue bool) (bool, error) {
+		return false, nil
+	}
+
+	remote, err := pickRemote(cfg, "my-branch", "")
+	output := collectOutput(cfg, outR, errR)
+
+	assert.NoError(t, err)
+	assert.Equal(t, "origin", remote)
+	assert.False(t, saveCalled, "SaveRemote should not be called when user declines")
+	assert.NotContains(t, output, "Saved")
+}
+
+func TestPickRemote_SkipsPromptWhenSingleRemote(t *testing.T) {
+	restore := git.SetOps(&git.MockOps{
+		ResolveRemoteFn: func(string) (string, error) {
+			return "origin", nil
+		},
+	})
+	defer restore()
+
+	cfg, outR, errR := config.NewTestConfig()
+
+	remote, err := pickRemote(cfg, "my-branch", "")
+	collectOutput(cfg, outR, errR)
+
+	assert.NoError(t, err)
+	assert.Equal(t, "origin", remote)
+}
+
+func TestPickRemote_OverrideTakesPrecedence(t *testing.T) {
+	resolveCalled := false
+	restore := git.SetOps(&git.MockOps{
+		ResolveRemoteFn: func(string) (string, error) {
+			resolveCalled = true
+			return "", fmt.Errorf("should not be called")
+		},
+	})
+	defer restore()
+
+	cfg, outR, errR := config.NewTestConfig()
+
+	remote, err := pickRemote(cfg, "my-branch", "custom")
+	collectOutput(cfg, outR, errR)
+
+	assert.NoError(t, err)
+	assert.Equal(t, "custom", remote)
+	assert.False(t, resolveCalled, "ResolveRemote should not be called when override is provided")
+}

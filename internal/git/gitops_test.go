@@ -414,3 +414,76 @@ func TestSplitCommitMessage(t *testing.T) {
 		})
 	}
 }
+
+// ---------------------------------------------------------------------------
+// Integration tests for saved remote (gh-stack.remote)
+// ---------------------------------------------------------------------------
+
+func TestIntegration_ResolveRemote_UsesSavedRemote(t *testing.T) {
+	_, cloneDir := setupBareAndClone(t)
+	restoreDir := withGitDir(t, cloneDir)
+	defer restoreDir()
+
+	// Create a branch without upstream tracking.
+	gitExec(t, cloneDir, "checkout", "-b", "feature")
+
+	// Add a second remote so there are multiple.
+	gitExec(t, cloneDir, "remote", "add", "upstream", cloneDir)
+
+	// Without saved remote, multiple remotes should return ErrMultipleRemotes.
+	_, err := ResolveRemote("feature")
+	var multi *ErrMultipleRemotes
+	require.ErrorAs(t, err, &multi)
+
+	// Save a remote preference.
+	gitExec(t, cloneDir, "config", "gh-stack.remote", "upstream")
+
+	// Now ResolveRemote should return the saved remote.
+	remote, err := ResolveRemote("feature")
+	require.NoError(t, err)
+	assert.Equal(t, "upstream", remote)
+}
+
+func TestIntegration_ResolveRemote_GitPushConfigTakesPrecedence(t *testing.T) {
+	_, cloneDir := setupBareAndClone(t)
+	restoreDir := withGitDir(t, cloneDir)
+	defer restoreDir()
+
+	// Add a second remote.
+	gitExec(t, cloneDir, "remote", "add", "upstream", cloneDir)
+
+	// Save gh-stack.remote to "upstream".
+	gitExec(t, cloneDir, "config", "gh-stack.remote", "upstream")
+
+	// Set standard git push config to "origin" — this should take precedence.
+	gitExec(t, cloneDir, "config", "remote.pushDefault", "origin")
+
+	remote, err := ResolveRemote("main")
+	require.NoError(t, err)
+	assert.Equal(t, "origin", remote)
+}
+
+func TestIntegration_SaveAndGetRemote(t *testing.T) {
+	_, cloneDir := setupBareAndClone(t)
+	restoreDir := withGitDir(t, cloneDir)
+	defer restoreDir()
+
+	// Initially no saved remote.
+	_, err := GetSavedRemote()
+	require.Error(t, err)
+
+	// Save a remote.
+	require.NoError(t, SaveRemote("upstream"))
+
+	// Should be retrievable.
+	saved, err := GetSavedRemote()
+	require.NoError(t, err)
+	assert.Equal(t, "upstream", saved)
+
+	// Clear it.
+	require.NoError(t, ClearRemote())
+
+	// Should be gone.
+	_, err = GetSavedRemote()
+	require.Error(t, err)
+}

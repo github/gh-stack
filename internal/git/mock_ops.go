@@ -1,5 +1,7 @@
 package git
 
+import "fmt"
+
 // MockOps is a test double for git operations.
 // Each field is an optional function that, when set, handles the corresponding
 // Ops method call. When nil, a reasonable default is returned.
@@ -20,6 +22,9 @@ type MockOps struct {
 	IsRerereEnabledFn       func() (bool, error)
 	IsRerereDeclinedFn      func() (bool, error)
 	SaveRerereDeclinedFn    func() error
+	GetSavedRemoteFn        func() (string, error)
+	SaveRemoteFn            func(string) error
+	ClearRemoteFn           func() error
 	RebaseOntoFn            func(string, string, string, RebaseOpts) error
 	RebaseContinueFn        func(RebaseOpts) error
 	RebaseAbortFn           func() error
@@ -163,6 +168,27 @@ func (m *MockOps) IsRerereDeclined() (bool, error) {
 func (m *MockOps) SaveRerereDeclined() error {
 	if m.SaveRerereDeclinedFn != nil {
 		return m.SaveRerereDeclinedFn()
+	}
+	return nil
+}
+
+func (m *MockOps) GetSavedRemote() (string, error) {
+	if m.GetSavedRemoteFn != nil {
+		return m.GetSavedRemoteFn()
+	}
+	return "", fmt.Errorf("not set")
+}
+
+func (m *MockOps) SaveRemote(remote string) error {
+	if m.SaveRemoteFn != nil {
+		return m.SaveRemoteFn(remote)
+	}
+	return nil
+}
+
+func (m *MockOps) ClearRemote() error {
+	if m.ClearRemoteFn != nil {
+		return m.ClearRemoteFn()
 	}
 	return nil
 }

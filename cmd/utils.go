@@ -1033,3 +1033,88 @@ func ensureRerere(cfg *config.Config) error {
 	}
 	return nil
 }
+
+// pickRemote determines which remote to use. If remoteOverride is
+// non-empty, it is returned directly. Otherwise it delegates to
+// git.ResolveRemote for config-based resolution and remote listing.
+// If multiple remotes exist with no configured default, the user is
+// prompted to select one interactively and offered the option to save
+// the choice via gh-stack.remote git config.
+func pickRemote(cfg *config.Config, branch, remoteOverride string) (string, error) {
+	if remoteOverride != "" {
+		return remoteOverride, nil
+	}
+
+	remote, err := git.ResolveRemote(branch)
+	if err == nil {
+		return remote, nil
+	}
+
+	var multi *git.ErrMultipleRemotes
+	if !errors.As(err, &multi) {
+		return "", err
+	}
+
+	if !cfg.IsInteractive() {
+		return "", fmt.Errorf("multiple remotes configured; set remote.pushDefault or use an interactive terminal")
+	}
+
+	p := prompter.New(cfg.In, cfg.Out, cfg.Err)
+	selectFn := func(prompt, def string, opts []string) (int, error) {
+		if cfg.SelectFn != nil {
+			return cfg.SelectFn(prompt, def, opts)
+		}
+		return p.Select(prompt, def, opts)
+	}
+
+	selected, promptErr := selectFn("Multiple remotes found. Which remote should be used?", "", multi.Remotes)
+	if promptErr != nil {
+		if isInterruptError(promptErr) {
+			if cfg.SelectFn == nil {
+				clearSelectPrompt(cfg, len(multi.Remotes))
+			}
+			printInterrupt(cfg)
+			return "", errInterrupt
+		}
+		return "", fmt.Errorf("remote selection: %w", promptErr)
+	}
+	selectedRemote := multi.Remotes[selected]
+
+	// Offer to save the selected remote for future operations.
+	save, confirmErr := confirmSaveRemote(cfg, selectedRemote)
+	if confirmErr != nil {
+		if errors.Is(confirmErr, errInterrupt) {
+			return "", errInterrupt
+		}
+		// Non-fatal: proceed with the selected remote even if the prompt fails.
+		return selectedRemote, nil
+	}
+	if save {
+		if saveErr := git.SaveRemote(selectedRemote); saveErr == nil {
+			cfg.Successf("Saved %q as the default remote for gh stack", selectedRemote)
+			cfg.Printf("To change later, run: %s", cfg.ColorCyan("git config gh-stack.remote <other-remote>"))
+			cfg.Printf("To clear, run:        %s", cfg.ColorCyan("git config --unset gh-stack.remote"))
+		}
+	}
+
+	return selectedRemote, nil
+}
+
+// confirmSaveRemote asks the user whether to persist the selected remote
+// for all future gh stack operations. Returns errInterrupt on Ctrl+C.
+func confirmSaveRemote(cfg *config.Config, remote string) (bool, error) {
+	prompt := fmt.Sprintf("Save %q as the default remote for all gh stack operations?", remote)
+	if cfg.ConfirmFn != nil {
+		return cfg.ConfirmFn(prompt, true)
+	}
+	p := prompter.New(cfg.In, cfg.Out, cfg.Err)
+	ok, err := p.Confirm(prompt, true)
+	if err != nil {
+		if isInterruptError(err) {
+			printInterrupt(cfg)
+			return false, errInterrupt
+		}
+		return false, err
+	}
+	return ok, nil
+}

@@ -2,9 +2,7 @@ package cmd
 
 import (
 	"errors"
-	"fmt"
 
-	"github.com/cli/go-gh/v2/pkg/prompter"
 	"github.com/github/gh-stack/internal/config"
 	"github.com/github/gh-stack/internal/git"
 	"github.com/github/gh-stack/internal/modify"
@@ -137,41 +135,4 @@ func runPush(cfg *config.Config, opts *pushOptions) error {
 		cfg.Printf("Run `%s` to see your stack of PRs", cfg.ColorCyan("gh stack view"))
 	}
 	return nil
-}
-
-// pickRemote determines which remote to push to. If remoteOverride is
-// non-empty, it is returned directly. Otherwise it delegates to
-// git.ResolveRemote for config-based resolution and remote listing.
-// If multiple remotes exist with no configured default, the user is
-// prompted to select one interactively.
-func pickRemote(cfg *config.Config, branch, remoteOverride string) (string, error) {
-	if remoteOverride != "" {
-		return remoteOverride, nil
-	}
-
-	remote, err := git.ResolveRemote(branch)
-	if err == nil {
-		return remote, nil
-	}
-
-	var multi *git.ErrMultipleRemotes
-	if !errors.As(err, &multi) {
-		return "", err
-	}
-
-	if !cfg.IsInteractive() {
-		return "", fmt.Errorf("multiple remotes configured; set remote.pushDefault or use an interactive terminal")
-	}
-
-	p := prompter.New(cfg.In, cfg.Out, cfg.Err)
-	selected, promptErr := p.Select("Multiple remotes found. Which remote should be used?", "", multi.Remotes)
-	if promptErr != nil {
-		if isInterruptError(promptErr) {
-			clearSelectPrompt(cfg, len(multi.Remotes))
-			printInterrupt(cfg)
-			return "", errInterrupt
-		}
-		return "", fmt.Errorf("remote selection: %w", promptErr)
-	}
-	return multi.Remotes[selected], nil
 }
