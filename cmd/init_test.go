@@ -798,26 +798,3 @@ func TestInit_TwoPassValidation_InvalidRefName(t *testing.T) {
 	assert.Contains(t, output, "invalid branch name")
 	assert.Empty(t, created, "no branches should be created when an arg has an invalid ref name")
 }
-
-func TestDetectPrefix(t *testing.T) {
-	tests := []struct {
-		name     string
-		branches []string
-		want     string
-	}{
-		{"common prefix", []string{"feat/a", "feat/b", "feat/c"}, "feat"},
-		{"nested prefix", []string{"sameen/feat/a", "sameen/feat/b"}, "sameen/feat"},
-		{"mixed prefixes", []string{"feat/a", "bug/b"}, ""},
-		{"no slashes", []string{"auth", "api", "ui"}, ""},
-		{"empty list", []string{}, ""},
-		{"single branch with slash", []string{"feat/x"}, "feat"},
-		{"single branch no slash", []string{"auth"}, ""},
-		{"leading slash only", []string{"/x"}, ""},
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			got := detectPrefix(tt.branches)
-			assert.Equal(t, tt.want, got)
-		})
-	}
-}

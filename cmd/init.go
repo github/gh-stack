@@ -448,29 +448,6 @@ func promptBranchName(cfg *config.Config, prefix string) (string, error) {
 	return branchName, nil
 }
 
-// detectPrefix finds a common prefix across branches by splitting each
-// at its last slash. Returns the prefix (without trailing slash) if all
-// branches share the same one, or "" otherwise.
-func detectPrefix(branches []string) string {
-	if len(branches) == 0 {
-		return ""
-	}
-	var common string
-	for i, b := range branches {
-		lastSlash := strings.LastIndex(b, "/")
-		if lastSlash <= 0 {
-			return "" // no slash or leading slash — no prefix
-		}
-		prefix := b[:lastSlash]
-		if i == 0 {
-			common = prefix
-		} else if prefix != common {
-			return "" // different prefixes
-		}
-	}
-	return common
-}
-
 // printWhatsNext prints the scenario-aware "What's next" block after init.
 func printWhatsNext(cfg *config.Config, s *stack.Stack, branches []string, hasAdopted bool, prCount int) {
 	lastBranch := branches[len(branches)-1]
