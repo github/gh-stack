@@ -130,6 +130,12 @@ func runRebase(cfg *config.Config, opts *rebaseOptions) error {
 		cfg.Successf("Fetched %s", remote)
 	}
 
+	// Ensure trunk exists locally before fast-forward or cascade rebase.
+	if err := ensureLocalTrunk(cfg, s.Trunk.Branch, remote); err != nil {
+		cfg.Errorf("%s", err)
+		return ErrSilent
+	}
+
 	// Fast-forward trunk so the cascade rebase targets the latest upstream.
 	fastForwardTrunk(cfg, s.Trunk.Branch, remote, currentBranch)
 

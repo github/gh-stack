@@ -212,3 +212,53 @@ func TestTrunk_RejectsArgs(t *testing.T) {
 
 	assert.Error(t, err, "should reject positional arguments")
 }
+
+func TestTrunk_MissingLocallyCreatedFromRemote(t *testing.T) {
+	s := stack.Stack{
+		Trunk:    stack.BranchRef{Branch: "main"},
+		Branches: []stack.BranchRef{{Branch: "b1"}, {Branch: "b2"}},
+	}
+
+	var checkedOut []string
+	var createdBranch string
+	tmpDir := t.TempDir()
+	writeStackFile(t, tmpDir, s)
+
+	mock := &git.MockOps{
+		GitDirFn:        func() (string, error) { return tmpDir, nil },
+		CurrentBranchFn: func() (string, error) { return "b1", nil },
+		BranchExistsFn: func(name string) bool {
+			// trunk does not exist locally
+			return name != "main"
+		},
+		ResolveRemoteFn: func(branch string) (string, error) {
+			return "origin", nil
+		},
+		FetchBranchesFn: func(remote string, branches []string) error {
+			return nil
+		},
+		CreateBranchFn: func(name, base string) error {
+			createdBranch = name
+			return nil
+		},
+		CheckoutBranchFn: func(name string) error {
+			checkedOut = append(checkedOut, name)
+			return nil
+		},
+	}
+	restore := git.SetOps(mock)
+	defer restore()
+
+	cfg, outR, errR := config.NewTestConfig()
+	cmd := TrunkCmd(cfg)
+	cmd.SetOut(io.Discard)
+	cmd.SetErr(io.Discard)
+	err := cmd.Execute()
+
+	output := readCfgOutput(cfg, outR, errR)
+
+	assert.NoError(t, err)
+	assert.Equal(t, "main", createdBranch, "should create trunk from remote")
+	assert.Equal(t, []string{"main"}, checkedOut)
+	assert.Contains(t, output, "Created local trunk branch main from origin/main")
+}

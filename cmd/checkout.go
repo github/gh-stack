@@ -482,12 +482,9 @@ func importRemoteStack(
 	}
 
 	// Ensure trunk exists locally
-	if !git.BranchExists(trunk) {
-		remoteTrunk := remote + "/" + trunk
-		if err := git.CreateBranch(trunk, remoteTrunk); err != nil {
-			cfg.Errorf("could not create trunk branch %s from %s: %v", trunk, remoteTrunk, err)
-			return nil, ErrSilent
-		}
+	if err := ensureLocalTrunk(cfg, trunk, remote); err != nil {
+		cfg.Errorf("%s", err)
+		return nil, ErrSilent
 	}
 
 	// Create local branches for each PR's head branch.
