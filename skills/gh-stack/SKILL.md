@@ -7,7 +7,7 @@ description: >
   branch chains, or incremental code review workflows.
 metadata:
   author: github
-  version: "0.0.5"
+  version: "0.0.6"
 ---
 
 # gh-stack
@@ -155,6 +155,7 @@ Small, incidental fixes (e.g., fixing a typo you noticed) can go in the current 
 | Sync and prune merged branches | `gh stack sync --prune` |
 | Rebase entire stack | `gh stack rebase` |
 | Rebase upstack only | `gh stack rebase --upstack` |
+| Rebase without trunk | `gh stack rebase --no-trunk` |
 | Continue after conflict | `gh stack rebase --continue` |
 | Abort rebase | `gh stack rebase --abort` |
 | View stack details (JSON) | `gh stack view --json` |
@@ -663,6 +664,9 @@ gh stack rebase --downstack
 # Rebase only branches from current branch to top
 gh stack rebase --upstack
 
+# Rebase stack branches without pulling from or rebasing with trunk
+gh stack rebase --no-trunk
+
 # After resolving a conflict: stage files with `git add`, then:
 gh stack rebase --continue
 
@@ -674,6 +678,7 @@ gh stack rebase --abort
 |------|-------------|
 | `--downstack` | Only rebase branches from trunk to the current branch |
 | `--upstack` | Only rebase branches from the current branch to the top |
+| `--no-trunk` | Skip trunk — only rebase stack branches onto each other (no fetch, no trunk rebase) |
 | `--continue` | Continue after resolving conflicts |
 | `--abort` | Abort and restore all branches |
 | `--remote <name>` | Remote to fetch from (use if multiple remotes exist) |
@@ -687,6 +692,8 @@ gh stack rebase --abort
 **Merged PR detection:** If a branch's PR was merged on GitHub, the rebase automatically handles this using `--onto` mode and correctly replays commits on top of the merge target.
 
 **Rerere (conflict memory):** `git rerere` is enabled by `init` so previously resolved conflicts are auto-resolved in future rebases.
+
+**No-trunk mode:** Use `--no-trunk` to skip fetching from the remote and rebasing with the trunk branch. Only inter-branch rebases are performed (branch 2 onto branch 1, branch 3 onto branch 2, etc.). Useful when you only need to align stack branches with each other without pulling upstream changes.
 
 ---
 

@@ -155,6 +155,9 @@ gh stack rebase --downstack
 
 # Only rebase from the current branch up to the top
 gh stack rebase --upstack
+
+# Rebase stack branches without pulling from or rebasing with trunk
+gh stack rebase --no-trunk
 ```
 
 After rebasing, push the updated branches:

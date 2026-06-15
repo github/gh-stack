@@ -209,6 +209,7 @@ If a rebase conflict occurs, the operation pauses and prints the conflicted file
 |------|-------------|
 | `--downstack` | Only rebase branches from trunk to the current branch |
 | `--upstack` | Only rebase branches from the current branch to the top |
+| `--no-trunk` | Skip trunk — only rebase stack branches onto each other (no fetch, no trunk rebase) |
 | `--continue` | Continue the rebase after resolving conflicts |
 | `--abort` | Abort the rebase and restore all branches to their pre-rebase state |
 | `--remote <name>` | Remote to fetch from (defaults to auto-detected remote) |
@@ -229,6 +230,9 @@ gh stack rebase --downstack
 
 # Only rebase branches above the current one
 gh stack rebase --upstack
+
+# Rebase stack branches without pulling from or rebasing with trunk
+gh stack rebase --no-trunk
 
 # After resolving a conflict
 gh stack rebase --continue
