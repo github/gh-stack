@@ -725,3 +725,88 @@ func TestWarnStacksUnavailableOrPAT_ShowsNotEnabledForOAuth(t *testing.T) {
 	assert.Contains(t, output, "Stacked PRs are not enabled for this repository")
 	assert.NotContains(t, output, "Personal access tokens")
 }
+
+func TestEnsureLocalTrunk_AlreadyExists(t *testing.T) {
+	mock := &git.MockOps{
+		BranchExistsFn: func(name string) bool {
+			return name == "main"
+		},
+	}
+	restore := git.SetOps(mock)
+	defer restore()
+
+	cfg, _, _ := config.NewTestConfig()
+	err := ensureLocalTrunk(cfg, "main", "origin")
+	assert.NoError(t, err)
+}
+
+func TestEnsureLocalTrunk_FetchesAndCreates(t *testing.T) {
+	var fetchedBranches []string
+	var createdBranch, createdBase string
+
+	mock := &git.MockOps{
+		BranchExistsFn: func(name string) bool {
+			return false
+		},
+		FetchBranchesFn: func(remote string, branches []string) error {
+			fetchedBranches = branches
+			return nil
+		},
+		CreateBranchFn: func(name, base string) error {
+			createdBranch = name
+			createdBase = base
+			return nil
+		},
+	}
+	restore := git.SetOps(mock)
+	defer restore()
+
+	cfg, _, _ := config.NewTestConfig()
+	err := ensureLocalTrunk(cfg, "main", "origin")
+
+	assert.NoError(t, err)
+	assert.Equal(t, []string{"main"}, fetchedBranches)
+	assert.Equal(t, "main", createdBranch)
+	assert.Equal(t, "origin/main", createdBase)
+}
+
+func TestEnsureLocalTrunk_FetchFails(t *testing.T) {
+	mock := &git.MockOps{
+		BranchExistsFn: func(name string) bool {
+			return false
+		},
+		FetchBranchesFn: func(remote string, branches []string) error {
+			return fmt.Errorf("network error")
+		},
+	}
+	restore := git.SetOps(mock)
+	defer restore()
+
+	cfg, _, _ := config.NewTestConfig()
+	err := ensureLocalTrunk(cfg, "main", "origin")
+
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "could not fetch trunk branch main from origin")
+}
+
+func TestEnsureLocalTrunk_CreateFails(t *testing.T) {
+	mock := &git.MockOps{
+		BranchExistsFn: func(name string) bool {
+			return false
+		},
+		FetchBranchesFn: func(remote string, branches []string) error {
+			return nil
+		},
+		CreateBranchFn: func(name, base string) error {
+			return fmt.Errorf("ref not found")
+		},
+	}
+	restore := git.SetOps(mock)
+	defer restore()
+
+	cfg, _, _ := config.NewTestConfig()
+	err := ensureLocalTrunk(cfg, "main", "origin")
+
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "could not create local trunk branch main")
+}

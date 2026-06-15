@@ -693,11 +693,34 @@ func resolveOriginalRefs(s *stack.Stack) (map[string]string, error) {
 	return originalRefs, nil
 }
 
+// ensureLocalTrunk ensures the trunk branch exists locally. If it does not,
+// it fetches the branch from the remote and creates a local tracking branch.
+// This handles the case where a user started their stack after renaming their
+// initial branch (e.g. `git branch -m newbranch`), leaving no local trunk.
+func ensureLocalTrunk(cfg *config.Config, trunk, remote string) error {
+	if git.BranchExists(trunk) {
+		return nil
+	}
+
+	if err := git.FetchBranches(remote, []string{trunk}); err != nil {
+		return fmt.Errorf("could not fetch trunk branch %s from %s: %w", trunk, remote, err)
+	}
+
+	remoteTrunk := remote + "/" + trunk
+	if err := git.CreateBranch(trunk, remoteTrunk); err != nil {
+		return fmt.Errorf("could not create local trunk branch %s from %s: %w", trunk, remoteTrunk, err)
+	}
+
+	cfg.Successf("Created local trunk branch %s from %s", trunk, remoteTrunk)
+	return nil
+}
+
 // fastForwardTrunk fast-forwards the trunk branch to match its remote tracking
 // branch. Returns true if trunk was updated.
 func fastForwardTrunk(cfg *config.Config, trunk, remote, currentBranch string) bool {
 	// If the local trunk branch doesn't exist, there's nothing to
-	// fast-forward. The remote tracking ref is sufficient for rebasing.
+	// fast-forward. Callers should use ensureLocalTrunk beforehand if
+	// they need trunk to be resolvable as a local ref.
 	if !git.BranchExists(trunk) {
 		return false
 	}

@@ -1,6 +1,7 @@
 package cmd
 
 import (
+	"errors"
 	"fmt"
 	"strings"
 
@@ -295,6 +296,22 @@ func checkModifyPreconditions(cfg *config.Config) (*loadStackResult, error) {
 		cfg.Errorf("uncommitted changes in working tree")
 		cfg.Printf("Commit or stash your changes before running modify")
 		return nil, ErrSilent
+	}
+
+	// Ensure trunk branch exists locally (it may be absent if the user
+	// renamed their initial branch before starting the stack).
+	if !git.BranchExists(s.Trunk.Branch) {
+		remote, err := pickRemote(cfg, result.CurrentBranch, "")
+		if err != nil {
+			if !errors.Is(err, errInterrupt) {
+				cfg.Errorf("failed to resolve remote: %s", err)
+			}
+			return nil, ErrSilent
+		}
+		if err := ensureLocalTrunk(cfg, s.Trunk.Branch, remote); err != nil {
+			cfg.Errorf("%s", err)
+			return nil, ErrSilent
+		}
 	}
 
 	// Show loading indicator while syncing PRs
