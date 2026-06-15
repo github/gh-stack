@@ -191,7 +191,7 @@ func SaveRerereDeclined() error {
 }
 
 // GetSavedRemote returns the remote saved via gh-stack.remote git config,
-// or an empty string if none is saved.
+// or an error if none is configured.
 func GetSavedRemote() (string, error) {
 	return ops.GetSavedRemote()
 }

@@ -1094,6 +1094,8 @@ func pickRemote(cfg *config.Config, branch, remoteOverride string) (string, erro
 			cfg.Successf("Saved %q as the default remote for gh stack", selectedRemote)
 			cfg.Printf("To change later, run: %s", cfg.ColorCyan("git config gh-stack.remote <other-remote>"))
 			cfg.Printf("To clear, run:        %s", cfg.ColorCyan("git config --unset gh-stack.remote"))
+		} else {
+			cfg.Warningf("Could not save remote preference: %v", saveErr)
 		}
 	}
 
