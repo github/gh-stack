@@ -46,6 +46,16 @@ type Config struct {
 	// InputFn, when non-nil, is called instead of prompting via the
 	// terminal. Used in tests to simulate text input prompts.
 	InputFn func(prompt, defaultValue string) (string, error)
+
+	// TokenForHostFn, when non-nil, is called instead of auth.TokenForHost
+	// to retrieve the auth token for a given GitHub host. Used in tests to
+	// simulate different token types (OAuth vs PAT).
+	TokenForHostFn func(host string) (string, string)
+
+	// RepoOverride, when non-nil, is returned by Repo() instead of
+	// calling repository.Current(). Used in tests to avoid depending on
+	// the real git repo context.
+	RepoOverride *repository.Repository
 }
 
 // New creates a new Config with terminal-aware output and color support.
@@ -126,6 +136,9 @@ func (c *Config) IsInteractive() bool {
 }
 
 func (c *Config) Repo() (repository.Repository, error) {
+	if c.RepoOverride != nil {
+		return *c.RepoOverride, nil
+	}
 	return repository.Current()
 }
 

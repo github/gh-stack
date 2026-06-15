@@ -70,6 +70,16 @@ func printInterrupt(cfg *config.Config) {
 	cfg.Infof("Received interrupt, aborting operation")
 }
 
+// warnStacksUnavailableOrPAT prints an appropriate warning when a stacks API
+// call returns 404. If the token is a PAT the message focuses on the auth
+// issue; otherwise it falls back to the generic "not enabled" message.
+func warnStacksUnavailableOrPAT(cfg *config.Config) {
+	if cfg.WarnIfPAT() {
+		return
+	}
+	cfg.Warningf("Stacked PRs are not enabled for this repository")
+}
+
 // inputWithPrefill prompts the user for text input with the given prefill
 // already editable in the input field. Unlike survey.Input's Default (which
 // shows in parentheses), this places the prefill text directly in the
