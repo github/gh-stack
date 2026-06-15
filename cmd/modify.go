@@ -300,16 +300,18 @@ func checkModifyPreconditions(cfg *config.Config) (*loadStackResult, error) {
 
 	// Ensure trunk branch exists locally (it may be absent if the user
 	// renamed their initial branch before starting the stack).
-	remote, err := pickRemote(cfg, result.CurrentBranch, "")
-	if err != nil {
-		if !errors.Is(err, errInterrupt) {
-			cfg.Errorf("failed to resolve remote: %s", err)
+	if !git.BranchExists(s.Trunk.Branch) {
+		remote, err := pickRemote(cfg, result.CurrentBranch, "")
+		if err != nil {
+			if !errors.Is(err, errInterrupt) {
+				cfg.Errorf("failed to resolve remote: %s", err)
+			}
+			return nil, ErrSilent
 		}
-		return nil, ErrSilent
-	}
-	if err := ensureLocalTrunk(cfg, s.Trunk.Branch, remote); err != nil {
-		cfg.Errorf("%s", err)
-		return nil, ErrSilent
+		if err := ensureLocalTrunk(cfg, s.Trunk.Branch, remote); err != nil {
+			cfg.Errorf("%s", err)
+			return nil, ErrSilent
+		}
 	}
 
 	// Show loading indicator while syncing PRs
