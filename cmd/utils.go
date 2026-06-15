@@ -696,6 +696,12 @@ func resolveOriginalRefs(s *stack.Stack) (map[string]string, error) {
 // fastForwardTrunk fast-forwards the trunk branch to match its remote tracking
 // branch. Returns true if trunk was updated.
 func fastForwardTrunk(cfg *config.Config, trunk, remote, currentBranch string) bool {
+	// If the local trunk branch doesn't exist, there's nothing to
+	// fast-forward. The remote tracking ref is sufficient for rebasing.
+	if !git.BranchExists(trunk) {
+		return false
+	}
+
 	localSHA, remoteSHA := "", ""
 	trunkRefs, trunkErr := git.RevParseMulti([]string{trunk, remote + "/" + trunk})
 	if trunkErr == nil {
