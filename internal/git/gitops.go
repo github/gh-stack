@@ -119,28 +119,27 @@ func (d *defaultOps) Fetch(remote string) error {
 }
 
 func (d *defaultOps) FetchBranches(remote string, branches []string) error {
-	// Only fetch branches that already have a remote tracking ref.
-	var tracked []string
-	for _, b := range branches {
-		ref := fmt.Sprintf("refs/remotes/%s/%s", remote, b)
-		if err := runSilent("rev-parse", "--verify", "--quiet", ref); err == nil {
-			tracked = append(tracked, b)
-		}
-	}
-	if len(tracked) == 0 {
+	if len(branches) == 0 {
 		return nil
 	}
-	// Fast path: fetch all tracked branches in a single call.
+	// Build explicit refspecs that create/update tracking refs for every
+	// branch, regardless of whether a tracking ref already exists.
+	// The + prefix allows non-fast-forward tracking-ref updates.
+	refspecs := make([]string, len(branches))
+	for i, b := range branches {
+		refspecs[i] = fmt.Sprintf("+refs/heads/%s:refs/remotes/%s/%s", b, remote, b)
+	}
+	// Fast path: fetch all branches in a single call.
 	args := []string{"fetch", remote}
-	args = append(args, tracked...)
+	args = append(args, refspecs...)
 	if err := runSilent(args...); err == nil {
 		return nil
 	}
-	// Fallback: a ref may have been deleted on the remote while the
-	// local tracking ref still exists. Fetch branches individually so
-	// one missing ref doesn't block the others.
-	for _, b := range tracked {
-		_ = runSilent("fetch", remote, b)
+	// Fallback: one branch may be absent on the remote or deleted since
+	// the last fetch. Fetch individually so one missing branch doesn't
+	// block the rest. Per-branch failure is expected and tolerated.
+	for _, rs := range refspecs {
+		_ = runSilent("fetch", remote, rs)
 	}
 	return nil
 }
@@ -165,12 +164,34 @@ func (d *defaultOps) CreateBranch(name, base string) error {
 func (d *defaultOps) Push(remote string, branches []string, force, atomic bool) error {
 	args := []string{"push", remote}
 	if force {
-		args = append(args, "--force-with-lease")
+		// Build explicit per-branch leases and refspecs. This removes
+		// dependence on push.default / upstream configuration and
+		// ensures correct lease values for branches whose tracking ref
+		// was missing before the preceding FetchBranches call.
+		for _, b := range branches {
+			trackingRef := fmt.Sprintf("refs/remotes/%s/%s", remote, b)
+			sha, err := run("rev-parse", "--verify", "--quiet", trackingRef)
+			if err == nil && sha != "" {
+				// Tracking ref exists: lease against the known SHA.
+				args = append(args, fmt.Sprintf("--force-with-lease=refs/heads/%s:%s", b, sha))
+			} else {
+				// No tracking ref: branch is absent on remote (never
+				// pushed). Empty expected value means "must not exist".
+				args = append(args, fmt.Sprintf("--force-with-lease=refs/heads/%s:", b))
+			}
+		}
 	}
 	if atomic {
 		args = append(args, "--atomic")
 	}
-	args = append(args, branches...)
+	if force {
+		// Explicit refspecs: <local-branch>:refs/heads/<remote-branch>.
+		for _, b := range branches {
+			args = append(args, fmt.Sprintf("%s:refs/heads/%s", b, b))
+		}
+	} else {
+		args = append(args, branches...)
+	}
 	return runSilent(args...)
 }
 
