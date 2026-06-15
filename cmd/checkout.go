@@ -23,11 +23,12 @@ func CheckoutCmd(cfg *config.Config) *cobra.Command {
 	opts := &checkoutOptions{}
 
 	cmd := &cobra.Command{
-		Use:   "checkout [<pr-number> | <branch>]",
-		Short: "Checkout a stack from a PR number or branch name",
-		Long: `Check out a stack from a pull request number or branch name.
+		Use:   "checkout [<pr-number> | <pr-url> | <branch>]",
+		Short: "Checkout a stack from a PR number, PR URL, or branch name",
+		Long: `Check out a stack from a pull request number, PR URL, or branch name.
 
-When a PR number is provided (e.g. 123), the command first checks
+When a PR number or PR URL is provided (e.g. 123 or
+https://github.com/owner/repo/pull/123), the command first checks
 local tracking. If the PR is not tracked locally, it queries the
 GitHub API to discover the stack, fetches the branches, and sets up
 the stack locally. If the stack already exists locally and matches,
@@ -40,6 +41,9 @@ When run without arguments, shows a menu of all locally available
 stacks to choose from.`,
 		Example: `  # Check out a stack by PR number
   $ gh stack checkout 42
+
+  # Check out a stack by PR URL
+  $ gh stack checkout https://github.com/owner/repo/pull/42
 
   # Check out a stack by branch name
   $ gh stack checkout feat/api-routes
@@ -91,6 +95,12 @@ func runCheckout(cfg *config.Config, opts *checkoutOptions) error {
 			return nil
 		}
 		targetBranch = s.Branches[len(s.Branches)-1].Branch
+	} else if prNumber, ok := parsePRURL(opts.target); ok {
+		// Target is a PR URL — extract number and resolve like a numeric target
+		s, targetBranch, err = resolveNumericTarget(cfg, sf, gitDir, prNumber, opts.target)
+		if err != nil {
+			return err
+		}
 	} else if prNumber, parseErr := strconv.Atoi(opts.target); parseErr == nil && prNumber > 0 {
 		// Target is a pure integer — try local PR, then remote API, then branch name
 		s, targetBranch, err = resolveNumericTarget(cfg, sf, gitDir, prNumber, opts.target)

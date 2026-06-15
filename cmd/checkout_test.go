@@ -930,3 +930,86 @@ func TestFindRemoteStackForPR(t *testing.T) {
 	require.NoError(t, err)
 	assert.Nil(t, rs)
 }
+
+func TestCheckout_ByPRURL_Local(t *testing.T) {
+	// When a PR URL resolves to a locally tracked stack, no API call needed
+	gitDir := t.TempDir()
+	var checkedOut string
+	restore := git.SetOps(&git.MockOps{
+		GitDirFn:        func() (string, error) { return gitDir, nil },
+		CurrentBranchFn: func() (string, error) { return "main", nil },
+		CheckoutBranchFn: func(name string) error {
+			checkedOut = name
+			return nil
+		},
+	})
+	defer restore()
+
+	writeStackFile(t, gitDir, stack.Stack{
+		Trunk: stack.BranchRef{Branch: "main"},
+		Branches: []stack.BranchRef{
+			{Branch: "b1", PullRequest: &stack.PullRequestRef{Number: 42, URL: "https://github.com/o/r/pull/42"}},
+		},
+	})
+
+	cfg, outR, errR := config.NewTestConfig()
+	// No GitHubClientOverride — should resolve locally without API
+	err := runCheckout(cfg, &checkoutOptions{target: "https://github.com/o/r/pull/42"})
+	output := collectOutput(cfg, outR, errR)
+
+	require.NoError(t, err)
+	assert.Equal(t, "b1", checkedOut)
+	assert.Contains(t, output, "Switched to b1")
+}
+
+func TestCheckout_ByPRURL_Remote(t *testing.T) {
+	// When a PR URL is not tracked locally, fall back to remote API
+	gitDir := t.TempDir()
+	var checkedOut string
+
+	prDB := map[int]*github.PullRequest{
+		10: {ID: "PR_10", Number: 10, HeadRefName: "feat-1", BaseRefName: "main", URL: "https://github.com/o/r/pull/10"},
+		11: {ID: "PR_11", Number: 11, HeadRefName: "feat-2", BaseRefName: "feat-1", URL: "https://github.com/o/r/pull/11"},
+	}
+
+	restore := git.SetOps(&git.MockOps{
+		GitDirFn:        func() (string, error) { return gitDir, nil },
+		CurrentBranchFn: func() (string, error) { return "main", nil },
+		BranchExistsFn:  func(name string) bool { return name == "main" },
+		FetchFn:         func(string) error { return nil },
+		CreateBranchFn:  func(string, string) error { return nil },
+		SetUpstreamTrackingFn: func(string, string) error { return nil },
+		RevParseFn:      func(string) (string, error) { return "abc123", nil },
+		ResolveRemoteFn: func(string) (string, error) { return "origin", nil },
+		CheckoutBranchFn: func(name string) error {
+			checkedOut = name
+			return nil
+		},
+	})
+	defer restore()
+
+	// Empty stack file — nothing local
+	writeStackFile(t, gitDir, stack.Stack{})
+
+	cfg, outR, errR := config.NewTestConfig()
+	cfg.GitHubClientOverride = &github.MockClient{
+		ListStacksFn: func() ([]github.RemoteStack, error) {
+			return []github.RemoteStack{
+				{ID: 1, PullRequests: []int{10, 11}},
+			}, nil
+		},
+		FindPRByNumberFn: func(n int) (*github.PullRequest, error) {
+			if pr, ok := prDB[n]; ok {
+				return pr, nil
+			}
+			return nil, nil
+		},
+	}
+
+	err := runCheckout(cfg, &checkoutOptions{target: "https://github.com/o/r/pull/11"})
+	output := collectOutput(cfg, outR, errR)
+
+	require.NoError(t, err)
+	assert.Equal(t, "feat-2", checkedOut)
+	assert.Contains(t, output, "Imported stack with 2 branches")
+}
