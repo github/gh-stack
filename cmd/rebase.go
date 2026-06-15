@@ -21,6 +21,7 @@ type rebaseOptions struct {
 	upstack                   bool
 	cont                      bool
 	abort                     bool
+	noTrunk                   bool
 	remote                    string
 	committerDateIsAuthorDate bool
 }
@@ -34,6 +35,7 @@ type rebaseState struct {
 	UseOnto                   bool              `json:"useOnto,omitempty"`
 	OntoOldBase               string            `json:"ontoOldBase,omitempty"`
 	CommitterDateIsAuthorDate bool              `json:"committerDateIsAuthorDate,omitempty"`
+	NoTrunk                   bool              `json:"noTrunk,omitempty"`
 }
 
 const rebaseStateFile = "gh-stack-rebase-state"
@@ -47,7 +49,11 @@ func RebaseCmd(cfg *config.Config) *cobra.Command {
 		Long: `Pull from remote and do a cascading rebase across the stack.
 
 Ensures that each branch in the stack has the tip of the previous
-layer in its commit history, rebasing if necessary.`,
+layer in its commit history, rebasing if necessary.
+
+Use --no-trunk to skip fetching and rebasing with the trunk branch.
+Only the inter-branch rebases are performed (branch 2 onto branch 1,
+branch 3 onto branch 2, etc.).`,
 		Example: `  # Rebase the entire stack
   $ gh stack rebase
 
@@ -56,6 +62,9 @@ layer in its commit history, rebasing if necessary.`,
 
   # Only rebase from current branch to the top
   $ gh stack rebase --upstack
+
+  # Rebase stack branches without pulling from or rebasing with trunk
+  $ gh stack rebase --no-trunk
 
   # Continue after resolving conflicts
   $ gh stack rebase --continue
@@ -73,6 +82,7 @@ layer in its commit history, rebasing if necessary.`,
 
 	cmd.Flags().BoolVar(&opts.downstack, "downstack", false, "Only rebase branches from trunk to current branch")
 	cmd.Flags().BoolVar(&opts.upstack, "upstack", false, "Only rebase branches from current branch to top")
+	cmd.Flags().BoolVar(&opts.noTrunk, "no-trunk", false, "Skip trunk — only rebase stack branches onto each other")
 	cmd.Flags().BoolVar(&opts.cont, "continue", false, "Continue rebase after resolving conflicts")
 	cmd.Flags().BoolVar(&opts.abort, "abort", false, "Abort rebase and restore all branches")
 	cmd.Flags().StringVar(&opts.remote, "remote", "", "Remote to fetch from (defaults to auto-detected remote)")
@@ -115,32 +125,34 @@ func runRebase(cfg *config.Config, opts *rebaseOptions) error {
 		return ErrSilent
 	}
 
-	// Resolve remote for fetch and trunk comparison
-	remote, err := pickRemote(cfg, currentBranch, opts.remote)
-	if err != nil {
-		if !errors.Is(err, errInterrupt) {
-			cfg.Errorf("%s", err)
+	if !opts.noTrunk {
+		// Resolve remote for fetch and trunk comparison
+		remote, err := pickRemote(cfg, currentBranch, opts.remote)
+		if err != nil {
+			if !errors.Is(err, errInterrupt) {
+				cfg.Errorf("%s", err)
+			}
+			return ErrSilent
 		}
-		return ErrSilent
+
+		if err := git.Fetch(remote); err != nil {
+			cfg.Warningf("Failed to fetch %s: %v", remote, err)
+		} else {
+			cfg.Successf("Fetched %s", remote)
+		}
+
+		// Ensure trunk exists locally before fast-forward or cascade rebase.
+		if err := ensureLocalTrunk(cfg, s.Trunk.Branch, remote); err != nil {
+			cfg.Errorf("%s", err)
+			return ErrSilent
+		}
+
+		// Fast-forward trunk so the cascade rebase targets the latest upstream.
+		fastForwardTrunk(cfg, s.Trunk.Branch, remote, currentBranch)
+
+		// Fast-forward stack branches that are behind their remote tracking branch.
+		fastForwardBranches(cfg, s, remote, currentBranch)
 	}
-
-	if err := git.Fetch(remote); err != nil {
-		cfg.Warningf("Failed to fetch %s: %v", remote, err)
-	} else {
-		cfg.Successf("Fetched %s", remote)
-	}
-
-	// Ensure trunk exists locally before fast-forward or cascade rebase.
-	if err := ensureLocalTrunk(cfg, s.Trunk.Branch, remote); err != nil {
-		cfg.Errorf("%s", err)
-		return ErrSilent
-	}
-
-	// Fast-forward trunk so the cascade rebase targets the latest upstream.
-	fastForwardTrunk(cfg, s.Trunk.Branch, remote, currentBranch)
-
-	// Fast-forward stack branches that are behind their remote tracking branch.
-	fastForwardBranches(cfg, s, remote, currentBranch)
 
 	cfg.Printf("Stack detected: %s", s.DisplayChain())
 
@@ -161,6 +173,11 @@ func runRebase(cfg *config.Config, opts *rebaseOptions) error {
 	}
 	if opts.upstack {
 		startIdx = currentIdx
+	}
+
+	// With --no-trunk, skip the first branch (which would rebase onto trunk).
+	if opts.noTrunk && startIdx < 1 {
+		startIdx = 1
 	}
 
 	branchesToRebase := s.Branches[startIdx:endIdx]
@@ -224,6 +241,7 @@ func runRebase(cfg *config.Config, opts *rebaseOptions) error {
 			UseOnto:                   rebaseResult.NeedsOnto,
 			OntoOldBase:               rebaseResult.OntoOldBase,
 			CommitterDateIsAuthorDate: opts.committerDateIsAuthorDate,
+			NoTrunk:                   opts.noTrunk,
 		}
 		if err := saveRebaseState(gitDir, state); err != nil {
 			cfg.Warningf("failed to save rebase state: %s", err)
@@ -263,7 +281,11 @@ func runRebase(cfg *config.Config, opts *rebaseOptions) error {
 		rangeDesc = fmt.Sprintf("All upstack branches from %s", currentBranch)
 	}
 
-	cfg.Printf("%s rebased locally with %s", rangeDesc, s.Trunk.Branch)
+	if opts.noTrunk {
+		cfg.Printf("%s rebased locally (without trunk)", rangeDesc)
+	} else {
+		cfg.Printf("%s rebased locally with %s", rangeDesc, s.Trunk.Branch)
+	}
 	cfg.Printf("To push up your changes, run `%s`",
 		cfg.ColorCyan("gh stack push"))
 
@@ -393,7 +415,11 @@ func continueRebase(cfg *config.Config, gitDir string) error {
 
 	stack.SaveNonBlocking(gitDir, sf)
 
-	cfg.Printf("All branches in stack rebased locally with %s", s.Trunk.Branch)
+	if state.NoTrunk {
+		cfg.Printf("All branches in stack rebased locally (without trunk)")
+	} else {
+		cfg.Printf("All branches in stack rebased locally with %s", s.Trunk.Branch)
+	}
 	cfg.Printf("To push up your changes and open/update the stack of PRs, run `%s`",
 		cfg.ColorCyan("gh stack submit"))
 

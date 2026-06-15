@@ -1480,3 +1480,229 @@ func TestRebase_ConflictSavesCommitterDateFlag(t *testing.T) {
 	assert.True(t, loaded.CommitterDateIsAuthorDate,
 		"saved rebase state should preserve CommitterDateIsAuthorDate flag")
 }
+
+// TestRebase_NoTrunk_SkipsTrunkRebase verifies that --no-trunk skips rebasing
+// branch 1 onto trunk but still cascades inter-branch rebases.
+func TestRebase_NoTrunk_SkipsTrunkRebase(t *testing.T) {
+	s := stack.Stack{
+		Trunk: stack.BranchRef{Branch: "main"},
+		Branches: []stack.BranchRef{
+			{Branch: "b1"},
+			{Branch: "b2"},
+			{Branch: "b3"},
+		},
+	}
+
+	tmpDir := t.TempDir()
+	writeStackFile(t, tmpDir, s)
+
+	var allRebaseCalls []rebaseCall
+	var currentCheckedOut string
+
+	mock := newRebaseMock(tmpDir, "b2")
+	mock.CheckoutBranchFn = func(name string) error {
+		currentCheckedOut = name
+		return nil
+	}
+	mock.RebaseFn = func(base string, opts git.RebaseOpts) error {
+		allRebaseCalls = append(allRebaseCalls, rebaseCall{newBase: base, oldBase: "", branch: currentCheckedOut})
+		return nil
+	}
+	mock.RebaseOntoFn = func(newBase, oldBase, branch string, opts git.RebaseOpts) error {
+		allRebaseCalls = append(allRebaseCalls, rebaseCall{newBase, oldBase, branch})
+		return nil
+	}
+
+	restore := git.SetOps(mock)
+	defer restore()
+
+	cfg, _, errR := config.NewTestConfig()
+	cmd := RebaseCmd(cfg)
+	cmd.SetArgs([]string{"--no-trunk"})
+	cmd.SetOut(io.Discard)
+	cmd.SetErr(io.Discard)
+	err := cmd.Execute()
+
+	cfg.Err.Close()
+	errOut, _ := io.ReadAll(errR)
+	output := string(errOut)
+
+	assert.NoError(t, err)
+
+	// Only b2 onto b1 and b3 onto b2 — no rebase onto trunk (main).
+	require.Len(t, allRebaseCalls, 2, "should only rebase b2 and b3 (skip b1 onto trunk)")
+	assert.Equal(t, "b1", allRebaseCalls[0].newBase, "b2 should be rebased onto b1")
+	assert.Equal(t, "b2", allRebaseCalls[1].newBase, "b3 should be rebased onto b2")
+
+	assert.Contains(t, output, "without trunk")
+}
+
+// TestRebase_NoTrunk_SkipsFetch verifies that --no-trunk does not call Fetch.
+func TestRebase_NoTrunk_SkipsFetch(t *testing.T) {
+	s := stack.Stack{
+		Trunk: stack.BranchRef{Branch: "main"},
+		Branches: []stack.BranchRef{
+			{Branch: "b1"},
+			{Branch: "b2"},
+		},
+	}
+
+	tmpDir := t.TempDir()
+	writeStackFile(t, tmpDir, s)
+
+	fetchCalled := false
+
+	mock := newRebaseMock(tmpDir, "b1")
+	mock.CheckoutBranchFn = func(name string) error { return nil }
+	mock.RebaseFn = func(base string, opts git.RebaseOpts) error { return nil }
+	mock.RebaseOntoFn = func(newBase, oldBase, branch string, opts git.RebaseOpts) error { return nil }
+	mock.FetchFn = func(remote string) error {
+		fetchCalled = true
+		return nil
+	}
+
+	restore := git.SetOps(mock)
+	defer restore()
+
+	cfg, _, _ := config.NewTestConfig()
+	cmd := RebaseCmd(cfg)
+	cmd.SetArgs([]string{"--no-trunk"})
+	cmd.SetOut(io.Discard)
+	cmd.SetErr(io.Discard)
+	err := cmd.Execute()
+
+	cfg.Out.Close()
+	cfg.Err.Close()
+
+	assert.NoError(t, err)
+	assert.False(t, fetchCalled, "Fetch should not be called with --no-trunk")
+}
+
+// TestRebase_NoTrunk_SingleBranch verifies that --no-trunk with a single-branch
+// stack has no branches to rebase (since branch 1 onto trunk is skipped).
+func TestRebase_NoTrunk_SingleBranch(t *testing.T) {
+	s := stack.Stack{
+		Trunk: stack.BranchRef{Branch: "main"},
+		Branches: []stack.BranchRef{
+			{Branch: "b1"},
+		},
+	}
+
+	tmpDir := t.TempDir()
+	writeStackFile(t, tmpDir, s)
+
+	mock := newRebaseMock(tmpDir, "b1")
+	mock.CheckoutBranchFn = func(name string) error { return nil }
+
+	restore := git.SetOps(mock)
+	defer restore()
+
+	cfg, _, errR := config.NewTestConfig()
+	cmd := RebaseCmd(cfg)
+	cmd.SetArgs([]string{"--no-trunk"})
+	cmd.SetOut(io.Discard)
+	cmd.SetErr(io.Discard)
+	err := cmd.Execute()
+
+	cfg.Err.Close()
+	errOut, _ := io.ReadAll(errR)
+	output := string(errOut)
+
+	assert.NoError(t, err)
+	assert.Contains(t, output, "No branches to rebase")
+}
+
+// TestRebase_NoTrunk_WithUpstack verifies --no-trunk combined with --upstack
+// when the current branch is above index 0. The --no-trunk should not change
+// behavior since --upstack already starts from a non-trunk branch.
+func TestRebase_NoTrunk_WithUpstack(t *testing.T) {
+	s := stack.Stack{
+		Trunk: stack.BranchRef{Branch: "main"},
+		Branches: []stack.BranchRef{
+			{Branch: "b1"},
+			{Branch: "b2"},
+			{Branch: "b3"},
+		},
+	}
+
+	tmpDir := t.TempDir()
+	writeStackFile(t, tmpDir, s)
+
+	var allRebaseCalls []rebaseCall
+	var currentCheckedOut string
+
+	mock := newRebaseMock(tmpDir, "b2")
+	mock.CheckoutBranchFn = func(name string) error {
+		currentCheckedOut = name
+		return nil
+	}
+	mock.RebaseFn = func(base string, opts git.RebaseOpts) error {
+		allRebaseCalls = append(allRebaseCalls, rebaseCall{newBase: base, oldBase: "", branch: currentCheckedOut})
+		return nil
+	}
+	mock.RebaseOntoFn = func(newBase, oldBase, branch string, opts git.RebaseOpts) error {
+		allRebaseCalls = append(allRebaseCalls, rebaseCall{newBase, oldBase, branch})
+		return nil
+	}
+
+	restore := git.SetOps(mock)
+	defer restore()
+
+	cfg, _, _ := config.NewTestConfig()
+	cmd := RebaseCmd(cfg)
+	cmd.SetArgs([]string{"--no-trunk", "--upstack"})
+	cmd.SetOut(io.Discard)
+	cmd.SetErr(io.Discard)
+	err := cmd.Execute()
+
+	cfg.Out.Close()
+	cfg.Err.Close()
+
+	assert.NoError(t, err)
+	// --upstack from b2 = [b2, b3], --no-trunk doesn't change this since startIdx is already 1
+	require.Len(t, allRebaseCalls, 2, "upstack should rebase b2 and b3")
+	assert.Equal(t, "b1", allRebaseCalls[0].newBase, "b2 should be rebased onto b1")
+	assert.Equal(t, "b2", allRebaseCalls[1].newBase, "b3 should be rebased onto b2")
+}
+
+// TestRebase_NoTrunk_ConflictSavesState verifies that --no-trunk persists the
+// NoTrunk flag in the rebase state when a conflict occurs.
+func TestRebase_NoTrunk_ConflictSavesState(t *testing.T) {
+	s := stack.Stack{
+		Trunk: stack.BranchRef{Branch: "main"},
+		Branches: []stack.BranchRef{
+			{Branch: "b1"},
+			{Branch: "b2"},
+			{Branch: "b3"},
+		},
+	}
+
+	tmpDir := t.TempDir()
+	writeStackFile(t, tmpDir, s)
+
+	mock := newRebaseMock(tmpDir, "b2")
+	mock.CheckoutBranchFn = func(name string) error { return nil }
+	mock.RebaseOntoFn = func(newBase, oldBase, branch string, opts git.RebaseOpts) error {
+		if branch == "b2" {
+			return fmt.Errorf("conflict")
+		}
+		return nil
+	}
+	mock.ConflictedFilesFn = func() ([]string, error) { return nil, nil }
+
+	restore := git.SetOps(mock)
+	defer restore()
+
+	cfg, _, _ := config.NewTestConfig()
+	cmd := RebaseCmd(cfg)
+	cmd.SetArgs([]string{"--no-trunk"})
+	cmd.SetOut(io.Discard)
+	cmd.SetErr(io.Discard)
+	_ = cmd.Execute()
+
+	// Load the saved state and verify the NoTrunk flag is persisted.
+	loaded, err := loadRebaseState(tmpDir)
+	require.NoError(t, err)
+	assert.True(t, loaded.NoTrunk,
+		"saved rebase state should preserve NoTrunk flag")
+}
