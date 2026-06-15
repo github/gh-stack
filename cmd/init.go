@@ -149,13 +149,6 @@ func runInit(cfg *config.Config, opts *initOptions) error {
 			return err
 		}
 
-		// Prefix detection (only when --prefix not explicitly set)
-		if opts.prefix == "" {
-			if detected := detectPrefix(branches); detected != "" {
-				opts.prefix = detected
-			}
-		}
-
 	} else if opts.numbered {
 		// === NUMBERED PATH (unchanged) ===
 		if opts.prefix == "" && cfg.IsInteractive() {
