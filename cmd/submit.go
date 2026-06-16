@@ -14,6 +14,7 @@ import (
 	"github.com/github/gh-stack/internal/modify"
 	"github.com/github/gh-stack/internal/pr"
 	"github.com/github/gh-stack/internal/stack"
+	"github.com/github/gh-stack/internal/tui/submitview"
 	"github.com/spf13/cobra"
 )
 
@@ -181,6 +182,12 @@ func runSubmit(cfg *config.Config, opts *submitOptions) error {
 	// Push each branch and create/update its PR in stack order (bottom to top).
 	// Sequential pushing ensures each branch's base is up-to-date on the
 	// remote before the next branch is pushed, preventing race conditions.
+	//
+	// drafts carries per-PR overrides from the interactive editor. It is nil on
+	// the --auto / non-interactive path, in which case ensurePR/createPR fall
+	// back to auto-generated titles and bodies (today's behavior).
+	var drafts map[string]*submitview.PRDraft
+
 	cfg.Printf("Pushing to %s...", remote)
 	for i, b := range s.Branches {
 		if s.Branches[i].IsMerged() || s.Branches[i].IsQueued() {
@@ -195,7 +202,7 @@ func runSubmit(cfg *config.Config, opts *submitOptions) error {
 
 		// Find or create PR, and fix base if needed
 		baseBranch := s.ActiveBaseBranch(b.Branch)
-		if err := ensurePR(cfg, client, s, i, baseBranch, opts, templateContent); err != nil {
+		if err := ensurePR(cfg, client, s, i, baseBranch, opts, templateContent, drafts); err != nil {
 			if errors.Is(err, errInterrupt) {
 				printInterrupt(cfg)
 				return ErrSilent
@@ -225,7 +232,11 @@ func runSubmit(cfg *config.Config, opts *submitOptions) error {
 // ensurePR finds or creates a PR for the branch at index i, and updates
 // its base branch if needed. This is the single place where PR state is
 // reconciled during submit.
-func ensurePR(cfg *config.Config, client github.ClientOps, s *stack.Stack, i int, baseBranch string, opts *submitOptions, templateContent string) error {
+//
+// drafts holds optional per-branch overrides from the interactive editor. When
+// a NEW branch has been deselected in the editor, it is pushed for stack
+// consistency but no PR is created for it.
+func ensurePR(cfg *config.Config, client github.ClientOps, s *stack.Stack, i int, baseBranch string, opts *submitOptions, templateContent string, drafts map[string]*submitview.PRDraft) error {
 	b := s.Branches[i]
 
 	pr, err := client.FindPRForBranch(b.Branch)
@@ -235,7 +246,12 @@ func ensurePR(cfg *config.Config, client github.ClientOps, s *stack.Stack, i int
 	}
 
 	if pr == nil {
-		return createPR(cfg, client, s, i, baseBranch, opts, templateContent)
+		// A NEW branch the user deselected in the editor: pushed for stack
+		// consistency, but intentionally left without a PR.
+		if d := drafts[b.Branch]; d != nil && !d.Include {
+			return nil
+		}
+		return createPR(cfg, client, s, i, baseBranch, opts, templateContent, drafts)
 	}
 
 	// PR exists — record it and fix base if needed.
@@ -292,30 +308,52 @@ func ensurePR(cfg *config.Config, client github.ClientOps, s *stack.Stack, i int
 }
 
 // createPR creates a new PR for the branch at index i.
-func createPR(cfg *config.Config, client github.ClientOps, s *stack.Stack, i int, baseBranch string, opts *submitOptions, templateContent string) error {
+//
+// When the interactive editor has supplied a draft override for this branch
+// (drafts[branch] != nil), its title, body, and draft state are used verbatim
+// — the attribution footer is appended via generatePRBody. Otherwise the
+// auto-generated title/body path (with an optional line prompt in interactive
+// mode) is used, preserving today's --auto / non-interactive behavior.
+func createPR(cfg *config.Config, client github.ClientOps, s *stack.Stack, i int, baseBranch string, opts *submitOptions, templateContent string, drafts map[string]*submitview.PRDraft) error {
 	b := s.Branches[i]
 
-	title, commitBody := defaultPRTitleBody(baseBranch, b.Branch)
-	originalTitle := title
-	if !opts.auto && cfg.IsInteractive() {
-		input, err := inputWithPrefill(cfg, fmt.Sprintf("Title for PR (branch %s):", b.Branch), title)
-		if err != nil {
-			if isInterruptError(err) {
-				return errInterrupt
+	var title, body string
+	isDraft := !opts.open
+
+	if d := drafts[b.Branch]; d != nil {
+		// Interactive editor override. The user already edited the description
+		// in the TUI (prefilled from the repo template when one exists), so
+		// d.Body is the final body. Pass no template so generatePRBody keeps the
+		// user's text and only appends the attribution footer, rather than
+		// discarding their edits in favor of the raw template.
+		title = d.Title
+		body = generatePRBody(d.Body, "")
+		isDraft = d.Draft
+	} else {
+		// Auto / non-interactive default path.
+		var commitBody string
+		title, commitBody = defaultPRTitleBody(baseBranch, b.Branch)
+		originalTitle := title
+		if !opts.auto && cfg.IsInteractive() {
+			input, err := inputWithPrefill(cfg, fmt.Sprintf("Title for PR (branch %s):", b.Branch), title)
+			if err != nil {
+				if isInterruptError(err) {
+					return errInterrupt
+				}
+				// Non-interrupt error: keep the auto-generated title.
+			} else if input != "" {
+				title = input
 			}
-			// Non-interrupt error: keep the auto-generated title.
-		} else if input != "" {
-			title = input
 		}
+
+		prBody := commitBody
+		if title != originalTitle && commitBody != "" {
+			prBody = originalTitle + "\n\n" + commitBody
+		}
+		body = generatePRBody(prBody, templateContent)
 	}
 
-	prBody := commitBody
-	if title != originalTitle && commitBody != "" {
-		prBody = originalTitle + "\n\n" + commitBody
-	}
-	body := generatePRBody(prBody, templateContent)
-
-	newPR, createErr := client.CreatePR(baseBranch, b.Branch, title, body, !opts.open)
+	newPR, createErr := client.CreatePR(baseBranch, b.Branch, title, body, isDraft)
 	if createErr != nil {
 		cfg.Warningf("failed to create PR for %s: %v", b.Branch, createErr)
 		return nil
