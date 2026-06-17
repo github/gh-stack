@@ -89,7 +89,12 @@ Use typed exit codes defined in `cmd/utils.go`:
 | 9 | `ErrStacksUnavailable` | Stacked PRs not enabled for repository |
 | 10 | `ErrModifyRecovery` | Modify session interrupted |
 
-Return these from `RunE`. Never call `os.Exit()` directly from commands. Check with `errors.As(err, &ExitError{})`.
+Return these from `RunE`. Never call `os.Exit()` directly from commands. Check with:
+
+```go
+var exitErr *ExitError
+if errors.As(err, &exitErr) { ... }
+```
 
 ### Testing patterns
 

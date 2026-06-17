@@ -25,7 +25,7 @@ No Makefile, no code generation, no external linter config. Standard Go toolchai
 ## Coding conventions
 
 - Return typed `ExitError` sentinels (codes 1-10 in `cmd/utils.go`) from `RunE`. Never call `os.Exit()` directly.
-- Check errors with `errors.As(err, &ExitError{})`.
+- Check errors with `var exitErr *ExitError; errors.As(err, &exitErr)`.
 - Table-driven tests with `t.Run()` subtests.
 - Use `config.NewTestConfig()` for test configs with captured I/O.
 - Mock git: `restore := git.SetOps(&git.MockOps{...}); defer restore()`. Always defer restore.
