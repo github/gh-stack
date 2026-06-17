@@ -6,7 +6,7 @@ A GitHub CLI (`gh`) extension for managing stacked branches and pull requests. W
 
 ```sh
 go mod download                  # install dependencies
-go build ./...                   # build (produces ./gh-stack binary)
+go build -o gh-stack .           # build (produces ./gh-stack binary)
 go vet ./...                     # static analysis. Run before tests.
 go test -race -count=1 ./...     # all tests with race detection
 ```
