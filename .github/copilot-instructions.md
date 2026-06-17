@@ -6,7 +6,7 @@ A Go CLI extension (`gh stack`) for managing stacked branches and pull requests.
 
 ```sh
 go mod download                  # install deps
-go build ./...                   # build
+go build -o gh-stack .           # build
 go vet ./...                     # static analysis. Always run before tests.
 go test -race -count=1 ./...     # tests with race detection
 ```
