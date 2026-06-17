@@ -73,7 +73,7 @@ func runUnstack(cfg *config.Config, opts *unstackOptions) error {
 				return ErrAPIFailure
 			}
 			if blocked {
-				cfg.Errorf("Unstacking not allowed. Pull requests that are queued for merge, have auto-merge enabled, or are already merged will remain in the stack.")
+				cfg.Errorf("Unstacking not allowed. Pull requests that are queued for merge, are merging, or are already merged will remain in the stack.")
 				return ErrInvalidArgs
 			}
 
