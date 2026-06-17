@@ -2,6 +2,7 @@ package cmd
 
 import (
 	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
 	"testing"
@@ -137,7 +138,10 @@ func TestUnstack_API404_TreatedAsIdempotentSuccess(t *testing.T) {
 	writeStackFile(t, gitDir, stack.Stack{
 		ID:       "99",
 		Trunk:    stack.BranchRef{Branch: "main"},
-		Branches: []stack.BranchRef{{Branch: "b1"}, {Branch: "b2"}},
+		Branches: []stack.BranchRef{
+			{Branch: "b1", PullRequest: &stack.PullRequestRef{Number: 101, Merged: true}},
+			{Branch: "b2", PullRequest: &stack.PullRequestRef{Number: 102}},
+		},
 	})
 
 	cfg, outR, errR := config.NewTestConfig()
@@ -170,7 +174,10 @@ func TestUnstack_API409_ShowsErrorAndStopsLocalDeletion(t *testing.T) {
 	writeStackFile(t, gitDir, stack.Stack{
 		ID:       "99",
 		Trunk:    stack.BranchRef{Branch: "main"},
-		Branches: []stack.BranchRef{{Branch: "b1"}, {Branch: "b2"}},
+		Branches: []stack.BranchRef{
+			{Branch: "b1", PullRequest: &stack.PullRequestRef{Number: 101, Merged: true}},
+			{Branch: "b2", PullRequest: &stack.PullRequestRef{Number: 102}},
+		},
 	})
 
 	cfg, outR, errR := config.NewTestConfig()
@@ -225,4 +232,180 @@ func TestUnstack_RemovesCorrectStackByPointer(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, sf.Stacks, 1, "should remove exactly one stack")
 	assert.Equal(t, []string{"b1", "b2"}, sf.Stacks[0].BranchNames(), "should keep the OTHER stack intact")
+}
+
+func TestUnstack_PreflightBlocksDelete_WhenAllPRsIneligible(t *testing.T) {
+	gitDir := t.TempDir()
+	restore := git.SetOps(&git.MockOps{
+		GitDirFn:        func() (string, error) { return gitDir, nil },
+		CurrentBranchFn: func() (string, error) { return "b1", nil },
+	})
+	defer restore()
+
+	writeStackFile(t, gitDir, stack.Stack{
+		ID:       "99",
+		Trunk:    stack.BranchRef{Branch: "main"},
+		Branches: []stack.BranchRef{
+			{Branch: "b1", PullRequest: &stack.PullRequestRef{Number: 101, Merged: true}},
+			{Branch: "b2", PullRequest: &stack.PullRequestRef{Number: 102}},
+		},
+	})
+
+	deleteCalled := false
+	cfg, outR, errR := config.NewTestConfig()
+	cfg.GitHubClientOverride = &github.MockClient{
+		FindPRByNumberFn: func(number int) (*github.PullRequest, error) {
+			switch number {
+			case 101:
+				return &github.PullRequest{Number: 101, State: "MERGED"}, nil
+			case 102:
+				return &github.PullRequest{Number: 102, State: "OPEN", MergeQueueEntry: &github.MergeQueueEntry{ID: "MQE_1"}}, nil
+			default:
+				return nil, nil
+			}
+		},
+		DeleteStackFn: func(stackID string) error {
+			deleteCalled = true
+			return nil
+		},
+	}
+
+	err := runUnstack(cfg, &unstackOptions{})
+	output := collectOutput(cfg, outR, errR)
+
+	assert.ErrorIs(t, err, ErrInvalidArgs)
+	assert.False(t, deleteCalled, "DeleteStack should not be called when all PRs are ineligible")
+	assert.Contains(t, output, "Unstacking not allowed")
+	assert.NotContains(t, output, "Stack removed from local tracking")
+
+	sf, loadErr := stack.Load(gitDir)
+	require.NoError(t, loadErr)
+	require.Len(t, sf.Stacks, 1)
+}
+
+func TestUnstack_PreflightAllowsDelete_WhenMixedEligibility(t *testing.T) {
+	gitDir := t.TempDir()
+	restore := git.SetOps(&git.MockOps{
+		GitDirFn:        func() (string, error) { return gitDir, nil },
+		CurrentBranchFn: func() (string, error) { return "b1", nil },
+	})
+	defer restore()
+
+	writeStackFile(t, gitDir, stack.Stack{
+		ID:       "99",
+		Trunk:    stack.BranchRef{Branch: "main"},
+		Branches: []stack.BranchRef{
+			{Branch: "b1", PullRequest: &stack.PullRequestRef{Number: 101}},
+			{Branch: "b2", PullRequest: &stack.PullRequestRef{Number: 102}},
+		},
+	})
+
+	deleteCalled := false
+	cfg, outR, errR := config.NewTestConfig()
+	cfg.GitHubClientOverride = &github.MockClient{
+		FindPRByNumberFn: func(number int) (*github.PullRequest, error) {
+			switch number {
+			case 101:
+				return &github.PullRequest{Number: 101, State: "MERGED"}, nil
+			case 102:
+				return &github.PullRequest{Number: 102, State: "OPEN"}, nil
+			default:
+				return nil, nil
+			}
+		},
+		DeleteStackFn: func(stackID string) error {
+			deleteCalled = true
+			return nil
+		},
+	}
+
+	err := runUnstack(cfg, &unstackOptions{})
+	output := collectOutput(cfg, outR, errR)
+
+	require.NoError(t, err)
+	assert.True(t, deleteCalled, "DeleteStack should be called when at least one PR is eligible")
+	assert.Contains(t, output, "Stack deleted on GitHub")
+	assert.Contains(t, output, "Stack removed from local tracking")
+
+	sf, loadErr := stack.Load(gitDir)
+	require.NoError(t, loadErr)
+	assert.Empty(t, sf.Stacks)
+}
+
+func TestUnstack_PreflightLookupFailure_StopsDeletion(t *testing.T) {
+	gitDir := t.TempDir()
+	restore := git.SetOps(&git.MockOps{
+		GitDirFn:        func() (string, error) { return gitDir, nil },
+		CurrentBranchFn: func() (string, error) { return "b1", nil },
+	})
+	defer restore()
+
+	writeStackFile(t, gitDir, stack.Stack{
+		ID:       "99",
+		Trunk:    stack.BranchRef{Branch: "main"},
+		Branches: []stack.BranchRef{{Branch: "b1", PullRequest: &stack.PullRequestRef{Number: 101}}},
+	})
+
+	deleteCalled := false
+	cfg, outR, errR := config.NewTestConfig()
+	cfg.GitHubClientOverride = &github.MockClient{
+		FindPRByNumberFn: func(number int) (*github.PullRequest, error) {
+			return nil, errors.New("graphql timeout")
+		},
+		DeleteStackFn: func(stackID string) error {
+			deleteCalled = true
+			return nil
+		},
+	}
+
+	err := runUnstack(cfg, &unstackOptions{})
+	output := collectOutput(cfg, outR, errR)
+
+	assert.ErrorIs(t, err, ErrAPIFailure)
+	assert.False(t, deleteCalled, "DeleteStack should not be called if preflight fails")
+	assert.Contains(t, output, "failed to check pull request states before unstack")
+	assert.NotContains(t, output, "Stack removed from local tracking")
+
+	sf, loadErr := stack.Load(gitDir)
+	require.NoError(t, loadErr)
+	require.Len(t, sf.Stacks, 1)
+}
+
+func TestUnstack_API422_ShowsInformativeErrorAndStopsLocalDeletion(t *testing.T) {
+	gitDir := t.TempDir()
+	restore := git.SetOps(&git.MockOps{
+		GitDirFn:        func() (string, error) { return gitDir, nil },
+		CurrentBranchFn: func() (string, error) { return "b1", nil },
+	})
+	defer restore()
+
+	writeStackFile(t, gitDir, stack.Stack{
+		ID:       "99",
+		Trunk:    stack.BranchRef{Branch: "main"},
+		Branches: []stack.BranchRef{
+			{Branch: "b1", PullRequest: &stack.PullRequestRef{Number: 101}},
+			{Branch: "b2", PullRequest: &stack.PullRequestRef{Number: 102}},
+		},
+	})
+
+	cfg, outR, errR := config.NewTestConfig()
+	cfg.GitHubClientOverride = &github.MockClient{
+		FindPRByNumberFn: func(number int) (*github.PullRequest, error) {
+			return &github.PullRequest{Number: number, State: "OPEN"}, nil
+		},
+		DeleteStackFn: func(stackID string) error {
+			return &api.HTTPError{StatusCode: 422, Message: "some pull requests cannot be removed from stack"}
+		},
+	}
+	err := runUnstack(cfg, &unstackOptions{})
+	output := collectOutput(cfg, outR, errR)
+
+	assert.ErrorIs(t, err, ErrAPIFailure)
+	assert.Contains(t, output, "Cannot delete stack on GitHub")
+	assert.Contains(t, output, "cannot be removed")
+	assert.NotContains(t, output, "Stack removed from local tracking")
+
+	sf, loadErr := stack.Load(gitDir)
+	require.NoError(t, loadErr)
+	require.Len(t, sf.Stacks, 1)
 }
