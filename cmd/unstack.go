@@ -23,7 +23,7 @@ func UnstackCmd(cfg *config.Config) *cobra.Command {
 		Use:     "unstack",
 		Aliases: []string{"delete"},
 		Short:   "Delete a stack locally and on GitHub",
-		Long:    "Remove the current active stack from local tracking and delete it on GitHub. Use --local to only remove local tracking.",
+		Long:    "Remove the current active stack from local tracking and delete it on GitHub. Use --local to only remove local tracking. Full unstack is blocked when every pull request is queued for merge, merging, or already merged",
 		Example: `  # Delete the stack locally and on GitHub
   $ gh stack unstack
 
@@ -67,7 +67,7 @@ func runUnstack(cfg *config.Config, opts *unstackOptions) error {
 				return ErrAPIFailure
 			}
 
-			blocked, err := shouldBlockUnstackDelete(cfg, client, s)
+			blocked, err := shouldBlockUnstackDelete(client, s)
 			if err != nil {
 				cfg.Errorf("failed to check pull request states before unstack: %s", err)
 				return ErrAPIFailure
@@ -118,7 +118,7 @@ func runUnstack(cfg *config.Config, opts *unstackOptions) error {
 	return nil
 }
 
-func shouldBlockUnstackDelete(cfg *config.Config, client github.ClientOps, s *stack.Stack) (bool, error) {
+func shouldBlockUnstackDelete(client github.ClientOps, s *stack.Stack) (bool, error) {
 	if s == nil || len(s.Branches) == 0 {
 		return false, nil
 	}
