@@ -6,6 +6,7 @@ import (
 	"strconv"
 	"strings"
 
+	tea "github.com/charmbracelet/bubbletea"
 	"github.com/cli/go-gh/v2/pkg/api"
 	"github.com/cli/go-gh/v2/pkg/prompter"
 	"github.com/github/gh-stack/internal/config"
@@ -14,6 +15,7 @@ import (
 	"github.com/github/gh-stack/internal/modify"
 	"github.com/github/gh-stack/internal/pr"
 	"github.com/github/gh-stack/internal/stack"
+	"github.com/github/gh-stack/internal/tui/stackview"
 	"github.com/github/gh-stack/internal/tui/submitview"
 	"github.com/spf13/cobra"
 )
@@ -32,21 +34,27 @@ func SubmitCmd(cfg *config.Config) *cobra.Command {
 		Short: "Create a stack of PRs on GitHub",
 		Long: `Push all branches and create or update a stack of PRs on GitHub.
 
+In an interactive terminal, a single-screen editor opens. Every branch without a
+PR is included by default; deselect any you don't want with the checkbox or ^x,
+and draft each PR's title, description, and draft state, then submit them all at
+once with Ctrl+S. Pass --auto (or run in a non-interactive terminal) to skip the
+editor and use auto-generated titles.
+
 This command performs several steps:
   1. Pushes all branches to the remote
-  2. Creates new PRs for branches that don't have one
+  2. Creates new PRs for the included branches
   3. Updates base branches for existing PRs
   4. Creates or updates the stack on GitHub
 
-New PRs are created as drafts by default. Use --open to mark them as ready
-for review.`,
-		Example: `  # Push and create/update PRs (prompts for PR titles)
+In the editor, new PRs default to ready for review; toggle "Open as draft" per
+PR. With --auto, new PRs are created as drafts unless you pass --open.`,
+		Example: `  # Push and create/update PRs (opens the interactive editor)
   $ gh stack submit
 
-  # Use auto-generated PR titles without prompting
+  # Skip the editor and use auto-generated PR titles
   $ gh stack submit --auto
 
-  # Mark all PRs as ready for review
+  # Mark new and existing PRs as ready for review
   $ gh stack submit --open`,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			return runSubmit(cfg, opts)
@@ -132,7 +140,7 @@ func runSubmit(cfg *config.Config, opts *submitOptions) error {
 	}
 
 	// Sync PR state to detect merged/queued PRs before pushing.
-	_ = syncStackPRs(cfg, s)
+	prDetails := syncStackPRs(cfg, s)
 
 	// Resolve remote for pushing
 	remote, err := pickRemote(cfg, currentBranch, opts.remote)
@@ -179,15 +187,28 @@ func runSubmit(cfg *config.Config, opts *submitOptions) error {
 		templateContent = pr.FindTemplate(repoRoot)
 	}
 
+	// In an interactive terminal, open the TUI so the user can pick which new
+	// branches become PRs and draft each PR's title, description, and draft
+	// state. The drafts feed the create path below. On the --auto /
+	// non-interactive path drafts stays nil and ensurePR/createPR fall back to
+	// auto-generated titles and bodies (today's behavior).
+	var drafts map[string]*submitview.PRDraft
+	if cfg.IsInteractive() && !opts.auto {
+		collected, cancelled, tuiErr := collectPRDrafts(cfg, s, currentBranch, prDetails, templateContent)
+		if tuiErr != nil {
+			cfg.Errorf("failed to run the submit editor: %s", tuiErr)
+			return ErrSilent
+		}
+		if cancelled {
+			cfg.Printf("Submit cancelled — no branches were pushed")
+			return nil
+		}
+		drafts = collected
+	}
+
 	// Push each branch and create/update its PR in stack order (bottom to top).
 	// Sequential pushing ensures each branch's base is up-to-date on the
 	// remote before the next branch is pushed, preventing race conditions.
-	//
-	// drafts carries per-PR overrides from the interactive editor. It is nil on
-	// the --auto / non-interactive path, in which case ensurePR/createPR fall
-	// back to auto-generated titles and bodies (today's behavior).
-	var drafts map[string]*submitview.PRDraft
-
 	cfg.Printf("Pushing to %s...", remote)
 	for i, b := range s.Branches {
 		if s.Branches[i].IsMerged() || s.Branches[i].IsQueued() {
@@ -227,6 +248,73 @@ func runSubmit(cfg *config.Config, opts *submitOptions) error {
 
 	cfg.Successf("Pushed and synced %d branches", len(s.ActiveBranches()))
 	return nil
+}
+
+// collectPRDrafts loads branch display data and runs the interactive submit TUI
+// so the user can choose which new branches become PRs and draft each one. It
+// returns the per-branch overrides, whether the user cancelled, and any error.
+// When the stack contains no branches without a PR, it skips the TUI and
+// returns nil drafts so the normal push/relink path runs.
+func collectPRDrafts(cfg *config.Config, s *stack.Stack, currentBranch string, prDetails map[string]*github.PRDetails, templateContent string) (map[string]*submitview.PRDraft, bool, error) {
+	fmt.Fprintf(cfg.Err, "Loading stack...")
+	viewNodes := stackview.LoadBranchNodes(cfg, s, currentBranch, prDetails)
+	fmt.Fprintf(cfg.Err, "\r\033[2K")
+
+	// Reverse so index 0 = top of stack (matches the visual order).
+	reversed := make([]stackview.BranchNode, len(viewNodes))
+	for i, n := range viewNodes {
+		reversed[len(viewNodes)-1-i] = n
+	}
+	nodes := submitview.NewSubmitNodes(reversed, templateContent)
+
+	// Nothing to create — skip the TUI and run the normal push/relink path.
+	if submitview.CountNew(nodes) == 0 {
+		return nil, false, nil
+	}
+
+	repoLabel := ""
+	if repo, err := cfg.Repo(); err == nil {
+		repoLabel = repo.Owner + "/" + repo.Name
+	}
+
+	model := submitview.New(submitview.Options{
+		Nodes:     nodes,
+		Trunk:     s.Trunk,
+		StackName: stackDisplayName(s),
+		RepoLabel: repoLabel,
+		Version:   Version,
+	})
+
+	p := tea.NewProgram(model, tea.WithAltScreen(), tea.WithMouseAllMotion())
+	final, err := p.Run()
+	if err != nil {
+		return nil, false, fmt.Errorf("running submit TUI: %w", err)
+	}
+
+	m, ok := final.(submitview.Model)
+	if !ok {
+		return nil, false, fmt.Errorf("unexpected model type %T", final)
+	}
+	if m.Cancelled() || !m.SubmitRequested() {
+		return nil, true, nil
+	}
+	return submitview.BuildDrafts(m.Nodes()), false, nil
+}
+
+// stackDisplayName returns a human-readable name for the stack, used in the TUI
+// header: the stack prefix, else the common branch-name prefix, else the
+// bottom-most branch.
+func stackDisplayName(s *stack.Stack) string {
+	if s.Prefix != "" {
+		return strings.TrimRight(s.Prefix, "/")
+	}
+	if p := submitview.CommonPrefix(s.BranchNames()); p != "" {
+		return strings.TrimRight(p, "/")
+	}
+	if len(s.Branches) > 0 {
+		return s.Branches[0].Branch
+	}
+	return s.Trunk.Branch
 }
 
 // ensurePR finds or creates a PR for the branch at index i, and updates
@@ -330,27 +418,12 @@ func createPR(cfg *config.Config, client github.ClientOps, s *stack.Stack, i int
 		body = generatePRBody(d.Body, "")
 		isDraft = d.Draft
 	} else {
-		// Auto / non-interactive default path.
+		// Auto / non-interactive default path: an auto-generated title and a
+		// body built from the branch's commits (the interactive title is
+		// drafted in the submit TUI instead).
 		var commitBody string
 		title, commitBody = defaultPRTitleBody(baseBranch, b.Branch)
-		originalTitle := title
-		if !opts.auto && cfg.IsInteractive() {
-			input, err := inputWithPrefill(cfg, fmt.Sprintf("Title for PR (branch %s):", b.Branch), title)
-			if err != nil {
-				if isInterruptError(err) {
-					return errInterrupt
-				}
-				// Non-interrupt error: keep the auto-generated title.
-			} else if input != "" {
-				title = input
-			}
-		}
-
-		prBody := commitBody
-		if title != originalTitle && commitBody != "" {
-			prBody = originalTitle + "\n\n" + commitBody
-		}
-		body = generatePRBody(prBody, templateContent)
+		body = generatePRBody(commitBody, templateContent)
 	}
 
 	newPR, createErr := client.CreatePR(baseBranch, b.Branch, title, body, isDraft)

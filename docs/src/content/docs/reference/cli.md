@@ -269,11 +269,18 @@ gh stack submit [flags]
 
 Creates a Stacked PR for every branch in the stack, pushing branches to the remote. After creating PRs, `submit` automatically creates a **Stack** on GitHub to link the PRs together. If the stack already exists on GitHub (e.g., from a previous submit), new PRs are added to the existing stack.
 
-When creating new PRs, you will be prompted to enter a title for each one. Press Enter to accept the default (branch name), or use `--auto` to skip prompting entirely. New PRs are created as **drafts by default**; use `--open` to create new PRs as ready for review and to mark existing PRs as ready for review.
+In an interactive terminal, `submit` opens a full-screen editor on a single screen:
+
+- **Left panel** — every branch without a PR is **included by default**; deselect any you don't want to submit with <kbd>Ctrl</kbd>+<kbd>X</kbd>. Because each PR builds on the branch below it, deselecting a branch also deselects the ones stacked above it, and re-including a branch re-includes the ones below it that it depends on. Branches that already have a PR (open, draft, queued, or merged) are shown for context but are locked; edit those on the web.
+- **Right panel** — for the focused branch, draft the title, description (pre-filled from your repo's PR template or commits, with a Glamour markdown preview and `$EDITOR` escape), and whether it opens ready for review or as a draft (a ready ↔ draft toggle). Focusing a locked branch shows a read-only card with a link to its PR (<kbd>o</kbd> to open in the browser).
+
+Press <kbd>Ctrl</kbd>+<kbd>S</kbd> to submit all included PRs at once. The editor supports both keyboard and mouse input. Pass `--auto` (or run in a non-interactive terminal, such as CI) to skip the editor and use auto-generated titles.
+
+In the editor, new PRs default to **ready for review**; flip any PR to **draft** with the ready ↔ draft toggle. With `--auto`, new PRs are created as **drafts** unless you pass `--open`.
 
 | Flag | Description |
 |------|-------------|
-| `--auto` | Use auto-generated PR titles without prompting |
+| `--auto` | Skip the editor and use auto-generated PR titles |
 | `--open` | Create new PRs as ready for review instead of drafts, and mark existing PRs as ready for review |
 | `--remote <name>` | Remote to push to (defaults to auto-detected remote) |
 
