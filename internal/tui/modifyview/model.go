@@ -1191,11 +1191,17 @@ func (m Model) nodeLineCount(idx int) int {
 	return shared.NodeLineCount(toNodeData(m.nodes[idx], idx, idx))
 }
 
-func (m Model) contentViewHeight() int {
-	reserved := 3 // post-scroll newline + context line + status bar
+// headerHeight returns the number of rows the header occupies for this model's
+// config, or 0 when the header is hidden.
+func (m Model) headerHeight() int {
 	if shared.ShouldShowHeader(m.width, m.height) {
-		reserved += shared.HeaderHeight
+		return shared.HeaderHeightFor(m.buildHeaderConfig())
 	}
+	return 0
+}
+
+func (m Model) contentViewHeight() int {
+	reserved := 3 + m.headerHeight() // post-scroll newline + context line + status bar
 	h := m.height - reserved
 	if h < 1 {
 		h = 1
@@ -1221,7 +1227,7 @@ func (m Model) handleMouseClick(screenX, screenY int) (tea.Model, tea.Cmd) {
 		nodes[i] = toNodeData(n, i, i)
 	}
 
-	result := shared.HandleClick(screenX, screenY, nodes, m.width, m.height, m.scrollOffset, shared.ShouldShowHeader(m.width, m.height), false)
+	result := shared.HandleClick(screenX, screenY, nodes, m.width, m.height, m.scrollOffset, m.headerHeight(), false)
 	if result.NodeIndex < 0 {
 		return m, nil
 	}
@@ -1357,6 +1363,10 @@ func (m Model) View() string {
 	showHeader := shared.ShouldShowHeader(m.width, m.height)
 	if showHeader {
 		shared.RenderHeader(&out, m.buildHeaderConfig(), m.width, m.height)
+	} else {
+		// The header (and its inline-image logo) is hidden; clear any logo that
+		// was previously drawn so it does not linger in the graphics layer.
+		out.WriteString(shared.ClearLogo())
 	}
 
 	// Build the scrollable branch list content
@@ -1382,10 +1392,7 @@ func (m Model) View() string {
 	bottomLines := 2 // error/status line + status bar (post-scroll newline is inline)
 
 	// Scrolling — reserve space for header and fixed bottom
-	reservedLines := bottomLines
-	if showHeader {
-		reservedLines += shared.HeaderHeight
-	}
+	reservedLines := bottomLines + m.headerHeight()
 	viewHeight := m.height - reservedLines
 	if viewHeight < 1 {
 		viewHeight = 1

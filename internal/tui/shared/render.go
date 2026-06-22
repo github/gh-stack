@@ -401,24 +401,24 @@ func TimeAgo(t time.Time) string {
 
 // ClickResult describes what happened when a node was clicked.
 type ClickResult struct {
-	NodeIndex    int  // which node was clicked (-1 if none)
-	ToggleFiles  bool // should toggle files expansion
-	ToggleCommits bool // should toggle commits expansion
-	OpenURL      string // URL to open in browser (empty if none)
+	NodeIndex     int    // which node was clicked (-1 if none)
+	ToggleFiles   bool   // should toggle files expansion
+	ToggleCommits bool   // should toggle commits expansion
+	OpenURL       string // URL to open in browser (empty if none)
 }
 
 // HandleClick maps a screen click to a node action.
 // nodes is the list of BranchNodeData in display order.
-// showHeader indicates whether the header is visible.
+// headerHeight is the number of rows the header occupies (0 when it is hidden).
 // scrollOffset is the current scroll position.
 // hasSeparators controls whether merged/queued separator lines are accounted for.
-func HandleClick(screenX, screenY int, nodes []BranchNodeData, width, height, scrollOffset int, showHeader, hasSeparators bool) ClickResult {
+func HandleClick(screenX, screenY int, nodes []BranchNodeData, width, height, scrollOffset int, headerHeight int, hasSeparators bool) ClickResult {
 	yOffset := 0
-	if showHeader {
-		if screenY < HeaderHeight {
+	if headerHeight > 0 {
+		if screenY < headerHeight {
 			return ClickResult{NodeIndex: -1}
 		}
-		yOffset = HeaderHeight
+		yOffset = headerHeight
 	}
 
 	contentLine := (screenY - yOffset) + scrollOffset
