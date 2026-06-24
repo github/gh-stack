@@ -1361,8 +1361,13 @@ func (m Model) View() string {
 
 	// Header
 	showHeader := shared.ShouldShowHeader(m.width, m.height)
+	headerLines := 0
 	if showHeader {
-		shared.RenderHeader(&out, m.buildHeaderConfig(), m.width, m.height)
+		// Build the header config once and reuse it for both rendering and the
+		// height reservation, so View does not rebuild it twice per frame.
+		cfg := m.buildHeaderConfig()
+		shared.RenderHeader(&out, cfg, m.width, m.height)
+		headerLines = shared.HeaderHeightFor(cfg)
 	} else {
 		// The header (and its inline-image logo) is hidden; clear any logo that
 		// was previously drawn so it does not linger in the graphics layer.
@@ -1392,7 +1397,7 @@ func (m Model) View() string {
 	bottomLines := 2 // error/status line + status bar (post-scroll newline is inline)
 
 	// Scrolling — reserve space for header and fixed bottom
-	reservedLines := bottomLines + m.headerHeight()
+	reservedLines := bottomLines + headerLines
 	viewHeight := m.height - reservedLines
 	if viewHeight < 1 {
 		viewHeight = 1

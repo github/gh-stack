@@ -6,12 +6,6 @@ import (
 	"github.com/charmbracelet/lipgloss"
 )
 
-// HeaderHeight is the maximum number of lines the header occupies (a top border,
-// the content rows, and a bottom border). The actual height for a given config
-// is HeaderHeightFor, which sizes the box to its content with no trailing empty
-// rows.
-const HeaderHeight = 9
-
 // MinHeightForHeader is the minimum terminal height to show the header.
 const MinHeightForHeader = 25
 
