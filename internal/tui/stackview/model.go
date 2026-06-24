@@ -19,11 +19,13 @@ type keyMap struct {
 	ToggleFiles   key.Binding
 	OpenPR        key.Binding
 	Checkout      key.Binding
+	Refresh       key.Binding
+	Push          key.Binding
 	Quit          key.Binding
 }
 
 func (k keyMap) ShortHelp() []key.Binding {
-	return []key.Binding{k.Up, k.Down, k.ToggleCommits, k.ToggleFiles, k.OpenPR, k.Checkout, k.Quit}
+	return []key.Binding{k.Up, k.Down, k.ToggleCommits, k.ToggleFiles, k.OpenPR, k.Checkout, k.Refresh, k.Push, k.Quit}
 }
 
 func (k keyMap) FullHelp() [][]key.Binding {
@@ -55,6 +57,14 @@ var keys = keyMap{
 		key.WithKeys("enter"),
 		key.WithHelp("enter", "checkout"),
 	),
+	Refresh: key.NewBinding(
+		key.WithKeys("r"),
+		key.WithHelp("r", "refresh"),
+	),
+	Push: key.NewBinding(
+		key.WithKeys("p"),
+		key.WithHelp("p", "push"),
+	),
 	Quit: key.NewBinding(
 		key.WithKeys("q", "esc", "ctrl+c"),
 		key.WithHelp("q", "quit"),
@@ -76,6 +86,65 @@ type Model struct {
 
 	// checkoutBranch is set when the user wants to checkout a branch after quitting.
 	checkoutBranch string
+
+	// interactive enables in-place actions that keep the TUI open instead of
+	// quitting (used by `gh stack watch`).
+	interactive bool
+
+	// checkoutFn performs an in-place checkout in interactive mode. When nil,
+	// checkout falls back to the quit-then-checkout behavior.
+	checkoutFn func(string) error
+
+	// refreshFn re-syncs PR/stack state and returns fresh nodes (top-down
+	// order). When nil, the refresh key is disabled.
+	refreshFn func() ([]BranchNode, error)
+
+	// pushFn pushes the whole stack. When nil, the push key is disabled.
+	pushFn func() error
+
+	// busy indicates an async action is in flight; action keys are ignored
+	// until it completes.
+	busy bool
+
+	// confirmMode is true while waiting for a y/n answer before a mutating
+	// action. confirmAction names the pending action (e.g. "push").
+	confirmMode   bool
+	confirmAction string
+
+	// infoMsg holds a transient status/success message for the bottom line.
+	infoMsg string
+
+	// errMsg holds a transient error to display at the bottom of the view.
+	errMsg string
+}
+
+// InteractiveActions bundles the in-place action callbacks used by `watch`.
+// Any nil field disables the corresponding key.
+type InteractiveActions struct {
+	// Checkout switches to the given branch in place.
+	Checkout func(string) error
+	// Refresh re-syncs PR/stack state and returns fresh nodes in top-down order.
+	Refresh func() ([]BranchNode, error)
+	// Push pushes the whole stack to the remote.
+	Push func() error
+}
+
+// checkoutResultMsg reports the outcome of an in-place checkout.
+type checkoutResultMsg struct {
+	branch string
+	err    error
+}
+
+// refreshResultMsg reports the outcome of an in-place refresh.
+type refreshResultMsg struct {
+	nodes []BranchNode
+	err   error
+}
+
+// actionResultMsg reports the outcome of a mutating action (e.g. push).
+type actionResultMsg struct {
+	action string
+	err    error
 }
 
 // New creates a new stack view model.
@@ -111,9 +180,73 @@ func New(nodes []BranchNode, trunk stack.BranchRef, version string) Model {
 	}
 }
 
+// NewInteractive creates a stack view model for the interactive `watch` mode.
+// Pressing enter on a branch invokes the Checkout action in place and keeps the
+// TUI open, updating the current-branch marker instead of quitting. Refresh and
+// Push actions, when supplied, are bound to the `r` and `p` keys.
+func NewInteractive(nodes []BranchNode, trunk stack.BranchRef, version string, actions InteractiveActions) Model {
+	m := New(nodes, trunk, version)
+	m.interactive = true
+	m.checkoutFn = actions.Checkout
+	m.refreshFn = actions.Refresh
+	m.pushFn = actions.Push
+	return m
+}
+
 // CheckoutBranch returns the branch to checkout after the TUI exits, if any.
 func (m Model) CheckoutBranch() string {
 	return m.checkoutBranch
+}
+
+// checkoutCmd returns a command that performs an in-place checkout and reports
+// the result back to the model.
+func (m Model) checkoutCmd(branch string) tea.Cmd {
+	fn := m.checkoutFn
+	return func() tea.Msg {
+		var err error
+		if fn != nil {
+			err = fn(branch)
+		}
+		return checkoutResultMsg{branch: branch, err: err}
+	}
+}
+
+// refreshCmd returns a command that re-syncs stack state and reports fresh
+// nodes back to the model.
+func (m Model) refreshCmd() tea.Cmd {
+	fn := m.refreshFn
+	return func() tea.Msg {
+		if fn == nil {
+			return refreshResultMsg{}
+		}
+		nodes, err := fn()
+		return refreshResultMsg{nodes: nodes, err: err}
+	}
+}
+
+// pushCmd returns a command that pushes the stack and reports the result back
+// to the model.
+func (m Model) pushCmd() tea.Cmd {
+	fn := m.pushFn
+	return func() tea.Msg {
+		var err error
+		if fn != nil {
+			err = fn()
+		}
+		return actionResultMsg{action: "push", err: err}
+	}
+}
+
+// activeBranchCount returns the number of branches that are neither merged nor
+// queued (i.e. the branches a push would actually update).
+func (m Model) activeBranchCount() int {
+	n := 0
+	for _, node := range m.nodes {
+		if !node.Ref.IsMerged() && !node.Ref.IsQueued() {
+			n++
+		}
+	}
+	return n
 }
 
 func (m Model) Init() tea.Cmd {
@@ -129,6 +262,30 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case tea.KeyMsg:
+		// While awaiting a y/n confirmation, only confirm keys are handled.
+		if m.confirmMode {
+			switch msg.String() {
+			case "y", "Y", "enter":
+				action := m.confirmAction
+				m.confirmMode = false
+				m.confirmAction = ""
+				if action == "push" {
+					m.busy = true
+					m.errMsg = ""
+					m.infoMsg = "Pushing stack…"
+					return m, m.pushCmd()
+				}
+				return m, nil
+			case "n", "N", "esc", "ctrl+c":
+				m.confirmMode = false
+				m.confirmAction = ""
+				m.infoMsg = "Canceled"
+				m.errMsg = ""
+				return m, nil
+			}
+			return m, nil
+		}
+
 		switch {
 		case key.Matches(msg, keys.Quit):
 			return m, tea.Quit
@@ -170,12 +327,74 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			if m.cursor >= 0 && m.cursor < len(m.nodes) {
 				node := m.nodes[m.cursor]
 				if !node.IsCurrent && !node.Ref.IsMerged() {
+					if m.interactive {
+						return m, m.checkoutCmd(node.Ref.Branch)
+					}
 					m.checkoutBranch = node.Ref.Branch
 					return m, tea.Quit
 				}
 			}
 			return m, nil
+
+		case key.Matches(msg, keys.Refresh):
+			if m.interactive && m.refreshFn != nil && !m.busy {
+				m.busy = true
+				m.errMsg = ""
+				m.infoMsg = "Refreshing…"
+				return m, m.refreshCmd()
+			}
+			return m, nil
+
+		case key.Matches(msg, keys.Push):
+			if m.interactive && m.pushFn != nil && !m.busy {
+				m.confirmMode = true
+				m.confirmAction = "push"
+				m.errMsg = ""
+				m.infoMsg = ""
+			}
+			return m, nil
 		}
+
+	case checkoutResultMsg:
+		if msg.err != nil {
+			m.errMsg = fmt.Sprintf("failed to checkout %s: %v", msg.branch, msg.err)
+			return m, nil
+		}
+		for i := range m.nodes {
+			m.nodes[i].IsCurrent = m.nodes[i].Ref.Branch == msg.branch
+		}
+		m.errMsg = ""
+		return m, nil
+
+	case refreshResultMsg:
+		m.busy = false
+		if msg.err != nil {
+			m.infoMsg = ""
+			m.errMsg = fmt.Sprintf("refresh failed: %v", msg.err)
+			return m, nil
+		}
+		m.nodes = msg.nodes
+		if m.cursor >= len(m.nodes) {
+			m.cursor = len(m.nodes) - 1
+		}
+		if m.cursor < 0 {
+			m.cursor = 0
+		}
+		m.clampScroll()
+		m.errMsg = ""
+		m.infoMsg = "Refreshed"
+		return m, nil
+
+	case actionResultMsg:
+		m.busy = false
+		if msg.err != nil {
+			m.infoMsg = ""
+			m.errMsg = fmt.Sprintf("%s failed: %v", msg.action, msg.err)
+			return m, nil
+		}
+		m.errMsg = ""
+		m.infoMsg = fmt.Sprintf("%s complete", msg.action)
+		return m, nil
 
 	case tea.MouseMsg:
 		switch msg.Action {
@@ -387,6 +606,10 @@ func (m Model) View() string {
 	if showHeader {
 		reservedLines = shared.HeaderHeight
 	}
+	statusLine := m.statusLine()
+	if statusLine != "" {
+		reservedLines++ // reserve a line for the status message
+	}
 	viewHeight := m.height - reservedLines
 	if viewHeight < 1 {
 		viewHeight = 1
@@ -394,7 +617,36 @@ func (m Model) View() string {
 
 	out.WriteString(shared.ApplyScrollToContent(content, m.scrollOffset, viewHeight))
 
+	if statusLine != "" {
+		out.WriteString("\n")
+		out.WriteString(statusLine)
+	}
+
 	return out.String()
+}
+
+// statusLine returns the bottom status line: a pending confirmation prompt, a
+// transient error, or a transient info message (in that priority order).
+func (m Model) statusLine() string {
+	if m.confirmMode && m.confirmAction == "push" {
+		count := m.activeBranchCount()
+		return fmt.Sprintf("Push %d %s to the remote? (y/n)", count, plural(count, "branch", "branches"))
+	}
+	if m.errMsg != "" {
+		return shared.WarningIcon + " " + m.errMsg
+	}
+	if m.infoMsg != "" {
+		return shared.OpenIcon + " " + m.infoMsg
+	}
+	return ""
+}
+
+// plural returns singular or plural based on n.
+func plural(n int, singular, pluralForm string) string {
+	if n == 1 {
+		return singular
+	}
+	return pluralForm
 }
 
 // buildHeaderConfig produces the header configuration for the stack view.
@@ -429,9 +681,37 @@ func (m Model) buildHeaderConfig() shared.HeaderConfig {
 		branchIcon = "●"
 	}
 
+	title := "View Stack"
+	if m.interactive {
+		title = "Watch Stack"
+	}
+
+	shortcuts := []shared.ShortcutEntry{
+		{Key: "↑", Desc: "up"},
+		{Key: "↓", Desc: "down"},
+		{Key: "c", Desc: "commits"},
+		{Key: "f", Desc: "files"},
+		{Key: "o", Desc: "open PR"},
+		{Key: "↵", Desc: "checkout"},
+		{Key: "q", Desc: "quit"},
+	}
+	if m.interactive {
+		shortcuts = []shared.ShortcutEntry{
+			{Key: "↑", Desc: "up"},
+			{Key: "↓", Desc: "down"},
+			{Key: "c", Desc: "commits"},
+			{Key: "f", Desc: "files"},
+			{Key: "o", Desc: "open PR"},
+			{Key: "↵", Desc: "switch (stays open)"},
+			{Key: "r", Desc: "refresh"},
+			{Key: "p", Desc: "push"},
+			{Key: "q", Desc: "quit"},
+		}
+	}
+
 	return shared.HeaderConfig{
 		ShowArt:  true,
-		Title:    "View Stack",
+		Title:    title,
 		Subtitle: "v" + m.version,
 		InfoLines: []shared.HeaderInfoLine{
 			{Icon: "✓", Label: "Stack initialized"},
@@ -439,15 +719,7 @@ func (m Model) buildHeaderConfig() shared.HeaderConfig {
 			{Icon: branchIcon, Label: branchInfo},
 		},
 		ShortcutColumns: 1,
-		Shortcuts: []shared.ShortcutEntry{
-			{Key: "↑", Desc: "up"},
-			{Key: "↓", Desc: "down"},
-			{Key: "c", Desc: "commits"},
-			{Key: "f", Desc: "files"},
-			{Key: "o", Desc: "open PR"},
-			{Key: "↵", Desc: "checkout"},
-			{Key: "q", Desc: "quit"},
-		},
+		Shortcuts:       shortcuts,
 	}
 }
 

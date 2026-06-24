@@ -74,6 +74,10 @@ locally, then push to GitHub to create your stack of PRs.`,
 	viewCmd.GroupID = "stack"
 	root.AddCommand(viewCmd)
 
+	watchCmd := WatchCmd(cfg)
+	watchCmd.GroupID = "stack"
+	root.AddCommand(watchCmd)
+
 	checkoutCmd := CheckoutCmd(cfg)
 	checkoutCmd.GroupID = "stack"
 	root.AddCommand(checkoutCmd)

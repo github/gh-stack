@@ -450,6 +450,38 @@ gh stack view --short
 gh stack view --json
 ```
 
+### `gh stack watch`
+
+Open an interactive view of the stack that stays open while you work.
+
+```
+gh stack watch
+```
+
+Works like `gh stack view`, but the view does not close after you act on it. Navigate with the arrow keys and press enter to check out a branch in place — the current-branch marker updates without leaving the view, so you can keep moving around the stack. Requires an interactive terminal; use `gh stack view` in non-interactive contexts.
+
+Press `r` to refresh PR and stack state in place, or `p` to push the whole stack to the remote (after a confirmation prompt).
+
+**Keybindings:**
+
+| Key | Action |
+|-----|--------|
+| `↑`/`↓` | Navigate branch list |
+| `c` | Toggle commits |
+| `f` | Toggle files changed |
+| `o` | Open PR in browser |
+| `↵` | Check out branch in place (stays open) |
+| `r` | Refresh PR and stack state |
+| `p` | Push the stack (with confirmation) |
+| `q`/`Esc` | Quit |
+
+**Examples:**
+
+```sh
+# Open the interactive watch view
+gh stack watch
+```
+
 ### `gh stack unstack`
 
 Remove a stack from local tracking and delete it on GitHub. Also available as `gh stack delete`.

@@ -173,6 +173,174 @@ func TestUpdate_EnterOnCurrentDoesNothing(t *testing.T) {
 	assert.Nil(t, cmd, "enter on current branch should not quit")
 }
 
+func TestInteractive_EnterChecksOutInPlace(t *testing.T) {
+	nodes := makeNodes("b1", "b2")
+	nodes[0].IsCurrent = true
+
+	var checkedOut string
+	m := NewInteractive(nodes, testTrunk, "0.0.1", InteractiveActions{Checkout: func(branch string) error {
+		checkedOut = branch
+		return nil
+	}})
+
+	// Move to b2 (non-current).
+	updated, _ := m.Update(keyMsg("down"))
+	m = updated.(Model)
+	assert.Equal(t, 1, m.cursor)
+
+	// Press enter: interactive mode should not quit and should not set checkoutBranch.
+	updated, cmd := m.Update(keyMsg("enter"))
+	m = updated.(Model)
+	assert.Equal(t, "", m.CheckoutBranch(), "interactive checkout should not use quit-then-checkout path")
+	if assert.NotNil(t, cmd, "interactive enter should produce a checkout command") {
+		// Run the command to obtain the result message and feed it back.
+		msg := cmd()
+		result, ok := msg.(checkoutResultMsg)
+		assert.True(t, ok, "command should produce a checkoutResultMsg")
+		assert.Equal(t, "b2", checkedOut, "checkoutFn should be invoked with the selected branch")
+
+		updated, quitCmd := m.Update(result)
+		m = updated.(Model)
+		assert.Nil(t, quitCmd, "successful in-place checkout should not quit")
+		assert.False(t, m.nodes[0].IsCurrent, "previous current marker should be cleared")
+		assert.True(t, m.nodes[1].IsCurrent, "selected branch should become current")
+		assert.Equal(t, "", m.errMsg)
+	}
+}
+
+func TestInteractive_CheckoutErrorSetsMessage(t *testing.T) {
+	nodes := makeNodes("b1", "b2")
+	nodes[0].IsCurrent = true
+
+	m := NewInteractive(nodes, testTrunk, "0.0.1", InteractiveActions{Checkout: func(branch string) error {
+		return fmt.Errorf("boom")
+	}})
+
+	updated, _ := m.Update(keyMsg("down"))
+	m = updated.(Model)
+
+	_, cmd := m.Update(keyMsg("enter"))
+	msg := cmd()
+	result := msg.(checkoutResultMsg)
+
+	updated, quitCmd := m.Update(result)
+	m = updated.(Model)
+	assert.Nil(t, quitCmd, "checkout error should not quit")
+	assert.Contains(t, m.errMsg, "boom", "error message should be surfaced")
+	assert.True(t, m.nodes[0].IsCurrent, "current marker should be unchanged on error")
+	assert.False(t, m.nodes[1].IsCurrent)
+}
+
+func TestInteractive_RefreshReplacesNodes(t *testing.T) {
+	nodes := makeNodes("b1", "b2")
+	nodes[0].IsCurrent = true
+
+	fresh := makeNodes("b1", "b2", "b3")
+	called := false
+	m := NewInteractive(nodes, testTrunk, "0.0.1", InteractiveActions{
+		Refresh: func() ([]BranchNode, error) {
+			called = true
+			return fresh, nil
+		},
+	})
+
+	updated, cmd := m.Update(keyMsg("r"))
+	m = updated.(Model)
+	assert.True(t, m.busy, "refresh should mark the model busy")
+	if assert.NotNil(t, cmd, "refresh should produce a command") {
+		msg := cmd()
+		result, ok := msg.(refreshResultMsg)
+		assert.True(t, ok, "command should produce a refreshResultMsg")
+		assert.True(t, called, "refresh func should be invoked")
+
+		updated, _ = m.Update(result)
+		m = updated.(Model)
+		assert.False(t, m.busy, "refresh result should clear busy")
+		assert.Len(t, m.nodes, 3, "nodes should be replaced with fresh data")
+		assert.Equal(t, "Refreshed", m.infoMsg)
+	}
+}
+
+func TestInteractive_RefreshErrorSetsMessage(t *testing.T) {
+	nodes := makeNodes("b1", "b2")
+	m := NewInteractive(nodes, testTrunk, "0.0.1", InteractiveActions{
+		Refresh: func() ([]BranchNode, error) {
+			return nil, fmt.Errorf("network down")
+		},
+	})
+
+	updated, cmd := m.Update(keyMsg("r"))
+	m = updated.(Model)
+	result := cmd().(refreshResultMsg)
+	updated, _ = m.Update(result)
+	m = updated.(Model)
+	assert.False(t, m.busy)
+	assert.Len(t, m.nodes, 2, "nodes should be unchanged on error")
+	assert.Contains(t, m.errMsg, "network down")
+}
+
+func TestInteractive_PushRequiresConfirmation(t *testing.T) {
+	nodes := makeNodes("b1", "b2")
+	pushed := false
+	m := NewInteractive(nodes, testTrunk, "0.0.1", InteractiveActions{
+		Push: func() error {
+			pushed = true
+			return nil
+		},
+	})
+
+	// Press p: should enter confirm mode without pushing.
+	updated, cmd := m.Update(keyMsg("p"))
+	m = updated.(Model)
+	assert.True(t, m.confirmMode, "p should enter confirm mode")
+	assert.Equal(t, "push", m.confirmAction)
+	assert.Nil(t, cmd, "p should not dispatch a push yet")
+	assert.False(t, pushed)
+	assert.Contains(t, m.statusLine(), "Push 2 branches")
+
+	// Cancel with n.
+	updated, _ = m.Update(keyMsg("n"))
+	m = updated.(Model)
+	assert.False(t, m.confirmMode, "n should cancel confirm mode")
+	assert.False(t, pushed)
+
+	// Press p then confirm with y.
+	updated, _ = m.Update(keyMsg("p"))
+	m = updated.(Model)
+	updated, cmd = m.Update(keyMsg("y"))
+	m = updated.(Model)
+	assert.False(t, m.confirmMode, "y should exit confirm mode")
+	assert.True(t, m.busy, "confirmed push should mark busy")
+	if assert.NotNil(t, cmd, "confirmed push should dispatch a command") {
+		result, ok := cmd().(actionResultMsg)
+		assert.True(t, ok)
+		assert.True(t, pushed, "push func should be invoked after confirmation")
+		updated, _ = m.Update(result)
+		m = updated.(Model)
+		assert.False(t, m.busy)
+		assert.Equal(t, "push complete", m.infoMsg)
+	}
+}
+
+func TestInteractive_PushErrorSetsMessage(t *testing.T) {
+	nodes := makeNodes("b1", "b2")
+	m := NewInteractive(nodes, testTrunk, "0.0.1", InteractiveActions{
+		Push: func() error {
+			return fmt.Errorf("rejected")
+		},
+	})
+
+	updated, _ := m.Update(keyMsg("p"))
+	m = updated.(Model)
+	updated, cmd := m.Update(keyMsg("y"))
+	m = updated.(Model)
+	result := cmd().(actionResultMsg)
+	updated, _ = m.Update(result)
+	m = updated.(Model)
+	assert.False(t, m.busy)
+	assert.Contains(t, m.errMsg, "rejected")
+}
+
 func TestView_HeaderShownWhenTallEnough(t *testing.T) {
 	nodes := makeNodes("b1", "b2")
 	m := New(nodes, testTrunk, "0.0.1")
