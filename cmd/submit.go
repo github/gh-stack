@@ -194,7 +194,7 @@ func runSubmit(cfg *config.Config, opts *submitOptions) error {
 	// auto-generated titles and bodies (today's behavior).
 	var drafts map[string]*submitview.PRDraft
 	if cfg.IsInteractive() && !opts.auto {
-		collected, cancelled, tuiErr := collectPRDrafts(cfg, s, currentBranch, prDetails, templateContent)
+		collected, cancelled, tuiErr := collectPRDrafts(cfg, client, s, currentBranch, prDetails, templateContent)
 		if tuiErr != nil {
 			cfg.Errorf("failed to run the submit editor: %s", tuiErr)
 			return ErrSilent
@@ -255,7 +255,11 @@ func runSubmit(cfg *config.Config, opts *submitOptions) error {
 // returns the per-branch overrides, whether the user cancelled, and any error.
 // When the stack contains no branches without a PR, it skips the TUI and
 // returns nil drafts so the normal push/relink path runs.
-func collectPRDrafts(cfg *config.Config, s *stack.Stack, currentBranch string, prDetails map[string]*github.PRDetails, templateContent string) (map[string]*submitview.PRDraft, bool, error) {
+func collectPRDrafts(cfg *config.Config, client github.ClientOps, s *stack.Stack, currentBranch string, prDetails map[string]*github.PRDetails, templateContent string) (map[string]*submitview.PRDraft, bool, error) {
+	// Fill in the real title/description for existing PRs that were synced
+	// without them (e.g. merged branches) so the read-only cards show API data.
+	enrichPRContent(client, prDetails)
+
 	fmt.Fprintf(cfg.Err, "Loading stack...")
 	viewNodes := stackview.LoadBranchNodes(cfg, s, currentBranch, prDetails)
 	fmt.Fprintf(cfg.Err, "\r\033[2K")

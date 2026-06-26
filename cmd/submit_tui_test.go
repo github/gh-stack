@@ -76,7 +76,7 @@ func TestCollectPRDrafts_SkipsWhenNoNewBranches(t *testing.T) {
 		"b2": {Number: 2, State: "OPEN"},
 	}
 
-	drafts, cancelled, err := collectPRDrafts(cfg, s, "b1", prDetails, "")
+	drafts, cancelled, err := collectPRDrafts(cfg, nil, s, "b1", prDetails, "")
 	require.NoError(t, err)
 	assert.False(t, cancelled)
 	assert.Nil(t, drafts, "no NEW branches means the TUI is skipped and drafts are nil")

@@ -40,61 +40,53 @@ func DeriveState(node stackview.BranchNode) BranchState {
 	return StateNew
 }
 
-// PrefillTitle returns the default PR title for a node: the subject of the
-// branch's first (oldest) commit when it has any commits, otherwise the
-// humanized branch name. git.LogRange returns commits newest-first, so the
-// oldest commit — the one that established the branch — is the last element.
+// PrefillTitle returns the default PR title for a new branch: the subject of its
+// single commit when the branch has exactly one commit, otherwise the humanized
+// branch name. This mirrors the non-TUI submit's defaultPRTitleBody.
 func PrefillTitle(node stackview.BranchNode) string {
-	if n := len(node.Commits); n > 0 {
-		if subject := strings.TrimSpace(node.Commits[n-1].Subject); subject != "" {
+	if commits := node.Commits; len(commits) == 1 {
+		if subject := strings.TrimSpace(commits[0].Subject); subject != "" {
 			return subject
 		}
 	}
 	return humanize(node.Ref.Branch)
 }
 
-// PrefillDescription returns the default PR description following the spec's
-// priority order: the repo PR template if one exists, otherwise the single
-// commit body, otherwise a bulleted list of commit subjects for multi-commit
-// branches. The attribution footer is appended later, at submit time.
+// PrefillDescription returns the default PR description for a new branch: the
+// repo PR template if one exists, otherwise the body of the branch's single
+// commit, otherwise empty. Multi-commit branches with no template get an empty
+// description (no bulleted commit list). This mirrors the non-TUI submit. The
+// attribution footer is appended later, at submit time.
 func PrefillDescription(node stackview.BranchNode, template string) string {
 	if t := strings.TrimSpace(template); t != "" {
 		return t
 	}
-
-	commits := node.Commits
-	switch {
-	case len(commits) == 1:
+	if commits := node.Commits; len(commits) == 1 {
 		return strings.TrimSpace(commits[0].Body)
-	case len(commits) > 1:
-		var b strings.Builder
-		// List oldest commit first so the body reads like a changelog.
-		for i := len(commits) - 1; i >= 0; i-- {
-			subject := strings.TrimSpace(commits[i].Subject)
-			if subject == "" {
-				continue
-			}
-			b.WriteString("- ")
-			b.WriteString(subject)
-			b.WriteString("\n")
-		}
-		return strings.TrimSpace(b.String())
-	default:
-		return ""
 	}
+	return ""
 }
 
 // NewSubmitNodes builds the per-branch UI state for the submit TUI from loaded
-// branch display data. NEW branches default to included; every node's title and
-// description are prefilled. New PRs default to ready for review; the per-PR
-// draft toggle starts off. The prefill snapshots are retained for edit
-// detection.
+// branch display data. NEW branches default to included; new PRs have their
+// title and description prefilled from commits and the PR template, while
+// existing PRs show their real title and description fetched from the API. New
+// PRs default to ready for review; the per-PR draft toggle starts off. The
+// prefill snapshots are retained for edit detection.
 func NewSubmitNodes(nodes []stackview.BranchNode, template string) []SubmitNode {
 	out := make([]SubmitNode, len(nodes))
 	for i, n := range nodes {
 		state := DeriveState(n)
 		title := PrefillTitle(n)
 		desc := PrefillDescription(n, template)
+		// Existing PRs render their real title/description from the API instead
+		// of the commit/template-derived draft used for new PRs.
+		if state != StateNew && n.PR != nil {
+			desc = n.PR.Body
+			if t := strings.TrimSpace(n.PR.Title); t != "" {
+				title = t
+			}
+		}
 		out[i] = SubmitNode{
 			BranchNode:   n,
 			State:        state,

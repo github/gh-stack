@@ -810,3 +810,25 @@ func TestEnsureLocalTrunk_CreateFails(t *testing.T) {
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), "could not create local trunk branch main")
 }
+
+func TestEnrichPRContent(t *testing.T) {
+	calls := 0
+	client := &github.MockClient{
+		FindPRByNumberFn: func(number int) (*github.PullRequest, error) {
+			calls++
+			return &github.PullRequest{Number: number, Title: "Fetched title", Body: "Fetched body"}, nil
+		},
+	}
+	details := map[string]*github.PRDetails{
+		"merged": {Number: 10, State: "MERGED"},                // missing title -> fetched
+		"open":   {Number: 11, State: "OPEN", Title: "Has it"}, // already has a title -> skipped
+		"nonum":  {Number: 0, State: "OPEN"},                   // no number -> skipped
+	}
+
+	enrichPRContent(client, details)
+
+	assert.Equal(t, 1, calls, "only the title-less PR with a number is fetched")
+	assert.Equal(t, "Fetched title", details["merged"].Title)
+	assert.Equal(t, "Fetched body", details["merged"].Body)
+	assert.Equal(t, "Has it", details["open"].Title, "PRs that already have a title are untouched")
+}

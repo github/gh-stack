@@ -102,11 +102,11 @@ func TestPrefillTitle(t *testing.T) {
 		assert.Equal(t, "Add auth middleware", PrefillTitle(n))
 	})
 
-	t.Run("multiple commits use the first (oldest) commit subject", func(t *testing.T) {
-		// git.LogRange returns commits newest-first, so the last element is the
-		// oldest — the commit that established the branch.
+	t.Run("multiple commits humanize the branch name", func(t *testing.T) {
+		// Only a single-commit branch uses the commit subject; multi-commit
+		// branches default to the humanized branch name (matches non-TUI submit).
 		n := node("feat/auth-middleware", commit("Polish middleware", ""), commit("Add auth middleware", ""))
-		assert.Equal(t, "Add auth middleware", PrefillTitle(n))
+		assert.Equal(t, "feat/auth middleware", PrefillTitle(n))
 	})
 
 	t.Run("zero commits humanize branch name", func(t *testing.T) {
@@ -131,11 +131,10 @@ func TestPrefillDescription(t *testing.T) {
 		assert.Equal(t, "Detailed body\nsecond line", PrefillDescription(n, ""))
 	})
 
-	t.Run("multi commit lists subjects oldest first", func(t *testing.T) {
-		// LogRange returns newest first; the body should read oldest first.
+	t.Run("multi commit with no template is empty", func(t *testing.T) {
+		// No bulleted commit list — multi-commit branches default to empty.
 		n := node("feat/a", commit("newest", ""), commit("middle", ""), commit("oldest", ""))
-		got := PrefillDescription(n, "")
-		assert.Equal(t, "- oldest\n- middle\n- newest", got)
+		assert.Equal(t, "", PrefillDescription(n, ""))
 	})
 
 	t.Run("no commits no template is empty", func(t *testing.T) {
@@ -165,6 +164,20 @@ func TestNewSubmitNodes(t *testing.T) {
 	// OPEN branch: not included, locked.
 	assert.Equal(t, StateOpen, got[1].State)
 	assert.False(t, got[1].Included)
+}
+
+func TestNewSubmitNodes_ExistingPRUsesAPIContent(t *testing.T) {
+	// An existing PR shows its real title/body from the API, not the
+	// commit-subject / template prefill used for new PRs.
+	nodes := []stackview.BranchNode{
+		withPR(node("feat/b", commit("commit subject", "commit body")),
+			&ghapi.PRDetails{Number: 2, State: "OPEN", Title: "Real PR title", Body: "Real PR body"}),
+	}
+	got := NewSubmitNodes(nodes, "## Template")
+	assert.Len(t, got, 1)
+	assert.Equal(t, StateOpen, got[0].State)
+	assert.Equal(t, "Real PR title", got[0].Title, "existing PR uses the API title")
+	assert.Equal(t, "Real PR body", got[0].Description, "existing PR uses the API body, not the template")
 }
 
 func TestCounts(t *testing.T) {
