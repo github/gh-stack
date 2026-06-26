@@ -605,6 +605,47 @@ func TestMouse_WheelScrollsDescriptionViewport(t *testing.T) {
 	assert.False(t, m.descScrollPinned, "typing returns to the cursor-following view")
 }
 
+// TestMouse_WheelDoesNotEnterFieldText guards against the regression where
+// scrolling the mouse wheel leaked escape-sequence bytes as text into the
+// focused title/description field. handleMouse must consume every wheel event
+// (returning without forwarding it to the text inputs), so the field contents
+// never change regardless of which panel the pointer is over.
+func TestMouse_WheelDoesNotEnterFieldText(t *testing.T) {
+	m := testModel(t, newNodes())
+	require.Equal(t, fieldTitle, m.focusedField)
+
+	leftW, _ := m.panelWidths()
+	leftX := leftW / 2  // over the left timeline
+	rightX := leftW + 5 // over the right editor
+	titleLine, _, _, _, _ := m.rightZones()
+	y := m.panelTopRow() + titleLine
+
+	wheel := func(m Model) Model {
+		t.Helper()
+		for _, x := range []int{leftX, rightX} {
+			for _, b := range []tea.MouseButton{tea.MouseButtonWheelUp, tea.MouseButtonWheelDown} {
+				u, _ := m.Update(tea.MouseMsg{Action: tea.MouseActionPress, Button: b, X: x, Y: y})
+				m = u.(Model)
+			}
+		}
+		return m
+	}
+
+	// Title focused: wheeling over either panel must not alter the title.
+	titleBefore := m.nodes[m.cursor].Title
+	m = wheel(m)
+	assert.Equal(t, titleBefore, m.nodes[m.cursor].Title, "wheel must not modify the focused title")
+	assert.Equal(t, titleBefore, m.titleInput.Value(), "wheel must not modify the title input")
+
+	// Description focused: same guarantee.
+	m = sendKey(t, m, tea.KeyMsg{Type: tea.KeyTab})
+	require.Equal(t, fieldDescription, m.focusedField)
+	descBefore := m.nodes[m.cursor].Description
+	m = wheel(m)
+	assert.Equal(t, descBefore, m.nodes[m.cursor].Description, "wheel must not modify the focused description")
+	assert.Equal(t, descBefore, m.descArea.Value(), "wheel must not modify the description input")
+}
+
 func TestMouse_WheelScrollBoundedByContent(t *testing.T) {
 	// The over-scroll bug only appears with a real color profile (the textarea
 	// pads blank rows with styled spaces), so force one here.

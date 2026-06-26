@@ -103,6 +103,12 @@ type Model struct {
 	// to open an existing PR. Tests inject a no-op so the suite never spawns a
 	// real browser.
 	openURL func(string)
+
+	// mouseLeak tracks an in-progress terminal mouse escape sequence that the
+	// Bubble Tea input parser split across reads and surfaced as key runes. See
+	// consumeLeakedMouseKey for details.
+	mouseLeakActive bool
+	mouseLeakBuf    string
 }
 
 // New constructs a submit TUI model from the given options. The single screen
@@ -185,6 +191,13 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case tea.KeyMsg:
+		// Drop fragments of a terminal mouse escape sequence that the input
+		// parser split across reads and leaked as key runes; otherwise they get
+		// typed into the focused title/description field while scrolling.
+		if m.consumeLeakedMouseKey(msg) {
+			return m, nil
+		}
+
 		// Any key dismisses a transient status hint.
 		m.statusMessage = ""
 		m.statusIsError = false

@@ -289,7 +289,12 @@ func collectPRDrafts(cfg *config.Config, client github.ClientOps, s *stack.Stack
 		Version:   Version,
 	})
 
-	p := tea.NewProgram(model, tea.WithAltScreen(), tea.WithMouseAllMotion())
+	// Use cell-motion mouse mode (clicks, drag, and wheel) rather than all-motion.
+	// All-motion (mode 1003) reports an event on every pointer move, flooding the
+	// input; under that volume bubbletea can split an SGR mouse sequence across
+	// reads, leaking its bytes as text into a focused title/description field
+	// while scrolling. We don't use idle-hover, so cell-motion loses nothing.
+	p := tea.NewProgram(model, tea.WithAltScreen(), tea.WithMouseCellMotion())
 	final, err := p.Run()
 	if err != nil {
 		return nil, false, fmt.Errorf("running submit TUI: %w", err)
