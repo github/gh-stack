@@ -14,9 +14,6 @@ func (m Model) handleMouse(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
 	}
 
 	switch msg.Action {
-	case tea.MouseActionMotion:
-		m.updateHover(msg.X, msg.Y)
-		return m, nil
 	case tea.MouseActionPress:
 		leftW, _ := m.panelWidths()
 		overLeft := msg.X >= 0 && msg.X < leftW
@@ -298,9 +295,4 @@ func (m *Model) positionDescCursor(visRow, col int) {
 		m.descArea.CursorDown()
 	}
 	m.descArea.SetCursor(m.descArea.LineInfo().StartColumn + col)
-}
-
-// updateHover tracks the branch row under the pointer for hover styling.
-func (m *Model) updateHover(x, y int) {
-	m.hoverRow = m.branchRowAt(x, y)
 }

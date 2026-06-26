@@ -42,8 +42,6 @@ type Options struct {
 	Nodes []SubmitNode
 	// Trunk is the stack's trunk branch, shown for context.
 	Trunk stack.BranchRef
-	// StackName is the human-readable stack name shown in the header.
-	StackName string
 	// RepoLabel is the "owner/repo" string shown in the header.
 	RepoLabel string
 	// Version is the CLI version string.
@@ -54,13 +52,8 @@ type Options struct {
 type Model struct {
 	nodes     []SubmitNode
 	trunk     stack.BranchRef
-	stackName string
 	repoLabel string
 	version   string
-
-	// prefix is the common slash-delimited branch-name prefix, used to render
-	// short branch names in the stack map.
-	prefix string
 
 	cursor int // index into nodes (the focused branch)
 
@@ -84,9 +77,6 @@ type Model struct {
 	// Transient status line shown below the content (cleared on next key).
 	statusMessage string
 	statusIsError bool
-
-	// hoverRow is the node index currently under the mouse pointer, or -1.
-	hoverRow int
 
 	// leftScroll is the first visible row offset of the left stack timeline when
 	// its content is taller than the panel.
@@ -115,11 +105,6 @@ type Model struct {
 // opens immediately with the first branch focused (preferring the first NEW
 // branch) and the title field ready for editing.
 func New(opts Options) Model {
-	branchNames := make([]string, len(opts.Nodes))
-	for i, n := range opts.Nodes {
-		branchNames[i] = n.Ref.Branch
-	}
-
 	// Start on the bottom-most NEW branch (closest to trunk) — the first PR
 	// created, in stack order. Nodes are ordered top (index 0) to bottom, so the
 	// bottom-most NEW branch is the highest-indexed one.
@@ -144,12 +129,9 @@ func New(opts Options) Model {
 	m := Model{
 		nodes:     opts.Nodes,
 		trunk:     opts.Trunk,
-		stackName: opts.StackName,
 		repoLabel: opts.RepoLabel,
 		version:   opts.Version,
-		prefix:    CommonPrefix(branchNames),
 		cursor:    cursor,
-		hoverRow:  -1,
 
 		titleInput:   ti,
 		descArea:     ta,

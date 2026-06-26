@@ -46,8 +46,9 @@ This command performs several steps:
   3. Updates base branches for existing PRs
   4. Creates or updates the stack on GitHub
 
-In the editor, new PRs default to ready for review; toggle "Open as draft" per
-PR. With --auto, new PRs are created as drafts unless you pass --open.`,
+In the editor, new PRs default to ready for review; switch any to draft with the
+"CREATE AS" toggle. With --auto, new PRs are created as drafts unless you pass
+--open.`,
 		Example: `  # Push and create/update PRs (opens the interactive editor)
   $ gh stack submit
 
@@ -284,7 +285,6 @@ func collectPRDrafts(cfg *config.Config, client github.ClientOps, s *stack.Stack
 	model := submitview.New(submitview.Options{
 		Nodes:     nodes,
 		Trunk:     s.Trunk,
-		StackName: stackDisplayName(s),
 		RepoLabel: repoLabel,
 		Version:   Version,
 	})
@@ -308,22 +308,6 @@ func collectPRDrafts(cfg *config.Config, client github.ClientOps, s *stack.Stack
 		return nil, true, nil
 	}
 	return submitview.BuildDrafts(m.Nodes()), false, nil
-}
-
-// stackDisplayName returns a human-readable name for the stack, used in the TUI
-// header: the stack prefix, else the common branch-name prefix, else the
-// bottom-most branch.
-func stackDisplayName(s *stack.Stack) string {
-	if s.Prefix != "" {
-		return strings.TrimRight(s.Prefix, "/")
-	}
-	if p := submitview.CommonPrefix(s.BranchNames()); p != "" {
-		return strings.TrimRight(p, "/")
-	}
-	if len(s.Branches) > 0 {
-		return s.Branches[0].Branch
-	}
-	return s.Trunk.Branch
 }
 
 // ensurePR finds or creates a PR for the branch at index i, and updates

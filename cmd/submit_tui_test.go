@@ -11,46 +11,6 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestStackDisplayName(t *testing.T) {
-	tests := []struct {
-		name string
-		s    *stack.Stack
-		want string
-	}{
-		{
-			name: "uses stack prefix",
-			s:    &stack.Stack{Prefix: "feat/", Trunk: stack.BranchRef{Branch: "main"}},
-			want: "feat",
-		},
-		{
-			name: "falls back to common branch prefix",
-			s: &stack.Stack{
-				Trunk:    stack.BranchRef{Branch: "main"},
-				Branches: []stack.BranchRef{{Branch: "feat/auth/a"}, {Branch: "feat/auth/b"}},
-			},
-			want: "feat/auth",
-		},
-		{
-			name: "single branch falls back to its name",
-			s: &stack.Stack{
-				Trunk:    stack.BranchRef{Branch: "main"},
-				Branches: []stack.BranchRef{{Branch: "solo"}},
-			},
-			want: "solo",
-		},
-		{
-			name: "no branches falls back to trunk",
-			s:    &stack.Stack{Trunk: stack.BranchRef{Branch: "main"}},
-			want: "main",
-		},
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			assert.Equal(t, tt.want, stackDisplayName(tt.s))
-		})
-	}
-}
-
 // TestCollectPRDrafts_SkipsWhenNoNewBranches verifies the TUI is skipped (no
 // program launched) when every branch already has a PR, returning nil drafts so
 // the normal push/relink path runs.

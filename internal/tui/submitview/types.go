@@ -1,8 +1,8 @@
-// Package submitview implements the interactive two-step TUI used by
-// `gh stack submit` to create a stack of pull requests. Step 1 selects which
-// branches without a PR should become PRs; Step 2 is a two-panel editor for
-// drafting each PR's title, description, and draft state before a single
-// batch submit.
+// Package submitview implements the interactive single-screen TUI used by
+// `gh stack submit` to create a stack of pull requests. A left-hand timeline
+// lists the stack and lets the user choose which branches without a PR should
+// become PRs; the right-hand editor drafts each PR's title, description, and
+// ready/draft state before a single batch submit.
 //
 // The package builds on the shared Charm components in internal/tui/shared and
 // reuses the branch display data loaded by internal/tui/stackview. The submit
@@ -15,13 +15,13 @@ import (
 )
 
 // BranchState classifies a branch by the status of its pull request. The state
-// determines whether a branch is selectable in Step 1, editable in Step 2, and
-// which badge color it renders with.
+// determines whether a branch is selectable and editable in the TUI, and which
+// badge color it renders with.
 type BranchState int
 
 const (
 	// StateNew is a branch with no PR yet. It is the only interactive state:
-	// selectable in Step 1 (default on) and editable in Step 2.
+	// selectable (default on) and editable.
 	StateNew BranchState = iota
 	// StateOpen is a branch with an open (non-draft) PR. Locked, shown for context.
 	StateOpen
@@ -36,12 +36,12 @@ const (
 	StateClosed
 )
 
-// Selectable reports whether a branch in this state can be toggled in Step 1.
-// Only NEW branches are selectable.
+// Selectable reports whether a branch in this state can be toggled for
+// inclusion. Only NEW branches are selectable.
 func (s BranchState) Selectable() bool { return s == StateNew }
 
-// Editable reports whether a branch in this state opens the editor in Step 2.
-// Only NEW branches are editable.
+// Editable reports whether a branch in this state opens the editor. Only NEW
+// branches are editable.
 func (s BranchState) Editable() bool { return s == StateNew }
 
 // Locked reports whether a branch is shown for context only (open, draft,

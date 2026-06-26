@@ -52,7 +52,6 @@ func testModel(t *testing.T, nodes []SubmitNode) Model {
 	m := New(Options{
 		Nodes:     nodes,
 		Trunk:     stack.BranchRef{Branch: "main"},
-		StackName: "feat/auth",
 		RepoLabel: "myorg/myrepo",
 		Version:   "1.0.0",
 	})
@@ -86,11 +85,6 @@ func TestNew_AllNewIncludedByDefault(t *testing.T) {
 	m := testModel(t, newNodes())
 	assert.True(t, m.nodes[0].Included)
 	assert.True(t, m.nodes[1].Included)
-}
-
-func TestNew_ComputesPrefix(t *testing.T) {
-	m := testModel(t, newNodes())
-	assert.Equal(t, "feat/auth/", m.prefix)
 }
 
 // --- navigation ---
@@ -357,14 +351,6 @@ func TestMouse_ClickCheckboxToggles(t *testing.T) {
 	updated, _ := m.Update(tea.MouseMsg{Action: tea.MouseActionPress, Button: tea.MouseButtonLeft, X: cbX, Y: y})
 	m = updated.(Model)
 	assert.False(t, m.nodes[0].Included)
-}
-
-func TestMouse_HoverTracksRow(t *testing.T) {
-	m := testModel(t, newNodes())
-	y, _ := leftBranchNode(m, 2)
-	updated, _ := m.Update(tea.MouseMsg{Action: tea.MouseActionMotion, X: 6, Y: y})
-	m = updated.(Model)
-	assert.Equal(t, 2, m.hoverRow)
 }
 
 // leftBranchNode returns the screen Y of branch idx's node line and the X of its

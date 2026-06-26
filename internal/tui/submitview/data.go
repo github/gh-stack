@@ -124,7 +124,7 @@ func CountSelected(nodes []SubmitNode) int {
 }
 
 // HasClosed reports whether any branch in the list has a closed PR, which blocks
-// the stack and triggers the Step 1 callout.
+// the stack and triggers the closed-branch callout.
 func HasClosed(nodes []SubmitNode) bool {
 	for _, node := range nodes {
 		if node.State == StateClosed {
@@ -143,63 +143,6 @@ func ClosedBranches(nodes []SubmitNode) []string {
 		}
 	}
 	return names
-}
-
-// CommonPrefix returns the longest shared slash-delimited path prefix across the
-// given branch names, including a trailing slash. It returns "" when fewer than
-// two names are given or there is no shared prefix. This is used to render the
-// stack map with short branch names.
-func CommonPrefix(names []string) string {
-	if len(names) < 2 {
-		return ""
-	}
-
-	// Split each name into slash-delimited segments and find the longest run of
-	// leading segments common to all names.
-	segs := make([][]string, len(names))
-	minLen := -1
-	for i, n := range names {
-		segs[i] = strings.Split(n, "/")
-		// The last segment is the leaf name; only path segments before it can
-		// be part of a shared prefix.
-		pathLen := len(segs[i]) - 1
-		if minLen == -1 || pathLen < minLen {
-			minLen = pathLen
-		}
-	}
-	if minLen <= 0 {
-		return ""
-	}
-
-	common := 0
-	for i := 0; i < minLen; i++ {
-		seg := segs[0][i]
-		same := true
-		for j := 1; j < len(segs); j++ {
-			if segs[j][i] != seg {
-				same = false
-				break
-			}
-		}
-		if !same {
-			break
-		}
-		common++
-	}
-	if common == 0 {
-		return ""
-	}
-	return strings.Join(segs[0][:common], "/") + "/"
-}
-
-// Shortname strips prefix from branch when present, returning the remainder. If
-// branch does not start with prefix (or prefix is empty), branch is returned
-// unchanged.
-func Shortname(branch, prefix string) string {
-	if prefix == "" {
-		return branch
-	}
-	return strings.TrimPrefix(branch, prefix)
 }
 
 // humanize replaces hyphens and underscores with spaces. It mirrors the helper

@@ -46,8 +46,7 @@ func (s BranchState) Label() string {
 // Color returns the foreground color associated with a state.
 func (s BranchState) Color() lipgloss.Color { return stateColors[s] }
 
-// Dot returns the compact legend glyph for a state, used in the Step 2 stack
-// map and legend.
+// Dot returns the compact status glyph for a state.
 func (s BranchState) Dot() string {
 	switch s {
 	case StateNew:

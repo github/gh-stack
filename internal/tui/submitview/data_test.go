@@ -199,29 +199,3 @@ func TestClosedBranches(t *testing.T) {
 	}
 	assert.Equal(t, []string{"feat/legacy"}, ClosedBranches(nodes))
 }
-
-func TestCommonPrefix(t *testing.T) {
-	tests := []struct {
-		name  string
-		names []string
-		want  string
-	}{
-		{"shared two-segment prefix", []string{"feat/auth/a", "feat/auth/b", "feat/auth/c"}, "feat/auth/"},
-		{"shared one-segment prefix", []string{"feat/a", "feat/b"}, "feat/"},
-		{"no shared prefix", []string{"feat/a", "fix/b"}, ""},
-		{"single name has no prefix", []string{"feat/a"}, ""},
-		{"empty list", nil, ""},
-		{"flat names share nothing", []string{"a", "b"}, ""},
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			assert.Equal(t, tt.want, CommonPrefix(tt.names))
-		})
-	}
-}
-
-func TestShortname(t *testing.T) {
-	assert.Equal(t, "middleware", Shortname("feat/auth/middleware", "feat/auth/"))
-	assert.Equal(t, "feat/auth/middleware", Shortname("feat/auth/middleware", ""))
-	assert.Equal(t, "other/x", Shortname("other/x", "feat/auth/"))
-}
