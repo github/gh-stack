@@ -4,52 +4,59 @@ import "github.com/charmbracelet/lipgloss"
 
 var (
 	// Branch name styles
-	CurrentBranchStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("14")).Bold(true)
-	NormalBranchStyle  = lipgloss.NewStyle().Foreground(lipgloss.Color("15"))
-	MergedBranchStyle  = lipgloss.NewStyle().Foreground(lipgloss.Color("8"))
-	TrunkStyle         = lipgloss.NewStyle().Foreground(lipgloss.Color("8")).Italic(true)
+	CurrentBranchStyle = lipgloss.NewStyle().Foreground(ColorAccent).Bold(true)
+	NormalBranchStyle  = lipgloss.NewStyle().Foreground(ColorText)
+	MergedBranchStyle  = lipgloss.NewStyle().Foreground(ColorTextMuted)
+	TrunkStyle         = lipgloss.NewStyle().Foreground(ColorTextMuted).Italic(true)
 
-	// Status indicators
-	MergedIcon  = lipgloss.NewStyle().Foreground(lipgloss.Color("5")).Render("✓")
-	WarningIcon = lipgloss.NewStyle().Foreground(lipgloss.Color("3")).Render("⚠")
-	OpenIcon    = lipgloss.NewStyle().Foreground(lipgloss.Color("2")).Render("○")
-	QueuedIcon  = lipgloss.NewStyle().Foreground(lipgloss.Color("130")).Render("◎")
+	// Status indicator glyphs. These are rendered at use-time (see StatusIcon)
+	// with the styles below so their adaptive colors resolve against the detected
+	// terminal background rather than being baked in at package-init time.
+	mergedGlyph  = "✓"
+	warningGlyph = "⚠"
+	openGlyph    = "○"
+	queuedGlyph  = "◎"
+
+	mergedIconStyle  = lipgloss.NewStyle().Foreground(ColorPurple)
+	warningIconStyle = lipgloss.NewStyle().Foreground(ColorYellow)
+	openIconStyle    = lipgloss.NewStyle().Foreground(ColorGreen)
+	queuedIconStyle  = lipgloss.NewStyle().Foreground(ColorYellow)
 
 	// PR status styles
-	PRLinkStyle   = lipgloss.NewStyle().Foreground(lipgloss.Color("15")).Underline(true)
-	PROpenStyle   = lipgloss.NewStyle().Foreground(lipgloss.Color("2"))
-	PRMergedStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("5"))
-	PRClosedStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("1"))
-	PRDraftStyle  = lipgloss.NewStyle().Foreground(lipgloss.Color("8"))
-	PRQueuedStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("130"))
+	PRLinkStyle   = lipgloss.NewStyle().Foreground(ColorText).Underline(true)
+	PROpenStyle   = lipgloss.NewStyle().Foreground(ColorGreen)
+	PRMergedStyle = lipgloss.NewStyle().Foreground(ColorPurple)
+	PRClosedStyle = lipgloss.NewStyle().Foreground(ColorRed)
+	PRDraftStyle  = lipgloss.NewStyle().Foreground(ColorGray)
+	PRQueuedStyle = lipgloss.NewStyle().Foreground(ColorYellow)
 
 	// Diff stats
-	AdditionsStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("2"))
-	DeletionsStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("1"))
+	AdditionsStyle = lipgloss.NewStyle().Foreground(ColorGreen)
+	DeletionsStyle = lipgloss.NewStyle().Foreground(ColorRed)
 
 	// Commit lines
-	CommitSHAStyle     = lipgloss.NewStyle().Foreground(lipgloss.Color("3"))
-	CommitSubjectStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("15"))
-	CommitTimeStyle    = lipgloss.NewStyle().Foreground(lipgloss.Color("8"))
+	CommitSHAStyle     = lipgloss.NewStyle().Foreground(ColorYellow)
+	CommitSubjectStyle = lipgloss.NewStyle().Foreground(ColorText)
+	CommitTimeStyle    = lipgloss.NewStyle().Foreground(ColorTextMuted)
 
 	// Connector lines
-	ConnectorStyle        = lipgloss.NewStyle().Foreground(lipgloss.Color("8"))
-	ConnectorDashedStyle  = lipgloss.NewStyle().Foreground(lipgloss.Color("3"))
-	ConnectorFocusedStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("15"))
-	ConnectorCurrentStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("14"))
-	ConnectorMergedStyle  = lipgloss.NewStyle().Foreground(lipgloss.Color("5"))
-	ConnectorQueuedStyle  = lipgloss.NewStyle().Foreground(lipgloss.Color("130"))
+	ConnectorStyle        = lipgloss.NewStyle().Foreground(ColorBorder)
+	ConnectorDashedStyle  = lipgloss.NewStyle().Foreground(ColorYellow)
+	ConnectorFocusedStyle = lipgloss.NewStyle().Foreground(ColorText)
+	ConnectorCurrentStyle = lipgloss.NewStyle().Foreground(ColorAccent)
+	ConnectorMergedStyle  = lipgloss.NewStyle().Foreground(ColorPurple)
+	ConnectorQueuedStyle  = lipgloss.NewStyle().Foreground(ColorYellow)
 
 	// Dim text
-	DimStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("240"))
+	DimStyle = lipgloss.NewStyle().Foreground(ColorTextFaint)
 
 	// Header styles
-	HeaderBorderStyle    = lipgloss.NewStyle().Foreground(lipgloss.Color("8"))
-	HeaderTitleStyle     = lipgloss.NewStyle().Foreground(lipgloss.Color("15")).Bold(true)
-	HeaderInfoStyle      = lipgloss.NewStyle().Foreground(lipgloss.Color("14"))
-	HeaderInfoLabelStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("8"))
-	HeaderShortcutKey    = lipgloss.NewStyle().Foreground(lipgloss.Color("15"))
-	HeaderShortcutDesc   = lipgloss.NewStyle().Foreground(lipgloss.Color("8"))
+	HeaderBorderStyle    = lipgloss.NewStyle().Foreground(ColorBorder)
+	HeaderTitleStyle     = lipgloss.NewStyle().Foreground(ColorText).Bold(true)
+	HeaderInfoStyle      = lipgloss.NewStyle().Foreground(ColorAccent)
+	HeaderInfoLabelStyle = lipgloss.NewStyle().Foreground(ColorTextMuted)
+	HeaderShortcutKey    = lipgloss.NewStyle().Foreground(ColorText)
+	HeaderShortcutDesc   = lipgloss.NewStyle().Foreground(ColorTextMuted)
 
 	// Expand/collapse icons
 	ExpandedIcon  = "▾"

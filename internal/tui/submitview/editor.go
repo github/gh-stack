@@ -6,6 +6,8 @@ import (
 
 	"github.com/charmbracelet/bubbles/textarea"
 	"github.com/charmbracelet/lipgloss"
+
+	"github.com/github/gh-stack/internal/tui/shared"
 )
 
 // currentNode returns a pointer to the focused node, or nil.
@@ -266,9 +268,9 @@ func descTextWidth(innerW int) int {
 // so the scrollbar (the content's last column) sits flush against the right
 // border with no extra margin.
 func descBox(content string, width int, focused bool) string {
-	bc := lipgloss.Color("8")
+	var bc lipgloss.TerminalColor = shared.ColorBorder
 	if focused {
-		bc = lipgloss.Color("14")
+		bc = shared.ColorAccent
 	}
 	w := width - 2
 	if w < 1 {
@@ -577,9 +579,9 @@ func (m Model) draftSegmentBounds() (segStart, dividerX, segEnd int) {
 // fieldBox wraps a field's content in a rounded box whose border highlights when
 // focused. width is the desired outer width.
 func fieldBox(content string, width int, focused bool) string {
-	bc := lipgloss.Color("8")
+	var bc lipgloss.TerminalColor = shared.ColorBorder
 	if focused {
-		bc = lipgloss.Color("14")
+		bc = shared.ColorAccent
 	}
 	w := width - 2
 	if w < 1 {

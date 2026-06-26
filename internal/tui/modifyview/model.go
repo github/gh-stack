@@ -1465,7 +1465,7 @@ func (m Model) buildHeaderConfig() shared.HeaderConfig {
 		{Icon: "○", Label: branchInfo},
 	}
 	if pendingSummary != "" {
-		yellowStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("3"))
+		yellowStyle := lipgloss.NewStyle().Foreground(shared.ColorYellow)
 		infoLines = append(infoLines, shared.HeaderInfoLine{Icon: "■", Label: pendingSummary, IconStyle: &yellowStyle})
 	} else {
 		infoLines = append(infoLines, shared.HeaderInfoLine{Icon: "□", Label: "No pending changes"})

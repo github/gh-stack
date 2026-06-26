@@ -623,6 +623,23 @@ gh stack submit
 
 Compared to the typical workflow, there's no need to name branches, run `git add`, or run `git commit` separately. Each `gh stack add -Am "..."` does it all.
 
+## Terminal theme
+
+The interactive screens (`submit`, `modify`, and `view`) automatically adapt their colors to your terminal's background, so they're readable on both dark and light themes. The background is detected from the terminal; if a terminal doesn't report it (some SSH or `tmux` setups), the dark palette is used.
+
+Set `GH_STACK_THEME` to force a palette if detection is wrong:
+
+| Value | Behavior |
+|-------|----------|
+| `auto` (default) | Detect from the terminal background |
+| `light` | Force the light palette |
+| `dark` | Force the dark palette |
+
+```bash
+# Force the light palette for one command
+GH_STACK_THEME=light gh stack view
+```
+
 ## Exit codes
 
 | Code | Meaning |

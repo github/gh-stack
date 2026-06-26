@@ -8,6 +8,7 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/glamour"
 	"github.com/charmbracelet/glamour/styles"
+	"github.com/charmbracelet/lipgloss"
 )
 
 // editorFinishedMsg is delivered after the external $EDITOR process exits.
@@ -117,10 +118,12 @@ func writeTempDescription(content string) (string, error) {
 }
 
 // renderMarkdown renders markdown to styled terminal output using Glamour. It
-// uses a fixed dark style rather than glamour.WithAutoStyle(): auto-style probes
-// the terminal background with an OSC query whose response is consumed by Bubble
-// Tea's own input reader, so the query blocks forever and freezes the UI. On any
-// error it falls back to the raw markdown so the user still sees their content.
+// selects the light or dark Glamour style from the already-detected terminal
+// background (lipgloss.HasDarkBackground, cached at startup) rather than
+// glamour.WithAutoStyle(): auto-style probes the terminal with an OSC query whose
+// response is consumed by Bubble Tea's own input reader, so the query blocks
+// forever and freezes the UI. On any error it falls back to the raw markdown so
+// the user still sees their content.
 func renderMarkdown(md string, width int) string {
 	if strings.TrimSpace(md) == "" {
 		return hintStyle.Render("(no description)")
@@ -128,11 +131,15 @@ func renderMarkdown(md string, width int) string {
 	if width < 10 {
 		width = 10
 	}
-	// Use glamour's "dark" style but drop the document block's default 2-column
-	// margin so the preview text aligns flush-left with the edit-mode textarea
-	// instead of being indented. Copying the struct and replacing the Margin
-	// pointer leaves the shared package-level style untouched.
+	// Match the preview to the terminal background, then drop the document
+	// block's default 2-column margin so the preview text aligns flush-left with
+	// the edit-mode textarea instead of being indented. Copying the struct and
+	// replacing the Margin pointer leaves the shared package-level style
+	// untouched.
 	style := styles.DarkStyleConfig
+	if !lipgloss.HasDarkBackground() {
+		style = styles.LightStyleConfig
+	}
 	var noMargin uint
 	style.Document.Margin = &noMargin
 	r, err := glamour.NewTermRenderer(

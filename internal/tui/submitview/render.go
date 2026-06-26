@@ -10,7 +10,7 @@ import (
 
 // Chrome styles shared across the submit views.
 var (
-	stackInfoStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("8"))
+	stackInfoStyle = lipgloss.NewStyle().Foreground(shared.ColorTextMuted)
 )
 
 // headerHeight returns the number of screen rows the shared header occupies, or
@@ -56,7 +56,7 @@ func (m Model) buildHeaderConfig() shared.HeaderConfig {
 		}
 	}
 	if newCount > 0 {
-		yellowStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("3"))
+		yellowStyle := lipgloss.NewStyle().Foreground(shared.ColorYellow)
 		prWord := "PRs"
 		if newCount == 1 {
 			prWord = "PR"
