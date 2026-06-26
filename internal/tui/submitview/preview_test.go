@@ -2,6 +2,7 @@ package submitview
 
 import (
 	"os"
+	"reflect"
 	"testing"
 
 	tea "github.com/charmbracelet/bubbletea"
@@ -64,6 +65,55 @@ func TestHandleEditorFinished_UpdatesDescription(t *testing.T) {
 
 	_, statErr := os.Stat(f.Name())
 	assert.True(t, os.IsNotExist(statErr))
+}
+
+// cmdMessages flattens the message(s) a command (possibly a tea.Batch) emits.
+func cmdMessages(cmd tea.Cmd) []tea.Msg {
+	if cmd == nil {
+		return nil
+	}
+	switch msg := cmd().(type) {
+	case tea.BatchMsg:
+		var out []tea.Msg
+		for _, c := range msg {
+			out = append(out, cmdMessages(c)...)
+		}
+		return out
+	default:
+		return []tea.Msg{msg}
+	}
+}
+
+func containsType(msgs []tea.Msg, want tea.Msg) bool {
+	wt := reflect.TypeOf(want)
+	for _, m := range msgs {
+		if reflect.TypeOf(m) == wt {
+			return true
+		}
+	}
+	return false
+}
+
+func TestEditorFinished_ReenablesMouse(t *testing.T) {
+	// Bubble Tea's RestoreTerminal (run after the external editor exits) does not
+	// re-enable mouse tracking, so the editor-finished handler must re-arm it or
+	// the mouse stops working after the editor closes.
+	want := tea.EnableMouseCellMotion()
+
+	t.Run("success", func(t *testing.T) {
+		m := testModel(t, newNodes())
+		f, err := os.CreateTemp(t.TempDir(), "ed-*.md")
+		require.NoError(t, err)
+		require.NoError(t, f.Close())
+		_, cmd := m.Update(editorFinishedMsg{path: f.Name()})
+		assert.True(t, containsType(cmdMessages(cmd), want), "mouse tracking is re-enabled after a clean editor exit")
+	})
+
+	t.Run("editor error", func(t *testing.T) {
+		m := testModel(t, newNodes())
+		_, cmd := m.Update(editorFinishedMsg{path: "/no/such/file", err: assert.AnError})
+		assert.True(t, containsType(cmdMessages(cmd), want), "mouse tracking is re-enabled even when the editor errored")
+	})
 }
 
 func TestRenderMarkdown(t *testing.T) {

@@ -214,7 +214,13 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m.handleMouse(msg)
 
 	case editorFinishedMsg:
-		return m.handleEditorFinished(msg)
+		updated, cmd := m.handleEditorFinished(msg)
+		// After tea.ExecProcess runs the external editor, Bubble Tea's
+		// RestoreTerminal re-enables the alt-screen, bracketed paste, and focus
+		// reporting but NOT mouse tracking, so the terminal stops emitting mouse
+		// events once the editor closes. Re-enable cell-motion mouse mode (which
+		// also re-arms SGR mode) to match the program's startup options.
+		return updated, tea.Batch(cmd, tea.EnableMouseCellMotion)
 	}
 
 	return m, nil
