@@ -229,6 +229,11 @@ func (m Model) handleClick(x, y int) (tea.Model, tea.Cmd) {
 		return m, nil
 	case rel >= titleLine-1 && rel <= titleLine+1:
 		cmd := m.focusField(fieldTitle)
+		// Clicking inside the title box content row positions the cursor at the
+		// clicked column (the border rows just focus the field).
+		if rel == titleLine {
+			m.positionTitleCursor(x - (leftW + 5))
+		}
 		return m, cmd
 	case rel >= descTop && rel <= descBot:
 		// Resolve the current top visible row, then map the clicked screen row to
@@ -295,4 +300,19 @@ func (m *Model) positionDescCursor(visRow, col int) {
 		m.descArea.CursorDown()
 	}
 	m.descArea.SetCursor(m.descArea.LineInfo().StartColumn + col)
+}
+
+// positionTitleCursor moves the title input's cursor to the clicked column,
+// where col is the offset from the title box's text start. It is exact when the
+// title fits the field (the single-line input isn't horizontally scrolled) and
+// approximate otherwise, mirroring positionDescCursor. col is treated as a rune
+// offset, so it is exact for the typical ASCII title.
+func (m *Model) positionTitleCursor(col int) {
+	if col < 0 {
+		col = 0
+	}
+	if n := len([]rune(m.titleInput.Value())); col > n {
+		col = n
+	}
+	m.titleInput.SetCursor(col)
 }

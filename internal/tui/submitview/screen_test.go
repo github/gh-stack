@@ -579,6 +579,41 @@ func TestMouse_ClickDescriptionPositionsCursor(t *testing.T) {
 	assert.True(t, m.descArea.Focused())
 }
 
+func TestMouse_ClickTitlePositionsCursor(t *testing.T) {
+	m := testModel(t, newNodes())
+	m.titleInput.SetValue("hello world")
+	// Move focus away so the click must both focus the title and position it.
+	m = sendKey(t, m, tea.KeyMsg{Type: tea.KeyTab}) // -> description
+	require.Equal(t, fieldDescription, m.focusedField)
+
+	leftW, _ := m.panelWidths()
+	titleLine, _, _, _, _ := m.rightZones()
+	y := m.panelTopRow() + titleLine // title box content row
+	// Click at column 6 (the start of "world").
+	updated, _ := m.Update(tea.MouseMsg{Action: tea.MouseActionPress, Button: tea.MouseButtonLeft, X: leftW + 5 + 6, Y: y})
+	m = updated.(Model)
+
+	assert.Equal(t, fieldTitle, m.focusedField, "clicking the title focuses it")
+	assert.True(t, m.titleInput.Focused())
+	assert.Equal(t, 6, m.titleInput.Position(), "clicking column 6 positions the title cursor there")
+}
+
+func TestMouse_ClickTitleBorderFocusesWithoutMovingCursor(t *testing.T) {
+	m := testModel(t, newNodes())
+	m.titleInput.SetValue("hello world")
+	m.titleInput.SetCursor(3)
+
+	leftW, _ := m.panelWidths()
+	titleLine, _, _, _, _ := m.rightZones()
+	// The top border row of the title box just focuses; it must not reposition.
+	y := m.panelTopRow() + titleLine - 1
+	updated, _ := m.Update(tea.MouseMsg{Action: tea.MouseActionPress, Button: tea.MouseButtonLeft, X: leftW + 5 + 6, Y: y})
+	m = updated.(Model)
+
+	assert.Equal(t, fieldTitle, m.focusedField)
+	assert.Equal(t, 3, m.titleInput.Position(), "clicking the title border does not move the cursor")
+}
+
 func TestMouse_WheelScrollsDescriptionViewport(t *testing.T) {
 	m := testModel(t, newNodes())
 	m = sendKey(t, m, tea.KeyMsg{Type: tea.KeyTab}) // focus description
