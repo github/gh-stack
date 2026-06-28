@@ -14,7 +14,7 @@ import (
 	"github.com/github/gh-stack/internal/git"
 	"github.com/github/gh-stack/internal/github"
 	"github.com/github/gh-stack/internal/stack"
-	"github.com/mgutz/ansi"
+	"github.com/github/gh-stack/internal/theme"
 )
 
 // ErrSilent indicates the error has already been printed to the user.
@@ -97,24 +97,25 @@ func inputWithPrefill(cfg *config.Config, prompt, prefill string) (string, error
 	}
 	defer func() { _ = rr.RestoreTermMode() }()
 
-	// Render the prompt in survey style: green bold "?" + message
+	// Render the prompt in survey style: green "?" + message
 	icon := "?"
 	useColor := cfg.Terminal.IsColorEnabled()
 	if useColor {
-		icon = ansi.Color("?", "green+hb")
+		icon = theme.Success("?")
 	}
 	fmt.Fprintf(cfg.Out, "%s %s ", icon, prompt)
 
-	// Set cyan color for the user's input text
+	// Color the user's echoed input with the accent (cyan) color.
+	cyanStart, cyanReset := theme.FgSeqs(theme.ColorAccent)
 	if useColor {
-		fmt.Fprint(cfg.Out, ansi.ColorCode("cyan"))
+		fmt.Fprint(cfg.Out, cyanStart)
 	}
 
 	line, err := rr.ReadLineWithDefault(0, []rune(prefill))
 
 	// Reset color after input
 	if useColor {
-		fmt.Fprint(cfg.Out, ansi.ColorCode("reset"))
+		fmt.Fprint(cfg.Out, cyanReset)
 	}
 
 	if err != nil {

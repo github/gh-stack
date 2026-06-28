@@ -6,7 +6,7 @@ import (
 	"os"
 
 	"github.com/github/gh-stack/internal/config"
-	"github.com/github/gh-stack/internal/tui/shared"
+	"github.com/github/gh-stack/internal/theme"
 	"github.com/spf13/cobra"
 )
 
@@ -36,11 +36,9 @@ locally, then push to GitHub to create your stack of PRs.`,
 		Version:       Version,
 		SilenceUsage:  true,
 		SilenceErrors: true,
-		// Honor GH_STACK_THEME (auto|light|dark) before any command renders, so
-		// the background-aware TUI palette can be forced when a terminal
-		// mis-detects its background.
+		// Honor GH_STACK_THEME (auto|light|dark) before any command renders
 		PersistentPreRun: func(_ *cobra.Command, _ []string) {
-			shared.ApplyThemeOverride()
+			theme.ApplyOverride()
 		},
 	}
 

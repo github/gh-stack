@@ -6,9 +6,9 @@ import (
 
 	"github.com/cli/go-gh/v2/pkg/repository"
 	"github.com/cli/go-gh/v2/pkg/term"
-	"github.com/mgutz/ansi"
 
 	ghapi "github.com/github/gh-stack/internal/github"
+	"github.com/github/gh-stack/internal/theme"
 )
 
 // Config holds shared state for all commands.
@@ -69,14 +69,14 @@ func New() *Config {
 	}
 
 	if terminal.IsColorEnabled() {
-		cfg.ColorSuccess = ansi.ColorFunc("green")
-		cfg.ColorError = ansi.ColorFunc("red")
-		cfg.ColorWarning = ansi.ColorFunc("yellow")
-		cfg.ColorBold = ansi.ColorFunc("default+b")
-		cfg.ColorBlue = ansi.ColorFunc("blue")
-		cfg.ColorMagenta = ansi.ColorFunc("magenta")
-		cfg.ColorCyan = ansi.ColorFunc("cyan")
-		cfg.ColorGray = ansi.ColorFunc("default+d")
+		cfg.ColorSuccess = theme.Success
+		cfg.ColorError = theme.Error
+		cfg.ColorWarning = theme.Warning
+		cfg.ColorBold = theme.Bold
+		cfg.ColorBlue = theme.Blue
+		cfg.ColorMagenta = theme.Magenta
+		cfg.ColorCyan = theme.Cyan
+		cfg.ColorGray = theme.Gray
 	} else {
 		noop := func(s string) string { return s }
 		cfg.ColorSuccess = noop

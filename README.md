@@ -625,7 +625,7 @@ Compared to the typical workflow, there's no need to name branches, run `git add
 
 ## Terminal theme
 
-The interactive screens (`submit`, `modify`, and `view`) automatically adapt their colors to your terminal's background, so they're readable on both dark and light themes. The background is detected from the terminal; if a terminal doesn't report it (some SSH or `tmux` setups), the dark palette is used.
+The interactive screens (`submit`, `modify`, and `view`) and all colored command output (status messages, prompts) automatically adapt their colors to your terminal's background, so they're readable on both dark and light themes. The background is detected from the terminal; if a terminal doesn't report it (some SSH or `tmux` setups), the dark palette is used.
 
 Set `GH_STACK_THEME` to force a palette if detection is wrong:
 
@@ -636,8 +636,8 @@ Set `GH_STACK_THEME` to force a palette if detection is wrong:
 | `dark` | Force the dark palette |
 
 ```bash
-# Force the light palette for one command
-GH_STACK_THEME=light gh stack view
+# Force the light palette
+export GH_STACK_THEME=light && gh stack view
 ```
 
 ## Exit codes
