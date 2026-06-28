@@ -34,19 +34,19 @@ func TestConsumeLeakedMouseKey_SwallowsSplitSequences(t *testing.T) {
 			t.Run(fmt.Sprintf("%q@%d", seq, cut), func(t *testing.T) {
 				m := testModel(t, newNodes())
 				require.Equal(t, fieldTitle, m.focusedField)
-				before := m.titleInput.Value()
+				before := m.titleArea.Value()
 
 				for _, msg := range splitSGRBurst(seq, cut) {
 					updated, _ := m.Update(msg)
 					m = updated.(Model)
 				}
 
-				assert.Equal(t, before, m.titleInput.Value(), "no fragment should reach the title field")
+				assert.Equal(t, before, m.titleArea.Value(), "no fragment should reach the title field")
 				assert.False(t, m.mouseLeakActive, "the sequence resets once its terminator is consumed")
 
 				// A normal keystroke afterwards must still register.
 				m = sendKey(t, m, runeKey('x'))
-				assert.Equal(t, before+"x", m.titleInput.Value(), "typing works after a swallowed sequence")
+				assert.Equal(t, before+"x", m.titleArea.Value(), "typing works after a swallowed sequence")
 			})
 		}
 	}
@@ -56,26 +56,26 @@ func TestConsumeLeakedMouseKey_SwallowsSingleRunTail(t *testing.T) {
 	// When the parser consumes "\x1b" as a lone Escape, the rest of the body can
 	// arrive as one run.
 	m := testModel(t, newNodes())
-	before := m.titleInput.Value()
+	before := m.titleArea.Value()
 	m = sendKey(t, m, runeMsg("[<65;54;51M", false))
-	assert.Equal(t, before, m.titleInput.Value(), "a whole leaked body in one run is dropped")
+	assert.Equal(t, before, m.titleArea.Value(), "a whole leaked body in one run is dropped")
 }
 
 func TestConsumeLeakedMouseKey_PreservesRealTyping(t *testing.T) {
 	m := testModel(t, newNodes())
-	before := m.titleInput.Value()
+	before := m.titleArea.Value()
 
 	// Characters from the mouse alphabet typed normally must pass through. Each
 	// real keystroke is a single-rune message, never a complete SGR body.
 	for _, r := range []rune{'<', '3', ';', '5', 'M', 'm'} {
 		m = sendKey(t, m, runeKey(r))
 	}
-	assert.Equal(t, before+"<3;5Mm", m.titleInput.Value(), "ordinary characters are never filtered")
+	assert.Equal(t, before+"<3;5Mm", m.titleArea.Value(), "ordinary characters are never filtered")
 }
 
 func TestConsumeLeakedMouseKey_StrayAltBracketDoesNotEatNextKey(t *testing.T) {
 	m := testModel(t, newNodes())
-	before := m.titleInput.Value()
+	before := m.titleArea.Value()
 
 	// A lone Alt+"[" opens a sequence, but the following key is not a mouse body,
 	// so it must still be handled (here: typed into the field).
@@ -83,18 +83,18 @@ func TestConsumeLeakedMouseKey_StrayAltBracketDoesNotEatNextKey(t *testing.T) {
 	require.True(t, m.mouseLeakActive)
 	m = sendKey(t, m, runeKey('z'))
 	assert.False(t, m.mouseLeakActive, "a non-body rune ends the sequence")
-	assert.Equal(t, before+"z", m.titleInput.Value(), "the following real key is not eaten")
+	assert.Equal(t, before+"z", m.titleArea.Value(), "the following real key is not eaten")
 }
 
 func TestConsumeLeakedMouseKey_BracketedPasteIsNotFiltered(t *testing.T) {
 	m := testModel(t, newNodes())
-	before := m.titleInput.Value()
+	before := m.titleArea.Value()
 
 	// A genuine paste that happens to look like a mouse body is preserved.
 	paste := tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("<65;54;51M"), Paste: true}
 	updated, _ := m.Update(paste)
 	m = updated.(Model)
-	assert.Equal(t, before+"<65;54;51M", m.titleInput.Value(), "pasted content is never filtered")
+	assert.Equal(t, before+"<65;54;51M", m.titleArea.Value(), "pasted content is never filtered")
 }
 
 func TestConsumeLeakedMouseKey_DescriptionField(t *testing.T) {

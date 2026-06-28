@@ -221,10 +221,10 @@ func TestPerBranchPersistence(t *testing.T) {
 
 	m = sendKey(t, m, tea.KeyMsg{Type: tea.KeyUp}) // branch 0
 	require.Equal(t, 0, m.cursor)
-	assert.NotEqual(t, edited, m.titleInput.Value())
+	assert.NotEqual(t, edited, m.titleArea.Value())
 
 	m = sendKey(t, m, tea.KeyMsg{Type: tea.KeyDown}) // back to 1
-	assert.Equal(t, edited, m.titleInput.Value())
+	assert.Equal(t, edited, m.titleArea.Value())
 }
 
 func TestSkippedBranch_ShowsDimmedBody(t *testing.T) {
@@ -581,7 +581,7 @@ func TestMouse_ClickDescriptionPositionsCursor(t *testing.T) {
 
 func TestMouse_ClickTitlePositionsCursor(t *testing.T) {
 	m := testModel(t, newNodes())
-	m.titleInput.SetValue("hello world")
+	m.titleArea.SetValue("hello world")
 	// Move focus away so the click must both focus the title and position it.
 	m = sendKey(t, m, tea.KeyMsg{Type: tea.KeyTab}) // -> description
 	require.Equal(t, fieldDescription, m.focusedField)
@@ -594,14 +594,14 @@ func TestMouse_ClickTitlePositionsCursor(t *testing.T) {
 	m = updated.(Model)
 
 	assert.Equal(t, fieldTitle, m.focusedField, "clicking the title focuses it")
-	assert.True(t, m.titleInput.Focused())
-	assert.Equal(t, 6, m.titleInput.Position(), "clicking column 6 positions the title cursor there")
+	assert.True(t, m.titleArea.Focused())
+	assert.Equal(t, 6, m.titleArea.LineInfo().ColumnOffset, "clicking column 6 positions the title cursor there")
 }
 
 func TestMouse_ClickTitleBorderFocusesWithoutMovingCursor(t *testing.T) {
 	m := testModel(t, newNodes())
-	m.titleInput.SetValue("hello world")
-	m.titleInput.SetCursor(3)
+	m.titleArea.SetValue("hello world")
+	m.titleArea.SetCursor(3)
 
 	leftW, _ := m.panelWidths()
 	titleLine, _, _, _, _ := m.rightZones()
@@ -611,7 +611,7 @@ func TestMouse_ClickTitleBorderFocusesWithoutMovingCursor(t *testing.T) {
 	m = updated.(Model)
 
 	assert.Equal(t, fieldTitle, m.focusedField)
-	assert.Equal(t, 3, m.titleInput.Position(), "clicking the title border does not move the cursor")
+	assert.Equal(t, 3, m.titleArea.LineInfo().ColumnOffset, "clicking the title border does not move the cursor")
 }
 
 func TestMouse_WheelScrollsDescriptionViewport(t *testing.T) {
@@ -670,7 +670,7 @@ func TestMouse_WheelDoesNotEnterFieldText(t *testing.T) {
 	titleBefore := m.nodes[m.cursor].Title
 	m = wheel(m)
 	assert.Equal(t, titleBefore, m.nodes[m.cursor].Title, "wheel must not modify the focused title")
-	assert.Equal(t, titleBefore, m.titleInput.Value(), "wheel must not modify the title input")
+	assert.Equal(t, titleBefore, m.titleArea.Value(), "wheel must not modify the title input")
 
 	// Description focused: same guarantee.
 	m = sendKey(t, m, tea.KeyMsg{Type: tea.KeyTab})

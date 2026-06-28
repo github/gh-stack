@@ -10,7 +10,7 @@ import (
 
 func TestSubmit_EmptyTitleGuard(t *testing.T) {
 	m := testModel(t, newNodes())
-	m.titleInput.SetValue("") // blank the focused branch's title
+	m.titleArea.SetValue("") // blank the focused branch's title
 
 	updated, cmd := m.Update(tea.KeyMsg{Type: tea.KeyCtrlS})
 	m = updated.(Model)
@@ -32,7 +32,7 @@ func TestSubmit_SucceedsWhenTitlesPresent(t *testing.T) {
 func TestSubmit_SkippedBranchWithoutTitleDoesNotBlock(t *testing.T) {
 	m := testModel(t, newNodes())
 	// Blank the first branch's title, then skip it; submit should proceed.
-	m.titleInput.SetValue("")
+	m.titleArea.SetValue("")
 	m.saveEditor()
 	m = sendKey(t, m, tea.KeyMsg{Type: tea.KeyCtrlX}) // skip branch 0
 

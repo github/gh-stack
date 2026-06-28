@@ -3,7 +3,6 @@ package submitview
 import (
 	"github.com/charmbracelet/bubbles/key"
 	"github.com/charmbracelet/bubbles/textarea"
-	"github.com/charmbracelet/bubbles/textinput"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 	"github.com/github/gh-stack/internal/stack"
@@ -60,7 +59,7 @@ type Model struct {
 	width, height int
 
 	// Editor state for the focused branch.
-	titleInput   textinput.Model
+	titleArea    textarea.Model
 	descArea     textarea.Model
 	focusedField editField
 	descPreview  bool // description preview (vs edit)
@@ -115,16 +114,23 @@ func New(opts Options) Model {
 		}
 	}
 
-	ti := textinput.New()
-	ti.Prompt = ""
-	ti.CharLimit = 256
-
 	ta := textarea.New()
 	ta.Prompt = ""
 	ta.ShowLineNumbers = false
 	ta.CharLimit = 0 // unlimited
 	// Soften the textarea chrome; the panel provides the border.
 	ta.FocusedStyle.CursorLine = lipgloss.NewStyle()
+
+	// The title is a single logical line shown soft-wrapped: its box grows in
+	// height as the text wraps (capped, with the description shrinking to fit).
+	// It is a textarea (not a single-line input) so the cursor can move between
+	// wrapped rows. Newlines are blocked in updateScreen so the value stays a
+	// single line.
+	tia := textarea.New()
+	tia.Prompt = ""
+	tia.ShowLineNumbers = false
+	tia.CharLimit = 256
+	tia.FocusedStyle.CursorLine = lipgloss.NewStyle()
 
 	m := Model{
 		nodes:     opts.Nodes,
@@ -133,7 +139,7 @@ func New(opts Options) Model {
 		version:   opts.Version,
 		cursor:    cursor,
 
-		titleInput:   ti,
+		titleArea:    tia,
 		descArea:     ta,
 		focusedField: fieldTitle,
 	}
@@ -161,7 +167,7 @@ func (m Model) Nodes() []SubmitNode { return m.nodes }
 // --- Bubble Tea interface ---
 
 func (m Model) Init() tea.Cmd {
-	return textinput.Blink
+	return textarea.Blink
 }
 
 func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {

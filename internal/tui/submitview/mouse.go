@@ -188,6 +188,7 @@ func (m Model) handleClick(x, y int) (tea.Model, tea.Cmd) {
 
 	rel := y - m.panelTopRow()
 	titleLine, descLabel, descTop, descBot, draftLine := m.rightZones()
+	titleH := m.titleAreaHeight()
 	rightEdge := leftW + 1 + rightW
 
 	// Include chip (header row 0, right side) toggles inclusion.
@@ -227,12 +228,12 @@ func (m Model) handleClick(x, y int) (tea.Model, tea.Cmd) {
 			return m, cmd
 		}
 		return m, nil
-	case rel >= titleLine-1 && rel <= titleLine+1:
+	case rel >= titleLine-1 && rel <= titleLine+titleH:
 		cmd := m.focusField(fieldTitle)
-		// Clicking inside the title box content row positions the cursor at the
-		// clicked column (the border rows just focus the field).
-		if rel == titleLine {
-			m.positionTitleCursor(x - (leftW + 5))
+		// Clicking inside the title box content rows positions the cursor at the
+		// clicked row and column (the border rows just focus the field).
+		if rel >= titleLine && rel < titleLine+titleH {
+			m.positionTitleCursor(rel-titleLine, x-(leftW+5))
 		}
 		return m, cmd
 	case rel >= descTop && rel <= descBot:
@@ -266,14 +267,17 @@ func (m Model) handleClick(x, y int) (tea.Model, tea.Cmd) {
 }
 
 // rightZones returns the right-panel line offsets (from panelTopRow) of the
-// interactive editor elements for the included-NEW layout.
+// interactive editor elements for the included-NEW layout. The title box grows
+// with its wrapped content, so the description and footer offsets shift down by
+// the title's extra rows.
 func (m Model) rightZones() (titleLine, descLabel, descTop, descBot, draftLine int) {
+	titleH := m.titleAreaHeight()
 	descH := m.descAreaHeight()
-	titleLine = 4 // title box content (header 0, rule 1, label 2, box 3..5)
-	descLabel = 6
-	descTop = 7 // description box top border
-	descBot = 8 + descH
-	draftLine = 9 + descH
+	titleLine = 4 // first title box content row (header 0, rule 1, label 2, box top 3)
+	descLabel = 5 + titleH
+	descTop = 6 + titleH // description box top border
+	descBot = 7 + titleH + descH
+	draftLine = 8 + titleH + descH
 	return
 }
 
@@ -302,17 +306,27 @@ func (m *Model) positionDescCursor(visRow, col int) {
 	m.descArea.SetCursor(m.descArea.LineInfo().StartColumn + col)
 }
 
-// positionTitleCursor moves the title input's cursor to the clicked column,
-// where col is the offset from the title box's text start. It is exact when the
-// title fits the field (the single-line input isn't horizontally scrolled) and
-// approximate otherwise, mirroring positionDescCursor. col is treated as a rune
-// offset, so it is exact for the typical ASCII title.
-func (m *Model) positionTitleCursor(col int) {
+// positionTitleCursor moves the title's cursor to the clicked visual row and
+// column, where col is the offset from the title box's text start. Like
+// positionDescCursor it resets to the top of the (single logical, soft-wrapped)
+// line and walks down by visual row, so it is exact when the title is not
+// scrolled (the common case) and approximate otherwise.
+func (m *Model) positionTitleCursor(visRow, col int) {
+	if visRow < 0 {
+		visRow = 0
+	}
 	if col < 0 {
 		col = 0
 	}
-	if n := len([]rune(m.titleInput.Value())); col > n {
-		col = n
+	for guard := 0; guard < 1000; guard++ {
+		row, off := m.titleArea.Line(), m.titleArea.LineInfo().RowOffset
+		m.titleArea.CursorUp()
+		if m.titleArea.Line() == row && m.titleArea.LineInfo().RowOffset == off {
+			break // reached the top-left of the buffer
+		}
 	}
-	m.titleInput.SetCursor(col)
+	for i := 0; i < visRow; i++ {
+		m.titleArea.CursorDown()
+	}
+	m.titleArea.SetCursor(m.titleArea.LineInfo().StartColumn + col)
 }

@@ -163,7 +163,7 @@ func (m Model) renderEditBody(innerW int) string {
 	// TITLE
 	b.WriteString(sectionLabelFor("TITLE", m.focusedField == fieldTitle))
 	b.WriteString("\n")
-	b.WriteString(fieldBox(m.titleInput.View(), innerW, m.focusedField == fieldTitle))
+	b.WriteString(fieldBox(m.titleContent(), innerW, m.focusedField == fieldTitle))
 	b.WriteString("\n")
 
 	// DESCRIPTION with edit/preview sub-toggle on the right.
@@ -314,6 +314,26 @@ func (m Model) descContent(innerW int) string {
 	}
 	rows := clipScrollRows(lines, scroll, height)
 	return addScrollbar(rows, scroll, len(lines), height, textWidth)
+}
+
+// titleContent renders the editable title as soft-wrapped visual rows with the
+// block cursor overlaid, mirroring descContent but without a scrollbar. The
+// title is a single logical line, so its cursor row is the wrapped row offset.
+func (m Model) titleContent() string {
+	width := m.titleTextWidth()
+	h := m.titleAreaHeight()
+	lines := wrapDescLines(m.titleArea.Value(), width)
+	cursorRow := m.titleArea.LineInfo().RowOffset
+	scroll := clampScroll(cursorViewTop(cursorRow, h), len(lines), h)
+	if m.focusedField == fieldTitle && m.titleArea.Focused() &&
+		cursorRow >= scroll && cursorRow < scroll+h && cursorRow < len(lines) {
+		lines = overlayCursor(lines, cursorRow, m.titleArea.LineInfo().ColumnOffset)
+	}
+	rows := clipScrollRows(lines, scroll, h)
+	for len(rows) < h {
+		rows = append(rows, "")
+	}
+	return strings.Join(rows, "\n")
 }
 
 // clampScroll bounds a scroll offset to [0, total-height].

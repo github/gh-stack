@@ -67,10 +67,13 @@ func (m Model) updateScreen(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		}
 	}
 
-	// Up/down move between branches, except while actively editing the
-	// multi-line description text.
-	editingDesc := editable && m.focusedField == fieldDescription && !m.descPreview
-	if !editingDesc {
+	// Up/down move between branches, except while actively editing multi-line
+	// text: the description, or a title that has wrapped onto multiple rows
+	// (where up/down navigate within the field instead).
+	editingText := editable &&
+		((m.focusedField == fieldDescription && !m.descPreview) ||
+			(m.focusedField == fieldTitle && m.titleAreaHeight() > 1))
+	if !editingText {
 		switch msg.Type {
 		case tea.KeyUp:
 			cmd := m.moveCursor(-1)
@@ -150,11 +153,19 @@ func (m Model) updateScreen(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m, cmd
 
 	case fieldTitle:
-		var cmd tea.Cmd
-		m.titleInput, cmd = m.titleInput.Update(msg)
-		if node != nil {
-			node.Title = m.titleInput.Value()
+		// The title is a single logical line; ignore Enter so it never gains a
+		// hard newline (it only ever soft-wraps).
+		if msg.Type == tea.KeyEnter {
+			return m, nil
 		}
+		var cmd tea.Cmd
+		m.titleArea, cmd = m.titleArea.Update(msg)
+		if node != nil {
+			node.Title = m.titleArea.Value()
+		}
+		// The title may have wrapped to a new height; reflow the editor so the
+		// description shrinks/grows to keep the layout from overflowing.
+		m.resizeEditor()
 		return m, cmd
 	}
 
@@ -198,7 +209,7 @@ func (m *Model) focusFirstField() tea.Cmd {
 	if n != nil && n.State == StateNew && n.Included {
 		return m.focusField(fieldTitle)
 	}
-	m.titleInput.Blur()
+	m.titleArea.Blur()
 	m.descArea.Blur()
 	m.focusedField = fieldTitle
 	return nil
@@ -210,7 +221,7 @@ func (m *Model) focusLastField() tea.Cmd {
 	if n != nil && n.State == StateNew && n.Included {
 		return m.focusField(fieldDraft)
 	}
-	m.titleInput.Blur()
+	m.titleArea.Blur()
 	m.descArea.Blur()
 	m.focusedField = fieldTitle
 	return nil
@@ -367,11 +378,11 @@ func (m *Model) retreatField() tea.Cmd {
 // any cursor-blink command. The Create-PR and draft toggles are not text inputs.
 func (m *Model) focusField(f editField) tea.Cmd {
 	m.focusedField = f
-	m.titleInput.Blur()
+	m.titleArea.Blur()
 	m.descArea.Blur()
 	switch f {
 	case fieldTitle:
-		return m.titleInput.Focus()
+		return m.titleArea.Focus()
 	case fieldDescription:
 		if !m.descPreview {
 			return m.descArea.Focus()
@@ -407,7 +418,7 @@ func (m *Model) loadEditor() {
 		return
 	}
 	n := m.nodes[m.cursor]
-	m.titleInput.SetValue(n.Title)
+	m.titleArea.SetValue(n.Title)
 	m.descArea.SetValue(n.Description)
 	// Start at the top: SetValue leaves the cursor at the end, so move it back to
 	// the first line and reset the scroll. This keeps a prefilled (e.g. template)
@@ -419,6 +430,9 @@ func (m *Model) loadEditor() {
 	m.descArea.CursorStart()
 	m.descScroll = 0
 	m.descScrollPinned = false
+	// SetValue leaves the title cursor at the end (ready to append, matching the
+	// old single-line input). Reflow so the boxes are sized to the new content.
+	m.resizeEditor()
 }
 
 // saveEditor writes the input components back to the focused branch.
@@ -430,7 +444,7 @@ func (m *Model) saveEditor() {
 	if n.State != StateNew {
 		return
 	}
-	n.Title = m.titleInput.Value()
+	n.Title = m.titleArea.Value()
 	n.Description = m.descArea.Value()
 }
 
@@ -443,9 +457,54 @@ func (m *Model) resizeEditor() {
 	}
 	// Field boxes add a border (2) and horizontal padding (2). The description
 	// also reserves columns for its scrollbar so its wrap matches descContent.
-	m.titleInput.Width = innerW - 4
+	m.titleArea.SetWidth(innerW - 4)
+	m.titleArea.SetHeight(m.titleAreaHeight())
 	m.descArea.SetWidth(descTextWidth(innerW))
 	m.descArea.SetHeight(m.descAreaHeight())
+}
+
+// maxTitleLines caps how tall the soft-wrapped title box may grow, so it never
+// dominates the panel; a longer title scrolls within the box. The description
+// shrinks to make room as the title grows (down to its own minimum), so the
+// editor never overflows the panel.
+const maxTitleLines = 4
+
+// titleTextWidth is the wrap width of the title text inside its box: the right
+// panel inner width less the field box's border (2) and padding (2).
+func (m Model) titleTextWidth() int {
+	_, rightW := m.panelWidths()
+	innerW := rightW - 4
+	if innerW < 10 {
+		innerW = 10
+	}
+	w := innerW - 4
+	if w < 10 {
+		w = 10
+	}
+	return w
+}
+
+// titleAreaHeight returns the number of soft-wrapped rows to show for the title,
+// from 1 up to maxTitleLines (and further capped so the description keeps at
+// least its minimum height on short terminals).
+func (m Model) titleAreaHeight() int {
+	n := len(wrapDescLines(m.titleArea.Value(), m.titleTextWidth()))
+	if n < 1 {
+		n = 1
+	}
+	// Keep the description at >= 3 rows: descAreaHeight is contentHeight-2-12
+	// minus (titleH-1), so titleH must not exceed contentHeight-16.
+	max := maxTitleLines
+	if room := m.contentHeight() - 16; room < max {
+		max = room
+	}
+	if max < 1 {
+		max = 1
+	}
+	if n > max {
+		n = max
+	}
+	return n
 }
 
 // nextEditableIndex returns the index of the next PR up the stack — the nearest
@@ -540,9 +599,10 @@ func (m Model) panelWidths() (left, right int) {
 // sized so the description box fills the right panel's remaining vertical space.
 func (m Model) descAreaHeight() int {
 	// Right-panel rows excluding the description text: header (1), separator
-	// rule (1), TITLE label + box (4), DESCRIPTION label (1), description box
-	// borders (2), OPEN-AS toggle (1), footer rule (1), footer strip (1) = 12.
-	overhead := 12
+	// rule (1), TITLE label + box (4 when the title is a single row), DESCRIPTION
+	// label (1), description box borders (2), OPEN-AS toggle (1), footer rule (1),
+	// footer strip (1) = 12. Each extra wrapped title row adds one more.
+	overhead := 12 + (m.titleAreaHeight() - 1)
 	// contentHeight() already excludes the slim header and bottom bar; subtract
 	// the panel border (2) and the chrome so the textarea fills the rest.
 	h := m.contentHeight() - 2 - overhead

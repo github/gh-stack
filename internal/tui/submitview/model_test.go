@@ -78,7 +78,7 @@ func TestNew_OpensEditorOnBottomMostNew(t *testing.T) {
 	m := testModel(t, newNodes())
 	assert.Equal(t, 1, m.cursor, "opens on the bottom-most NEW branch (closest to trunk)")
 	assert.Equal(t, fieldTitle, m.focusedField)
-	assert.True(t, m.titleInput.Focused(), "title is focused for immediate editing")
+	assert.True(t, m.titleArea.Focused(), "title is focused for immediate editing")
 }
 
 func TestNew_AllNewIncludedByDefault(t *testing.T) {
@@ -121,7 +121,7 @@ func TestNavigation_FocusesLockedWithNoTextInput(t *testing.T) {
 	m = sendKey(t, m, tea.KeyMsg{Type: tea.KeyDown})
 	m = sendKey(t, m, tea.KeyMsg{Type: tea.KeyDown}) // locked
 	require.True(t, m.nodes[m.cursor].State.Locked())
-	assert.False(t, m.titleInput.Focused())
+	assert.False(t, m.titleArea.Focused())
 	assert.False(t, m.descArea.Focused())
 }
 
@@ -135,11 +135,11 @@ func TestCtrlX_TogglesInclude(t *testing.T) {
 
 	m = sendKey(t, m, tea.KeyMsg{Type: tea.KeyCtrlX})
 	assert.False(t, m.nodes[0].Included, "^x skips the focused NEW branch")
-	assert.False(t, m.titleInput.Focused(), "a skipped branch's title is non-interactive")
+	assert.False(t, m.titleArea.Focused(), "a skipped branch's title is non-interactive")
 
 	m = sendKey(t, m, tea.KeyMsg{Type: tea.KeyCtrlX})
 	assert.True(t, m.nodes[0].Included, "^x includes it again")
-	assert.True(t, m.titleInput.Focused(), "re-including focuses the title for editing")
+	assert.True(t, m.titleArea.Focused(), "re-including focuses the title for editing")
 }
 
 func TestCtrlX_WorksWhileTypingTitle(t *testing.T) {
