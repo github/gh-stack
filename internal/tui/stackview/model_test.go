@@ -9,6 +9,7 @@ import (
 	ghapi "github.com/github/gh-stack/internal/github"
 	"github.com/github/gh-stack/internal/stack"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 func makeNodes(branches ...string) []BranchNode {
@@ -387,4 +388,68 @@ func TestUpdate_EnterOnMergedDoesNothing(t *testing.T) {
 	m = updated.(Model)
 	assert.Equal(t, "", m.CheckoutBranch(), "enter on merged branch should not set checkout")
 	assert.Nil(t, cmd, "enter on merged branch should not quit")
+}
+
+// makeAllMergedNodes returns nodes whose branches are all merged.
+func makeAllMergedNodes(branches ...string) []BranchNode {
+	nodes := makeNodes(branches...)
+	for i := range nodes {
+		nodes[i].Ref.PullRequest = &stack.PullRequestRef{Number: i + 1, Merged: true}
+	}
+	return nodes
+}
+
+func TestNew_CursorHiddenWhenAllMerged(t *testing.T) {
+	m := New(makeAllMergedNodes("b1", "b2"), testTrunk, "0.0.1")
+	assert.Equal(t, -1, m.cursor, "cursor should be hidden when every branch is merged")
+}
+
+func TestUpdate_AllMergedCursorStaysHidden(t *testing.T) {
+	m := New(makeAllMergedNodes("b1", "b2", "b3"), testTrunk, "0.0.1")
+
+	updated, _ := m.Update(keyMsg("down"))
+	m = updated.(Model)
+	assert.Equal(t, -1, m.cursor, "down should not move the hidden cursor")
+
+	updated, _ = m.Update(keyMsg("up"))
+	m = updated.(Model)
+	assert.Equal(t, -1, m.cursor, "up should not move the hidden cursor")
+
+	updated, cmd := m.Update(keyMsg("enter"))
+	m = updated.(Model)
+	assert.Equal(t, "", m.CheckoutBranch(), "enter should not check out when all merged")
+	assert.Nil(t, cmd, "enter should not quit when all merged")
+}
+
+func TestView_AllMergedRendersWithoutPanic(t *testing.T) {
+	m := New(makeAllMergedNodes("b1", "b2"), testTrunk, "0.0.1")
+	updated, _ := m.Update(tea.WindowSizeMsg{Width: 100, Height: 40})
+	m = updated.(Model)
+	// Should not panic with a hidden (-1) cursor.
+	view := m.View()
+	assert.Contains(t, view, "b1")
+}
+
+func TestBuildHeaderConfig_DisablesShortcutsWhenAllMerged(t *testing.T) {
+	m := New(makeAllMergedNodes("b1", "b2"), testTrunk, "0.0.1")
+	cfg := m.buildHeaderConfig()
+
+	require.NotEmpty(t, cfg.Shortcuts)
+	for _, sc := range cfg.Shortcuts {
+		if sc.Desc == "quit" {
+			assert.False(t, sc.Disabled, "quit should stay enabled")
+		} else {
+			assert.True(t, sc.Disabled, "%q should be disabled when all branches merged", sc.Desc)
+		}
+	}
+}
+
+func TestBuildHeaderConfig_ShortcutsEnabledWithActiveBranches(t *testing.T) {
+	m := New(makeNodes("b1", "b2"), testTrunk, "0.0.1")
+	cfg := m.buildHeaderConfig()
+
+	require.NotEmpty(t, cfg.Shortcuts)
+	for _, sc := range cfg.Shortcuts {
+		assert.False(t, sc.Disabled, "%q should be enabled when there are active branches", sc.Desc)
+	}
 }

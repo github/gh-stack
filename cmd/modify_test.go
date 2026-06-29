@@ -2,6 +2,7 @@ package cmd
 
 import (
 	"encoding/json"
+	"io"
 	"os"
 	"path/filepath"
 	"testing"
@@ -634,6 +635,50 @@ func TestCheckModifyPreconditions_AllPass(t *testing.T) {
 	require.NotNil(t, result)
 	assert.Equal(t, tmpDir, result.GitDir)
 	assert.Equal(t, "b1", result.CurrentBranch)
+}
+
+func TestRunModify_FullyMergedStack_ShortCircuits(t *testing.T) {
+	s := stack.Stack{
+		Trunk: stack.BranchRef{Branch: "main"},
+		Branches: []stack.BranchRef{
+			{Branch: "b1", PullRequest: &stack.PullRequestRef{Number: 1, Merged: true}},
+			{Branch: "b2", PullRequest: &stack.PullRequestRef{Number: 2, Merged: true}},
+		},
+	}
+
+	tmpDir := t.TempDir()
+	writeStackFile(t, tmpDir, s)
+
+	mock := &git.MockOps{
+		GitDirFn:                func() (string, error) { return tmpDir, nil },
+		CurrentBranchFn:         func() (string, error) { return "b1", nil },
+		IsRebaseInProgressFn:    func() bool { return false },
+		HasUncommittedChangesFn: func() (bool, error) { return false, nil },
+		BranchExistsFn:          func(string) bool { return true },
+		IsAncestorFn:            func(a, d string) (bool, error) { return true, nil },
+		LogMergesFn:             func(base, head string) ([]git.CommitInfo, error) { return nil, nil },
+	}
+	restore := git.SetOps(mock)
+	defer restore()
+
+	cfg, _, errR := config.NewTestConfig()
+	cfg.ForceInteractive = true
+	cfg.GitHubClientOverride = &github.MockClient{
+		FindPRForBranchFn: func(string) (*github.PullRequest, error) { return nil, nil },
+	}
+
+	// runModify must short-circuit (and never launch the TUI) on a fully
+	// merged stack, returning cleanly like submit's "nothing to submit" path.
+	err := runModify(cfg)
+
+	cfg.Out.Close()
+	cfg.Err.Close()
+	out, _ := io.ReadAll(errR)
+	output := string(out)
+
+	assert.NoError(t, err)
+	assert.Contains(t, output, "All branches in this stack have been merged")
+	assert.Contains(t, output, "gh stack init")
 }
 
 // ---------------------------------------------------------------------------

@@ -83,17 +83,17 @@ func New(nodes []BranchNode, trunk stack.BranchRef, version string) Model {
 	h := help.New()
 	h.ShowAll = true
 
-	// Cursor starts at the current branch, or first non-merged branch
-	cursor := 0
-	found := false
+	// Cursor starts at the current branch, or the first non-merged branch.
+	// When every branch is merged there is nothing selectable, so the cursor
+	// is hidden (-1) and the cursor-dependent shortcuts are disabled.
+	cursor := -1
 	for i, n := range nodes {
 		if n.IsCurrent && !n.Ref.IsMerged() {
 			cursor = i
-			found = true
 			break
 		}
 	}
-	if !found {
+	if cursor < 0 {
 		for i, n := range nodes {
 			if !n.Ref.IsMerged() {
 				cursor = i
@@ -439,6 +439,10 @@ func (m Model) buildHeaderConfig() shared.HeaderConfig {
 		branchIcon = "●"
 	}
 
+	// When every branch is merged there is no selectable branch, so the cursor
+	// is hidden and the actions that depend on it are dimmed; only quit works.
+	allMerged := branchCount > 0 && mergedCount == branchCount
+
 	return shared.HeaderConfig{
 		ShowArt:  true,
 		Title:    "View Stack",
@@ -450,11 +454,11 @@ func (m Model) buildHeaderConfig() shared.HeaderConfig {
 		},
 		ShortcutColumns: 1,
 		Shortcuts: []shared.ShortcutEntry{
-			{Key: "↑↓", Desc: "navigate"},
-			{Key: "c", Desc: "commits"},
-			{Key: "f", Desc: "files"},
-			{Key: "o", Desc: "open PR"},
-			{Key: "↵", Desc: "checkout"},
+			{Key: "↑↓", Desc: "navigate", Disabled: allMerged},
+			{Key: "c", Desc: "commits", Disabled: allMerged},
+			{Key: "f", Desc: "files", Disabled: allMerged},
+			{Key: "o", Desc: "open PR", Disabled: allMerged},
+			{Key: "↵", Desc: "checkout", Disabled: allMerged},
 			{Key: "q", Desc: "quit"},
 		},
 	}
