@@ -643,6 +643,243 @@ func TestSyncStack_AlreadyStacked_DifferentStack(t *testing.T) {
 	assert.NotContains(t, output, "up to date")
 }
 
+func TestSyncStack_AdoptsExistingRemoteStack_ExactMatch(t *testing.T) {
+	// The stack exists on GitHub but isn't recorded locally (s.ID == "").
+	// All local PRs match the remote stack exactly — adopt the ID without
+	// creating or updating anything.
+	s := &stack.Stack{
+		Trunk: stack.BranchRef{Branch: "main"},
+		Branches: []stack.BranchRef{
+			{Branch: "b1", PullRequest: &stack.PullRequestRef{Number: 10}},
+			{Branch: "b2", PullRequest: &stack.PullRequestRef{Number: 11}},
+		},
+	}
+
+	var createCalled, updateCalled bool
+	mock := &github.MockClient{
+		ListStacksFn: func() ([]github.RemoteStack, error) {
+			return []github.RemoteStack{{ID: 77, PullRequests: []int{10, 11}}}, nil
+		},
+		CreateStackFn: func([]int) (int, error) {
+			createCalled = true
+			return 0, nil
+		},
+		UpdateStackFn: func(string, []int) error {
+			updateCalled = true
+			return nil
+		},
+	}
+
+	cfg, _, errR := config.NewTestConfig()
+	syncStack(cfg, mock, s)
+
+	cfg.Err.Close()
+	errOut, _ := io.ReadAll(errR)
+	output := string(errOut)
+
+	assert.False(t, createCalled, "should not create when the stack already exists on GitHub")
+	assert.False(t, updateCalled, "should not update when local matches remote exactly")
+	assert.Equal(t, "77", s.ID, "should adopt the remote stack ID into local tracking")
+	assert.Contains(t, output, "Linked to the existing stack on GitHub")
+	assert.Contains(t, output, "up to date")
+}
+
+func TestSyncStack_AdoptsExistingRemoteStack_AddsNewPR(t *testing.T) {
+	// Two of our three PRs already form a remote stack; the third was added
+	// locally on top. Adopt the remote ID and update the stack to include the
+	// new PR at the top.
+	s := &stack.Stack{
+		Trunk: stack.BranchRef{Branch: "main"},
+		Branches: []stack.BranchRef{
+			{Branch: "b1", PullRequest: &stack.PullRequestRef{Number: 10}},
+			{Branch: "b2", PullRequest: &stack.PullRequestRef{Number: 11}},
+			{Branch: "b3", PullRequest: &stack.PullRequestRef{Number: 12}},
+		},
+	}
+
+	var createCalled bool
+	var gotStackID string
+	var gotNumbers []int
+	mock := &github.MockClient{
+		ListStacksFn: func() ([]github.RemoteStack, error) {
+			return []github.RemoteStack{{ID: 77, PullRequests: []int{10, 11}}}, nil
+		},
+		CreateStackFn: func([]int) (int, error) {
+			createCalled = true
+			return 0, nil
+		},
+		UpdateStackFn: func(stackID string, prNumbers []int) error {
+			gotStackID = stackID
+			gotNumbers = prNumbers
+			return nil
+		},
+	}
+
+	cfg, _, errR := config.NewTestConfig()
+	syncStack(cfg, mock, s)
+
+	cfg.Err.Close()
+	errOut, _ := io.ReadAll(errR)
+	output := string(errOut)
+
+	assert.False(t, createCalled, "should adopt and update, not create")
+	assert.Equal(t, "77", s.ID, "should adopt the remote stack ID")
+	assert.Equal(t, "77", gotStackID, "should update the adopted stack")
+	assert.Equal(t, []int{10, 11, 12}, gotNumbers, "should send the full local PR list")
+	assert.Contains(t, output, "Stack updated on GitHub with 3 PRs")
+}
+
+func TestSyncStack_RemoteStackHasExtraPRs_Refuses(t *testing.T) {
+	// The remote stack contains a PR we aren't tracking locally. Syncing to
+	// match local would drop it, so refuse and warn instead.
+	s := &stack.Stack{
+		Trunk: stack.BranchRef{Branch: "main"},
+		Branches: []stack.BranchRef{
+			{Branch: "b1", PullRequest: &stack.PullRequestRef{Number: 10}},
+			{Branch: "b2", PullRequest: &stack.PullRequestRef{Number: 11}},
+		},
+	}
+
+	var createCalled, updateCalled bool
+	mock := &github.MockClient{
+		ListStacksFn: func() ([]github.RemoteStack, error) {
+			return []github.RemoteStack{{ID: 77, PullRequests: []int{10, 11, 12}}}, nil
+		},
+		CreateStackFn: func([]int) (int, error) {
+			createCalled = true
+			return 0, nil
+		},
+		UpdateStackFn: func(string, []int) error {
+			updateCalled = true
+			return nil
+		},
+	}
+
+	cfg, _, errR := config.NewTestConfig()
+	syncStack(cfg, mock, s)
+
+	cfg.Err.Close()
+	errOut, _ := io.ReadAll(errR)
+	output := string(errOut)
+
+	assert.False(t, createCalled, "should not create over an existing stack")
+	assert.False(t, updateCalled, "should not drop remote-only PRs")
+	assert.Equal(t, "", s.ID, "should not adopt a divergent remote stack")
+	assert.Contains(t, output, "#12")
+	assert.Contains(t, output, "not in your local stack")
+}
+
+func TestSyncStack_PRsSpanMultipleRemoteStacks_Warns(t *testing.T) {
+	// Our PRs are split across two remote stacks — an unresolvable divergence.
+	s := &stack.Stack{
+		Trunk: stack.BranchRef{Branch: "main"},
+		Branches: []stack.BranchRef{
+			{Branch: "b1", PullRequest: &stack.PullRequestRef{Number: 10}},
+			{Branch: "b2", PullRequest: &stack.PullRequestRef{Number: 11}},
+		},
+	}
+
+	var createCalled, updateCalled bool
+	mock := &github.MockClient{
+		ListStacksFn: func() ([]github.RemoteStack, error) {
+			return []github.RemoteStack{
+				{ID: 1, PullRequests: []int{10}},
+				{ID: 2, PullRequests: []int{11}},
+			}, nil
+		},
+		CreateStackFn: func([]int) (int, error) {
+			createCalled = true
+			return 0, nil
+		},
+		UpdateStackFn: func(string, []int) error {
+			updateCalled = true
+			return nil
+		},
+	}
+
+	cfg, _, errR := config.NewTestConfig()
+	syncStack(cfg, mock, s)
+
+	cfg.Err.Close()
+	errOut, _ := io.ReadAll(errR)
+	output := string(errOut)
+
+	assert.False(t, createCalled, "should not create when PRs span multiple stacks")
+	assert.False(t, updateCalled, "should not update when PRs span multiple stacks")
+	assert.Equal(t, "", s.ID)
+	assert.Contains(t, output, "multiple stacks")
+}
+
+func TestSyncStack_ListStacksError_FallsThroughToCreate(t *testing.T) {
+	// If we can't inspect remote stacks, fall back to the create path rather
+	// than blocking the submit.
+	s := &stack.Stack{
+		Trunk: stack.BranchRef{Branch: "main"},
+		Branches: []stack.BranchRef{
+			{Branch: "b1", PullRequest: &stack.PullRequestRef{Number: 10}},
+			{Branch: "b2", PullRequest: &stack.PullRequestRef{Number: 11}},
+		},
+	}
+
+	var createCalled bool
+	mock := &github.MockClient{
+		ListStacksFn: func() ([]github.RemoteStack, error) {
+			return nil, fmt.Errorf("network down")
+		},
+		CreateStackFn: func([]int) (int, error) {
+			createCalled = true
+			return 88, nil
+		},
+	}
+
+	cfg, _, errR := config.NewTestConfig()
+	syncStack(cfg, mock, s)
+
+	cfg.Err.Close()
+	errOut, _ := io.ReadAll(errR)
+	output := string(errOut)
+
+	assert.True(t, createCalled, "should fall through to CreateStack when ListStacks fails")
+	assert.Equal(t, "88", s.ID)
+	assert.Contains(t, output, "Stack created on GitHub with 2 PRs")
+}
+
+func TestSyncStack_AlreadyPartOfAStack_FallbackPhrasing(t *testing.T) {
+	// Fallback path: ListStacks returns no match (so adoption is skipped), but
+	// the create endpoint still rejects with the server's "already part of a
+	// stack" phrasing (no PR numbers). The message must be actionable rather
+	// than the raw "Could not create stack".
+	s := &stack.Stack{
+		Trunk: stack.BranchRef{Branch: "main"},
+		Branches: []stack.BranchRef{
+			{Branch: "b1", PullRequest: &stack.PullRequestRef{Number: 10}},
+			{Branch: "b2", PullRequest: &stack.PullRequestRef{Number: 11}},
+		},
+	}
+
+	mock := &github.MockClient{
+		ListStacksFn: func() ([]github.RemoteStack, error) { return nil, nil },
+		CreateStackFn: func([]int) (int, error) {
+			return 0, &api.HTTPError{
+				StatusCode: 422,
+				Message:    "Pull requests are already part of a stack",
+				RequestURL: &url.URL{Path: "/repos/o/r/cli_internal/pulls/stacks"},
+			}
+		},
+	}
+
+	cfg, _, errR := config.NewTestConfig()
+	syncStack(cfg, mock, s)
+
+	cfg.Err.Close()
+	errOut, _ := io.ReadAll(errR)
+	output := string(errOut)
+
+	assert.Contains(t, output, "already part of a")
+	assert.Contains(t, output, "gh stack checkout")
+	assert.NotContains(t, output, "Could not create stack")
+}
+
 func TestSyncStack_InvalidChain_422(t *testing.T) {
 	s := &stack.Stack{
 		Trunk: stack.BranchRef{Branch: "main"},

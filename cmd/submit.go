@@ -563,9 +563,93 @@ func syncStack(cfg *config.Config, client github.ClientOps, s *stack.Stack) {
 
 	if s.ID != "" {
 		updateStack(cfg, client, s, prNumbers)
-	} else {
-		createNewStack(cfg, client, s, prNumbers)
+		return
 	}
+
+	// No locally tracked stack ID. The stack may already exist on GitHub
+	// (created from the web UI or another clone) without being recorded
+	// locally. Adopt it instead of blindly creating a new one, which the API
+	// rejects because the PRs are already part of a stack.
+	if adoptRemoteStack(cfg, client, s, prNumbers) {
+		return
+	}
+
+	createNewStack(cfg, client, s, prNumbers)
+}
+
+// adoptRemoteStack reconciles a locally untracked stack (s.ID == "") with the
+// stacks that already exist on GitHub. The PRs in s may already belong to a
+// remote stack created from the web UI or another clone; in that case we must
+// adopt that stack rather than POST a new one (which the API rejects because
+// the PRs are already stacked).
+//
+// It returns true when it has fully handled the sync — either by adopting and
+// updating the existing stack, or by intentionally refusing to modify a
+// divergent remote stack — and false when no matching remote stack exists and
+// the caller should create a new one.
+func adoptRemoteStack(cfg *config.Config, client github.ClientOps, s *stack.Stack, prNumbers []int) bool {
+	stacks, err := client.ListStacks()
+	if err != nil {
+		// Couldn't inspect remote state — fall back to the create path, which
+		// reports its own errors (handleCreate422 covers "already stacked").
+		return false
+	}
+
+	matched, err := findMatchingStack(stacks, prNumbers)
+	if err != nil {
+		// Our PRs are spread across more than one remote stack. A PR can only
+		// belong to one stack, so this is a genuine divergence we can't resolve
+		// automatically.
+		cfg.Warningf("Your PRs belong to multiple stacks on GitHub — reconcile them before submitting")
+		cfg.Printf("  Run `%s` to import a stack, or unstack the PRs from the web",
+			cfg.ColorCyan("gh stack checkout <pr>"))
+		return true
+	}
+
+	if matched == nil {
+		// No existing stack contains any of our PRs — create a new one.
+		return false
+	}
+
+	// A remote stack already contains some of our PRs. Refuse to silently drop
+	// any PRs it holds that we aren't tracking locally; let the user reconcile.
+	if dropped := prsMissingFrom(matched.PullRequests, prNumbers); len(dropped) > 0 {
+		cfg.Warningf("A stack on GitHub already contains %s, which %s not in your local stack",
+			formatPRList(dropped), plural(len(dropped), "is", "are"))
+		cfg.Printf("  Run `%s` to import the full stack, then `%s`",
+			cfg.ColorCyan("gh stack checkout <pr>"), cfg.ColorCyan("gh stack submit"))
+		return true
+	}
+
+	// Every PR in the remote stack is tracked locally (and we may have added
+	// more on top). Adopt the remote stack ID — recording it locally — and
+	// update the stack with our full, ordered PR list to append any new PRs.
+	s.ID = strconv.Itoa(matched.ID)
+
+	if slicesEqual(matched.PullRequests, prNumbers) {
+		cfg.Successf("Linked to the existing stack on GitHub (%d PRs, already up to date)", len(prNumbers))
+		return true
+	}
+
+	cfg.Infof("Found the stack on GitHub — updating it to match your local stack")
+	updateStack(cfg, client, s, prNumbers)
+	return true
+}
+
+// prsMissingFrom returns the numbers in remote that do not appear in local,
+// preserving remote order.
+func prsMissingFrom(remote, local []int) []int {
+	localSet := make(map[int]bool, len(local))
+	for _, n := range local {
+		localSet[n] = true
+	}
+	var missing []int
+	for _, n := range remote {
+		if !localSet[n] {
+			missing = append(missing, n)
+		}
+	}
+	return missing
 }
 
 // updateStack calls the PUT endpoint to sync the full PR list for an existing stack.
@@ -626,7 +710,7 @@ func createNewStack(cfg *config.Config, client github.ClientOps, s *stack.Stack,
 func handleCreate422(cfg *config.Config, httpErr *api.HTTPError, prNumbers []int) {
 	msg := httpErr.Message
 
-	if strings.Contains(msg, "already stacked") {
+	if isAlreadyStackedError(msg) {
 		// Check if the error lists exactly the same PRs we're trying to
 		// stack. If so, they're already in a stack together — nothing to do.
 		// If only a subset matches, the PRs are in a different stack.
@@ -635,8 +719,8 @@ func handleCreate422(cfg *config.Config, httpErr *api.HTTPError, prNumbers []int
 			return
 		}
 		cfg.Warningf("One or more PRs are already part of a different stack on GitHub")
-		cfg.Printf("  To fix this, unstack the PRs from the web, then `%s`",
-			cfg.ColorCyan("gh stack submit"))
+		cfg.Printf("  Run `%s` to import the existing stack, or unstack the PRs from the web",
+			cfg.ColorCyan("gh stack checkout <pr>"))
 		return
 	}
 
@@ -660,4 +744,14 @@ func allPRsInMessage(msg string, prNumbers []int) bool {
 		}
 	}
 	return true
+}
+
+// isAlreadyStackedError reports whether a create-stack 422 message indicates
+// the PRs already belong to a stack. The server has used more than one phrasing
+// ("Pull requests #1, #2 are already stacked", "Pull requests are already part
+// of a stack"), so match on the stable substrings rather than an exact string.
+func isAlreadyStackedError(msg string) bool {
+	m := strings.ToLower(msg)
+	return strings.Contains(m, "already stacked") ||
+		strings.Contains(m, "already part of a stack")
 }
