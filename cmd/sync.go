@@ -366,13 +366,17 @@ func syncRemoteStack(cfg *config.Config, client github.ClientOps, s *stack.Stack
 		return false
 	}
 
-	// Inspect the remote stacks first so a routine sync that has not changed the
-	// PR membership does not issue a redundant — and misleading — update.
+	// Inspect the remote stacks once so a routine sync that has not changed the
+	// PR membership does not issue a redundant — and misleading — update, and so
+	// the create/adopt path can reuse the same list (one ListStacks per sync).
 	stacks, err := client.ListStacks()
 	if err != nil {
-		// Couldn't inspect remote state; let syncStack attempt the operation and
-		// surface its own availability/PAT/create errors.
-		return syncStack(cfg, client, s)
+		// Couldn't inspect remote state; attempt a direct create/update and let
+		// those helpers surface their own availability/PAT/create errors.
+		if s.ID != "" {
+			return updateStack(cfg, client, s, prNumbers)
+		}
+		return createNewStack(cfg, client, s, prNumbers)
 	}
 
 	if matched, mErr := findMatchingStack(stacks, prNumbers); mErr == nil &&
@@ -384,8 +388,12 @@ func syncRemoteStack(cfg *config.Config, client github.ClientOps, s *stack.Stack
 		return true
 	}
 
-	// Membership differs (or no stack exists yet): create, adopt, or update.
-	return syncStack(cfg, client, s)
+	// Membership differs (or no stack exists yet). Reuse the list we already
+	// fetched for the create/adopt/update path.
+	if s.ID != "" {
+		return updateStack(cfg, client, s, prNumbers)
+	}
+	return reconcileUntrackedStack(cfg, client, s, prNumbers, stacks)
 }
 
 // restoreBranches resets each branch to its original SHA, collecting any errors.

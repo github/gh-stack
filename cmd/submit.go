@@ -721,48 +721,46 @@ func syncStack(cfg *config.Config, client github.ClientOps, s *stack.Stack) bool
 
 	// No locally tracked stack ID. The stack may already exist on GitHub
 	// (created from the web UI or another clone) without being recorded
-	// locally. Adopt it instead of blindly creating a new one, which the API
-	// rejects because the PRs are already part of a stack.
-	if handled, synced := adoptRemoteStack(cfg, client, s, prNumbers); handled {
-		return synced
-	}
-
-	return createNewStack(cfg, client, s, prNumbers)
-}
-
-// adoptRemoteStack reconciles a locally untracked stack (s.ID == "") with the
-// stacks that already exist on GitHub. The PRs in s may already belong to a
-// remote stack created from the web UI or another clone; in that case we must
-// adopt that stack rather than POST a new one (which the API rejects because
-// the PRs are already stacked).
-//
-// It returns (handled, synced). handled is true when it has fully handled the
-// sync — either by adopting and updating the existing stack, or by
-// intentionally refusing to modify a divergent remote stack — and false when no
-// matching remote stack exists and the caller should create a new one. synced
-// is true only when the remote stack object now reflects the local stack.
-func adoptRemoteStack(cfg *config.Config, client github.ClientOps, s *stack.Stack, prNumbers []int) (bool, bool) {
+	// locally. Inspect the remote stacks and adopt a match instead of blindly
+	// creating a new one, which the API rejects because the PRs are already
+	// part of a stack.
 	stacks, err := client.ListStacks()
 	if err != nil {
 		// Couldn't inspect remote state — fall back to the create path, which
 		// reports its own errors (handleCreate422 covers "already stacked").
-		return false, false
+		return createNewStack(cfg, client, s, prNumbers)
 	}
 
+	return reconcileUntrackedStack(cfg, client, s, prNumbers, stacks)
+}
+
+// reconcileUntrackedStack reconciles a locally untracked stack (s.ID == "")
+// against the already-fetched remote stacks. The PRs in s may already belong to
+// a remote stack created from the web UI or another clone; in that case we adopt
+// that stack rather than POST a new one (which the API rejects because the PRs
+// are already stacked). It creates a new stack when none match, refuses to
+// modify a divergent or PR-dropping stack, adopts a matching stack, or updates a
+// partially-formed one.
+//
+// Callers pass the pre-fetched stack list so a single ListStacks round-trip is
+// shared across the reconciliation flow (sync fetches the list once for its
+// already-up-to-date short-circuit and reuses it here). It returns true when the
+// remote stack object now reflects the local stack.
+func reconcileUntrackedStack(cfg *config.Config, client github.ClientOps, s *stack.Stack, prNumbers []int, stacks []github.RemoteStack) bool {
 	matched, err := findMatchingStack(stacks, prNumbers)
 	if err != nil {
 		// Our PRs are spread across more than one remote stack. A PR can only
 		// belong to one stack, so this is a genuine divergence we can't resolve
 		// automatically.
-		cfg.Warningf("Your PRs belong to multiple stacks on GitHub — reconcile them before submitting")
+		cfg.Warningf("Your PRs belong to multiple stacks on GitHub — reconcile them first")
 		cfg.Printf("  Run `%s` to import a stack, or unstack the PRs from the web",
 			cfg.ColorCyan("gh stack checkout <pr>"))
-		return true, false
+		return false
 	}
 
 	if matched == nil {
 		// No existing stack contains any of our PRs — create a new one.
-		return false, false
+		return createNewStack(cfg, client, s, prNumbers)
 	}
 
 	// A remote stack already contains some of our PRs. Refuse to silently drop
@@ -770,9 +768,9 @@ func adoptRemoteStack(cfg *config.Config, client github.ClientOps, s *stack.Stac
 	if dropped := prsMissingFrom(matched.PullRequests, prNumbers); len(dropped) > 0 {
 		cfg.Warningf("A stack on GitHub already contains %s, which %s not in your local stack",
 			formatPRList(dropped), plural(len(dropped), "is", "are"))
-		cfg.Printf("  Run `%s` to import the full stack, then `%s`",
-			cfg.ColorCyan("gh stack checkout <pr>"), cfg.ColorCyan("gh stack submit"))
-		return true, false
+		cfg.Printf("  Run `%s` to import the full stack",
+			cfg.ColorCyan("gh stack checkout <pr>"))
+		return false
 	}
 
 	// Every PR in the remote stack is tracked locally (and we may have added
@@ -782,11 +780,11 @@ func adoptRemoteStack(cfg *config.Config, client github.ClientOps, s *stack.Stac
 
 	if slicesEqual(matched.PullRequests, prNumbers) {
 		cfg.Successf("Linked to the existing stack on GitHub (%d PRs, already up to date)", len(prNumbers))
-		return true, true
+		return true
 	}
 
 	cfg.Infof("Found the stack on GitHub — updating it to match your local stack")
-	return true, updateStack(cfg, client, s, prNumbers)
+	return updateStack(cfg, client, s, prNumbers)
 }
 
 // prsMissingFrom returns the numbers in remote that do not appear in local,

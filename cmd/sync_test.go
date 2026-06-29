@@ -1673,9 +1673,13 @@ func TestSync_CreatesRemoteStackWhenPRsExist(t *testing.T) {
 	writeStackFile(t, tmpDir, s)
 
 	var createdWith []int
+	var listCalls int
 	ghMock := &github.MockClient{
 		FindPRForBranchFn: openPRFinder(map[string]int{"b1": 101, "b2": 102}),
-		ListStacksFn:      func() ([]github.RemoteStack, error) { return nil, nil },
+		ListStacksFn: func() ([]github.RemoteStack, error) {
+			listCalls++
+			return nil, nil
+		},
 		CreateStackFn: func(prNumbers []int) (int, error) {
 			createdWith = prNumbers
 			return 7, nil
@@ -1689,6 +1693,7 @@ func TestSync_CreatesRemoteStackWhenPRsExist(t *testing.T) {
 	output := runSyncWithGitHub(t, newSyncMockNoRebase(tmpDir, "b1"), ghMock)
 
 	assert.Equal(t, []int{101, 102}, createdWith, "should create the stack from both PR numbers")
+	assert.Equal(t, 1, listCalls, "should issue exactly one ListStacks on the create path (no redundant round-trip)")
 	assert.Contains(t, output, "Stack created on GitHub with 2 PRs")
 	assert.Contains(t, output, "Stack synced")
 	assert.NotContains(t, output, "Branches synced")
@@ -1863,6 +1868,7 @@ func TestSync_PRsSpanMultipleStacks_BranchesSynced(t *testing.T) {
 	assert.False(t, createCalled, "CreateStack should not be called on divergence")
 	assert.False(t, updateCalled, "UpdateStack should not be called on divergence")
 	assert.Contains(t, output, "multiple stacks")
+	assert.NotContains(t, output, "submitting", "divergence guidance should be command-neutral, not submit-specific")
 	assert.Contains(t, output, "Branches synced")
 	assert.NotContains(t, output, "Stack synced")
 }
