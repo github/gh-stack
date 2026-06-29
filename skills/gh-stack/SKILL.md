@@ -643,7 +643,7 @@ gh stack sync [flags]
 - `✓ Pushed N branches`
 - `✓ PR #N (<branch>) — Open` per branch
 - `Merged: #N, #M` for merged branches
-- `✓ Stack created on GitHub with N PRs` / `✓ Stack updated on GitHub with N PRs` / `✓ Stack already up to date on GitHub` (when two or more PRs exist)
+- `✓ Stack created on GitHub with N PRs` / `✓ Stack updated on GitHub with N PRs` / `✓ Linked to the existing stack on GitHub` (when two or more PRs exist)
 - `✓ Pruned <branch> (merged)` per pruned branch (when pruning)
 - `✓ Stack synced` when the stack object on GitHub was created/updated to match local, or `✓ Branches synced` when only the branches were synced (fewer than two PRs, stacked PRs unavailable, or a divergence)
 

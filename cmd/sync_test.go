@@ -1733,7 +1733,7 @@ func TestSync_AdoptsExistingEqualRemoteStack(t *testing.T) {
 
 	output := runSyncWithGitHub(t, newSyncMockNoRebase(tmpDir, "b1"), ghMock)
 
-	assert.Contains(t, output, "Stack already up to date on GitHub")
+	assert.Contains(t, output, "already up to date")
 	assert.Contains(t, output, "Stack synced")
 	assert.NotContains(t, output, "Branches synced")
 

@@ -3,13 +3,11 @@ package cmd
 import (
 	"errors"
 	"fmt"
-	"strconv"
 	"strings"
 
 	"github.com/cli/go-gh/v2/pkg/prompter"
 	"github.com/github/gh-stack/internal/config"
 	"github.com/github/gh-stack/internal/git"
-	"github.com/github/gh-stack/internal/github"
 	"github.com/github/gh-stack/internal/modify"
 	"github.com/github/gh-stack/internal/stack"
 	"github.com/spf13/cobra"
@@ -240,7 +238,7 @@ func runSync(cfg *config.Config, opts *syncOptions) error {
 	// summary message below.
 	stackSynced := false
 	if client, err := cfg.GitHubClient(); err == nil {
-		stackSynced = syncRemoteStack(cfg, client, s)
+		stackSynced = syncStack(cfg, client, s)
 	}
 
 	// --- Step 6: Prune merged branches (optional) ---
@@ -348,52 +346,6 @@ func runSync(cfg *config.Config, opts *syncOptions) error {
 		cfg.Successf("Branches synced")
 	}
 	return nil
-}
-
-// syncRemoteStack reconciles the stack object on GitHub with the local stack's
-// open PRs. It only links existing PRs into a stack — it never opens PRs (use
-// `gh stack submit` for that). It returns true when the remote stack object now
-// reflects the local stack (created, updated, adopted, or already in sync), and
-// false when there is nothing to sync or the remote stack could not be
-// reconciled (fewer than two PRs, stacked PRs unavailable, a divergence across
-// multiple stacks, or an API failure).
-//
-// A stack on GitHub requires at least two open PRs, so a single-PR or PR-less
-// stack reconciles to false and the caller reports only the branches as synced.
-func syncRemoteStack(cfg *config.Config, client github.ClientOps, s *stack.Stack) bool {
-	prNumbers := stackPRNumbers(s)
-	if len(prNumbers) < 2 {
-		return false
-	}
-
-	// Inspect the remote stacks once so a routine sync that has not changed the
-	// PR membership does not issue a redundant — and misleading — update, and so
-	// the create/adopt path can reuse the same list (one ListStacks per sync).
-	stacks, err := client.ListStacks()
-	if err != nil {
-		// Couldn't inspect remote state; attempt a direct create/update and let
-		// those helpers surface their own availability/PAT/create errors.
-		if s.ID != "" {
-			return updateStack(cfg, client, s, prNumbers)
-		}
-		return createNewStack(cfg, client, s, prNumbers)
-	}
-
-	if matched, mErr := findMatchingStack(stacks, prNumbers); mErr == nil &&
-		matched != nil && slicesEqual(matched.PullRequests, prNumbers) {
-		// The remote stack already lists exactly these PRs — record its ID so
-		// future operations stay cheap and report it as in sync.
-		s.ID = strconv.Itoa(matched.ID)
-		cfg.Successf("Stack already up to date on GitHub")
-		return true
-	}
-
-	// Membership differs (or no stack exists yet). Reuse the list we already
-	// fetched for the create/adopt/update path.
-	if s.ID != "" {
-		return updateStack(cfg, client, s, prNumbers)
-	}
-	return reconcileUntrackedStack(cfg, client, s, prNumbers, stacks)
 }
 
 // restoreBranches resets each branch to its original SHA, collecting any errors.

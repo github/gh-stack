@@ -684,19 +684,6 @@ func clearPendingModifyState(cfg *config.Config, gitDir string) {
 	cfg.Successf("Stack recreated on GitHub to match local state")
 }
 
-// stackPRNumbers returns the PR numbers for a stack in order (bottom to top),
-// including merged PRs. The stacks API expects the full list — omitting merged
-// PRs causes a "Stack contents have changed" rejection.
-func stackPRNumbers(s *stack.Stack) []int {
-	var prNumbers []int
-	for _, b := range s.Branches {
-		if b.PullRequest != nil {
-			prNumbers = append(prNumbers, b.PullRequest.Number)
-		}
-	}
-	return prNumbers
-}
-
 // syncStack creates or updates a stack on GitHub from the active PRs.
 // If the stack already exists (s.ID is set), it calls the PUT endpoint with
 // the full list of PRs to keep the remote stack in sync. If no stack exists
@@ -708,7 +695,15 @@ func stackPRNumbers(s *stack.Stack) []int {
 // (created, updated, or already in sync) and false otherwise (fewer than two
 // PRs, an unresolved divergence, stacked PRs unavailable, or an API failure).
 func syncStack(cfg *config.Config, client github.ClientOps, s *stack.Stack) bool {
-	prNumbers := stackPRNumbers(s)
+	// Collect PR numbers in stack order (bottom to top), including merged PRs.
+	// The API expects the full list — omitting merged PRs causes a
+	// "Stack contents have changed" rejection.
+	var prNumbers []int
+	for _, b := range s.Branches {
+		if b.PullRequest != nil {
+			prNumbers = append(prNumbers, b.PullRequest.Number)
+		}
+	}
 
 	// The API requires at least 2 PRs to form a stack.
 	if len(prNumbers) < 2 {
@@ -721,9 +716,20 @@ func syncStack(cfg *config.Config, client github.ClientOps, s *stack.Stack) bool
 
 	// No locally tracked stack ID. The stack may already exist on GitHub
 	// (created from the web UI or another clone) without being recorded
-	// locally. Inspect the remote stacks and adopt a match instead of blindly
-	// creating a new one, which the API rejects because the PRs are already
-	// part of a stack.
+	// locally. Adopt it instead of blindly creating a new one, which the API
+	// rejects because the PRs are already part of a stack.
+	return reconcileUntrackedStack(cfg, client, s, prNumbers)
+}
+
+// reconcileUntrackedStack reconciles a locally untracked stack (s.ID == "")
+// with the stacks that already exist on GitHub. The PRs in s may already belong
+// to a remote stack created from the web UI or another clone; in that case we
+// adopt that stack rather than POST a new one (which the API rejects because the
+// PRs are already stacked). It creates a new stack when none match, refuses to
+// modify a divergent or PR-dropping stack, adopts a matching stack, or updates a
+// partially-formed one. It returns true when the remote stack object now
+// reflects the local stack.
+func reconcileUntrackedStack(cfg *config.Config, client github.ClientOps, s *stack.Stack, prNumbers []int) bool {
 	stacks, err := client.ListStacks()
 	if err != nil {
 		// Couldn't inspect remote state — fall back to the create path, which
@@ -731,22 +737,6 @@ func syncStack(cfg *config.Config, client github.ClientOps, s *stack.Stack) bool
 		return createNewStack(cfg, client, s, prNumbers)
 	}
 
-	return reconcileUntrackedStack(cfg, client, s, prNumbers, stacks)
-}
-
-// reconcileUntrackedStack reconciles a locally untracked stack (s.ID == "")
-// against the already-fetched remote stacks. The PRs in s may already belong to
-// a remote stack created from the web UI or another clone; in that case we adopt
-// that stack rather than POST a new one (which the API rejects because the PRs
-// are already stacked). It creates a new stack when none match, refuses to
-// modify a divergent or PR-dropping stack, adopts a matching stack, or updates a
-// partially-formed one.
-//
-// Callers pass the pre-fetched stack list so a single ListStacks round-trip is
-// shared across the reconciliation flow (sync fetches the list once for its
-// already-up-to-date short-circuit and reuses it here). It returns true when the
-// remote stack object now reflects the local stack.
-func reconcileUntrackedStack(cfg *config.Config, client github.ClientOps, s *stack.Stack, prNumbers []int, stacks []github.RemoteStack) bool {
 	matched, err := findMatchingStack(stacks, prNumbers)
 	if err != nil {
 		// Our PRs are spread across more than one remote stack. A PR can only
