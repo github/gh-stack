@@ -216,6 +216,18 @@ func (sf *StackFile) FindAllStacksForBranch(branch string) []*Stack {
 	return stacks
 }
 
+// IndexOfStack returns the index of the given stack within the file by identity
+// (pointer), or -1 if it is not part of this file. Use it to locate a stack
+// obtained from FindAllStacksForBranch before mutating the Stacks slice.
+func (sf *StackFile) IndexOfStack(s *Stack) int {
+	for i := range sf.Stacks {
+		if &sf.Stacks[i] == s {
+			return i
+		}
+	}
+	return -1
+}
+
 // FindStackByPRNumber returns the first stack and branch whose PR number matches.
 // Returns nil, nil if no match is found.
 func (sf *StackFile) FindStackByPRNumber(prNumber int) (*Stack, *BranchRef) {

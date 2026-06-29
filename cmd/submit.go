@@ -143,6 +143,13 @@ func runSubmit(cfg *config.Config, opts *submitOptions) error {
 	// Sync PR state to detect merged/queued PRs before pushing.
 	prDetails := syncStackPRs(cfg, s)
 
+	// If the active branches now sit on top of a fully-merged base, they can no
+	// longer extend the existing remote stack. Fork them into a fresh stack
+	// rooted at the trunk and continue the submit with that new stack.
+	if stacksAvailable {
+		s = maybeForkFromMergedBase(cfg, client, sf, s, gitDir)
+	}
+
 	// Resolve remote for pushing
 	remote, err := pickRemote(cfg, currentBranch, opts.remote)
 	if err != nil {
@@ -477,6 +484,144 @@ func humanize(s string) string {
 	}, s)
 }
 
+// maybeForkFromMergedBase detects when every PR that is officially part of the
+// stack on GitHub has already been merged, and forks the remaining local
+// branches (new branches, or open PRs that were never part of that remote stack)
+// into a brand-new stack rooted at the trunk.
+//
+// Once all of a stack's remote PRs are merged — especially after their branches
+// are deleted upstream — you can no longer add to that stack: a new PR on top
+// would target the trunk, breaking the remote stack's "each PR's base ref ==
+// previous PR's head ref" chain. Rather than failing the stack update on GitHub,
+// we lift the survivors into a new local stack with no remote ID so the
+// subsequent submit creates a fresh stack on GitHub. The original (fully merged)
+// remote stack is left untouched on GitHub.
+//
+// It returns the stack submit should continue with: the new forked stack when a
+// fork happens, or the original stack otherwise.
+func maybeForkFromMergedBase(cfg *config.Config, client github.ClientOps, sf *stack.StackFile, s *stack.Stack, gitDir string) *stack.Stack {
+	// Only meaningful when there is a tracked remote stack to evaluate. A fork
+	// can only happen if every remote-stack PR is merged, which implies at least
+	// one locally tracked branch is merged — checking that first avoids an extra
+	// ListStacks call on the common path.
+	if s.ID == "" || len(s.MergedBranches()) == 0 {
+		return s
+	}
+
+	remotePRs := remoteStackPRs(client, s.ID)
+	if len(remotePRs) == 0 {
+		return s
+	}
+
+	// Every PR officially in the remote stack must be merged. Open PRs that are
+	// not part of the remote stack do not count.
+	merged := mergedPRNumbers(s)
+	for _, n := range remotePRs {
+		if !merged[n] {
+			return s // a remote-stack PR is still open — not a fork situation
+		}
+	}
+
+	stackIdx := sf.IndexOfStack(s)
+	if stackIdx < 0 {
+		return s
+	}
+
+	// Partition the local branches: those that are part of the merged remote
+	// stack stay behind; everything else (new branches and open PRs that were
+	// never part of the remote stack) is forked into a new stack.
+	remoteSet := make(map[int]bool, len(remotePRs))
+	for _, n := range remotePRs {
+		remoteSet[n] = true
+	}
+	var keepBranches, forkBranches []stack.BranchRef
+	for _, b := range s.Branches {
+		if b.PullRequest != nil && remoteSet[b.PullRequest.Number] {
+			keepBranches = append(keepBranches, b)
+		} else {
+			forkBranches = append(forkBranches, b)
+		}
+	}
+	if len(forkBranches) == 0 {
+		return s // nothing new to fork — the whole stack is merged and done
+	}
+
+	// Capture trunk/prefix before mutating sf.Stacks (RemoveStack/AddStack can
+	// reallocate the slice and invalidate the s pointer).
+	trunk := s.Trunk
+	prefix := s.Prefix
+	numbered := s.Numbered
+
+	// The bottom surviving branch re-bases onto the trunk.
+	if base, err := git.MergeBase(forkBranches[0].Branch, trunk.Branch); err == nil {
+		forkBranches[0].Base = base
+	}
+
+	cfg.Warningf("Every PR in this stack has already been merged on GitHub")
+	cfg.Printf("Adding to a fully merged stack isn't supported — starting a new stack for your %d unmerged %s based on %s",
+		len(forkBranches), plural(len(forkBranches), "branch", "branches"), cfg.ColorCyan(trunk.Branch))
+
+	// Decide the fate of the original (fully merged) stack: keep it as a record
+	// only if at least one of its branches still exists locally; otherwise drop
+	// it. The merged stack is left intact on GitHub either way.
+	removeOld := true
+	for _, b := range keepBranches {
+		if git.BranchExists(b.Branch) {
+			removeOld = false
+			break
+		}
+	}
+
+	if removeOld {
+		sf.RemoveStack(stackIdx)
+	} else {
+		sf.Stacks[stackIdx].Branches = keepBranches
+	}
+
+	sf.AddStack(stack.Stack{
+		Prefix:   prefix,
+		Numbered: numbered,
+		Trunk:    trunk,
+		Branches: forkBranches,
+	})
+
+	if err := stack.Save(gitDir, sf); err != nil {
+		// Persisting the split failed, but the in-memory model is correct;
+		// surface the error and continue so the PRs still get submitted.
+		_ = handleSaveError(cfg, err)
+	}
+
+	return &sf.Stacks[len(sf.Stacks)-1]
+}
+
+// remoteStackPRs returns the PR numbers that are officially part of the remote
+// stack identified by stackID, or nil if it can't be determined.
+func remoteStackPRs(client github.ClientOps, stackID string) []int {
+	stacks, err := client.ListStacks()
+	if err != nil {
+		return nil
+	}
+	for _, rs := range stacks {
+		if strconv.Itoa(rs.ID) == stackID {
+			return rs.PullRequests
+		}
+	}
+	return nil
+}
+
+// mergedPRNumbers returns the set of PR numbers whose local branch is marked
+// merged. Call after syncStackPRs so the merge flags reflect the remote state.
+func mergedPRNumbers(s *stack.Stack) map[int]bool {
+	merged := make(map[int]bool)
+	for i := range s.Branches {
+		b := &s.Branches[i]
+		if b.IsMerged() && b.PullRequest != nil {
+			merged[b.PullRequest.Number] = true
+		}
+	}
+	return merged
+}
+
 // handlePendingModify handles the stack recreation after a modify operation.
 // It deletes the old remote stack and clears s.ID so syncStack creates a new
 // one. The state file is NOT cleared here — it is cleared after syncStack
@@ -665,6 +810,17 @@ func updateStack(cfg *config.Config, client github.ClientOps, s *stack.Stack, pr
 				// immediately try to re-create it.
 				s.ID = ""
 				createNewStack(cfg, client, s, prNumbers)
+			case 422:
+				// A merged branch whose ref has been deleted upstream breaks the
+				// stack's base→head chain, so the update is rejected. This is
+				// expected once part of the stack has landed; the unmerged PRs
+				// were still pushed and re-based, so explain it calmly rather
+				// than alarming the user with a raw API error.
+				if strings.Contains(httpErr.Message, "must form a stack") && len(s.MergedBranches()) > 0 {
+					cfg.Infof("Merged PRs have left the stack on GitHub, so it wasn't updated — your unmerged PRs were pushed and re-based onto the trunk")
+					return
+				}
+				cfg.Warningf("Failed to update stack on GitHub: %s", httpErr.Message)
 			default:
 				cfg.Warningf("Failed to update stack on GitHub: %s", httpErr.Message)
 			}

@@ -187,6 +187,10 @@ This applies whether or not a merge queue is enabled. With a merge queue, the sa
 
 Yes, partial stack merges are supported. After the merge, the lowest unmerged PR is updated to explicitly target the stack base (e.g., `main`). A cascading rebase is also automatically run to rebase the remaining unmerged branches.
 
+### What happens if I add a new PR after the whole stack has merged?
+
+Once every PR in a stack has merged, the stack is complete and can't be extended — a new PR on top would target the trunk directly, which no longer chains onto the merged PRs. When you run `gh stack submit` with new branches on top of a fully merged stack, the CLI automatically starts a **new** stack rooted at the trunk for those branches and creates it on GitHub. The original, fully merged stack is left untouched.
+
 ### What happens if you close a PR in the middle of the stack?
 
 Closing a PR in the middle of the stack will block all PRs above it from being mergeable. The stack relationship is preserved, so if you want to open a different PR or modify the stack, you will need to unstack and then re-create the stack.

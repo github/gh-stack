@@ -383,6 +383,26 @@ func TestRemoveStackForBranch(t *testing.T) {
 	})
 }
 
+// --- IndexOfStack: locating a stack by identity ---
+
+func TestIndexOfStack(t *testing.T) {
+	sf := &StackFile{
+		Stacks: []Stack{
+			makeStack("main", "a1"),
+			makeStack("main", "b1"),
+			makeStack("main", "c1"),
+		},
+	}
+
+	assert.Equal(t, 0, sf.IndexOfStack(&sf.Stacks[0]))
+	assert.Equal(t, 2, sf.IndexOfStack(&sf.Stacks[2]))
+
+	t.Run("not part of the file", func(t *testing.T) {
+		other := makeStack("main", "z1")
+		assert.Equal(t, -1, sf.IndexOfStack(&other))
+	})
+}
+
 // --- Queued state: transient merge queue support ---
 
 func makeQueuedBranch(name string, prNum int) BranchRef {
