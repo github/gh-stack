@@ -6,8 +6,10 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/cli/go-gh/v2/pkg/api"
 	"github.com/github/gh-stack/internal/config"
 	"github.com/github/gh-stack/internal/git"
+	"github.com/github/gh-stack/internal/github"
 	"github.com/github/gh-stack/internal/stack"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -1602,4 +1604,265 @@ func TestSync_ExplicitPrune_SkipsPrompt(t *testing.T) {
 
 	assert.NoError(t, err)
 	assert.Equal(t, []string{"b1"}, deletedBranches)
+}
+
+// --- Remote stack object reconciliation -------------------------------------
+
+// newSyncMockNoRebase returns a sync git mock whose trunk is already up to date,
+// so no fast-forward or cascade rebase occurs and the run reaches the remote
+// stack reconciliation step cleanly.
+func newSyncMockNoRebase(tmpDir, currentBranch string) *git.MockOps {
+	m := newSyncMock(tmpDir, currentBranch)
+	m.RevParseFn = func(ref string) (string, error) {
+		if ref == "main" || ref == "origin/main" {
+			return "trunk-sha", nil
+		}
+		if strings.HasPrefix(ref, "origin/") {
+			return "sha-" + strings.TrimPrefix(ref, "origin/"), nil
+		}
+		return "sha-" + ref, nil
+	}
+	return m
+}
+
+// openPRFinder returns a FindPRForBranch func that reports OPEN PRs for the
+// branches in prFor (branch name -> PR number) and nil for any other branch.
+func openPRFinder(prFor map[string]int) func(string) (*github.PullRequest, error) {
+	return func(branch string) (*github.PullRequest, error) {
+		n, ok := prFor[branch]
+		if !ok {
+			return nil, nil
+		}
+		return &github.PullRequest{
+			Number:      n,
+			State:       "OPEN",
+			URL:         fmt.Sprintf("https://github.com/o/r/pull/%d", n),
+			HeadRefName: branch,
+		}, nil
+	}
+}
+
+// runSyncWithGitHub executes sync against tmpDir using the supplied git and
+// GitHub mocks and returns the captured stderr output.
+func runSyncWithGitHub(t *testing.T, gitMock *git.MockOps, ghMock *github.MockClient) string {
+	t.Helper()
+	restore := git.SetOps(gitMock)
+	defer restore()
+
+	cfg, _, errR := config.NewTestConfig()
+	cfg.GitHubClientOverride = ghMock
+	cmd := SyncCmd(cfg)
+	cmd.SetOut(io.Discard)
+	cmd.SetErr(io.Discard)
+	require.NoError(t, cmd.Execute())
+
+	cfg.Err.Close()
+	errOut, _ := io.ReadAll(errR)
+	return string(errOut)
+}
+
+// TestSync_CreatesRemoteStackWhenPRsExist verifies the core fix: when the
+// branches already have open PRs but no stack exists on GitHub, sync creates the
+// stack object and reports "Stack synced".
+func TestSync_CreatesRemoteStackWhenPRsExist(t *testing.T) {
+	s := stack.Stack{
+		Trunk:    stack.BranchRef{Branch: "main"},
+		Branches: []stack.BranchRef{{Branch: "b1"}, {Branch: "b2"}},
+	}
+	tmpDir := t.TempDir()
+	writeStackFile(t, tmpDir, s)
+
+	var createdWith []int
+	ghMock := &github.MockClient{
+		FindPRForBranchFn: openPRFinder(map[string]int{"b1": 101, "b2": 102}),
+		ListStacksFn:      func() ([]github.RemoteStack, error) { return nil, nil },
+		CreateStackFn: func(prNumbers []int) (int, error) {
+			createdWith = prNumbers
+			return 7, nil
+		},
+		UpdateStackFn: func(string, []int) error {
+			t.Fatal("UpdateStack should not be called when no remote stack exists")
+			return nil
+		},
+	}
+
+	output := runSyncWithGitHub(t, newSyncMockNoRebase(tmpDir, "b1"), ghMock)
+
+	assert.Equal(t, []int{101, 102}, createdWith, "should create the stack from both PR numbers")
+	assert.Contains(t, output, "Stack created on GitHub with 2 PRs")
+	assert.Contains(t, output, "Stack synced")
+	assert.NotContains(t, output, "Branches synced")
+
+	// The new remote stack ID must be persisted to the stack file.
+	sf, err := stack.Load(tmpDir)
+	require.NoError(t, err)
+	require.Len(t, sf.Stacks, 1)
+	assert.Equal(t, "7", sf.Stacks[0].ID)
+}
+
+// TestSync_AdoptsExistingEqualRemoteStack verifies that when a remote stack
+// already lists exactly the local PRs, sync records its ID without issuing a
+// redundant create/update and still reports "Stack synced".
+func TestSync_AdoptsExistingEqualRemoteStack(t *testing.T) {
+	s := stack.Stack{
+		Trunk:    stack.BranchRef{Branch: "main"},
+		Branches: []stack.BranchRef{{Branch: "b1"}, {Branch: "b2"}},
+	}
+	tmpDir := t.TempDir()
+	writeStackFile(t, tmpDir, s)
+
+	ghMock := &github.MockClient{
+		FindPRForBranchFn: openPRFinder(map[string]int{"b1": 101, "b2": 102}),
+		ListStacksFn: func() ([]github.RemoteStack, error) {
+			return []github.RemoteStack{{ID: 9, PullRequests: []int{101, 102}}}, nil
+		},
+		CreateStackFn: func([]int) (int, error) {
+			t.Fatal("CreateStack should not be called when the remote stack matches")
+			return 0, nil
+		},
+		UpdateStackFn: func(string, []int) error {
+			t.Fatal("UpdateStack should not be called when the remote stack matches")
+			return nil
+		},
+	}
+
+	output := runSyncWithGitHub(t, newSyncMockNoRebase(tmpDir, "b1"), ghMock)
+
+	assert.Contains(t, output, "Stack already up to date on GitHub")
+	assert.Contains(t, output, "Stack synced")
+	assert.NotContains(t, output, "Branches synced")
+
+	sf, err := stack.Load(tmpDir)
+	require.NoError(t, err)
+	assert.Equal(t, "9", sf.Stacks[0].ID, "should record the adopted stack ID")
+}
+
+// TestSync_UpdatesPartialRemoteStack verifies that when a remote stack contains
+// only some of the local PRs, sync updates it with the full list.
+func TestSync_UpdatesPartialRemoteStack(t *testing.T) {
+	s := stack.Stack{
+		Trunk:    stack.BranchRef{Branch: "main"},
+		Branches: []stack.BranchRef{{Branch: "b1"}, {Branch: "b2"}, {Branch: "b3"}},
+	}
+	tmpDir := t.TempDir()
+	writeStackFile(t, tmpDir, s)
+
+	var updatedID string
+	var updatedWith []int
+	ghMock := &github.MockClient{
+		FindPRForBranchFn: openPRFinder(map[string]int{"b1": 101, "b2": 102, "b3": 103}),
+		ListStacksFn: func() ([]github.RemoteStack, error) {
+			return []github.RemoteStack{{ID: 9, PullRequests: []int{101, 102}}}, nil
+		},
+		CreateStackFn: func([]int) (int, error) {
+			t.Fatal("CreateStack should not be called when a matching stack exists")
+			return 0, nil
+		},
+		UpdateStackFn: func(stackID string, prNumbers []int) error {
+			updatedID = stackID
+			updatedWith = prNumbers
+			return nil
+		},
+	}
+
+	output := runSyncWithGitHub(t, newSyncMockNoRebase(tmpDir, "b1"), ghMock)
+
+	assert.Equal(t, "9", updatedID)
+	assert.Equal(t, []int{101, 102, 103}, updatedWith)
+	assert.Contains(t, output, "Stack updated on GitHub with 3 PRs")
+	assert.Contains(t, output, "Stack synced")
+	assert.NotContains(t, output, "Branches synced")
+
+	sf, err := stack.Load(tmpDir)
+	require.NoError(t, err)
+	assert.Equal(t, "9", sf.Stacks[0].ID)
+}
+
+// TestSync_FewerThanTwoPRs_BranchesSynced verifies that with only one open PR
+// (no stack is possible), sync skips all stack API calls and reports
+// "Branches synced" rather than "Stack synced".
+func TestSync_FewerThanTwoPRs_BranchesSynced(t *testing.T) {
+	s := stack.Stack{
+		Trunk:    stack.BranchRef{Branch: "main"},
+		Branches: []stack.BranchRef{{Branch: "b1"}, {Branch: "b2"}},
+	}
+	tmpDir := t.TempDir()
+	writeStackFile(t, tmpDir, s)
+
+	var listCalled, createCalled bool
+	ghMock := &github.MockClient{
+		FindPRForBranchFn: openPRFinder(map[string]int{"b1": 101}), // b2 has no PR
+		ListStacksFn: func() ([]github.RemoteStack, error) {
+			listCalled = true
+			return nil, nil
+		},
+		CreateStackFn: func([]int) (int, error) {
+			createCalled = true
+			return 0, nil
+		},
+	}
+
+	output := runSyncWithGitHub(t, newSyncMockNoRebase(tmpDir, "b1"), ghMock)
+
+	assert.False(t, listCalled, "ListStacks should not be called with fewer than two PRs")
+	assert.False(t, createCalled, "CreateStack should not be called with fewer than two PRs")
+	assert.Contains(t, output, "Branches synced")
+	assert.NotContains(t, output, "Stack synced")
+}
+
+// TestSync_StacksUnavailable_BranchesSynced verifies that when the stacks API
+// is unavailable (404 on create), sync warns and reports "Branches synced".
+func TestSync_StacksUnavailable_BranchesSynced(t *testing.T) {
+	s := stack.Stack{
+		Trunk:    stack.BranchRef{Branch: "main"},
+		Branches: []stack.BranchRef{{Branch: "b1"}, {Branch: "b2"}},
+	}
+	tmpDir := t.TempDir()
+	writeStackFile(t, tmpDir, s)
+
+	ghMock := &github.MockClient{
+		FindPRForBranchFn: openPRFinder(map[string]int{"b1": 101, "b2": 102}),
+		ListStacksFn:      func() ([]github.RemoteStack, error) { return nil, nil },
+		CreateStackFn: func([]int) (int, error) {
+			return 0, &api.HTTPError{StatusCode: 404, Message: "Not Found"}
+		},
+	}
+
+	output := runSyncWithGitHub(t, newSyncMockNoRebase(tmpDir, "b1"), ghMock)
+
+	assert.Contains(t, output, "Branches synced")
+	assert.NotContains(t, output, "Stack synced")
+}
+
+// TestSync_PRsSpanMultipleStacks_BranchesSynced verifies that when the local
+// PRs belong to more than one remote stack, sync refuses to auto-resolve the
+// divergence and reports "Branches synced".
+func TestSync_PRsSpanMultipleStacks_BranchesSynced(t *testing.T) {
+	s := stack.Stack{
+		Trunk:    stack.BranchRef{Branch: "main"},
+		Branches: []stack.BranchRef{{Branch: "b1"}, {Branch: "b2"}},
+	}
+	tmpDir := t.TempDir()
+	writeStackFile(t, tmpDir, s)
+
+	var createCalled, updateCalled bool
+	ghMock := &github.MockClient{
+		FindPRForBranchFn: openPRFinder(map[string]int{"b1": 101, "b2": 102}),
+		ListStacksFn: func() ([]github.RemoteStack, error) {
+			return []github.RemoteStack{
+				{ID: 9, PullRequests: []int{101}},
+				{ID: 10, PullRequests: []int{102}},
+			}, nil
+		},
+		CreateStackFn: func([]int) (int, error) { createCalled = true; return 0, nil },
+		UpdateStackFn: func(string, []int) error { updateCalled = true; return nil },
+	}
+
+	output := runSyncWithGitHub(t, newSyncMockNoRebase(tmpDir, "b1"), ghMock)
+
+	assert.False(t, createCalled, "CreateStack should not be called on divergence")
+	assert.False(t, updateCalled, "UpdateStack should not be called on divergence")
+	assert.Contains(t, output, "multiple stacks")
+	assert.Contains(t, output, "Branches synced")
+	assert.NotContains(t, output, "Stack synced")
 }

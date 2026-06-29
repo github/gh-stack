@@ -51,4 +51,4 @@ gh stack sync
 
 - **`gh stack push`** pushes branches only (uses `--force-with-lease` for safety). It does not create or update PRs.
 - **`gh stack submit`** pushes branches and creates or updates PRs, linking them as a Stack on GitHub.
-- **`gh stack sync`** is the all-in-one command: fetch, rebase, push, sync PR state, and optionally prune local branches for merged PRs.
+- **`gh stack sync`** is the all-in-one command: fetch, rebase, push, sync PR state, link open PRs into a Stack on GitHub, and optionally prune local branches for merged PRs.

@@ -134,7 +134,8 @@ This command:
 3. Rebases all remaining stack branches onto the updated trunk
 4. Pushes the updated branches
 5. Syncs PR state from GitHub
-6. Prompts to prune local branches for merged PRs (use `--prune` to prune automatically)
+6. Links the open PRs into a Stack on GitHub (creating or updating the remote stack when two or more PRs exist)
+7. Prompts to prune local branches for merged PRs (use `--prune` to prune automatically)
 
 If a conflict is detected during the rebase, all branches are restored to their original state, and you're advised to run `gh stack rebase` to resolve conflicts interactively.
 
