@@ -29,6 +29,8 @@ type PullRequest struct {
 	Number           int               `graphql:"number"`
 	State            string            `graphql:"state"`
 	URL              string            `graphql:"url"`
+	Title            string            `graphql:"title"`
+	Body             string            `graphql:"body"`
 	HeadRefName      string            `graphql:"headRefName"`
 	BaseRefName      string            `graphql:"baseRefName"`
 	IsDraft          bool              `graphql:"isDraft"`
@@ -101,6 +103,8 @@ func (c *Client) FindPRForBranch(branch string) (*PullRequest, error) {
 					ID               string            `graphql:"id"`
 					Number           int               `graphql:"number"`
 					URL              string            `graphql:"url"`
+					Title            string            `graphql:"title"`
+					Body             string            `graphql:"body"`
 					BaseRefName      string            `graphql:"baseRefName"`
 					IsDraft          bool              `graphql:"isDraft"`
 					MergeQueueEntry  *MergeQueueEntry  `graphql:"mergeQueueEntry"`
@@ -130,6 +134,8 @@ func (c *Client) FindPRForBranch(branch string) (*PullRequest, error) {
 		ID:               n.ID,
 		Number:           n.Number,
 		URL:              n.URL,
+		Title:            n.Title,
+		Body:             n.Body,
 		BaseRefName:      n.BaseRefName,
 		IsDraft:          n.IsDraft,
 		MergeQueueEntry:  n.MergeQueueEntry,
@@ -279,6 +285,8 @@ type PRDetails struct {
 	Number   int
 	State    string // OPEN, CLOSED, MERGED
 	URL      string
+	Title    string
+	Body     string
 	IsDraft  bool
 	Merged   bool
 	IsQueued bool
@@ -342,6 +350,8 @@ func (c *Client) FindPRByNumber(number int) (*PullRequest, error) {
 				Number           int               `graphql:"number"`
 				State            string            `graphql:"state"`
 				URL              string            `graphql:"url"`
+				Title            string            `graphql:"title"`
+				Body             string            `graphql:"body"`
 				HeadRefName      string            `graphql:"headRefName"`
 				BaseRefName      string            `graphql:"baseRefName"`
 				IsDraft          bool              `graphql:"isDraft"`
@@ -371,6 +381,8 @@ func (c *Client) FindPRByNumber(number int) (*PullRequest, error) {
 		Number:           n.Number,
 		State:            n.State,
 		URL:              n.URL,
+		Title:            n.Title,
+		Body:             n.Body,
 		HeadRefName:      n.HeadRefName,
 		BaseRefName:      n.BaseRefName,
 		IsDraft:          n.IsDraft,

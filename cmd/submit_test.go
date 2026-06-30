@@ -15,6 +15,7 @@ import (
 	"github.com/github/gh-stack/internal/github"
 	"github.com/github/gh-stack/internal/modify"
 	"github.com/github/gh-stack/internal/stack"
+	"github.com/github/gh-stack/internal/tui/submitview"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -187,7 +188,7 @@ func TestSubmit_DefaultDraft(t *testing.T) {
 
 	cfg, _, _ := config.NewTestConfig()
 	cfg.GitHubClientOverride = &github.MockClient{
-		ListStacksFn: func() ([]github.RemoteStack, error) { return nil, nil },
+		ListStacksFn:      func() ([]github.RemoteStack, error) { return nil, nil },
 		FindPRForBranchFn: func(string) (*github.PullRequest, error) { return nil, nil },
 		CreatePRFn: func(base, head, title, body string, draft bool) (*github.PullRequest, error) {
 			createdDraft = draft
@@ -229,7 +230,7 @@ func TestSubmit_OpenFlag(t *testing.T) {
 
 	cfg, _, _ := config.NewTestConfig()
 	cfg.GitHubClientOverride = &github.MockClient{
-		ListStacksFn: func() ([]github.RemoteStack, error) { return nil, nil },
+		ListStacksFn:      func() ([]github.RemoteStack, error) { return nil, nil },
 		FindPRForBranchFn: func(string) (*github.PullRequest, error) { return nil, nil },
 		CreatePRFn: func(base, head, title, body string, draft bool) (*github.PullRequest, error) {
 			createdDraft = draft
@@ -1649,7 +1650,7 @@ func TestSubmit_UsesPRTemplate(t *testing.T) {
 
 	cfg, _, _ := config.NewTestConfig()
 	cfg.GitHubClientOverride = &github.MockClient{
-		ListStacksFn: func() ([]github.RemoteStack, error) { return nil, nil },
+		ListStacksFn:      func() ([]github.RemoteStack, error) { return nil, nil },
 		FindPRForBranchFn: func(string) (*github.PullRequest, error) { return nil, nil },
 		CreatePRFn: func(base, head, title, body string, draft bool) (*github.PullRequest, error) {
 			capturedBody = body
@@ -1696,7 +1697,7 @@ func TestSubmit_NoTemplate_UsesFooter(t *testing.T) {
 
 	cfg, _, _ := config.NewTestConfig()
 	cfg.GitHubClientOverride = &github.MockClient{
-		ListStacksFn: func() ([]github.RemoteStack, error) { return nil, nil },
+		ListStacksFn:      func() ([]github.RemoteStack, error) { return nil, nil },
 		FindPRForBranchFn: func(string) (*github.PullRequest, error) { return nil, nil },
 		CreatePRFn: func(base, head, title, body string, draft bool) (*github.PullRequest, error) {
 			capturedBody = body
@@ -1835,8 +1836,8 @@ func TestSubmit_DisablesAutoMergeOnExistingPR(t *testing.T) {
 			case "b2":
 				return &github.PullRequest{
 					Number: 20, ID: "PR_20",
-					URL:              "https://github.com/owner/repo/pull/20",
-					BaseRefName:      "b1", HeadRefName: "b2",
+					URL:         "https://github.com/owner/repo/pull/20",
+					BaseRefName: "b1", HeadRefName: "b2",
 					AutoMergeRequest: &github.AutoMergeRequest{EnabledAt: "2024-01-01T00:00:00Z"},
 				}, nil
 			}
@@ -1890,8 +1891,8 @@ func TestSubmit_DisableAutoMergeFailure_ContinuesWithWarning(t *testing.T) {
 		FindPRForBranchFn: func(branch string) (*github.PullRequest, error) {
 			return &github.PullRequest{
 				Number: 10, ID: "PR_10",
-				URL:              "https://github.com/owner/repo/pull/10",
-				BaseRefName:      "main", HeadRefName: "b1",
+				URL:         "https://github.com/owner/repo/pull/10",
+				BaseRefName: "main", HeadRefName: "b1",
 				AutoMergeRequest: &github.AutoMergeRequest{EnabledAt: "2024-01-01T00:00:00Z"},
 			}, nil
 		},
@@ -1962,4 +1963,90 @@ func TestSubmit_NoAutoMerge_SkipsDisable(t *testing.T) {
 	err := cmd.Execute()
 
 	assert.NoError(t, err)
+}
+
+// --- Per-PR draft override plumbing (interactive editor contract) ---
+
+func TestCreatePR_UsesDraftOverride(t *testing.T) {
+	s := &stack.Stack{
+		Trunk:    stack.BranchRef{Branch: "main"},
+		Branches: []stack.BranchRef{{Branch: "b1"}},
+	}
+
+	var gotTitle, gotBody string
+	var gotDraft bool
+	cfg, _, _ := config.NewTestConfig()
+	client := &github.MockClient{
+		CreatePRFn: func(base, head, title, body string, draft bool) (*github.PullRequest, error) {
+			gotTitle, gotBody, gotDraft = title, body, draft
+			return &github.PullRequest{Number: 7, ID: "PR_7", URL: "https://github.com/o/r/pull/7"}, nil
+		},
+	}
+
+	drafts := map[string]*submitview.PRDraft{
+		"b1": {Branch: "b1", Include: true, Title: "Custom title", Body: "Custom body", Draft: true},
+	}
+
+	// --open would normally force ready; the override's Draft must win.
+	err := createPR(cfg, client, s, 0, "main", &submitOptions{open: true}, "", drafts)
+	require.NoError(t, err)
+
+	assert.Equal(t, "Custom title", gotTitle)
+	assert.Contains(t, gotBody, "Custom body")
+	assert.Contains(t, gotBody, "GitHub Stacks CLI", "footer is appended at submit time")
+	assert.True(t, gotDraft, "draft override should be honored over --open")
+	require.NotNil(t, s.Branches[0].PullRequest)
+	assert.Equal(t, 7, s.Branches[0].PullRequest.Number)
+}
+
+func TestCreatePR_DraftOverride_KeepsUserBodyOverTemplate(t *testing.T) {
+	s := &stack.Stack{
+		Trunk:    stack.BranchRef{Branch: "main"},
+		Branches: []stack.BranchRef{{Branch: "b1"}},
+	}
+
+	var gotBody string
+	cfg, _, _ := config.NewTestConfig()
+	client := &github.MockClient{
+		CreatePRFn: func(base, head, title, body string, draft bool) (*github.PullRequest, error) {
+			gotBody = body
+			return &github.PullRequest{Number: 1, ID: "PR_1"}, nil
+		},
+	}
+	// The user edited the description in the TUI; the repo also has a template.
+	// The user's edits must win — the template was only the prefill.
+	drafts := map[string]*submitview.PRDraft{
+		"b1": {Branch: "b1", Include: true, Title: "T", Body: "My edited description"},
+	}
+
+	err := createPR(cfg, client, s, 0, "main", &submitOptions{}, "## Raw repo template", drafts)
+	require.NoError(t, err)
+
+	assert.Contains(t, gotBody, "My edited description", "the user's edited body is used")
+	assert.NotContains(t, gotBody, "Raw repo template", "the raw template does not override the user's edits")
+	assert.Contains(t, gotBody, "GitHub Stacks CLI", "the attribution footer is appended")
+}
+
+func TestEnsurePR_DeselectedNewBranchSkipsCreate(t *testing.T) {
+	s := &stack.Stack{
+		Trunk:    stack.BranchRef{Branch: "main"},
+		Branches: []stack.BranchRef{{Branch: "b1"}},
+	}
+
+	cfg, _, _ := config.NewTestConfig()
+	client := &github.MockClient{
+		FindPRForBranchFn: func(string) (*github.PullRequest, error) { return nil, nil },
+		CreatePRFn: func(string, string, string, string, bool) (*github.PullRequest, error) {
+			t.Fatal("CreatePR must not be called for a deselected NEW branch")
+			return nil, nil
+		},
+	}
+
+	drafts := map[string]*submitview.PRDraft{
+		"b1": {Branch: "b1", Include: false},
+	}
+
+	err := ensurePR(cfg, client, s, 0, "main", &submitOptions{}, "", drafts)
+	require.NoError(t, err)
+	assert.Nil(t, s.Branches[0].PullRequest, "no PR should be recorded for a deselected branch")
 }

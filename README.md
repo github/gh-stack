@@ -372,11 +372,13 @@ Creates a Stacked PR for every branch in the stack, pushing branches to the remo
 
 After creating PRs, `submit` automatically creates a **Stack** on GitHub to link the PRs together. If the stack already exists on GitHub (e.g., from a previous submit), new PRs will be added to the top of the stack.
 
-When creating new PRs, you will be prompted to enter a title for each one. Press Enter to accept the default (branch name), or use `--auto` to skip prompting entirely.
+In an interactive terminal, `submit` opens a full-screen, mouse- and keyboard-driven editor on a single screen. Every branch without a PR is included by default — deselect any you don't want on the left panel (<kbd>Ctrl</kbd>+<kbd>X</kbd>). Because each PR builds on the branch below it, deselecting a branch also deselects the ones stacked above it, and re-including a branch re-includes the ones below it. Draft each PR's title, description (with a markdown preview and `$EDITOR` escape), and choose ready-for-review or draft on the right, then submit them all at once with <kbd>Ctrl</kbd>+<kbd>S</kbd>. Pass `--auto` (or run in CI) to skip the editor and use auto-generated titles.
+
+In the editor, new PRs default to ready for review; flip any PR to draft with the ready ↔ draft toggle. With `--auto`, new PRs are created as drafts unless you pass `--open`.
 
 | Flag | Description |
 |------|-------------|
-| `--auto` | Use auto-generated PR titles without prompting |
+| `--auto` | Skip the editor and use auto-generated PR titles |
 | `--open` | Mark new and existing PRs as ready for review |
 | `--remote <name>` | Remote to push to (defaults to auto-detected remote) |
 

@@ -412,6 +412,8 @@ func syncStackPRs(cfg *config.Config, s *stack.Stack) map[string]*github.PRDetai
 				Number:   pr.Number,
 				State:    "OPEN",
 				URL:      pr.URL,
+				Title:    pr.Title,
+				Body:     pr.Body,
 				IsDraft:  pr.IsDraft,
 				Merged:   false,
 				IsQueued: pr.IsQueued(),
@@ -458,6 +460,8 @@ func prDetailsFromPR(pr *github.PullRequest) *github.PRDetails {
 		Number:   pr.Number,
 		State:    pr.State,
 		URL:      pr.URL,
+		Title:    pr.Title,
+		Body:     pr.Body,
 		IsDraft:  pr.IsDraft,
 		Merged:   pr.Merged,
 		IsQueued: pr.IsQueued(),
@@ -479,6 +483,35 @@ func prDetailsFromTracked(ref *stack.PullRequestRef) *github.PRDetails {
 		URL:    ref.URL,
 		Merged: ref.Merged,
 	}
+}
+
+// enrichPRContent fills in the Title and Body of any existing PR whose details
+// were built without them (e.g. merged branches, which skip the live refresh in
+// syncStackPRs). It is used before the submit TUI renders an existing PR's
+// read-only card so it shows the real PR title and description. PRs that already
+// have a title (the common open/draft/queued case) are left untouched.
+func enrichPRContent(client github.ClientOps, details map[string]*github.PRDetails) {
+	if client == nil {
+		return
+	}
+	var wg sync.WaitGroup
+	sem := make(chan struct{}, maxAPIConcurrency)
+	for _, d := range details {
+		if d == nil || d.Number == 0 || strings.TrimSpace(d.Title) != "" {
+			continue
+		}
+		wg.Add(1)
+		go func(d *github.PRDetails) {
+			defer wg.Done()
+			sem <- struct{}{}
+			defer func() { <-sem }()
+			if pr, err := client.FindPRByNumber(d.Number); err == nil && pr != nil {
+				d.Title = pr.Title
+				d.Body = pr.Body
+			}
+		}(d)
+	}
+	wg.Wait()
 }
 
 // syncStackPRsFromRemote uses the stack API to sync PR state. The remote
