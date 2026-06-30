@@ -395,6 +395,281 @@ func TestSubmit_SkipsMergedBranches(t *testing.T) {
 	assert.Equal(t, []string{"b2"}, pushCalls[0].branches)
 }
 
+// TestSubmit_ForksWhenRemoteStackFullyMerged covers the case where every PR
+// officially part of the stack on GitHub has merged and the user has added new
+// branches on top. Submit should lift the new branches into a fresh stack rooted
+// at the trunk and create a new stack on GitHub, leaving the merged stack alone.
+func TestSubmit_ForksWhenRemoteStackFullyMerged(t *testing.T) {
+	tests := []struct {
+		name           string
+		branchesExist  bool // do the merged branches still exist locally?
+		wantStackCount int
+	}{
+		{name: "removes old stack when merged branches are gone", branchesExist: false, wantStackCount: 1},
+		{name: "keeps old stack when merged branches still exist", branchesExist: true, wantStackCount: 2},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			s := stack.Stack{
+				ID:    "42",
+				Trunk: stack.BranchRef{Branch: "main"},
+				Branches: []stack.BranchRef{
+					{Branch: "b1", PullRequest: &stack.PullRequestRef{Number: 1, Merged: true}},
+					{Branch: "b2", PullRequest: &stack.PullRequestRef{Number: 2, Merged: true}},
+					{Branch: "b3"},
+					{Branch: "b4"},
+				},
+			}
+
+			tmpDir := t.TempDir()
+			writeStackFile(t, tmpDir, s)
+
+			var pushCalls []pushCall
+			var createdPRs []string
+			var createStackPRs []int
+
+			mock := newSubmitMock(tmpDir, "b4")
+			mock.PushFn = func(remote string, branches []string, force, atomic bool) error {
+				pushCalls = append(pushCalls, pushCall{remote, branches, force, atomic})
+				return nil
+			}
+			mock.LogRangeFn = func(base, head string) ([]git.CommitInfo, error) {
+				return []git.CommitInfo{{Subject: "commit for " + head}}, nil
+			}
+			mock.MergeBaseFn = func(a, b string) (string, error) { return "basesha", nil }
+			mock.RevParseFn = func(ref string) (string, error) { return "sha-" + ref, nil }
+			mock.BranchExistsFn = func(string) bool { return tt.branchesExist }
+			restore := git.SetOps(mock)
+			defer restore()
+
+			prCounter := 100
+			cfg, _, errR := config.NewTestConfig()
+			cfg.GitHubClientOverride = &github.MockClient{
+				ListStacksFn: func() ([]github.RemoteStack, error) {
+					return []github.RemoteStack{{ID: 42, PullRequests: []int{1, 2}}}, nil
+				},
+				FindPRByNumberFn: func(n int) (*github.PullRequest, error) {
+					switch n {
+					case 1:
+						return &github.PullRequest{Number: 1, HeadRefName: "b1", State: "MERGED", Merged: true}, nil
+					case 2:
+						return &github.PullRequest{Number: 2, HeadRefName: "b2", State: "MERGED", Merged: true}, nil
+					}
+					return &github.PullRequest{Number: n, State: "OPEN"}, nil
+				},
+				FindPRForBranchFn: func(string) (*github.PullRequest, error) { return nil, nil },
+				CreatePRFn: func(base, head, title, body string, draft bool) (*github.PullRequest, error) {
+					createdPRs = append(createdPRs, head)
+					prCounter++
+					return &github.PullRequest{
+						Number:      prCounter,
+						ID:          fmt.Sprintf("PR_%d", prCounter),
+						URL:         fmt.Sprintf("https://github.com/o/r/pull/%d", prCounter),
+						HeadRefName: head,
+					}, nil
+				},
+				CreateStackFn: func(prNumbers []int) (int, error) {
+					createStackPRs = prNumbers
+					return 99, nil
+				},
+			}
+
+			cmd := SubmitCmd(cfg)
+			cmd.SetArgs([]string{"--auto"})
+			cmd.SetOut(io.Discard)
+			cmd.SetErr(io.Discard)
+			err := cmd.Execute()
+
+			cfg.Err.Close()
+			errOut, _ := io.ReadAll(errR)
+			output := string(errOut)
+
+			require.NoError(t, err)
+
+			// Only the new branches are pushed; merged ones are left behind.
+			require.Len(t, pushCalls, 2)
+			assert.Equal(t, []string{"b3"}, pushCalls[0].branches)
+			assert.Equal(t, []string{"b4"}, pushCalls[1].branches)
+
+			// Fork messaging.
+			assert.Contains(t, output, "Every PR in this stack has already been merged")
+			assert.Contains(t, output, "starting a new stack")
+
+			// PRs are created for the new branches and grouped into a new stack.
+			assert.Equal(t, []string{"b3", "b4"}, createdPRs)
+			assert.Equal(t, []int{101, 102}, createStackPRs)
+
+			// The local stack file is split: the new branches form their own
+			// stack rooted at the trunk with the freshly created remote ID.
+			reloaded, err := stack.Load(tmpDir)
+			require.NoError(t, err)
+			require.Len(t, reloaded.Stacks, tt.wantStackCount)
+
+			forked := reloaded.FindAllStacksForBranch("b4")
+			require.Len(t, forked, 1)
+			assert.Equal(t, []string{"b3", "b4"}, forked[0].BranchNames())
+			assert.Equal(t, "99", forked[0].ID)
+			assert.Equal(t, "main", forked[0].Trunk.Branch)
+
+			oldStack := reloaded.FindAllStacksForBranch("b1")
+			if tt.branchesExist {
+				require.Len(t, oldStack, 1)
+				assert.Equal(t, []string{"b1", "b2"}, oldStack[0].BranchNames())
+				assert.Equal(t, "42", oldStack[0].ID)
+			} else {
+				assert.Empty(t, oldStack)
+			}
+		})
+	}
+}
+
+// TestSubmit_NoForkWhenRemoteStackHasOpenPR verifies that a normal partially
+// merged stack (the remote stack still has an open PR) is NOT forked — that is
+// the everyday bottom-up merge flow and must keep working as before.
+func TestSubmit_NoForkWhenRemoteStackHasOpenPR(t *testing.T) {
+	s := stack.Stack{
+		ID:    "42",
+		Trunk: stack.BranchRef{Branch: "main"},
+		Branches: []stack.BranchRef{
+			{Branch: "b1", PullRequest: &stack.PullRequestRef{Number: 1, Merged: true}},
+			{Branch: "b2", PullRequest: &stack.PullRequestRef{Number: 2, Merged: true}},
+			{Branch: "b3", PullRequest: &stack.PullRequestRef{Number: 3}},
+			{Branch: "b4"},
+		},
+	}
+
+	tmpDir := t.TempDir()
+	writeStackFile(t, tmpDir, s)
+
+	var pushCalls []pushCall
+
+	mock := newSubmitMock(tmpDir, "b4")
+	mock.PushFn = func(remote string, branches []string, force, atomic bool) error {
+		pushCalls = append(pushCalls, pushCall{remote, branches, force, atomic})
+		return nil
+	}
+	mock.LogRangeFn = func(base, head string) ([]git.CommitInfo, error) {
+		return []git.CommitInfo{{Subject: "commit for " + head}}, nil
+	}
+	mock.MergeBaseFn = func(a, b string) (string, error) { return "basesha", nil }
+	mock.RevParseFn = func(ref string) (string, error) { return "sha-" + ref, nil }
+	mock.BranchExistsFn = func(string) bool { return true }
+	restore := git.SetOps(mock)
+	defer restore()
+
+	prCounter := 100
+	cfg, _, errR := config.NewTestConfig()
+	cfg.GitHubClientOverride = &github.MockClient{
+		ListStacksFn: func() ([]github.RemoteStack, error) {
+			return []github.RemoteStack{{ID: 42, PullRequests: []int{1, 2, 3}}}, nil
+		},
+		FindPRByNumberFn: func(n int) (*github.PullRequest, error) {
+			switch n {
+			case 1:
+				return &github.PullRequest{Number: 1, HeadRefName: "b1", State: "MERGED", Merged: true}, nil
+			case 2:
+				return &github.PullRequest{Number: 2, HeadRefName: "b2", State: "MERGED", Merged: true}, nil
+			case 3:
+				return &github.PullRequest{Number: 3, HeadRefName: "b3", State: "OPEN"}, nil
+			}
+			return &github.PullRequest{Number: n, State: "OPEN"}, nil
+		},
+		FindPRForBranchFn: func(string) (*github.PullRequest, error) { return nil, nil },
+		CreatePRFn: func(base, head, title, body string, draft bool) (*github.PullRequest, error) {
+			prCounter++
+			return &github.PullRequest{
+				Number:      prCounter,
+				ID:          fmt.Sprintf("PR_%d", prCounter),
+				URL:         fmt.Sprintf("https://github.com/o/r/pull/%d", prCounter),
+				HeadRefName: head,
+			}, nil
+		},
+		UpdateStackFn: func(string, []int) error {
+			// Merged-and-deleted base branches break the chain on GitHub.
+			return &api.HTTPError{
+				StatusCode: 422,
+				Message:    "Pull requests must form a stack, where each PR's base ref is the previous PR's head ref",
+				RequestURL: &url.URL{Path: "/repos/o/r/cli_internal/pulls/stacks/42"},
+			}
+		},
+	}
+
+	cmd := SubmitCmd(cfg)
+	cmd.SetArgs([]string{"--auto"})
+	cmd.SetOut(io.Discard)
+	cmd.SetErr(io.Discard)
+	err := cmd.Execute()
+
+	cfg.Err.Close()
+	errOut, _ := io.ReadAll(errR)
+	output := string(errOut)
+
+	require.NoError(t, err)
+
+	// No fork happened.
+	assert.NotContains(t, output, "starting a new stack")
+	// The broken-chain update is explained calmly, not as a scary failure.
+	assert.Contains(t, output, "Merged PRs have left the stack")
+	assert.NotContains(t, output, "Failed to update stack")
+
+	// The local stack file is untouched: still a single stack with all branches.
+	reloaded, err := stack.Load(tmpDir)
+	require.NoError(t, err)
+	require.Len(t, reloaded.Stacks, 1)
+	assert.Equal(t, []string{"b1", "b2", "b3", "b4"}, reloaded.Stacks[0].BranchNames())
+}
+
+// TestUpdateStack_BrokenChainAfterMerge verifies the "must form a stack" 422 is
+// reported calmly when merged branches are present, but still warns otherwise.
+func TestUpdateStack_BrokenChainAfterMerge(t *testing.T) {
+	mustFormErr := func() error {
+		return &api.HTTPError{
+			StatusCode: 422,
+			Message:    "Pull requests must form a stack, where each PR's base ref is the previous PR's head ref",
+			RequestURL: &url.URL{Path: "/repos/o/r/cli_internal/pulls/stacks/42"},
+		}
+	}
+
+	t.Run("merged branches present is reported calmly", func(t *testing.T) {
+		s := &stack.Stack{
+			ID:    "42",
+			Trunk: stack.BranchRef{Branch: "main"},
+			Branches: []stack.BranchRef{
+				{Branch: "b1", PullRequest: &stack.PullRequestRef{Number: 1, Merged: true}},
+				{Branch: "b2", PullRequest: &stack.PullRequestRef{Number: 2}},
+				{Branch: "b3", PullRequest: &stack.PullRequestRef{Number: 3}},
+			},
+		}
+		mock := &github.MockClient{UpdateStackFn: func(string, []int) error { return mustFormErr() }}
+		cfg, _, errR := config.NewTestConfig()
+		updateStack(cfg, mock, s, []int{1, 2, 3})
+		cfg.Err.Close()
+		out, _ := io.ReadAll(errR)
+		output := string(out)
+		assert.Contains(t, output, "Merged PRs have left the stack")
+		assert.NotContains(t, output, "Failed to update stack")
+	})
+
+	t.Run("no merged branches still warns", func(t *testing.T) {
+		s := &stack.Stack{
+			ID:    "42",
+			Trunk: stack.BranchRef{Branch: "main"},
+			Branches: []stack.BranchRef{
+				{Branch: "b1", PullRequest: &stack.PullRequestRef{Number: 1}},
+				{Branch: "b2", PullRequest: &stack.PullRequestRef{Number: 2}},
+			},
+		}
+		mock := &github.MockClient{UpdateStackFn: func(string, []int) error { return mustFormErr() }}
+		cfg, _, errR := config.NewTestConfig()
+		updateStack(cfg, mock, s, []int{1, 2})
+		cfg.Err.Close()
+		out, _ := io.ReadAll(errR)
+		output := string(out)
+		assert.Contains(t, output, "Failed to update stack")
+	})
+}
+
 func TestSubmit_DefaultPRTitleBody(t *testing.T) {
 	t.Run("single_commit", func(t *testing.T) {
 		restore := git.SetOps(&git.MockOps{

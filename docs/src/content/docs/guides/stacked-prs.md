@@ -30,6 +30,8 @@ Stacks are merged **from the bottom up** — you can merge any number of PRs at 
 3. The next unmerged PR is now at the bottom and can be reviewed, approved, and merged.
 4. Repeat until the entire stack is landed.
 
+Once the entire stack has landed, it is complete and can't be extended. If you add new branches on top and run `gh stack submit`, the CLI automatically starts a **new** stack rooted at the trunk for those branches (a new PR on a fully merged stack would target the trunk directly rather than chaining onto the merged PRs).
+
 For details on merge methods (squash, merge commit, rebase) and merge requirements, see [Merging Stacks](/gh-stack/introduction/overview/#merging-stacks) in the Overview.
 
 ## Pushing and Syncing from the CLI

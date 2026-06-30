@@ -269,6 +269,8 @@ gh stack submit [flags]
 
 Creates a Stacked PR for every branch in the stack, pushing branches to the remote. After creating PRs, `submit` automatically creates a **Stack** on GitHub to link the PRs together. If the stack already exists on GitHub (e.g., from a previous submit), new PRs are added to the existing stack.
 
+If every PR in the stack has already been merged, that stack is complete and can't be extended. In that case `submit` automatically starts a **new** stack rooted at the trunk for your unmerged branches and creates it on GitHub, leaving the merged stack untouched.
+
 In an interactive terminal, `submit` opens a full-screen editor on a single screen:
 
 - **Left panel** — every branch without a PR is **included by default**; deselect any you don't want to submit with <kbd>Ctrl</kbd>+<kbd>X</kbd>. Because each PR builds on the branch below it, deselecting a branch also deselects the ones stacked above it, and re-including a branch re-includes the ones below it that it depends on. Branches that already have a PR (open, draft, queued, or merged) are shown for context but are locked; edit those on the web.

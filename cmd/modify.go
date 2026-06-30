@@ -74,6 +74,14 @@ func runModify(cfg *config.Config) error {
 	s := result.Stack
 	currentBranch := result.CurrentBranch
 
+	// A fully merged stack has nothing left to restructure. Short-circuit
+	// before opening the TUI, mirroring submit's "nothing to submit" behavior.
+	if s.IsFullyMerged() {
+		cfg.Warningf("All branches in this stack have been merged")
+		cfg.Printf("There's nothing to modify — start a new stack with `%s`", cfg.ColorCyan("gh stack init"))
+		return nil
+	}
+
 	// Load branch data for the TUI
 	viewNodes := stackview.LoadBranchNodes(cfg, s, currentBranch, result.PRDetails)
 
