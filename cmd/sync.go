@@ -33,10 +33,19 @@ This command performs a safe, non-interactive synchronization:
   3. Cascade-rebases stack branches onto their updated parents
   4. Pushes all branches atomically (using --force-with-lease --atomic)
   5. Syncs PR state from GitHub
+  6. Links the stack's open PRs into a stack on GitHub (creating or updating
+     the remote stack object) when two or more PRs exist
 
 If a rebase conflict is detected, all branches are restored to their
 original state and you are advised to run "gh stack rebase" to resolve
 conflicts interactively.
+
+Sync never opens pull requests — use "gh stack submit" for that. It only
+links PRs that already exist. The final message reflects what happened:
+"Stack synced" means the stack object on GitHub now matches your local
+stack, while "Branches synced" means the branches were rebased and pushed
+but no remote stack object was created or updated (for example, when fewer
+than two PRs exist yet).
 
 Use --prune to delete local branches for merged PRs. Stack metadata is
 preserved so that rebase and display logic continue to work correctly.
@@ -220,6 +229,18 @@ func runSync(cfg *config.Config, opts *syncOptions) error {
 		cfg.Printf("Merged: %s", strings.Join(names, ", "))
 	}
 
+	// --- Step 5b: Reconcile the remote stack object ---
+	// syncStackPRs above only refreshes local PR associations; it does not touch
+	// the stack object on GitHub. When the branches have open PRs, link them into
+	// a stack so the remote reflects the local stack. This never opens PRs — that
+	// is still `gh stack submit`'s job. stackSynced records whether the remote
+	// stack object actually reflects the local stack, which determines the final
+	// summary message below.
+	stackSynced := false
+	if client, err := cfg.GitHubClient(); err == nil {
+		stackSynced = syncStack(cfg, client, s)
+	}
+
 	// --- Step 6: Prune merged branches (optional) ---
 	doPrune := opts.prune
 	if !doPrune {
@@ -316,7 +337,14 @@ func runSync(cfg *config.Config, opts *syncOptions) error {
 	}
 
 	cfg.Printf("")
-	cfg.Successf("Stack synced")
+	if stackSynced {
+		cfg.Successf("Stack synced")
+	} else {
+		// The branches were fetched, rebased, and pushed, but no stack object on
+		// GitHub was created or updated (no PRs, fewer than two PRs, stacked PRs
+		// unavailable, or a divergence). Report only what actually happened.
+		cfg.Successf("Branches synced")
+	}
 	return nil
 }
 
