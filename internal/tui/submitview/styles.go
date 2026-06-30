@@ -1,26 +1,32 @@
 package submitview
 
-import "github.com/charmbracelet/lipgloss"
+import (
+	"github.com/charmbracelet/lipgloss"
 
-// State foreground colors, matching how GitHub.com colors these PR states.
-var stateColors = map[BranchState]lipgloss.Color{
-	StateNew:    lipgloss.Color("4"),   // blue
-	StateOpen:   lipgloss.Color("2"),   // green
-	StateDraft:  lipgloss.Color("250"), // gray
-	StateQueued: lipgloss.Color("137"), // brown
-	StateMerged: lipgloss.Color("5"),   // purple
-	StateClosed: lipgloss.Color("1"),   // red
+	"github.com/github/gh-stack/internal/tui/shared"
+)
+
+// State foreground colors, matching how GitHub.com colors these PR states. Each
+// is background-aware (see internal/tui/shared/theme.go).
+var stateColors = map[BranchState]lipgloss.TerminalColor{
+	StateNew:    shared.ColorBlue,
+	StateOpen:   shared.ColorGreen,
+	StateDraft:  shared.ColorGray,
+	StateQueued: shared.ColorYellow,
+	StateMerged: shared.ColorPurple,
+	StateClosed: shared.ColorRed,
 }
 
-// State background tints for pill badges (dark 256-color shades that read as a
-// low-opacity wash of the foreground color across most terminal themes).
-var stateBgColors = map[BranchState]lipgloss.Color{
-	StateNew:    lipgloss.Color("18"),  // dark blue
-	StateOpen:   lipgloss.Color("22"),  // dark green
-	StateDraft:  lipgloss.Color("238"), // dark gray
-	StateQueued: lipgloss.Color("58"),  // dark brown
-	StateMerged: lipgloss.Color("53"),  // dark purple
-	StateClosed: lipgloss.Color("52"),  // dark red
+// State background tints for pill badges: dark washes on a dark terminal, light
+// washes on a light terminal, so the badge reads as a low-opacity tint of its
+// foreground color in either mode.
+var stateBgColors = map[BranchState]lipgloss.TerminalColor{
+	StateNew:    lipgloss.AdaptiveColor{Dark: "#10243e", Light: "#cfe7ff"},
+	StateOpen:   lipgloss.AdaptiveColor{Dark: "#0d2818", Light: "#c8f0d4"},
+	StateDraft:  lipgloss.AdaptiveColor{Dark: "#272b33", Light: "#e4e9ef"},
+	StateQueued: lipgloss.AdaptiveColor{Dark: "#2b2410", Light: "#f4ead9"},
+	StateMerged: lipgloss.AdaptiveColor{Dark: "#241a3a", Light: "#ecdcff"},
+	StateClosed: lipgloss.AdaptiveColor{Dark: "#2d1417", Light: "#ffdcd7"},
 }
 
 // Label returns the uppercase badge text for a state (e.g. "NEW").
@@ -44,7 +50,7 @@ func (s BranchState) Label() string {
 }
 
 // Color returns the foreground color associated with a state.
-func (s BranchState) Color() lipgloss.Color { return stateColors[s] }
+func (s BranchState) Color() lipgloss.TerminalColor { return stateColors[s] }
 
 // Dot returns the compact status glyph for a state.
 func (s BranchState) Dot() string {
@@ -84,86 +90,83 @@ func RenderDot(s BranchState) string {
 
 // Shared submit-view styles. These are intentionally centralized so the left
 // stack tree, the editor, and the chrome render with a consistent visual
-// language.
+// language. Colors come from the background-aware palette in internal/tui/shared.
 var (
-	focusNameStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("14")).Bold(true) // cyan focused label
+	focusNameStyle = lipgloss.NewStyle().Foreground(shared.ColorAccent).Bold(true) // focused label
 	// headerBranchStyle renders the focused branch name in the right-panel card
-	// header in white (the left-panel cursor name stays cyan).
-	headerBranchStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("15")).Bold(true)
+	// header in primary ink (the left-panel cursor name uses the accent color).
+	headerBranchStyle = lipgloss.NewStyle().Foreground(shared.ColorText).Bold(true)
 
 	// rowShadeColor tints the focused (currently-viewed) branch row in the left
-	// timeline. A neutral cool gray (truecolor, so it doesn't pick up a warm tint
-	// from a themed 256-color palette) reading as a translucent-white highlight.
-	rowShadeColor = lipgloss.Color("#3b3e46")
+	// timeline, reading as a subtle highlight on either background.
+	rowShadeColor = shared.ColorRowShade
 
 	// Panel border shared by both panels (focus is shown on the active input
 	// field, not the panel frame).
 	panelBorderStyle = lipgloss.NewStyle().
 				Border(lipgloss.RoundedBorder()).
-				BorderForeground(lipgloss.Color("8")).
+				BorderForeground(shared.ColorBorder).
 				Padding(0, 1)
 
 	// Section labels (e.g. STACK, EDITING, TITLE, DESCRIPTION).
-	sectionLabelStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("8")).Bold(true)
+	sectionLabelStyle = lipgloss.NewStyle().Foreground(shared.ColorTextMuted).Bold(true)
 
 	// Tab strip styles.
-	tabActiveStyle   = lipgloss.NewStyle().Foreground(lipgloss.Color("15")).Bold(true).Underline(true)
-	tabInactiveStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("8"))
+	tabActiveStyle   = lipgloss.NewStyle().Foreground(shared.ColorText).Bold(true).Underline(true)
+	tabInactiveStyle = lipgloss.NewStyle().Foreground(shared.ColorTextMuted)
 
 	// Footer / status styles.
-	footerKeyStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("14"))
+	footerKeyStyle = lipgloss.NewStyle().Foreground(shared.ColorAccent)
 
-	// openLinkStyle renders the underlined white "↗ Open on GitHub" link (arrow
+	// openLinkStyle renders the underlined "↗ Open on GitHub" link (arrow
 	// included) in a locked PR's read-only card header; lockedTitleStyle renders
 	// that PR's title.
-	openLinkStyle    = lipgloss.NewStyle().Foreground(lipgloss.Color("15")).Bold(true).Underline(true)
-	lockedTitleStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("15")).Bold(true)
+	openLinkStyle    = lipgloss.NewStyle().Foreground(shared.ColorText).Bold(true).Underline(true)
+	lockedTitleStyle = lipgloss.NewStyle().Foreground(shared.ColorText).Bold(true)
 
-	// Footer bottom-right actions: nextBranchStyle is the white "NEXT BRANCH"
-	// label; submitButtonStyle is the prominent solid-white "SUBMIT N PRs" button
-	// (dark text) shown on the last PR.
-	nextBranchStyle   = lipgloss.NewStyle().Foreground(lipgloss.Color("15")).Bold(true)
-	submitButtonStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("0")).Background(lipgloss.Color("15")).Bold(true).Padding(0, 1)
-	// prNumberStyle renders a clickable existing-PR number as an underlined
-	// white link.
-	prNumberStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("15")).Underline(true)
+	// Footer bottom-right actions: nextBranchStyle is the "NEXT BRANCH" label;
+	// submitButtonStyle is the prominent inverted "SUBMIT N PRs" button shown on
+	// the last PR.
+	nextBranchStyle   = lipgloss.NewStyle().Foreground(shared.ColorText).Bold(true)
+	submitButtonStyle = lipgloss.NewStyle().Foreground(shared.ColorButtonFg).Background(shared.ColorButtonBg).Bold(true).Padding(0, 1)
+	// prNumberStyle renders a clickable existing-PR number as an underlined link.
+	prNumberStyle = lipgloss.NewStyle().Foreground(shared.ColorText).Underline(true)
 
 	// Tree spine + horizontal rules (dim chrome).
-	spineStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("8"))
-	ruleStyle  = lipgloss.NewStyle().Foreground(lipgloss.Color("8"))
+	spineStyle = lipgloss.NewStyle().Foreground(shared.ColorBorder)
+	ruleStyle  = lipgloss.NewStyle().Foreground(shared.ColorBorder)
 
 	// CREATE PR switch in the right-panel header. On: a green pill (matching the
-	// CREATE AS selected color) with a black square knob inset on the right. Off:
-	// the colors invert to a light-gray pill with a darker square inset on the
-	// left. The "CREATE PR" label uses the shared section-heading style.
-	switchOnStyle  = lipgloss.NewStyle().Background(lipgloss.Color("2"))
-	switchOffStyle = lipgloss.NewStyle().Background(lipgloss.Color("245"))
-	switchOnKnob   = lipgloss.Color("0")   // black knob (matches CREATE AS selected text)
-	switchOffKnob  = lipgloss.Color("236") // dark square on a lighter track
+	// CREATE AS selected color) with the knob inset on the right. Off: a muted
+	// track with a darker knob inset on the left.
+	switchOnStyle  = lipgloss.NewStyle().Background(shared.ColorGreen)
+	switchOffStyle = lipgloss.NewStyle().Background(lipgloss.AdaptiveColor{Dark: "#6e7681", Light: "#afb8c1"})
+	switchOnKnob   = shared.ColorOnFill // contrasts with the green track
+	switchOffKnob  = lipgloss.AdaptiveColor{Dark: "#1c2128", Light: "#57606a"}
 
 	// Segmented Ready/Draft control: the selected segment is filled green; the
-	// other is dim. Brackets/divider are dim chrome.
+	// other is muted. Brackets/divider are dim chrome.
 	segOnStyle = lipgloss.NewStyle().
-			Foreground(lipgloss.Color("0")).
-			Background(lipgloss.Color("2")).
+			Foreground(shared.ColorOnFill).
+			Background(shared.ColorGreen).
 			Bold(true).
 			Padding(0, 1)
-	segOffStyle   = lipgloss.NewStyle().Foreground(lipgloss.Color("8")).Padding(0, 1)
-	segFrameStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("8"))
+	segOffStyle   = lipgloss.NewStyle().Foreground(shared.ColorTextMuted).Padding(0, 1)
+	segFrameStyle = lipgloss.NewStyle().Foreground(shared.ColorBorder)
 
 	// dimBodyStyle renders the skipped branch's body as muted, non-interactive
 	// chrome.
-	dimBodyStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("240"))
+	dimBodyStyle = lipgloss.NewStyle().Foreground(shared.ColorTextFaint)
 
 	// descCursorStyle renders the block cursor overlaid on the scrollable
 	// description view.
 	descCursorStyle = lipgloss.NewStyle().Reverse(true)
 
 	// Description scrollbar (track + thumb), drawn inside the box.
-	scrollTrackStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("8"))
-	scrollThumbStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("15"))
+	scrollTrackStyle = lipgloss.NewStyle().Foreground(shared.ColorBorder)
+	scrollThumbStyle = lipgloss.NewStyle().Foreground(shared.ColorText)
 
 	// Callouts.
-	calloutErrorStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("1"))
-	hintStyle         = lipgloss.NewStyle().Foreground(lipgloss.Color("8"))
+	calloutErrorStyle = lipgloss.NewStyle().Foreground(shared.ColorRed)
+	hintStyle         = lipgloss.NewStyle().Foreground(shared.ColorTextMuted)
 )

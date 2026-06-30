@@ -88,16 +88,16 @@ func ResolveConnectorStyle(node BranchNodeData, isFocused bool) (string, lipglos
 // StatusIcon returns the appropriate status icon for a branch.
 func StatusIcon(node BranchNodeData) string {
 	if node.Ref.IsMerged() {
-		return MergedIcon
+		return mergedIconStyle.Render(mergedGlyph)
 	}
 	if node.Ref.IsQueued() {
-		return QueuedIcon
+		return queuedIconStyle.Render(queuedGlyph)
 	}
 	if !node.IsLinear {
-		return WarningIcon
+		return warningIconStyle.Render(warningGlyph)
 	}
 	if node.PR != nil && node.PR.Number != 0 {
-		return OpenIcon
+		return openIconStyle.Render(openGlyph)
 	}
 	return ""
 }

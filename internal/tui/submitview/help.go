@@ -4,17 +4,19 @@ import (
 	"strings"
 
 	"github.com/charmbracelet/lipgloss"
+
+	"github.com/github/gh-stack/internal/tui/shared"
 )
 
 var (
 	helpOverlayStyle = lipgloss.NewStyle().
 				Border(lipgloss.RoundedBorder()).
-				BorderForeground(lipgloss.Color("8")).
+				BorderForeground(shared.ColorBorder).
 				Padding(1, 2)
-	helpTitleStyle   = lipgloss.NewStyle().Foreground(lipgloss.Color("15")).Bold(true).Underline(true)
-	helpSectionStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("14")).Bold(true)
-	helpKeyStyle     = lipgloss.NewStyle().Foreground(lipgloss.Color("15")).Bold(true)
-	helpDescStyle    = lipgloss.NewStyle().Foreground(lipgloss.Color("8"))
+	helpTitleStyle   = lipgloss.NewStyle().Foreground(shared.ColorText).Bold(true).Underline(true)
+	helpSectionStyle = lipgloss.NewStyle().Foreground(shared.ColorAccent).Bold(true)
+	helpKeyStyle     = lipgloss.NewStyle().Foreground(shared.ColorText).Bold(true)
+	helpDescStyle    = lipgloss.NewStyle().Foreground(shared.ColorTextMuted)
 )
 
 // helpEntry is a single key/description pair in the help overlay.

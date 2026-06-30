@@ -361,7 +361,7 @@ func RenderHeader(b *strings.Builder, cfg HeaderConfig, width, height int) {
 }
 
 // disabledShortcutStyle renders both key and desc in dim gray.
-var disabledShortcutStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("240"))
+var disabledShortcutStyle = lipgloss.NewStyle().Foreground(ColorTextFaint)
 
 // renderShortcutEntry renders a single shortcut, dimmed if disabled.
 func renderShortcutEntry(sc ShortcutEntry) string {

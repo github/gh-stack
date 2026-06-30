@@ -1,42 +1,48 @@
 package modifyview
 
-import "github.com/charmbracelet/lipgloss"
+import (
+	"github.com/charmbracelet/lipgloss"
 
+	"github.com/github/gh-stack/internal/tui/shared"
+)
+
+// Colors come from the background-aware palette in internal/tui/shared so the
+// modify view reads well on both dark and light terminals.
 var (
 	// Action annotation styles (modify-specific)
-	dropBadge   = lipgloss.NewStyle().Foreground(lipgloss.Color("1"))  // red
-	foldBadge   = lipgloss.NewStyle().Foreground(lipgloss.Color("3"))  // yellow
-	renameBadge = lipgloss.NewStyle().Foreground(lipgloss.Color("14")) // cyan
-	moveBadge   = lipgloss.NewStyle().Foreground(lipgloss.Color("5"))  // magenta/purple
-	insertBadge = lipgloss.NewStyle().Foreground(lipgloss.Color("2"))  // green
+	dropBadge   = lipgloss.NewStyle().Foreground(shared.ColorRed)    // drop
+	foldBadge   = lipgloss.NewStyle().Foreground(shared.ColorYellow) // fold
+	renameBadge = lipgloss.NewStyle().Foreground(shared.ColorAccent) // rename
+	moveBadge   = lipgloss.NewStyle().Foreground(shared.ColorPurple) // move
+	insertBadge = lipgloss.NewStyle().Foreground(shared.ColorGreen)  // insert
 
 	// Branch name overrides for drop/fold/insert
-	dropBranchStyle   = lipgloss.NewStyle().Foreground(lipgloss.Color("1")).Strikethrough(true) // red strikethrough
-	foldBranchStyle   = lipgloss.NewStyle().Foreground(lipgloss.Color("3")).Strikethrough(true) // yellow strikethrough
-	insertBranchStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("2"))                     // green
+	dropBranchStyle   = lipgloss.NewStyle().Foreground(shared.ColorRed).Strikethrough(true)
+	foldBranchStyle   = lipgloss.NewStyle().Foreground(shared.ColorYellow).Strikethrough(true)
+	insertBranchStyle = lipgloss.NewStyle().Foreground(shared.ColorGreen)
 
 	// Connector color overrides for drop/fold/move/insert
-	dropConnectorStyle   = lipgloss.NewStyle().Foreground(lipgloss.Color("1")) // red
-	foldConnectorStyle   = lipgloss.NewStyle().Foreground(lipgloss.Color("3")) // yellow
-	movedConnectorStyle  = lipgloss.NewStyle().Foreground(lipgloss.Color("5")) // magenta/purple
-	insertConnectorStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("2")) // green
+	dropConnectorStyle   = lipgloss.NewStyle().Foreground(shared.ColorRed)
+	foldConnectorStyle   = lipgloss.NewStyle().Foreground(shared.ColorYellow)
+	movedConnectorStyle  = lipgloss.NewStyle().Foreground(shared.ColorPurple)
+	insertConnectorStyle = lipgloss.NewStyle().Foreground(shared.ColorGreen)
 
 	// Status line styles
-	statusBarStyle   = lipgloss.NewStyle().Foreground(lipgloss.Color("8"))
-	statusCountStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("15")).Bold(true)
-	statusKeyStyle   = lipgloss.NewStyle().Foreground(lipgloss.Color("14"))
-	statusDescStyle  = lipgloss.NewStyle().Foreground(lipgloss.Color("8"))
+	statusBarStyle   = lipgloss.NewStyle().Foreground(shared.ColorTextMuted)
+	statusCountStyle = lipgloss.NewStyle().Foreground(shared.ColorText).Bold(true)
+	statusKeyStyle   = lipgloss.NewStyle().Foreground(shared.ColorAccent)
+	statusDescStyle  = lipgloss.NewStyle().Foreground(shared.ColorTextMuted)
 
 	// Help overlay styles
 	helpOverlayStyle = lipgloss.NewStyle().
 				Border(lipgloss.RoundedBorder()).
-				BorderForeground(lipgloss.Color("8")).
+				BorderForeground(shared.ColorBorder).
 				Padding(1, 2)
-	helpKeyStyle   = lipgloss.NewStyle().Foreground(lipgloss.Color("14")).Bold(true)
-	helpDescStyle  = lipgloss.NewStyle().Foreground(lipgloss.Color("15"))
-	helpTitleStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("15")).Bold(true).Underline(true)
+	helpKeyStyle   = lipgloss.NewStyle().Foreground(shared.ColorAccent).Bold(true)
+	helpDescStyle  = lipgloss.NewStyle().Foreground(shared.ColorText)
+	helpTitleStyle = lipgloss.NewStyle().Foreground(shared.ColorText).Bold(true).Underline(true)
 
 	// Transient message styles
-	transientErrorStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("1")) // red
-	transientInfoStyle  = lipgloss.NewStyle().Foreground(lipgloss.Color("8")) // gray
+	transientErrorStyle = lipgloss.NewStyle().Foreground(shared.ColorRed)
+	transientInfoStyle  = lipgloss.NewStyle().Foreground(shared.ColorTextMuted)
 )

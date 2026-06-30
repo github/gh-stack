@@ -721,7 +721,7 @@ func leftPanelBox(content string, width, height int) string {
 	}
 	return lipgloss.NewStyle().
 		Border(lipgloss.RoundedBorder()).
-		BorderForeground(lipgloss.Color("8")).
+		BorderForeground(shared.ColorBorder).
 		Width(innerW).
 		Height(innerH).
 		MaxHeight(height).
@@ -837,30 +837,30 @@ func (m Model) branchCircle(n SubmitNode, focused bool) string {
 	glyph, color := "○", n.State.Color()
 	switch {
 	case n.State == StateNew && n.Included:
-		glyph, color = "●", lipgloss.Color("14") // filled cyan
+		glyph, color = "●", lipgloss.TerminalColor(shared.ColorAccent) // filled accent
 	case n.State == StateNew:
-		glyph, color = "◌", lipgloss.Color("245") // dotted ring: skipped
+		glyph, color = "◌", lipgloss.TerminalColor(shared.ColorTextFaint) // dotted ring: skipped
 	}
 	return bgIf(lipgloss.NewStyle().Foreground(color), focused).Render(glyph)
 }
 
-// branchNameStyle returns the full-name style: white and bold for a branch that
-// will become a PR, muted gray for skipped or existing-PR branches.
+// branchNameStyle returns the full-name style: primary and bold for a branch that
+// will become a PR, muted for skipped or existing-PR branches.
 func (m Model) branchNameStyle(n SubmitNode, focused bool) lipgloss.Style {
-	st := lipgloss.NewStyle().Foreground(lipgloss.Color("245"))
+	st := lipgloss.NewStyle().Foreground(shared.ColorTextMuted)
 	if n.State == StateNew && n.Included {
-		st = lipgloss.NewStyle().Foreground(lipgloss.Color("15")).Bold(true)
+		st = lipgloss.NewStyle().Foreground(shared.ColorText).Bold(true)
 	}
 	return bgIf(st, focused)
 }
 
-// branchCheckbox renders a NEW branch's include checkbox: cyan [x] when included,
-// gray [ ] when skipped.
+// branchCheckbox renders a NEW branch's include checkbox: accent [x] when
+// included, muted [ ] when skipped.
 func (m Model) branchCheckbox(n SubmitNode, focused bool) string {
 	if n.Included {
-		return bgIf(lipgloss.NewStyle().Foreground(lipgloss.Color("14")), focused).Render("[x]")
+		return bgIf(lipgloss.NewStyle().Foreground(shared.ColorAccent), focused).Render("[x]")
 	}
-	return bgIf(lipgloss.NewStyle().Foreground(lipgloss.Color("8")), focused).Render("[ ]")
+	return bgIf(lipgloss.NewStyle().Foreground(shared.ColorTextMuted), focused).Render("[ ]")
 }
 
 // branchMetaLine renders an existing PR's "state · #num" line, the state word in

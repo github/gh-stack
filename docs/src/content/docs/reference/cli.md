@@ -586,6 +586,19 @@ gh stack feedback "Support for reordering branches"
 
 ---
 
+## Environment Variables
+
+| Variable | Values | Description |
+|----------|--------|-------------|
+| `GH_STACK_THEME` | `auto` (default), `light`, `dark` | Controls the color palette of the interactive screens (`submit`, `modify`, `view`) and all colored command output. Colors adapt to your terminal background automatically; set this to force the light or dark palette when a terminal doesn't report its background (some SSH or `tmux` setups). |
+
+```sh
+# Force the light palette for one command
+GH_STACK_THEME=light gh stack view
+```
+
+---
+
 ## Exit Codes
 
 | Code | Meaning |
