@@ -40,7 +40,7 @@ GitHub supports Stacked PRs natively, combining a rich pull request UI with the 
 
 When a pull request is part of a stack, a **stack map** appears at the top of the PR page. It shows every PR in the stack, their status, and lets you navigate to any layer with one click. This gives reviewers immediate context about where a PR fits in the bigger picture.
 
-![The stack navigator in a pull request header](../../../assets/screenshots/stack-navigator.png)
+![The stack map in a pull request header](../../../assets/screenshots/stack-navigator.png)
 
 ### Rules and CI Enforcement
 
@@ -55,12 +55,19 @@ This ensures that every layer of the stack meets the same quality bar before it 
 
 ### Merging Stacks
 
-The entire stack does not need to be merged at once, but PRs must be merged **from the bottom up**. GitHub supports two merge methods:
+You can merge your entire stack, a single PR, or a portion of the stack spanning multiple PRs. When you click **Merge** on any PR, that PR **and every unmerged PR below it land together in a single atomic operation**. So you can:
 
-- **Direct merge** — Merges a PR (and all non-merged PRs below it) in a single operation, as long as all conditions are met.
+- **Land the entire stack in one click** by merging the top PR — every PR below it comes with it.
+- **Land part of the stack** by merging a mid-stack PR — the PRs below it come along, and the PRs above stay open.
+
+You can't merge a PR while leaving an unmerged PR below it behind. Merging a stacked PR always merges all the unmerged PRs below it as well.
+
+GitHub supports two merge methods:
+
+- **Direct merge** — Merges the selected PR and all unmerged PRs below it in a single operation, as long as all conditions are met.
 - **Merge queue** — Works as usual but is stack-aware. For example, if the bottom PR is removed from the queue, all other PRs in the stack are also removed.
 
-The resulting commit history is the same as merging each PR individually, starting from the bottom.
+The resulting commit history is the same as if each PR had been merged individually, starting from the bottom.
 
 ### Merge Methods
 

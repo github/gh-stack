@@ -75,7 +75,7 @@ GitHub Actions workflows trigger as if each PR in the stack is targeting the bas
 
 ### How do I access stack metadata in my GitHub Actions workflow?
 
-For advanced use cases, you can access the stack's base ref and base SHA in workflow expressions via `github.event.pull_request.stack`. This property is only present when the PR belongs to a stack.
+For advanced use cases, you can access the stack's metadata in workflow expressions via `github.event.pull_request.stack`. This property is only present when the PR belongs to a stack.
 
 ```yaml
 jobs:
@@ -89,16 +89,32 @@ jobs:
         run: |
           echo "Stack base ref: ${{ github.event.pull_request.stack.base.ref }}"
           echo "Stack base SHA: ${{ github.event.pull_request.stack.base.sha }}"
+          echo "PR ${{ github.event.pull_request.stack.position }} of ${{ github.event.pull_request.stack.size }} in the stack"
 
       - name: Run a step only when the stack targets a release branch
         if: github.event.pull_request.stack != null && startsWith(github.event.pull_request.stack.base.ref, 'release/')
         run: echo "This stack targets a release branch"
+
+      - name: Run a step only on the bottom PR of the stack
+        if: github.event.pull_request.stack.position == 1
+        run: echo "This is the bottom PR"
+
+      - name: Run a step only on the lowest unmerged PR of the stack
+        if: github.event.pull_request.stack.base.ref == github.event.pull_request.base.ref
+        run: echo "This is the bottom PR"
+      
+      - name: Run a step only on the top PR of the stack
+        if: github.event.pull_request.stack.position == github.event.pull_request.stack.size
+        run: echo "This is the top PR"
 ```
 
 | Expression | Description |
 |------------|-------------|
+| `github.event.pull_request.stack.number` | The stack's number, scoped to the repository. |
+| `github.event.pull_request.stack.size` | Total number of pull requests in the stack. |
+| `github.event.pull_request.stack.position` | 1-based position of this PR within the stack (`1` is the bottom). |
 | `github.event.pull_request.stack.base.ref` | The branch the entire stack ultimately targets (e.g., `main`). |
-| `github.event.pull_request.stack.base.sha` | The HEAD SHA of that target branch at the time of the event. |
+| `github.event.pull_request.stack.base.sha` | The HEAD SHA of the stack's base branch. |
 
 See the [Webhooks reference](/gh-stack/reference/webhooks/) for the full details on the `stack` object in webhook payloads.
 

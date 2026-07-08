@@ -5,13 +5,13 @@ description: Reference for the stack object in pull_request webhook event payloa
 
 When a pull request belongs to a stack, GitHub adds a `stack` property to the `pull_request` object in webhook event payloads. This lets apps and integrations inspect the stack's ultimate target branch — not just the direct parent branch of the PR.
 
-The `stack` object is included in the `pull_request` webhook payload for all [pull request lifecycle events](https://docs.github.com/en/actions/reference/workflows-and-actions/events-that-trigger-workflows#pull_request).
+The `stack` object is included in the `pull_request` webhook payload for all [pull request lifecycle events](https://docs.github.com/en/actions/reference/workflows-and-actions/events-that-trigger-workflows#pull_request) whenever the pull request is part of a stack.
 
 
 
 ## The `stack` Object
 
-The `stack` object is nested inside the `pull_request` object and contains information about the stack's base branch:
+The `stack` object is nested inside the `pull_request` object. It identifies the stack, describes this PR's place within it, and reports the stack's base branch and ultimate merge target:
 
 ```json
 {
@@ -24,6 +24,10 @@ The `stack` object is nested inside the `pull_request` object and contains infor
       "sha": "abc123..."
     },
     "stack": {
+      "id": 123456,
+      "number": 50,
+      "size": 5,
+      "position": 2,
       "base": {
         "ref": "main",
         "sha": "def456..."
@@ -37,8 +41,12 @@ The `stack` object is nested inside the `pull_request` object and contains infor
 
 | Field | Type | Description |
 |-------|------|-------------|
+| `pull_request.stack.id` | `integer` | Global identifier for the stack. |
+| `pull_request.stack.number` | `integer` | The stack's number, scoped to the repository. |
+| `pull_request.stack.size` | `integer` | Total number of pull requests in the stack. |
+| `pull_request.stack.position` | `integer` | 1-based position of this PR within the stack, where `1` is the bottom (the PR closest to the stack's base). |
 | `pull_request.stack.base.ref` | `string` | The branch the entire stack ultimately targets (e.g., `main`). |
-| `pull_request.stack.base.sha` | `string` | The HEAD SHA of that target branch at the time of the event. |
+| `pull_request.stack.base.sha` | `string` | The HEAD SHA of the stack's base branch. |
 
 `pull_request.base.ref` is the direct parent branch of an individual PR (the branch below it in the stack), while `pull_request.stack.base.ref` is the ultimate target of the entire stack. These differ for all PRs in the stack except the bottom one.
 
