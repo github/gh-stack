@@ -1,6 +1,6 @@
 ---
 title: Webhooks
-description: Reference for the stack object in pull_request webhook event payloads.
+description: Reference for the stacked action and stack object in pull_request webhook event payloads.
 ---
 
 When a pull request belongs to a stack, GitHub adds a `stack` property to the `pull_request` object in webhook event payloads. This lets apps and integrations inspect the stack's ultimate target branch — not just the direct parent branch of the PR.
@@ -51,6 +51,55 @@ The `stack` object is nested inside the `pull_request` object. It identifies the
 `pull_request.base.ref` is the direct parent branch of an individual PR (the branch below it in the stack), while `pull_request.stack.base.ref` is the ultimate target of the entire stack. These differ for all PRs in the stack except the bottom one.
 
 The `stack` object is **only present** when the pull request belongs to a stack. For standalone PRs, the field is null.
+
+## The `stacked` Event
+
+GitHub delivers the `pull_request` event with the `stacked` action when a pull request is **added to a stack**. Because a PR is created before it joins a stack, this is the event to listen for when you need to know exactly when a PR becomes part of a stack.
+
+| | |
+|---|---|
+| **Event** (`X-GitHub-Event` header) | `pull_request` |
+| **Action** | `stacked` |
+| **Fires when** | A pull request is added to a stack |
+
+The `stacked` payload surfaces the joined stack as a **top-level `stack` object**, in addition to the `stack` nested under `pull_request`. The two objects use the same [fields](#fields) and always match, so you can read either one.
+
+```json
+{
+  "action": "stacked",
+  "number": 42,
+  "stack": {
+    "id": 123456,
+    "number": 50,
+    "size": 5,
+    "position": 2,
+    "base": {
+      "ref": "main",
+      "sha": "def456..."
+    }
+  },
+  "pull_request": {
+    "number": 42,
+    "title": "Add API routes",
+    "base": {
+      "ref": "feat/auth-layer",
+      "sha": "abc123..."
+    },
+    "stack": {
+      "id": 123456,
+      "number": 50,
+      "size": 5,
+      "position": 2,
+      "base": {
+        "ref": "main",
+        "sha": "def456..."
+      }
+    }
+  }
+}
+```
+
+The top-level `stack` object is unique to the `stacked` event; other `pull_request` actions (such as `opened` or `synchronize`) only carry the `stack` nested inside `pull_request`.
 
 ## GitHub Actions
 
