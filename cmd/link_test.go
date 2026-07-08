@@ -1515,6 +1515,60 @@ func TestLink_BranchNames_UsesPRTemplate(t *testing.T) {
 	assert.NotContains(t, capturedBody, "GitHub Stacks CLI", "footer should not be present when template is used")
 }
 
+// TestLink_IgnoresSymlinkedPRTemplate verifies that `gh stack link`, when it
+// creates missing PRs, does not follow a symlinked PR template.
+func TestLink_IgnoresSymlinkedPRTemplate(t *testing.T) {
+	tmpDir := t.TempDir()
+
+	// The repo's PR template is a symlink to a file outside the repository;
+	// gh-stack must not follow it.
+	linked := filepath.Join(t.TempDir(), "linked.txt")
+	require.NoError(t, os.WriteFile(linked, []byte("LINKED_FILE_CONTENTS"), 0o600))
+
+	ghDir := filepath.Join(tmpDir, ".github")
+	require.NoError(t, os.MkdirAll(ghDir, 0o755))
+	if err := os.Symlink(linked, filepath.Join(ghDir, "pull_request_template.md")); err != nil {
+		t.Skipf("symlinks not supported on this platform: %v", err)
+	}
+
+	mock := newLinkGitMock("feat-a", "feat-b")
+	mock.RootDirFn = func() (string, error) { return tmpDir, nil }
+	restore := git.SetOps(mock)
+	defer restore()
+
+	var capturedBody string
+	cfg, _, errR := config.NewTestConfig()
+	cfg.GitHubClientOverride = &github.MockClient{
+		FindPRForBranchFn: func(string) (*github.PullRequest, error) {
+			return nil, nil // No existing PRs
+		},
+		CreatePRFn: func(base, head, title, body string, draft bool) (*github.PullRequest, error) {
+			capturedBody = body
+			return &github.PullRequest{
+				Number: 1, HeadRefName: head, BaseRefName: base,
+				URL: "https://github.com/o/r/pull/1",
+			}, nil
+		},
+		ListStacksFn: func() ([]github.RemoteStack, error) {
+			return []github.RemoteStack{}, nil
+		},
+		CreateStackFn: func([]int) (int, error) { return 42, nil },
+	}
+
+	cmd := LinkCmd(cfg)
+	cmd.SetArgs([]string{"feat-a", "feat-b"})
+	cmd.SetOut(io.Discard)
+	cmd.SetErr(io.Discard)
+	err := cmd.Execute()
+
+	cfg.Err.Close()
+	_, _ = io.ReadAll(errR)
+
+	assert.NoError(t, err)
+	assert.NotContains(t, capturedBody, "LINKED_FILE_CONTENTS", "symlinked template contents must not be included in the PR body")
+	assert.Contains(t, capturedBody, "GitHub Stacks CLI", "template ignored, footer fallback should be used")
+}
+
 func TestLink_PRNumbers_NoTemplateUsesFooter(t *testing.T) {
 	// When using PR numbers (no local repo context), no template is found
 	// and the footer should be present for newly created PRs.
