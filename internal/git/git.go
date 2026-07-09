@@ -399,10 +399,23 @@ func CherryPick(commits []string) error {
 	return ops.CherryPick(commits)
 }
 
-// CherryPickAbort clears any in-progress cherry-pick state.
-// Errors are silently ignored (no-op if no cherry-pick is in progress).
-func CherryPickAbort() {
-	_ = ops.CherryPickAbort()
+// CherryPickQuit clears any in-progress cherry-pick sequencer state without
+// touching the working tree or index. Errors are silently ignored (no-op if no
+// cherry-pick is in progress).
+func CherryPickQuit() {
+	_ = ops.CherryPickQuit()
+}
+
+// CherryPickAbort cancels an in-progress cherry-pick, restoring the working
+// tree and index to the state before the cherry-pick began. Callers should
+// gate this with IsCherryPickInProgress, as it errors when none is in progress.
+func CherryPickAbort() error {
+	return ops.CherryPickAbort()
+}
+
+// IsCherryPickInProgress reports whether a cherry-pick is currently in progress.
+func IsCherryPickInProgress() bool {
+	return ops.IsCherryPickInProgress()
 }
 
 // CherryPickContinue continues an in-progress cherry-pick after conflicts are resolved.

@@ -581,3 +581,89 @@ func TestIntegration_SaveAndGetRemote(t *testing.T) {
 	_, err = GetSavedRemote()
 	require.Error(t, err)
 }
+
+// ---------------------------------------------------------------------------
+// Integration tests for cherry-pick in-progress detection and abort
+// ---------------------------------------------------------------------------
+
+// A conflicting cherry-pick must be detected as in-progress, and CherryPickAbort
+// must fully restore the working tree/index so branch checkouts succeed again.
+// This underpins modify's --abort recovery for fold-down (cherry-pick) conflicts.
+func TestIntegration_CherryPickInProgressAndAbort(t *testing.T) {
+	_, cloneDir := setupBareAndClone(t)
+	restore := withGitDir(t, cloneDir)
+	defer restore()
+
+	// Ensure runSilent-based git commands have a committer identity.
+	gitExec(t, cloneDir, "config", "user.name", "Test")
+	gitExec(t, cloneDir, "config", "user.email", "test@test.com")
+
+	// feature edits conflict.txt one way; main edits it another way.
+	gitExec(t, cloneDir, "checkout", "-b", "feature")
+	writeFile(t, cloneDir, "conflict.txt", "feature change\n")
+	gitExec(t, cloneDir, "add", ".")
+	gitExec(t, cloneDir, "commit", "-m", "feature edit")
+	featureSHA := gitExec(t, cloneDir, "rev-parse", "feature")
+
+	gitExec(t, cloneDir, "checkout", "main")
+	writeFile(t, cloneDir, "conflict.txt", "main change\n")
+	gitExec(t, cloneDir, "add", ".")
+	gitExec(t, cloneDir, "commit", "-m", "main edit")
+
+	// No cherry-pick in progress before we start.
+	assert.False(t, IsCherryPickInProgress(), "no cherry-pick should be in progress initially")
+
+	// Cherry-picking feature onto main conflicts.
+	err := CherryPick([]string{featureSHA})
+	require.Error(t, err, "cherry-pick should conflict")
+	assert.True(t, IsCherryPickInProgress(), "cherry-pick should be in progress after a conflict")
+
+	// While mid-conflict, a plain checkout must fail (unmerged index).
+	_, coErr := gitExecMayFail(t, cloneDir, "checkout", "feature")
+	require.Error(t, coErr, "checkout should fail while cherry-pick index is unmerged")
+
+	// Aborting must fully restore: no longer in progress, clean tree, checkout works.
+	require.NoError(t, CherryPickAbort())
+	assert.False(t, IsCherryPickInProgress(), "cherry-pick should not be in progress after abort")
+
+	status, err := gitExecMayFail(t, cloneDir, "status", "--porcelain")
+	require.NoError(t, err)
+	assert.Empty(t, status, "working tree should be clean after abort")
+
+	_, coErr = gitExecMayFail(t, cloneDir, "checkout", "feature")
+	require.NoError(t, coErr, "checkout should succeed after abort restores a clean index")
+}
+
+// CherryPickQuit clears the sequencer state but intentionally leaves the index
+// as-is, so a plain checkout still fails. This documents why Unwind uses the
+// full --abort rather than --quit.
+func TestIntegration_CherryPickQuitLeavesIndexUnmerged(t *testing.T) {
+	_, cloneDir := setupBareAndClone(t)
+	restore := withGitDir(t, cloneDir)
+	defer restore()
+
+	gitExec(t, cloneDir, "config", "user.name", "Test")
+	gitExec(t, cloneDir, "config", "user.email", "test@test.com")
+
+	gitExec(t, cloneDir, "checkout", "-b", "feature")
+	writeFile(t, cloneDir, "conflict.txt", "feature change\n")
+	gitExec(t, cloneDir, "add", ".")
+	gitExec(t, cloneDir, "commit", "-m", "feature edit")
+	featureSHA := gitExec(t, cloneDir, "rev-parse", "feature")
+
+	gitExec(t, cloneDir, "checkout", "main")
+	writeFile(t, cloneDir, "conflict.txt", "main change\n")
+	gitExec(t, cloneDir, "add", ".")
+	gitExec(t, cloneDir, "commit", "-m", "main edit")
+
+	require.Error(t, CherryPick([]string{featureSHA}))
+	require.True(t, IsCherryPickInProgress())
+
+	// --quit clears sequencer state (no longer "in progress") ...
+	CherryPickQuit()
+	assert.False(t, IsCherryPickInProgress(), "quit should clear cherry-pick sequencer state")
+
+	// ... but leaves the unmerged index behind, so checkout still fails.
+	_, coErr := gitExecMayFail(t, cloneDir, "checkout", "feature")
+	require.Error(t, coErr, "checkout should still fail after --quit because the index is unmerged")
+}
