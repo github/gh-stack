@@ -397,7 +397,7 @@ func ApplyPlan(
 					shas[len(commits)-1-i] = c.SHA
 				}
 
-				git.CherryPickAbort()
+				git.CherryPickQuit()
 
 				if err := git.CherryPick(shas); err != nil {
 					conflict := &modifyview.ConflictInfo{Branch: foldBranch}
@@ -906,6 +906,12 @@ func ContinueApply(
 				}
 			}
 			state.ConflictBranch = branchName
+			// These remaining branches are always rebased via RebaseOnto, so
+			// the in-progress operation is a rebase. Update ConflictType in
+			// case the original conflict was a cherry-pick (fold-down) — a
+			// stale "cherry_pick" here would make the next --continue call
+			// CherryPickContinue and fail.
+			state.ConflictType = "rebase"
 			state.RemainingBranches = remaining
 			state.AffectsPRs = affectsPRs
 			_ = SaveState(gitDir, state)
@@ -977,9 +983,15 @@ func ContinueApply(
 // Unwind restores the stack to its pre-modify state using the snapshot.
 // stackIndex is the index of the stack in sf.Stacks at modify start time.
 func Unwind(cfg *config.Config, gitDir string, snapshot Snapshot, stackIndex int, sf *stack.StackFile, plan []Action) error {
-	// Abort any in-progress rebase
+	// Abort any in-progress rebase or cherry-pick so the working tree and
+	// index are clean before we restore branch tips. A fold-down conflict
+	// leaves an in-progress cherry-pick with an unmerged index; without
+	// aborting it first, the restore checkouts below would fail.
 	if git.IsRebaseInProgress() {
 		_ = git.RebaseAbort()
+	}
+	if git.IsCherryPickInProgress() {
+		_ = git.CherryPickAbort()
 	}
 
 	// Restore branch tips

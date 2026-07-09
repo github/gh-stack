@@ -771,3 +771,132 @@ func TestCheckModifyStateGuard_UnknownPhase(t *testing.T) {
 	err := modify.CheckStateGuard(gitDir)
 	assert.NoError(t, err, "guard only blocks on 'applying' phase")
 }
+
+// ---------------------------------------------------------------------------
+// 6. runModifyAbort recovery
+// ---------------------------------------------------------------------------
+
+// Regression test: aborting a modify that stopped at a conflict must actually
+// unwind the stack (abort the in-flight rebase, reset branch tips to their
+// pre-modify SHAs, restore metadata, clear state) — not fall into a default
+// branch that merely deletes the state file and strands the user.
+func TestRunModifyAbort_ConflictPhase_Unwinds(t *testing.T) {
+	s := stack.Stack{
+		Trunk: stack.BranchRef{Branch: "main"},
+		Branches: []stack.BranchRef{
+			{Branch: "A"},
+			{Branch: "B"},
+		},
+	}
+
+	tmpDir := t.TempDir()
+	writeStackFile(t, tmpDir, s)
+
+	meta, err := json.Marshal(s)
+	require.NoError(t, err)
+
+	snapshot := modify.Snapshot{
+		Branches: []modify.BranchSnapshot{
+			{Name: "A", TipSHA: "sha-A-original", Position: 0},
+			{Name: "B", TipSHA: "sha-B-original", Position: 1},
+		},
+		StackMetadata: meta,
+	}
+
+	// The state ApplyPlan persists when a cascade rebase conflicts.
+	state := &modify.StateFile{
+		SchemaVersion:  1,
+		StackName:      "main",
+		StackIndex:     0,
+		Phase:          modify.PhaseConflict,
+		ConflictBranch: "B",
+		ConflictType:   "rebase",
+		Snapshot:       snapshot,
+	}
+	require.NoError(t, modify.SaveState(tmpDir, state))
+
+	var rebaseAborted bool
+	var resetCalls []struct{ branch, sha string }
+	current := ""
+	mock := &git.MockOps{
+		GitDirFn:                 func() (string, error) { return tmpDir, nil },
+		IsRebaseInProgressFn:     func() bool { return true },
+		IsCherryPickInProgressFn: func() bool { return false },
+		RebaseAbortFn:            func() error { rebaseAborted = true; return nil },
+		BranchExistsFn:           func(string) bool { return true },
+		CheckoutBranchFn:         func(name string) error { current = name; return nil },
+		ResetHardFn: func(sha string) error {
+			resetCalls = append(resetCalls, struct{ branch, sha string }{current, sha})
+			return nil
+		},
+		CreateBranchFn: func(string, string) error { return nil },
+	}
+	restore := git.SetOps(mock)
+	defer restore()
+
+	cfg, _, errR := config.NewTestConfig()
+
+	err = runModifyAbort(cfg)
+
+	cfg.Out.Close()
+	cfg.Err.Close()
+	out, _ := io.ReadAll(errR)
+	output := string(out)
+
+	require.NoError(t, err)
+
+	// The in-flight rebase must have been aborted.
+	assert.True(t, rebaseAborted, "in-progress rebase should be aborted during recovery")
+
+	// The state file must be cleared because recovery ran (not left dangling,
+	// and not deleted-without-unwind).
+	assert.False(t, modify.StateExists(tmpDir), "state file should be cleared after a successful abort")
+
+	// Branch tips must be reset to their pre-modify snapshot SHAs.
+	resetMap := map[string]string{}
+	for _, r := range resetCalls {
+		resetMap[r.branch] = r.sha
+	}
+	assert.Equal(t, "sha-A-original", resetMap["A"])
+	assert.Equal(t, "sha-B-original", resetMap["B"])
+
+	// It must not fall into the old default branch.
+	assert.NotContains(t, output, "unexpected modify state phase")
+	assert.Contains(t, output, "Restoring stack to pre-modify state")
+}
+
+// PendingSubmit abort is a no-op that guides the user to submit; it must not
+// try to unwind (the local changes already succeeded).
+func TestRunModifyAbort_PendingSubmit_NoUnwind(t *testing.T) {
+	tmpDir := t.TempDir()
+
+	state := &modify.StateFile{
+		SchemaVersion: 1,
+		StackName:     "main",
+		StackIndex:    0,
+		Phase:         modify.PhasePendingSubmit,
+	}
+	require.NoError(t, modify.SaveState(tmpDir, state))
+
+	var resetCalled bool
+	mock := &git.MockOps{
+		GitDirFn:    func() (string, error) { return tmpDir, nil },
+		ResetHardFn: func(string) error { resetCalled = true; return nil },
+	}
+	restore := git.SetOps(mock)
+	defer restore()
+
+	cfg, _, errR := config.NewTestConfig()
+
+	err := runModifyAbort(cfg)
+
+	cfg.Out.Close()
+	cfg.Err.Close()
+	out, _ := io.ReadAll(errR)
+	output := string(out)
+
+	require.NoError(t, err)
+	assert.False(t, resetCalled, "pending-submit abort must not unwind branches")
+	assert.True(t, modify.StateExists(tmpDir), "pending-submit state should be preserved")
+	assert.Contains(t, output, "gh stack submit")
+}

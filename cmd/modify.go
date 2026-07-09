@@ -219,8 +219,12 @@ func runModifyAbort(cfg *config.Config) error {
 	}
 
 	switch state.Phase {
-	case modify.PhaseApplying:
-		cfg.Printf("A modify session was interrupted during the apply phase")
+	case modify.PhaseApplying, modify.PhaseConflict:
+		if state.Phase == modify.PhaseConflict {
+			cfg.Printf("Aborting the modify and discarding in-progress conflict resolution")
+		} else {
+			cfg.Printf("A modify session was interrupted during the apply phase")
+		}
 		cfg.Printf("Restoring stack to pre-modify state...")
 		if err := modify.UnwindFromStateFile(cfg, gitDir); err != nil {
 			cfg.Errorf("recovery failed: %s", err)
