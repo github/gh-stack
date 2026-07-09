@@ -187,20 +187,14 @@ func (d *defaultOps) Push(remote string, branches []string, force, atomic bool) 
 	if atomic {
 		args = append(args, "--atomic")
 	}
-	if force {
-		// Fully-qualified refspecs: refs/heads/<local>:refs/heads/<remote>.
-		// Qualifying the source (not a bare branch name) ensures a branch
-		// name is never reinterpreted as refspec syntax — e.g. a leading
-		// "+" is part of the ref, not a force modifier. Force is supplied
-		// out-of-band by the --force-with-lease flags above.
-		for _, b := range branches {
-			args = append(args, fmt.Sprintf("refs/heads/%s:refs/heads/%s", b, b))
-		}
-	} else {
-		// Fully-qualified refspecs here too, for the same reason.
-		for _, b := range branches {
-			args = append(args, fmt.Sprintf("refs/heads/%s:refs/heads/%s", b, b))
-		}
+	// Fully-qualified refspecs: refs/heads/<local>:refs/heads/<remote>.
+	// Qualifying the source (not a bare branch name) ensures a branch name is
+	// never reinterpreted as refspec syntax — e.g. a leading "+" is part of the
+	// ref, not a force modifier. This form is identical whether or not the push
+	// is forced; force is supplied out-of-band by the --force-with-lease flags
+	// built above.
+	for _, b := range branches {
+		args = append(args, fmt.Sprintf("refs/heads/%s:refs/heads/%s", b, b))
 	}
 	return runSilent(args...)
 }
