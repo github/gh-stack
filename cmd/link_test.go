@@ -558,6 +558,196 @@ func TestLink_ReportsMultipleIneligiblePRs(t *testing.T) {
 	assert.Contains(t, output, "auto-merge")
 }
 
+// Regression test to ensure a queued PR that is already a member of
+// the target stack does not block adding new PRs to that same stack.
+func TestLink_AllowsQueuedPRAlreadyInStack(t *testing.T) {
+	var updatedID string
+	var updatedPRs []int
+	cfg, _, errR := config.NewTestConfig()
+	cfg.GitHubClientOverride = &github.MockClient{
+		FindPRByNumberFn: func(n int) (*github.PullRequest, error) {
+			pr := &github.PullRequest{
+				Number:      n,
+				State:       "OPEN",
+				HeadRefName: fmt.Sprintf("branch-%d", n),
+				BaseRefName: "main",
+				URL:         fmt.Sprintf("https://github.com/o/r/pull/%d", n),
+			}
+			// PR 100 is the queued bottom PR already in the stack.
+			if n == 100 {
+				pr.MergeQueueEntry = &github.MergeQueueEntry{ID: "MQE_100"}
+			}
+			return pr, nil
+		},
+		ListStacksFn: func() ([]github.RemoteStack, error) {
+			return []github.RemoteStack{
+				{ID: 7, PullRequests: []int{100}},
+			}, nil
+		},
+		UpdateStackFn: func(stackID string, prNumbers []int) error {
+			updatedID = stackID
+			updatedPRs = prNumbers
+			return nil
+		},
+		CreateStackFn: func([]int) (int, error) {
+			t.Fatal("CreateStack should not be called when updating an existing stack")
+			return 0, nil
+		},
+	}
+
+	cmd := LinkCmd(cfg)
+	cmd.SetArgs([]string{"100", "101", "102"})
+	cmd.SetOut(io.Discard)
+	cmd.SetErr(io.Discard)
+	err := cmd.Execute()
+
+	cfg.Err.Close()
+	errOut, _ := io.ReadAll(errR)
+	output := string(errOut)
+
+	require.NoError(t, err)
+	assert.Equal(t, "7", updatedID)
+	assert.Equal(t, []int{100, 101, 102}, updatedPRs)
+	assert.NotContains(t, output, "cannot be added to a stack")
+}
+
+// TestLink_AllowsMergedPRAlreadyInStack verifies the exemption also covers
+// state-based ineligibility (merged/closed) for PRs already in the stack.
+func TestLink_AllowsMergedPRAlreadyInStack(t *testing.T) {
+	var updatedPRs []int
+	cfg, _, errR := config.NewTestConfig()
+	cfg.GitHubClientOverride = &github.MockClient{
+		FindPRByNumberFn: func(n int) (*github.PullRequest, error) {
+			pr := &github.PullRequest{
+				Number:      n,
+				State:       "OPEN",
+				HeadRefName: fmt.Sprintf("branch-%d", n),
+				BaseRefName: "main",
+				URL:         fmt.Sprintf("https://github.com/o/r/pull/%d", n),
+			}
+			if n == 100 {
+				pr.State = "MERGED"
+				pr.Merged = true
+			}
+			return pr, nil
+		},
+		ListStacksFn: func() ([]github.RemoteStack, error) {
+			return []github.RemoteStack{
+				{ID: 8, PullRequests: []int{100}},
+			}, nil
+		},
+		UpdateStackFn: func(_ string, prNumbers []int) error {
+			updatedPRs = prNumbers
+			return nil
+		},
+	}
+
+	cmd := LinkCmd(cfg)
+	cmd.SetArgs([]string{"100", "101"})
+	cmd.SetOut(io.Discard)
+	cmd.SetErr(io.Discard)
+	err := cmd.Execute()
+
+	cfg.Err.Close()
+	errOut, _ := io.ReadAll(errR)
+	output := string(errOut)
+
+	require.NoError(t, err)
+	assert.Equal(t, []int{100, 101}, updatedPRs)
+	assert.NotContains(t, output, "cannot be added to a stack")
+}
+
+// TestLink_AllowsAutoMergePRAlreadyInStack verifies the exemption also covers
+// auto-merge-enabled PRs already in the stack.
+func TestLink_AllowsAutoMergePRAlreadyInStack(t *testing.T) {
+	var updatedPRs []int
+	cfg, _, errR := config.NewTestConfig()
+	cfg.GitHubClientOverride = &github.MockClient{
+		FindPRByNumberFn: func(n int) (*github.PullRequest, error) {
+			pr := &github.PullRequest{
+				Number:      n,
+				State:       "OPEN",
+				HeadRefName: fmt.Sprintf("branch-%d", n),
+				BaseRefName: "main",
+				URL:         fmt.Sprintf("https://github.com/o/r/pull/%d", n),
+			}
+			if n == 100 {
+				pr.AutoMergeRequest = &github.AutoMergeRequest{EnabledAt: "2024-01-01T00:00:00Z"}
+			}
+			return pr, nil
+		},
+		ListStacksFn: func() ([]github.RemoteStack, error) {
+			return []github.RemoteStack{
+				{ID: 9, PullRequests: []int{100}},
+			}, nil
+		},
+		UpdateStackFn: func(_ string, prNumbers []int) error {
+			updatedPRs = prNumbers
+			return nil
+		},
+	}
+
+	cmd := LinkCmd(cfg)
+	cmd.SetArgs([]string{"100", "101"})
+	cmd.SetOut(io.Discard)
+	cmd.SetErr(io.Discard)
+	err := cmd.Execute()
+
+	cfg.Err.Close()
+	errOut, _ := io.ReadAll(errR)
+	output := string(errOut)
+
+	require.NoError(t, err)
+	assert.Equal(t, []int{100, 101}, updatedPRs)
+	assert.NotContains(t, output, "cannot be added to a stack")
+}
+
+// TestLink_RejectsQueuedPRNotInStack_WhenAddingToExistingStack confirms the
+// exemption is scoped correctly: a queued PR that is NOT already a member of the
+// matched stack is still rejected, even when the command targets that stack.
+func TestLink_RejectsQueuedPRNotInStack_WhenAddingToExistingStack(t *testing.T) {
+	cfg, _, errR := config.NewTestConfig()
+	cfg.GitHubClientOverride = &github.MockClient{
+		FindPRByNumberFn: func(n int) (*github.PullRequest, error) {
+			pr := &github.PullRequest{
+				Number:      n,
+				State:       "OPEN",
+				HeadRefName: fmt.Sprintf("branch-%d", n),
+				BaseRefName: "main",
+				URL:         fmt.Sprintf("https://github.com/o/r/pull/%d", n),
+			}
+			// PR 200 is queued and is NOT part of the existing stack.
+			if n == 200 {
+				pr.MergeQueueEntry = &github.MergeQueueEntry{ID: "MQE_200"}
+			}
+			return pr, nil
+		},
+		ListStacksFn: func() ([]github.RemoteStack, error) {
+			return []github.RemoteStack{
+				{ID: 7, PullRequests: []int{100}},
+			}, nil
+		},
+		UpdateStackFn: func(string, []int) error {
+			t.Fatal("UpdateStack should not be called when a new PR is ineligible")
+			return nil
+		},
+	}
+
+	cmd := LinkCmd(cfg)
+	cmd.SetArgs([]string{"100", "200"})
+	cmd.SetOut(io.Discard)
+	cmd.SetErr(io.Discard)
+	err := cmd.Execute()
+
+	cfg.Err.Close()
+	errOut, _ := io.ReadAll(errR)
+	output := string(errOut)
+
+	assert.ErrorIs(t, err, ErrInvalidArgs)
+	assert.Contains(t, output, "cannot be added to a stack")
+	assert.Contains(t, output, "queued for merge")
+}
+
 // --- Branch name tests ---
 
 func TestLink_BranchNames_AllHavePRs(t *testing.T) {

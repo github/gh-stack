@@ -104,15 +104,9 @@ func runLink(cfg *config.Config, opts *linkOptions, args []string) error {
 		return err
 	}
 
-	// Phase 2b: Validate that all found PRs are eligible to be added to a stack.
-	// Only open/draft PRs without auto-merge enabled are allowed.
-	if err := validatePREligibility(cfg, found); err != nil {
-		return err
-	}
-
-	// Phase 3: Pre-validate the stack — check that adding these PRs won't
-	// conflict with existing stacks before creating any new PRs.
-	// Also fetches stacks for reuse in the upsert phase.
+	// Phase 2b: Fetch existing stacks first so eligibility validation and
+	// stack pre-validation can account for PRs that are already members of
+	// the target stack. The stacks are also reused in the upsert phase.
 	knownPRNumbers := make([]int, 0, len(found))
 	for _, r := range found {
 		if r != nil {
@@ -124,8 +118,28 @@ func runLink(cfg *config.Config, opts *linkOptions, args []string) error {
 	if err != nil {
 		return err
 	}
-	if len(knownPRNumbers) > 0 {
-		if err := prevalidateStack(cfg, stacks, knownPRNumbers); err != nil {
+
+	// Determine the stack these PRs already belong to (if any). PRs that are
+	// already members of this stack are exempt from the eligibility checks
+	// below, since they are not being added — they are already present.
+	targetStack, err := findMatchingStack(stacks, knownPRNumbers)
+	if err != nil {
+		cfg.Errorf("%s", err)
+		return ErrDisambiguate
+	}
+
+	// Validate that all found PRs are eligible to be added to a stack. Only
+	// open/draft PRs without auto-merge enabled are allowed, except for PRs
+	// already in the target stack.
+	if err := validatePREligibility(cfg, found, targetStack); err != nil {
+		return err
+	}
+
+	// Phase 3: Pre-validate the stack — check that adding these PRs won't
+	// drop existing PRs from the target stack before creating any new PRs,
+	// so we can fail early without leaving orphaned PRs.
+	if targetStack != nil {
+		if err := prevalidateStack(cfg, targetStack, knownPRNumbers); err != nil {
 			return err
 		}
 	}
@@ -299,11 +313,27 @@ func findExistingPR(cfg *config.Config, client github.ClientOps, arg string) (*r
 // validatePREligibility checks that all found PRs are eligible to be added
 // to a stack. Only open or draft PRs without auto-merge enabled are allowed.
 // Merged, closed, queued, and auto-merge-enabled PRs are rejected.
-// Reports all invalid PRs at once before returning.
-func validatePREligibility(cfg *config.Config, found []*resolvedArg) error {
+//
+// PRs that are already members of targetStack are exempt from these checks:
+// they are not being added (they are already present), so re-including them —
+// as an additive update requires — must not fail the operation. Reports all
+// invalid PRs at once before returning.
+func validatePREligibility(cfg *config.Config, found []*resolvedArg, targetStack *github.RemoteStack) error {
+	inTargetStack := make(map[int]bool)
+	if targetStack != nil {
+		for _, n := range targetStack.PullRequests {
+			inTargetStack[n] = true
+		}
+	}
+
 	invalid := 0
 	for _, r := range found {
 		if r == nil || r.pr == nil {
+			continue
+		}
+		// PRs already in the target stack are not being added, so the
+		// eligibility checks below do not apply to them.
+		if inTargetStack[r.prNumber] {
 			continue
 		}
 		pr := r.pr
@@ -345,41 +375,35 @@ func listStacksSafe(cfg *config.Config, client github.ClientOps) ([]github.Remot
 	return stacks, nil
 }
 
-// prevalidateStack checks whether the known PRs would conflict with
-// existing stacks. This runs before creating new PRs so we can fail
-// early without leaving orphaned PRs.
-func prevalidateStack(cfg *config.Config, stacks []github.RemoteStack, knownPRNumbers []int) error {
-	matchedStack, err := findMatchingStack(stacks, knownPRNumbers)
-	if err != nil {
-		cfg.Errorf("%s", err)
-		return ErrDisambiguate
+// prevalidateStack checks whether adding the known PRs to the matched target
+// stack would remove any of the stack's existing PRs. This runs before creating
+// new PRs so we can fail early without leaving orphaned PRs. The caller is
+// responsible for passing a non-nil matchedStack (the result of
+// findMatchingStack); when no stack matches there is nothing to pre-validate.
+func prevalidateStack(cfg *config.Config, matchedStack *github.RemoteStack, knownPRNumbers []int) error {
+	// Check that we won't be removing PRs from the existing stack.
+	// At this point we only have the known PR numbers (existing PRs).
+	// New PRs will be created later and added. Since new PRs can't
+	// match existing stack PRs (they don't exist yet), we just need
+	// to check that all existing stack PRs are in the known set.
+	knownSet := make(map[int]bool, len(knownPRNumbers))
+	for _, n := range knownPRNumbers {
+		knownSet[n] = true
 	}
 
-	if matchedStack != nil {
-		// Check that we won't be removing PRs from the existing stack.
-		// At this point we only have the known PR numbers (existing PRs).
-		// New PRs will be created later and added. Since new PRs can't
-		// match existing stack PRs (they don't exist yet), we just need
-		// to check that all existing stack PRs are in the known set.
-		knownSet := make(map[int]bool, len(knownPRNumbers))
-		for _, n := range knownPRNumbers {
-			knownSet[n] = true
+	var dropped []int
+	for _, n := range matchedStack.PullRequests {
+		if !knownSet[n] {
+			dropped = append(dropped, n)
 		}
+	}
 
-		var dropped []int
-		for _, n := range matchedStack.PullRequests {
-			if !knownSet[n] {
-				dropped = append(dropped, n)
-			}
-		}
-
-		if len(dropped) > 0 {
-			cfg.Errorf("Cannot update stack: this would remove %s from the stack",
-				formatPRList(dropped))
-			cfg.Printf("Current stack: %s", formatPRList(matchedStack.PullRequests))
-			cfg.Printf("Include all existing PRs in the command to update the stack")
-			return ErrInvalidArgs
-		}
+	if len(dropped) > 0 {
+		cfg.Errorf("Cannot update stack: this would remove %s from the stack",
+			formatPRList(dropped))
+		cfg.Printf("Current stack: %s", formatPRList(matchedStack.PullRequests))
+		cfg.Printf("Include all existing PRs in the command to update the stack")
+		return ErrInvalidArgs
 	}
 
 	return nil
