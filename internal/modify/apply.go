@@ -916,6 +916,16 @@ func ContinueApply(
 			state.AffectsPRs = affectsPRs
 			_ = SaveState(gitDir, state)
 
+			// Persist the stack metadata so far. A fold-down removes the
+			// folded branch from the in-memory stack (above) before the
+			// cascade rebase runs. If we don't save it here, the next
+			// --continue re-reads the on-disk metadata (folded branch still
+			// present) and — because ConflictType is now "rebase" — skips the
+			// fold-removal block, silently resurrecting the folded branch as a
+			// phantom entry. Mirrors ApplyPlan's save-on-conflict.
+			if saveErr := stack.SaveWithLock(gitDir, sf, lock); saveErr != nil {
+				cfg.Warningf("failed to save stack metadata: %v", saveErr)
+			}
 			cfg.Warningf("Conflict rebasing %s", branchName)
 			if files, ferr := git.ConflictedFiles(); ferr == nil {
 				for _, f := range files {

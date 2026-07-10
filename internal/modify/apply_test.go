@@ -1329,6 +1329,94 @@ func TestContinueApply_SubsequentConflictBecomesRebase(t *testing.T) {
 	assert.Equal(t, "C", got.ConflictBranch)
 }
 
+// Regression test for the review on PR #167: after an initial fold-down
+// (cherry-pick) conflict is resolved, a subsequent cascade rebase conflict must
+// persist the fold-branch removal to disk. Otherwise the next --continue
+// re-reads stale on-disk metadata and — because ConflictType is now "rebase" —
+// skips the fold-removal step, silently resurrecting the folded branch as a
+// phantom entry once recovery completes.
+func TestContinueApply_FoldThenCascadeConflict_DoesNotResurrectFoldedBranch(t *testing.T) {
+	s := stack.Stack{
+		Trunk: stack.BranchRef{Branch: "main"},
+		Branches: []stack.BranchRef{
+			{Branch: "A"},
+			{Branch: "B"},
+			{Branch: "C"},
+		},
+	}
+
+	gitDir := t.TempDir()
+	writeTestStackFile(t, gitDir, s)
+
+	// State written by ApplyPlan when the fold-down of B into A conflicts on
+	// cherry-pick. B is still present in the on-disk metadata at this point.
+	state := &StateFile{
+		SchemaVersion:     1,
+		StackName:         "main",
+		StackIndex:        0,
+		Phase:             PhaseConflict,
+		ConflictType:      "cherry_pick",
+		ConflictBranch:    "B",
+		FoldBranch:        "B",
+		FoldTarget:        "A",
+		RemainingBranches: []string{"A", "C"},
+		OriginalBranch:    "A",
+		OriginalRefs:      map[string]string{"A": "sha-main", "C": "sha-A-old"},
+	}
+	require.NoError(t, SaveState(gitDir, state))
+
+	mock := newApplyMock(gitDir, map[string]string{
+		"main": "sha-main", "A": "sha-A", "B": "sha-B", "C": "sha-C",
+	})
+	mock.CherryPickContinueFn = func() error { return nil }
+	mock.IsRebaseInProgressFn = func() bool { return true }
+	mock.RebaseContinueFn = func(git.RebaseOpts) error { return nil }
+	// C conflicts on its first rebase attempt, then succeeds (user resolved it).
+	cRebases := 0
+	mock.RebaseOntoFn = func(newBase, oldBase, branch string, opts git.RebaseOpts) error {
+		if branch == "C" {
+			cRebases++
+			if cRebases == 1 {
+				return assert.AnError
+			}
+		}
+		return nil
+	}
+	mock.ConflictedFilesFn = func() ([]string, error) { return []string{"c.go"}, nil }
+
+	restore := git.SetOps(mock)
+	defer restore()
+
+	cfg, _, _ := config.NewTestConfig()
+	defer cfg.Out.Close()
+	defer cfg.Err.Close()
+
+	// First --continue: finishes the fold, then conflicts rebasing C.
+	err := ContinueApply(cfg, gitDir, noopUpdateBaseSHAs)
+	require.Error(t, err)
+
+	// The fold-branch removal must already be persisted on disk, even though
+	// the cascade hit a conflict.
+	afterFirst, err := stack.Load(gitDir)
+	require.NoError(t, err)
+	assert.Equal(t, -1, afterFirst.Stacks[0].IndexOf("B"),
+		"folded branch B must not be present on disk after the cascade conflict")
+
+	// Second --continue: rebase resolves and recovery completes.
+	err = ContinueApply(cfg, gitDir, noopUpdateBaseSHAs)
+	require.NoError(t, err)
+
+	final, err := stack.Load(gitDir)
+	require.NoError(t, err)
+	names := make([]string, len(final.Stacks[0].Branches))
+	for i, b := range final.Stacks[0].Branches {
+		names[i] = b.Branch
+	}
+	assert.Equal(t, []string{"A", "C"}, names,
+		"folded branch B must stay removed after recovery completes")
+	assert.False(t, StateExists(gitDir), "state should be cleared after successful recovery")
+}
+
 // ─── Unwind restores renamed branch ─────────────────────────────────────────
 
 func TestUnwind_RestoresRenamedBranch(t *testing.T) {
