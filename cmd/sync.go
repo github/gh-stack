@@ -26,15 +26,26 @@ func SyncCmd(cfg *config.Config) *cobra.Command {
 		Short: "Sync the current stack with the remote",
 		Long: `Fetch, rebase, push, and sync PR state for the current stack.
 
-This command performs a safe, non-interactive synchronization:
+This command performs a safe synchronization:
 
   1. Fetches the latest changes from the remote
-  2. Fast-forwards the trunk branch to match the remote
-  3. Cascade-rebases stack branches onto their updated parents
-  4. Pushes all branches atomically (using --force-with-lease --atomic)
-  5. Syncs PR state from GitHub
-  6. Links the stack's open PRs into a stack on GitHub (creating or updating
+  2. Reconciles the stack on GitHub with your local stack: pulls down
+     branches for any PRs added to the stack on GitHub, or prompts you to
+     resolve a divergence in an interactive terminal
+  3. Fast-forwards the trunk branch to match the remote
+  4. Cascade-rebases stack branches onto their updated parents
+  5. Pushes all branches atomically (using --force-with-lease --atomic)
+  6. Syncs PR state from GitHub
+  7. Links the stack's open PRs into a stack on GitHub (creating or updating
      the remote stack object) when two or more PRs exist
+
+If PRs have been added to the stack on GitHub, their branches are pulled
+down and appended to your local stack so it mirrors the remote. A clean
+"remote is ahead" update happens automatically without prompting. If the
+local and remote stacks have diverged, sync prompts (in an interactive
+terminal) to use the remote as the source of truth, use your local stack
+as the source of truth, disassociate them, or cancel. In a non-interactive
+terminal a divergence is reported and left untouched.
 
 If a rebase conflict is detected, all branches are restored to their
 original state and you are advised to run "gh stack rebase" to resolve
@@ -45,7 +56,7 @@ links PRs that already exist. The final message reflects what happened:
 "Stack synced" means the stack object on GitHub now matches your local
 stack, while "Branches synced" means the branches were rebased and pushed
 but no remote stack object was created or updated (for example, when fewer
-than two PRs exist yet).
+than two PRs exist yet, or a divergence was left unresolved).
 
 Use --prune to delete local branches for merged PRs. Stack metadata is
 preserved so that rebase and display logic continue to work correctly.
@@ -98,6 +109,22 @@ func runSync(cfg *config.Config, opts *syncOptions) error {
 	fetchTargets := append([]string{s.Trunk.Branch}, activeBranchNames(s)...)
 	_ = git.FetchBranches(remote, fetchTargets)
 	cfg.Successf("Fetched latest changes from %s", remote)
+
+	// --- Step 1b: Reconcile remote-ahead stack changes ---
+	// Pull in branches for PRs that were added to the stack on GitHub, or
+	// resolve a divergence, before rebasing and pushing so pulled branches
+	// participate in the normal flow. Best-effort for stacks tracked on the
+	// remote; a no-op otherwise.
+	reconcileRes, err := reconcileRemoteStack(cfg, sf, s, gitDir, remote)
+	if err != nil {
+		if errors.Is(err, errInterrupt) {
+			return ErrSilent
+		}
+		return err
+	}
+	if reconcileRes.stack != nil {
+		s = reconcileRes.stack
+	}
 
 	// --- Step 2: Fast-forward trunk ---
 	trunk := s.Trunk.Branch
@@ -237,8 +264,10 @@ func runSync(cfg *config.Config, opts *syncOptions) error {
 	// stack object actually reflects the local stack, which determines the final
 	// summary message below.
 	stackSynced := false
-	if client, err := cfg.GitHubClient(); err == nil {
-		stackSynced = syncStack(cfg, client, s)
+	if !reconcileRes.skipStackObjectSync {
+		if client, err := cfg.GitHubClient(); err == nil {
+			stackSynced = syncStack(cfg, client, s)
+		}
 	}
 
 	// --- Step 6: Prune merged branches (optional) ---
