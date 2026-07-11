@@ -315,6 +315,14 @@ func continueRebase(cfg *config.Config, gitDir string) error {
 		return fmt.Errorf("no stack found for branch %s", state.OriginalBranch)
 	}
 
+	// Refresh PR state before selecting the base and cascading the remaining
+	// branches. The queued flag is transient (not persisted), so it was lost
+	// when the stack was reloaded from disk above. Without this, a queued
+	// branch in the remaining cascade would be treated as active and its
+	// frozen merge-queue branch would be rebased. Mirrors the syncStackPRs
+	// call in runRebase before its cascade.
+	_ = syncStackPRs(cfg, s)
+
 	// The branch that had the conflict is stored in state; fall back to
 	// looking it up by index for backwards compatibility with older state files.
 	conflictBranch := state.ConflictBranch

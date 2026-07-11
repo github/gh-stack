@@ -974,6 +974,80 @@ func TestRebase_Continue_RebasesRemainingBranches(t *testing.T) {
 	assert.Contains(t, checkouts, "b1", "should checkout original branch")
 }
 
+// TestRebase_Continue_QueuedBranchBelowConflict verifies that a queued branch is
+// still skipped when the cascade resumes via --continue after a conflict below
+// it. The Queued flag is transient and lost when continueRebase reloads the
+// stack from disk, so it must be refreshed before the remaining cascade — else
+// the frozen merge-queue branch would be rebased.
+func TestRebase_Continue_QueuedBranchBelowConflict(t *testing.T) {
+	s := stack.Stack{
+		Trunk: stack.BranchRef{Branch: "main"},
+		Branches: []stack.BranchRef{
+			{Branch: "b1"},
+			{Branch: "b2", PullRequest: &stack.PullRequestRef{Number: 20}},
+			{Branch: "b3"},
+		},
+	}
+
+	tmpDir := t.TempDir()
+	writeStackFile(t, tmpDir, s)
+
+	// State: b1 (below the queued b2) conflicted; b2 and b3 remain.
+	state := &rebaseState{
+		CurrentBranchIndex: 0,
+		ConflictBranch:     "b1",
+		RemainingBranches:  []string{"b2", "b3"},
+		OriginalBranch:     "b3",
+		OriginalRefs: map[string]string{
+			"main": "main-orig-sha",
+			"b1":   "sha-b1",
+			"b2":   "sha-b2",
+			"b3":   "sha-b3",
+		},
+	}
+	stateData, _ := json.MarshalIndent(state, "", "  ")
+	require.NoError(t, os.WriteFile(filepath.Join(tmpDir, "gh-stack-rebase-state"), stateData, 0644))
+
+	var rebaseCalls []rebaseCall
+
+	mock := newRebaseMock(tmpDir, "b1")
+	mock.BranchExistsFn = func(name string) bool { return true }
+	mock.IsRebaseInProgressFn = func() bool { return true }
+	mock.RebaseContinueFn = func(opts git.RebaseOpts) error { return nil }
+	mock.RebaseOntoFn = func(newBase, oldBase, branch string, opts git.RebaseOpts) error {
+		rebaseCalls = append(rebaseCalls, rebaseCall{newBase, oldBase, branch})
+		return nil
+	}
+	mock.CheckoutBranchFn = func(string) error { return nil }
+
+	restore := git.SetOps(mock)
+	defer restore()
+
+	cfg, _, errR := config.NewTestConfig()
+	cfg.GitHubClientOverride = queuedPRClient(map[int]string{20: "b2"})
+	cmd := RebaseCmd(cfg)
+	cmd.SetArgs([]string{"--continue"})
+	cmd.SetOut(io.Discard)
+	cmd.SetErr(io.Discard)
+	err := cmd.Execute()
+
+	cfg.Err.Close()
+	errOut, _ := io.ReadAll(errR)
+	output := string(errOut)
+
+	assert.NoError(t, err)
+	assert.Contains(t, output, "Skipping b2")
+	assert.Contains(t, output, "queued")
+
+	// Only b3 is rebased, onto the queued b2. The queued b2 itself must not be
+	// rebased (its branch is frozen in the merge queue).
+	require.Len(t, rebaseCalls, 1)
+	assert.Equal(t, rebaseCall{"b2", "sha-b2", "b3"}, rebaseCalls[0])
+	for _, c := range rebaseCalls {
+		assert.NotEqual(t, "b2", c.branch, "the frozen queued branch must not be rebased")
+	}
+}
+
 // TestRebase_Continue_OntoMode verifies the --continue path when UseOnto is
 // set (merged branches upstream). With no remaining branches, only
 // RebaseContinue runs and the state is cleaned up.
