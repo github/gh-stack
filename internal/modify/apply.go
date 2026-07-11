@@ -754,32 +754,17 @@ func adjacentSnapshotBranch(snapshot Snapshot, target string, direction int) str
 // still exists in the stack. Prefers the branch above (higher index), then below.
 // resolvedName translates snapshot names through any renames from the same operation.
 func nearestSurvivingBranch(snapshot Snapshot, dropped string, s *stack.Stack, resolvedName func(string) string) string {
-	pos := -1
+	order := make([]string, len(snapshot.Branches))
 	for i, bs := range snapshot.Branches {
-		if bs.Name == dropped {
-			pos = i
-			break
-		}
+		order[i] = bs.Name
 	}
-	if pos < 0 {
+	raw := stack.NearestSurvivingBranch(order, dropped, func(name string) bool {
+		return s.IndexOf(resolvedName(name)) >= 0
+	})
+	if raw == "" {
 		return ""
 	}
-
-	// Search above first (higher indices = away from trunk)
-	for i := pos + 1; i < len(snapshot.Branches); i++ {
-		name := resolvedName(snapshot.Branches[i].Name)
-		if s.IndexOf(name) >= 0 {
-			return name
-		}
-	}
-	// Then below (lower indices = toward trunk)
-	for i := pos - 1; i >= 0; i-- {
-		name := resolvedName(snapshot.Branches[i].Name)
-		if s.IndexOf(name) >= 0 {
-			return name
-		}
-	}
-	return ""
+	return resolvedName(raw)
 }
 
 // ContinueApply resumes a modify operation after the user resolves a rebase conflict.

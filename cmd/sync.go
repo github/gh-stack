@@ -116,7 +116,7 @@ func runSync(cfg *config.Config, opts *syncOptions) error {
 	// resolve a divergence, before rebasing and pushing so pulled branches
 	// participate in the normal flow. Best-effort for stacks tracked on the
 	// remote; a no-op otherwise.
-	reconcileRes, err := reconcileRemoteStack(cfg, sf, s, gitDir, remote)
+	reconcileRes, err := reconcileRemoteStack(cfg, sf, s, currentBranch, gitDir, remote)
 	if err != nil {
 		if errors.Is(err, errInterrupt) {
 			return ErrSilent
@@ -132,6 +132,11 @@ func runSync(cfg *config.Config, opts *syncOptions) error {
 		cfg.Printf("")
 		cfg.Infof("Sync aborted — no changes were made")
 		return nil
+	}
+	// Reconciling "use remote as source of truth" may have moved us off a
+	// branch that is no longer in the stack, so re-read the current branch.
+	if cb, cbErr := git.CurrentBranch(); cbErr == nil {
+		currentBranch = cb
 	}
 
 	// --- Step 2: Fast-forward trunk ---

@@ -2182,8 +2182,70 @@ func TestSync_Divergent_UseRemote(t *testing.T) {
 	assert.Equal(t, "9", sf.Stacks[0].ID)
 }
 
-// TestSync_Divergent_UseRemote_DirtyBlocked refuses to replace the local stack
-// when the working tree has uncommitted changes.
+func TestNearestBranchAfterReplace(t *testing.T) {
+	newStack := func(branches ...string) *stack.Stack {
+		s := &stack.Stack{Trunk: stack.BranchRef{Branch: "main"}}
+		for _, b := range branches {
+			s.Branches = append(s.Branches, stack.BranchRef{Branch: b})
+		}
+		return s
+	}
+	tests := []struct {
+		name        string
+		old         []string
+		current     string
+		newBranches []string
+		want        string
+	}{
+		{"still in stack", []string{"b1", "b2", "b3"}, "b2", []string{"b1", "b2", "b4"}, "b2"},
+		{"dropped top prefers below", []string{"b1", "b2", "b3"}, "b3", []string{"b1", "b2", "b4"}, "b2"},
+		{"dropped middle prefers above", []string{"b1", "b2", "b3"}, "b2", []string{"b1", "b3"}, "b3"},
+		{"on trunk stays put", []string{"b1", "b2"}, "main", []string{"b1", "b2", "b4"}, "main"},
+		{"none survive falls back to top", []string{"x", "y", "z"}, "y", []string{"a", "b", "c"}, "c"},
+		{"empty new stack falls back to trunk", []string{"b1"}, "b1", nil, "main"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			assert.Equal(t, tt.want, nearestBranchAfterReplace(tt.old, tt.current, newStack(tt.newBranches...)))
+		})
+	}
+}
+
+// TestSync_Divergent_UseRemote_SwitchesOffDroppedBranch verifies that when the
+// user is on a branch that the remote stack no longer contains, replacing the
+// local stack with the remote moves them to the nearest surviving branch.
+func TestSync_Divergent_UseRemote_SwitchesOffDroppedBranch(t *testing.T) {
+	tmpDir := t.TempDir()
+	divergentStack(t, tmpDir) // local [b1,b2,b3], remote [b1,b2,b4]; user on b3 (dropped)
+
+	ghMock := divergentRemoteMock()
+	current := "b3"
+	var checkouts []string
+	mock := newSyncMockNoRebase(tmpDir, "b3")
+	mock.CurrentBranchFn = func() (string, error) { return current, nil }
+	mock.CheckoutBranchFn = func(name string) error { current = name; checkouts = append(checkouts, name); return nil }
+	mock.BranchExistsFn = func(name string) bool { return name != "b4" }
+	mock.CreateBranchFn = func(string, string) error { return nil }
+	mock.SetUpstreamTrackingFn = func(string, string) error { return nil }
+	mock.HasUncommittedChangesFn = func() (bool, error) { return false, nil }
+
+	output, err := runSyncCfg(t, mock, func(cfg *config.Config) {
+		cfg.GitHubClientOverride = ghMock
+		cfg.ForceInteractive = true
+		cfg.SelectFn = func(_, _ string, _ []string) (int, error) { return 0, nil }
+	})
+	require.NoError(t, err)
+
+	assert.Contains(t, checkouts, "b2", "should switch off dropped branch b3 to nearest surviving branch b2")
+	assert.NotContains(t, checkouts, "b3", "should never check the dropped branch back out")
+	assert.Contains(t, output, "Switched to b2")
+	assert.Contains(t, output, "no longer in the stack")
+	assert.Equal(t, "b2", current, "should end on b2, not the dropped b3")
+
+	sf, err := stack.Load(tmpDir)
+	require.NoError(t, err)
+	assert.Equal(t, []string{"b1", "b2", "b4"}, sf.Stacks[0].BranchNames())
+}
 func TestSync_Divergent_UseRemote_DirtyBlocked(t *testing.T) {
 	tmpDir := t.TempDir()
 	divergentStack(t, tmpDir)

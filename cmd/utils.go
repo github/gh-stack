@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"net/url"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -1229,7 +1230,7 @@ const (
 // a missing client, stacked PRs being unavailable, or any API error causes it
 // to skip so the rest of sync still runs. Untracked stacks (s.ID == "") are
 // left to the syncStack/reconcileUntrackedStack path.
-func reconcileRemoteStack(cfg *config.Config, sf *stack.StackFile, s *stack.Stack, gitDir, remote string) (remoteReconcileResult, error) {
+func reconcileRemoteStack(cfg *config.Config, sf *stack.StackFile, s *stack.Stack, currentBranch, gitDir, remote string) (remoteReconcileResult, error) {
 	var res remoteReconcileResult
 
 	if s.ID == "" {
@@ -1276,7 +1277,7 @@ func reconcileRemoteStack(cfg *config.Config, sf *stack.StackFile, s *stack.Stac
 	case remoteStackCleanAhead:
 		return pullRemoteAdditions(cfg, sf, s, gitDir, remote, prs)
 	default:
-		return resolveStackDivergence(cfg, client, sf, s, gitDir, remote, prs, remoteActive)
+		return resolveStackDivergence(cfg, client, sf, s, currentBranch, gitDir, remote, prs, remoteActive)
 	}
 }
 
@@ -1414,7 +1415,7 @@ func pullRemoteAdditions(cfg *config.Config, sf *stack.StackFile, s *stack.Stack
 // from the remote (neither is a prefix of the other). In an interactive
 // terminal it prompts the user to resolve it; otherwise (or when the user
 // cancels) it aborts the sync so nothing is pushed or updated.
-func resolveStackDivergence(cfg *config.Config, client github.ClientOps, sf *stack.StackFile, s *stack.Stack, gitDir, remote string, prs []*github.PullRequest, remoteActive []string) (remoteReconcileResult, error) {
+func resolveStackDivergence(cfg *config.Config, client github.ClientOps, sf *stack.StackFile, s *stack.Stack, currentBranch, gitDir, remote string, prs []*github.PullRequest, remoteActive []string) (remoteReconcileResult, error) {
 	cfg.Printf("")
 	cfg.Warningf("Your local stack has diverged from the stack on GitHub")
 	cfg.Printf("  Local:  %s", s.DisplayChain())
@@ -1454,7 +1455,7 @@ func resolveStackDivergence(cfg *config.Config, client github.ClientOps, sf *sta
 
 	switch selected {
 	case 0:
-		return resolveDivergenceUseRemote(cfg, sf, s, gitDir, remote, prs)
+		return resolveDivergenceUseRemote(cfg, sf, s, currentBranch, gitDir, remote, prs)
 	case 1:
 		return resolveDivergenceUseLocal(cfg, client, sf, s, gitDir)
 	case 2:
@@ -1470,7 +1471,7 @@ func resolveStackDivergence(cfg *config.Config, client github.ClientOps, sf *sta
 // destructive to stack tracking). Local-only branches remain as git refs but
 // are no longer part of the stack. Returns the rebuilt stack pointer so the
 // caller can continue with it (importRemoteStack reslices StackFile.Stacks).
-func resolveDivergenceUseRemote(cfg *config.Config, sf *stack.StackFile, s *stack.Stack, gitDir, remote string, prs []*github.PullRequest) (remoteReconcileResult, error) {
+func resolveDivergenceUseRemote(cfg *config.Config, sf *stack.StackFile, s *stack.Stack, currentBranch, gitDir, remote string, prs []*github.PullRequest) (remoteReconcileResult, error) {
 	var res remoteReconcileResult
 
 	if dirty, err := git.HasUncommittedChanges(); err == nil && dirty {
@@ -1481,6 +1482,7 @@ func resolveDivergenceUseRemote(cfg *config.Config, sf *stack.StackFile, s *stac
 
 	trunk := s.Trunk.Branch
 	remoteStackID := s.ID
+	oldBranches := s.BranchNames()
 
 	removeLocalStack(sf, s)
 	newStack, err := importRemoteStack(cfg, sf, gitDir, remote, trunk, prs, remoteStackID)
@@ -1488,6 +1490,18 @@ func resolveDivergenceUseRemote(cfg *config.Config, sf *stack.StackFile, s *stac
 		res.skipStackObjectSync = true
 		return res, err
 	}
+
+	// If the user was on a branch that the remote stack no longer contains,
+	// move them to the nearest surviving branch so they don't end up detached
+	// from the stack.
+	if target := nearestBranchAfterReplace(oldBranches, currentBranch, newStack); target != currentBranch {
+		if err := git.CheckoutBranch(target); err != nil {
+			cfg.Warningf("Failed to switch from %s to %s: %v", currentBranch, target, err)
+		} else {
+			cfg.Printf("Switched to %s (original branch %s is no longer in the stack)", target, currentBranch)
+		}
+	}
+
 	if err := stack.Save(gitDir, sf); err != nil {
 		res.skipStackObjectSync = true
 		return res, handleSaveError(cfg, err)
@@ -1496,6 +1510,33 @@ func resolveDivergenceUseRemote(cfg *config.Config, sf *stack.StackFile, s *stac
 	res.stack = newStack
 	cfg.Successf("Local stack replaced with the remote version")
 	return res, nil
+}
+
+// nearestBranchAfterReplace decides which branch to check out after the local
+// stack has been replaced with the remote version. If currentBranch still
+// exists in newStack (or the user was on the trunk / a non-stack branch), it is
+// returned unchanged. Otherwise it delegates to stack.NearestSurvivingBranch to
+// pick the nearest branch from the pre-replacement ordering (neighbor above,
+// then below), falling back to the top of the new stack, or the trunk if the new
+// stack has no branches. Mirrors the checkout behavior of `gh stack modify`.
+func nearestBranchAfterReplace(oldBranches []string, currentBranch string, newStack *stack.Stack) string {
+	// Still in the new stack, or never a stack branch (e.g. the trunk): stay put.
+	if newStack.IndexOf(currentBranch) >= 0 || slices.Index(oldBranches, currentBranch) < 0 {
+		return currentBranch
+	}
+
+	if nearest := stack.NearestSurvivingBranch(oldBranches, currentBranch, func(name string) bool {
+		return newStack.IndexOf(name) >= 0
+	}); nearest != "" {
+		return nearest
+	}
+
+	// A dropped stack branch with no surviving neighbor — fall back to the top
+	// of the new stack, then the trunk.
+	if len(newStack.Branches) > 0 {
+		return newStack.Branches[len(newStack.Branches)-1].Branch
+	}
+	return newStack.Trunk.Branch
 }
 
 // resolveDivergenceUseLocal makes the remote match the local stack by deleting
