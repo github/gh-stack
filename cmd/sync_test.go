@@ -2119,17 +2119,20 @@ func divergentRemoteMock() *github.MockClient {
 	}
 }
 
-// TestSync_Divergent_NonInteractive_SafeNoOp verifies that a divergence in a
-// non-interactive terminal is a safe no-op: no stack API mutations, guidance is
-// printed, the association is preserved, and it exits success.
-func TestSync_Divergent_NonInteractive_SafeNoOp(t *testing.T) {
+// TestSync_Divergent_NonInteractive_Aborts verifies that a divergence in a
+// non-interactive terminal aborts the sync: no branches are pushed, no stack API
+// mutations occur, guidance is printed, the association is preserved, and it
+// exits successfully.
+func TestSync_Divergent_NonInteractive_Aborts(t *testing.T) {
 	tmpDir := t.TempDir()
 	divergentStack(t, tmpDir)
 
 	ghMock := divergentRemoteMock()
 	var created []string
+	var pushed bool
 	mock := newSyncMockNoRebase(tmpDir, "b1")
 	mock.CreateBranchFn = func(name, base string) error { created = append(created, name); return nil }
+	mock.PushFn = func(string, []string, bool, bool) error { pushed = true; return nil }
 	ghMock.CreateStackFn = func([]int) (int, error) { t.Fatal("CreateStack must not be called"); return 0, nil }
 	ghMock.UpdateStackFn = func(string, []int) error { t.Fatal("UpdateStack must not be called"); return nil }
 	ghMock.DeleteStackFn = func(string) error { t.Fatal("DeleteStack must not be called"); return nil }
@@ -2138,8 +2141,10 @@ func TestSync_Divergent_NonInteractive_SafeNoOp(t *testing.T) {
 	require.NoError(t, err)
 
 	assert.Empty(t, created)
+	assert.False(t, pushed, "branches must not be pushed when sync aborts")
 	assert.Contains(t, output, "diverged")
-	assert.Contains(t, output, "Branches synced")
+	assert.Contains(t, output, "Sync aborted")
+	assert.NotContains(t, output, "Branches synced")
 	assert.NotContains(t, output, "Stack synced")
 
 	sf, err := stack.Load(tmpDir)
@@ -2283,7 +2288,9 @@ func TestSync_Divergent_Cancel(t *testing.T) {
 	ghMock.DeleteStackFn = func(string) error { t.Fatal("DeleteStack must not be called"); return nil }
 	ghMock.CreateStackFn = func([]int) (int, error) { t.Fatal("CreateStack must not be called"); return 0, nil }
 	ghMock.UpdateStackFn = func(string, []int) error { t.Fatal("UpdateStack must not be called"); return nil }
+	var pushed bool
 	mock := newSyncMockNoRebase(tmpDir, "b1")
+	mock.PushFn = func(string, []string, bool, bool) error { pushed = true; return nil }
 
 	output, err := runSyncCfg(t, mock, func(cfg *config.Config) {
 		cfg.GitHubClientOverride = ghMock
@@ -2292,8 +2299,10 @@ func TestSync_Divergent_Cancel(t *testing.T) {
 	})
 	require.NoError(t, err)
 
-	assert.Contains(t, output, "still differ")
-	assert.Contains(t, output, "Branches synced")
+	assert.False(t, pushed, "branches must not be pushed when the user cancels")
+	assert.Contains(t, output, "Sync aborted")
+	assert.NotContains(t, output, "Branches synced")
+	assert.NotContains(t, output, "Stack synced")
 
 	sf, err := stack.Load(tmpDir)
 	require.NoError(t, err)

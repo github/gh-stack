@@ -44,8 +44,9 @@ down and appended to your local stack so it mirrors the remote. A clean
 "remote is ahead" update happens automatically without prompting. If the
 local and remote stacks have diverged, sync prompts (in an interactive
 terminal) to use the remote as the source of truth, use your local stack
-as the source of truth, disassociate them, or cancel. In a non-interactive
-terminal a divergence is reported and left untouched.
+as the source of truth, disassociate them, or cancel. Cancelling — or a
+divergence in a non-interactive terminal — aborts the sync without pushing
+branches or updating PRs.
 
 If a rebase conflict is detected, all branches are restored to their
 original state and you are advised to run "gh stack rebase" to resolve
@@ -56,7 +57,7 @@ links PRs that already exist. The final message reflects what happened:
 "Stack synced" means the stack object on GitHub now matches your local
 stack, while "Branches synced" means the branches were rebased and pushed
 but no remote stack object was created or updated (for example, when fewer
-than two PRs exist yet, or a divergence was left unresolved).
+than two PRs exist yet).
 
 Use --prune to delete local branches for merged PRs. Stack metadata is
 preserved so that rebase and display logic continue to work correctly.
@@ -124,6 +125,13 @@ func runSync(cfg *config.Config, opts *syncOptions) error {
 	}
 	if reconcileRes.stack != nil {
 		s = reconcileRes.stack
+	}
+	if reconcileRes.abort {
+		// The user cancelled a divergence (or it can't be resolved
+		// non-interactively). Stop before touching any branches or PRs.
+		cfg.Printf("")
+		cfg.Infof("Sync aborted — no changes were made")
+		return nil
 	}
 
 	// --- Step 2: Fast-forward trunk ---

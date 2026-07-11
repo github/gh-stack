@@ -1200,9 +1200,14 @@ type remoteReconcileResult struct {
 	stack *stack.Stack
 
 	// skipStackObjectSync tells runSync to skip the later syncStack step so we
-	// never push the local stack over a divergent remote. Set for cancel,
-	// disassociate, and unresolved (non-interactive) divergences.
+	// never push the local stack over a divergent remote. Set when disassociating.
 	skipStackObjectSync bool
+
+	// abort tells runSync to stop the whole sync immediately (before any
+	// fast-forward, rebase, or push) and exit successfully without changes. Set
+	// when the user cancels an interactive divergence prompt, or when a
+	// divergence is detected in a non-interactive terminal.
+	abort bool
 }
 
 // remoteStackClass classifies the relationship between the local stack's active
@@ -1407,11 +1412,9 @@ func pullRemoteAdditions(cfg *config.Config, sf *stack.StackFile, s *stack.Stack
 
 // resolveStackDivergence handles a stack whose local composition has diverged
 // from the remote (neither is a prefix of the other). In an interactive
-// terminal it prompts the user; otherwise it is a safe no-op that reports the
-// divergence and leaves everything untouched.
+// terminal it prompts the user to resolve it; otherwise (or when the user
+// cancels) it aborts the sync so nothing is pushed or updated.
 func resolveStackDivergence(cfg *config.Config, client github.ClientOps, sf *stack.StackFile, s *stack.Stack, gitDir, remote string, prs []*github.PullRequest, remoteActive []string) (remoteReconcileResult, error) {
-	res := remoteReconcileResult{skipStackObjectSync: true}
-
 	cfg.Printf("")
 	cfg.Warningf("Your local stack has diverged from the stack on GitHub")
 	cfg.Printf("  Local:  %s", s.DisplayChain())
@@ -1420,14 +1423,14 @@ func resolveStackDivergence(cfg *config.Config, client github.ClientOps, sf *sta
 	if !cfg.IsInteractive() {
 		cfg.Printf("  Re-run in an interactive terminal to resolve, or import the remote stack with `%s`.",
 			cfg.ColorCyan("gh stack checkout <pr>"))
-		return res, nil
+		return remoteReconcileResult{abort: true}, nil
 	}
 
 	options := []string{
 		"Use the remote stack as the source of truth (update local to match)",
 		"Use your local stack as the source of truth (update remote to match)",
-		"Disassociate — stop tracking this stack on GitHub",
-		"Cancel — make no changes for now",
+		"Disassociate — unlink local stack with remote on GitHub",
+		"Cancel — abort the sync and do not make any changes",
 	}
 	p := prompter.New(cfg.In, cfg.Out, cfg.Err)
 	selectFn := func(prompt, def string, opts []string) (int, error) {
@@ -1436,17 +1439,17 @@ func resolveStackDivergence(cfg *config.Config, client github.ClientOps, sf *sta
 		}
 		return p.Select(prompt, def, opts)
 	}
-	selected, err := selectFn("How would you like to resolve this?", "", options)
+	selected, err := selectFn("How would you like to resolve?", "", options)
 	if err != nil {
 		if isInterruptError(err) {
 			if cfg.SelectFn == nil {
 				clearSelectPrompt(cfg, len(options))
 			}
 			printInterrupt(cfg)
-			return res, errInterrupt
+			return remoteReconcileResult{abort: true}, errInterrupt
 		}
 		cfg.Errorf("selection failed: %v", err)
-		return res, ErrSilent
+		return remoteReconcileResult{}, ErrSilent
 	}
 
 	switch selected {
@@ -1457,8 +1460,8 @@ func resolveStackDivergence(cfg *config.Config, client github.ClientOps, sf *sta
 	case 2:
 		return resolveDivergenceDisassociate(cfg, sf, s, gitDir)
 	default:
-		cfg.Infof("No changes made — your local and remote stacks still differ")
-		return res, nil
+		// Cancel: abort the whole sync without touching branches or PRs.
+		return remoteReconcileResult{abort: true}, nil
 	}
 }
 
