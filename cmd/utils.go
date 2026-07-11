@@ -850,23 +850,33 @@ func cascadeRebase(opts cascadeRebaseOpts) cascadeRebaseResult {
 			base = s.Branches[absIdx-1].Branch
 		}
 
-		// Skip merged and queued branches.
+		// Skip merged and queued branches — but treat them differently for
+		// downstream rebasing.
 		if br.IsSkipped() {
-			ontoOldBase = originalRefs[br.Branch]
-			needsOnto = true
 			if br.IsMerged() {
+				// A merged PR's commits are already in trunk, so downstream
+				// branches must drop them by rebasing --onto the first
+				// non-merged ancestor.
+				ontoOldBase = originalRefs[br.Branch]
+				needsOnto = true
 				cfg.Successf("Skipping %s (PR %s merged)", br.Branch, cfg.PRLink(br.PullRequest.Number, br.PullRequest.URL))
-			} else if br.IsQueued() {
+			} else {
+				// A queued PR is frozen in the merge queue and its commits are
+				// NOT yet in trunk. Downstream branches must stay stacked on top
+				// of it, so do not switch to --onto (which would drop its
+				// commits). Reset onto state in case a merged branch set it.
+				needsOnto = false
 				cfg.Successf("Skipping %s (PR %s queued)", br.Branch, cfg.PRLink(br.PullRequest.Number, br.PullRequest.URL))
 			}
 			continue
 		}
 
 		if needsOnto {
-			// Find --onto target: first non-skipped ancestor, or trunk.
+			// Find --onto target: first non-merged ancestor, or trunk. Queued
+			// ancestors keep their commits, so they are valid --onto targets.
 			newBase := s.Trunk.Branch
 			for j := absIdx - 1; j >= 0; j-- {
-				if !s.Branches[j].IsSkipped() {
+				if !s.Branches[j].IsMerged() {
 					newBase = s.Branches[j].Branch
 					break
 				}

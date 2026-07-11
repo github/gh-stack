@@ -11,6 +11,7 @@ import (
 
 	"github.com/github/gh-stack/internal/config"
 	"github.com/github/gh-stack/internal/git"
+	"github.com/github/gh-stack/internal/github"
 	"github.com/github/gh-stack/internal/stack"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -678,6 +679,188 @@ func TestRebase_SkipsMergedBranches(t *testing.T) {
 	// Only b2 should be rebased
 	require.Len(t, rebaseCalls, 1)
 	assert.Equal(t, "b2", rebaseCalls[0].branch)
+}
+
+// queuedPRClient returns a MockClient whose FindPRByNumber reports the given PR
+// numbers as queued (in a merge queue, open, not merged) and finds no PR by
+// branch name. Used to drive the transient Queued state through syncStackPRs in
+// rebase/sync tests.
+func queuedPRClient(headByNumber map[int]string) *github.MockClient {
+	return &github.MockClient{
+		FindPRByNumberFn: func(n int) (*github.PullRequest, error) {
+			head, ok := headByNumber[n]
+			if !ok {
+				return nil, nil
+			}
+			return &github.PullRequest{
+				Number:          n,
+				HeadRefName:     head,
+				State:           "OPEN",
+				Merged:          false,
+				MergeQueueEntry: &github.MergeQueueEntry{ID: fmt.Sprintf("MQ_%d", n)},
+			}, nil
+		},
+		FindPRForBranchFn: func(string) (*github.PullRequest, error) { return nil, nil },
+	}
+}
+
+// TestRebase_QueuedBranch_DownstreamStaysStacked verifies the #144 fix: a queued
+// PR is NOT treated as merged. Its branch is skipped (frozen in the merge queue),
+// but downstream branches stay stacked on top of it — they rebase onto the queued
+// branch, not --onto trunk with the queued commits dropped.
+func TestRebase_QueuedBranch_DownstreamStaysStacked(t *testing.T) {
+	s := stack.Stack{
+		Trunk: stack.BranchRef{Branch: "main"},
+		Branches: []stack.BranchRef{
+			{Branch: "b1", PullRequest: &stack.PullRequestRef{Number: 10}},
+			{Branch: "b2"},
+			{Branch: "b3"},
+		},
+	}
+
+	tmpDir := t.TempDir()
+	writeStackFile(t, tmpDir, s)
+
+	var rebaseCalls []rebaseCall
+
+	mock := newRebaseMock(tmpDir, "b2")
+	mock.BranchExistsFn = func(name string) bool { return true }
+	mock.RebaseOntoFn = func(newBase, oldBase, branch string, opts git.RebaseOpts) error {
+		rebaseCalls = append(rebaseCalls, rebaseCall{newBase, oldBase, branch})
+		return nil
+	}
+
+	restore := git.SetOps(mock)
+	defer restore()
+
+	cfg, _, errR := config.NewTestConfig()
+	cfg.GitHubClientOverride = queuedPRClient(map[int]string{10: "b1"})
+	cmd := RebaseCmd(cfg)
+	cmd.SetOut(io.Discard)
+	cmd.SetErr(io.Discard)
+	err := cmd.Execute()
+
+	cfg.Err.Close()
+	errOut, _ := io.ReadAll(errR)
+	output := string(errOut)
+
+	assert.NoError(t, err)
+	assert.Contains(t, output, "Skipping b1")
+	assert.Contains(t, output, "queued")
+	assert.NotContains(t, output, "adjusted for merged PR",
+		"queued branches must not trigger the merged --onto path")
+
+	// b2 stays stacked on the queued b1 (not rebased --onto main); b3 onto b2.
+	require.Len(t, rebaseCalls, 2)
+	assert.Equal(t, rebaseCall{"b1", "sha-b1", "b2"}, rebaseCalls[0],
+		"b2 should rebase onto the queued branch b1, keeping its commits")
+	assert.Equal(t, rebaseCall{"b2", "sha-b2", "b3"}, rebaseCalls[1],
+		"b3 should rebase onto b2")
+}
+
+// TestRebase_MergedBelowQueued_KeepsStackedOnQueued verifies that when a merged
+// branch sits below a queued branch, the branch above the queued one stays
+// stacked on the queued branch. The queued branch is frozen and still carries the
+// merged branch's commits, so downstream cannot drop them via --onto.
+func TestRebase_MergedBelowQueued_KeepsStackedOnQueued(t *testing.T) {
+	s := stack.Stack{
+		Trunk: stack.BranchRef{Branch: "main"},
+		Branches: []stack.BranchRef{
+			{Branch: "b1", PullRequest: &stack.PullRequestRef{Number: 10, Merged: true}},
+			{Branch: "b2", PullRequest: &stack.PullRequestRef{Number: 11}},
+			{Branch: "b3"},
+		},
+	}
+
+	tmpDir := t.TempDir()
+	writeStackFile(t, tmpDir, s)
+
+	var rebaseCalls []rebaseCall
+
+	mock := newRebaseMock(tmpDir, "b3")
+	mock.BranchExistsFn = func(name string) bool { return true }
+	mock.RebaseOntoFn = func(newBase, oldBase, branch string, opts git.RebaseOpts) error {
+		rebaseCalls = append(rebaseCalls, rebaseCall{newBase, oldBase, branch})
+		return nil
+	}
+
+	restore := git.SetOps(mock)
+	defer restore()
+
+	cfg, _, errR := config.NewTestConfig()
+	cfg.GitHubClientOverride = queuedPRClient(map[int]string{11: "b2"})
+	cmd := RebaseCmd(cfg)
+	cmd.SetOut(io.Discard)
+	cmd.SetErr(io.Discard)
+	err := cmd.Execute()
+
+	cfg.Err.Close()
+	errOut, _ := io.ReadAll(errR)
+	output := string(errOut)
+
+	assert.NoError(t, err)
+	assert.Contains(t, output, "Skipping b1")
+	assert.Contains(t, output, "PR #10 merged")
+	assert.Contains(t, output, "Skipping b2")
+	assert.Contains(t, output, "queued")
+
+	// b1 merged and b2 queued are both skipped. b3 stays stacked on the queued
+	// b2 — it must NOT be rebased --onto main (which would drop b2's + b1's
+	// commits while b2 is frozen).
+	require.Len(t, rebaseCalls, 1)
+	assert.Equal(t, rebaseCall{"b2", "sha-b2", "b3"}, rebaseCalls[0],
+		"b3 should rebase onto the queued b2, not --onto main")
+	assert.NotContains(t, output, "adjusted for merged PR")
+}
+
+// TestRebase_UpstackAboveQueuedBranch verifies the onto-seed fix: with --upstack
+// starting just above a queued branch, the first in-range branch rebases normally
+// onto the queued predecessor rather than dropping its commits via --onto.
+func TestRebase_UpstackAboveQueuedBranch(t *testing.T) {
+	s := stack.Stack{
+		Trunk: stack.BranchRef{Branch: "main"},
+		Branches: []stack.BranchRef{
+			{Branch: "b1", PullRequest: &stack.PullRequestRef{Number: 10}},
+			{Branch: "b2"},
+			{Branch: "b3"},
+		},
+	}
+
+	tmpDir := t.TempDir()
+	writeStackFile(t, tmpDir, s)
+
+	var rebaseCalls []rebaseCall
+
+	mock := newRebaseMock(tmpDir, "b2")
+	mock.BranchExistsFn = func(name string) bool { return true }
+	mock.RebaseOntoFn = func(newBase, oldBase, branch string, opts git.RebaseOpts) error {
+		rebaseCalls = append(rebaseCalls, rebaseCall{newBase, oldBase, branch})
+		return nil
+	}
+
+	restore := git.SetOps(mock)
+	defer restore()
+
+	cfg, _, errR := config.NewTestConfig()
+	cfg.GitHubClientOverride = queuedPRClient(map[int]string{10: "b1"})
+	cmd := RebaseCmd(cfg)
+	cmd.SetArgs([]string{"--upstack"})
+	cmd.SetOut(io.Discard)
+	cmd.SetErr(io.Discard)
+	err := cmd.Execute()
+
+	cfg.Err.Close()
+	errOut, _ := io.ReadAll(errR)
+	output := string(errOut)
+
+	assert.NoError(t, err)
+	// upstack from b2 = [b2, b3]; b1 (queued) is below the range.
+	require.Len(t, rebaseCalls, 2)
+	assert.Equal(t, rebaseCall{"b1", "sha-b1", "b2"}, rebaseCalls[0],
+		"b2 should rebase onto the queued predecessor b1, not --onto main")
+	assert.Equal(t, rebaseCall{"b2", "sha-b2", "b3"}, rebaseCalls[1],
+		"b3 should rebase onto b2")
+	assert.NotContains(t, output, "adjusted for merged PR")
 }
 
 // TestRebase_StateRoundTrip verifies that rebase state can be saved and loaded

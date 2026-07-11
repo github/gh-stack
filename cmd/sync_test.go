@@ -745,6 +745,83 @@ func TestSync_MergedBranch_UsesOnto(t *testing.T) {
 	assert.True(t, pushCalls[0].force)
 }
 
+// TestSync_QueuedBranch_DownstreamStaysStacked verifies the #144 fix in the sync
+// path: a queued branch is skipped from push (frozen in the merge queue) but
+// downstream branches stay stacked on top of it — they are NOT rebased --onto
+// trunk with the queued commits dropped.
+func TestSync_QueuedBranch_DownstreamStaysStacked(t *testing.T) {
+	s := stack.Stack{
+		Trunk: stack.BranchRef{Branch: "main"},
+		Branches: []stack.BranchRef{
+			{Branch: "b1", PullRequest: &stack.PullRequestRef{Number: 10}},
+			{Branch: "b2"},
+			{Branch: "b3"},
+		},
+	}
+
+	tmpDir := t.TempDir()
+	writeStackFile(t, tmpDir, s)
+
+	var rebaseOntoCalls []rebaseCall
+	var pushCalls []pushCall
+
+	mock := newSyncMock(tmpDir, "b2")
+	// Trunk behind remote to trigger rebase; branches match their remote.
+	mock.RevParseFn = func(ref string) (string, error) {
+		switch ref {
+		case "main":
+			return "local-sha", nil
+		case "origin/main":
+			return "remote-sha", nil
+		}
+		if strings.HasPrefix(ref, "origin/") {
+			return "sha-" + strings.TrimPrefix(ref, "origin/"), nil
+		}
+		return "sha-" + ref, nil
+	}
+	mock.UpdateBranchRefFn = func(string, string) error { return nil }
+	mock.CheckoutBranchFn = func(string) error { return nil }
+	mock.RebaseOntoFn = func(newBase, oldBase, branch string, opts git.RebaseOpts) error {
+		rebaseOntoCalls = append(rebaseOntoCalls, rebaseCall{newBase, oldBase, branch})
+		return nil
+	}
+	mock.PushFn = func(remote string, branches []string, force, atomic bool) error {
+		pushCalls = append(pushCalls, pushCall{remote, branches, force, atomic})
+		return nil
+	}
+
+	restore := git.SetOps(mock)
+	defer restore()
+
+	cfg, _, errR := config.NewTestConfig()
+	cfg.GitHubClientOverride = queuedPRClient(map[int]string{10: "b1"})
+	cmd := SyncCmd(cfg)
+	cmd.SetOut(io.Discard)
+	cmd.SetErr(io.Discard)
+	err := cmd.Execute()
+
+	cfg.Out.Close()
+	cfg.Err.Close()
+	errOut, _ := io.ReadAll(errR)
+	output := string(errOut)
+
+	assert.NoError(t, err)
+	assert.Contains(t, output, "queued")
+
+	// b1 is queued → skipped, but downstream stays stacked on it:
+	// b2 onto b1 (not --onto main), b3 onto b2.
+	require.Len(t, rebaseOntoCalls, 2)
+	assert.Equal(t, rebaseCall{"b1", "sha-b1", "b2"}, rebaseOntoCalls[0],
+		"b2 should rebase onto the queued b1, keeping its commits")
+	assert.Equal(t, rebaseCall{"b2", "sha-b2", "b3"}, rebaseOntoCalls[1],
+		"b3 should rebase onto b2")
+
+	// The queued branch is excluded from push; only b2 and b3 are pushed.
+	require.Len(t, pushCalls, 1)
+	assert.Equal(t, []string{"b2", "b3"}, pushCalls[0].branches,
+		"queued b1 must not be pushed")
+}
+
 // TestSync_StaleOntoOldBase_FallsBackToMergeBase verifies that when a branch
 // was already rebased past the merged branch's tip, sync detects the stale
 // ontoOldBase and falls back to merge-base for the correct divergence point.

@@ -198,14 +198,14 @@ func runRebase(cfg *config.Config, opts *rebaseOptions) error {
 		return fmt.Errorf("resolving branch refs: %w", err)
 	}
 
-	// Get --onto state from merged/queued branches below the rebase range.
-	// Ensures that when --upstack excludes skipped branches, we still check
-	// the immediate predecessor and use --onto if needed.
+	// Get --onto state from a merged branch immediately below the rebase range.
+	// Ensures that when --upstack excludes merged branches, we still check the
+	// immediate predecessor and use --onto if needed.
 	needsOnto := false
 	var ontoOldBase string
 	if startIdx > 0 {
 		prev := s.Branches[startIdx-1]
-		if prev.IsSkipped() {
+		if prev.IsMerged() {
 			if sha, ok := originalRefs[prev.Branch]; ok {
 				needsOnto = true
 				ontoOldBase = sha
@@ -334,10 +334,10 @@ func continueRebase(cfg *config.Config, gitDir string) error {
 
 	var baseBranch string
 	if state.UseOnto {
-		// The --onto path targets the first non-skipped ancestor, or trunk.
+		// The --onto path targets the first non-merged ancestor, or trunk.
 		baseBranch = s.Trunk.Branch
 		for j := state.CurrentBranchIndex - 1; j >= 0; j-- {
-			if !s.Branches[j].IsSkipped() {
+			if !s.Branches[j].IsMerged() {
 				baseBranch = s.Branches[j].Branch
 				break
 			}
