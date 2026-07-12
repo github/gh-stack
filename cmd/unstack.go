@@ -2,11 +2,9 @@ package cmd
 
 import (
 	"errors"
-	"fmt"
 
 	"github.com/cli/go-gh/v2/pkg/api"
 	"github.com/github/gh-stack/internal/config"
-	"github.com/github/gh-stack/internal/github"
 	"github.com/github/gh-stack/internal/modify"
 	"github.com/github/gh-stack/internal/stack"
 	"github.com/spf13/cobra"
@@ -55,11 +53,13 @@ func runUnstack(cfg *config.Config, opts *unstackOptions) error {
 	sf := result.StackFile
 	s := result.Stack
 
-	// Delete the stack on GitHub first (unless --local).
-	// Only proceed with local deletion after the remote operation succeeds.
+	// Unstack on GitHub first (unless --local). The server decides which PRs
+	// can be unstacked; PRs that are queued for merge or have auto-merge enabled
+	// are left in place and the stack is kept. Local tracking is only removed
+	// when the remote stack is fully dissolved.
 	if !opts.local {
-		if s.ID == "" {
-			cfg.Warningf("Stack has no remote ID — skipping server-side deletion")
+		if s.ID == "" && s.Number == 0 {
+			cfg.Warningf("Stack has no remote ID — skipping server-side unstack")
 		} else {
 			client, err := cfg.GitHubClient()
 			if err != nil {
@@ -67,36 +67,43 @@ func runUnstack(cfg *config.Config, opts *unstackOptions) error {
 				return ErrAPIFailure
 			}
 
-			blocked, err := shouldBlockUnstackDelete(client, s)
+			number, err := ensureStackNumber(client, s)
 			if err != nil {
-				cfg.Errorf("failed to check pull request states before unstack: %s", err)
+				cfg.Errorf("failed to look up stack on GitHub: %s", err)
 				return ErrAPIFailure
 			}
-			if blocked {
-				cfg.Errorf("Unstacking not allowed. Pull requests that are queued for merge, are merging, or are already merged will remain in the stack.")
-				return ErrInvalidArgs
-			}
 
-			if err := client.DeleteStack(s.ID); err != nil {
+			if number == 0 {
+				cfg.Warningf("Stack not found on GitHub — continuing with local unstack")
+			} else if _, dissolved, err := client.Unstack(number); err != nil {
 				var httpErr *api.HTTPError
 				if errors.As(err, &httpErr) {
 					switch httpErr.StatusCode {
 					case 404:
-						// Stack already deleted on GitHub — treat as success.
+						// Stack already gone on GitHub — treat as success.
 						cfg.Warningf("Stack not found on GitHub — continuing with local unstack")
 					case 422:
-						cfg.Errorf("Cannot delete stack on GitHub: %s", httpErr.Message)
-						return ErrAPIFailure
+						// The server refused: every PR is queued for merge or has
+						// auto-merge enabled, so nothing can be unstacked.
+						cfg.Errorf("Unstacking not allowed: %s", httpErr.Message)
+						return ErrInvalidArgs
 					default:
-						cfg.Errorf("Failed to delete stack on GitHub (HTTP %d): %s", httpErr.StatusCode, httpErr.Message)
+						cfg.Errorf("Failed to unstack on GitHub (HTTP %d): %s", httpErr.StatusCode, httpErr.Message)
 						return ErrAPIFailure
 					}
 				} else {
-					cfg.Errorf("Failed to delete stack on GitHub: %v", err)
+					cfg.Errorf("Failed to unstack on GitHub: %v", err)
 					return ErrAPIFailure
 				}
+			} else if !dissolved {
+				// Some PRs (queued for merge or with auto-merge enabled) remain
+				// stacked on GitHub, so the stack still exists. Keep local
+				// tracking so it continues to reflect the remote stack.
+				cfg.Warningf("Some pull requests are queued for merge or have auto-merge enabled and remain stacked on GitHub")
+				cfg.Printf("The stack was left in place — local tracking is unchanged")
+				return nil
 			} else {
-				cfg.Successf("Stack deleted on GitHub")
+				cfg.Successf("Stack removed on GitHub")
 			}
 		}
 	}
@@ -116,56 +123,4 @@ func runUnstack(cfg *config.Config, opts *unstackOptions) error {
 	cfg.Successf("Stack removed from local tracking")
 
 	return nil
-}
-
-func shouldBlockUnstackDelete(client github.ClientOps, s *stack.Stack) (bool, error) {
-	if s == nil || len(s.Branches) == 0 {
-		return false, nil
-	}
-
-	eligible := 0
-	ineligible := 0
-	for _, b := range s.Branches {
-		// Respect stored merged status when available in local stack metadata.
-		if b.PullRequest != nil && b.PullRequest.Merged {
-			ineligible++
-			continue
-		}
-
-		var (
-			pr  *github.PullRequest
-			err error
-		)
-
-		if b.PullRequest != nil && b.PullRequest.Number > 0 {
-			pr, err = client.FindPRByNumber(b.PullRequest.Number)
-			if err != nil {
-				return false, fmt.Errorf("checking PR #%d for branch %s: %w", b.PullRequest.Number, b.Branch, err)
-			}
-		} else {
-			pr, err = client.FindPRForBranch(b.Branch)
-			if err != nil {
-				return false, fmt.Errorf("checking PR for branch %s: %w", b.Branch, err)
-			}
-		}
-
-		// If the PR no longer exists (or branch has no open PR), do not block unstacking.
-		if pr == nil {
-			eligible++
-			continue
-		}
-
-		switch {
-		case pr.State == "MERGED":
-			ineligible++
-		case pr.IsQueued():
-			ineligible++
-		case pr.IsAutoMergeEnabled():
-			ineligible++
-		default:
-			eligible++
-		}
-	}
-
-	return ineligible > 0 && eligible == 0, nil
 }

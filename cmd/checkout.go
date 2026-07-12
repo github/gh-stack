@@ -188,8 +188,9 @@ func checkoutRemoteStack(cfg *config.Config, sf *stack.StackFile, gitDir string,
 		return nil, "", ErrAPIFailure
 	}
 
-	// Step 1: List stacks and find one containing the target PR
-	remoteStack, err := findRemoteStackForPR(client, prNumber)
+	// Step 1: Find the stack containing the target PR via the list endpoint's
+	// server-side pull_request filter.
+	remoteStack, err := client.FindStackForPR(prNumber)
 	if err != nil {
 		var httpErr *api.HTTPError
 		if errors.As(err, &httpErr) && httpErr.StatusCode == 404 {
@@ -205,7 +206,7 @@ func checkoutRemoteStack(cfg *config.Config, sf *stack.StackFile, gitDir string,
 	}
 
 	// Step 2: Fetch PR details for every PR in the remote stack
-	prs, err := fetchStackPRDetails(client, remoteStack.PullRequests)
+	prs, err := fetchStackPRDetails(client, remoteStack.PRNumbers())
 	if err != nil {
 		cfg.Errorf("failed to fetch PR details: %v", err)
 		return nil, "", ErrAPIFailure
@@ -245,11 +246,12 @@ func checkoutRemoteStack(cfg *config.Config, sf *stack.StackFile, gitDir string,
 		syncRemotePRState(localStack, prs)
 
 		// Case A: branch is in a local stack — check composition
-		if stackCompositionMatches(localStack, remoteStack.PullRequests) {
+		if stackCompositionMatches(localStack, remoteStack.PRNumbers()) {
 			// Composition matches — checkout
 			if localStack.ID == "" {
 				localStack.ID = remoteStackID
 			}
+			localStack.Number = remoteStack.Number
 			if err := stack.Save(gitDir, sf); err != nil {
 				return nil, "", handleSaveError(cfg, err)
 			}
@@ -274,7 +276,7 @@ func checkoutRemoteStack(cfg *config.Config, sf *stack.StackFile, gitDir string,
 		return nil, "", ErrSilent
 	}
 
-	s, err := importRemoteStack(cfg, sf, gitDir, remote, trunk, prs, remoteStackID)
+	s, err := importRemoteStack(cfg, sf, gitDir, remote, trunk, prs, remoteStackID, remoteStack.Number)
 	if err != nil {
 		return nil, "", err
 	}
@@ -284,23 +286,6 @@ func checkoutRemoteStack(cfg *config.Config, sf *stack.StackFile, gitDir string,
 	}
 
 	return s, targetBranch, nil
-}
-
-// findRemoteStackForPR queries the list stacks API and returns the stack
-// containing the given PR number, or nil if no stack contains it.
-func findRemoteStackForPR(client github.ClientOps, prNumber int) (*github.RemoteStack, error) {
-	stacks, err := client.ListStacks()
-	if err != nil {
-		return nil, err
-	}
-	for i := range stacks {
-		for _, n := range stacks[i].PullRequests {
-			if n == prNumber {
-				return &stacks[i], nil
-			}
-		}
-	}
-	return nil, nil
 }
 
 // fetchStackPRDetails fetches PR details for each number in the stack.
@@ -418,7 +403,7 @@ func handleCompositionConflict(
 			return nil, ErrSilent
 		}
 
-		s, importErr := importRemoteStack(cfg, sf, gitDir, remote, trunk, prs, remoteStackID)
+		s, importErr := importRemoteStack(cfg, sf, gitDir, remote, trunk, prs, remoteStackID, remoteStack.Number)
 		if importErr != nil {
 			return nil, importErr
 		}
@@ -429,19 +414,26 @@ func handleCompositionConflict(
 		return s, nil
 
 	case 1:
-		// Delete remote stack, keep local
-		if err := client.DeleteStack(remoteStackID); err != nil {
+		// Unstack the remote stack, keep local
+		_, dissolved, err := client.Unstack(remoteStack.Number)
+		if err != nil {
 			var httpErr *api.HTTPError
 			if errors.As(err, &httpErr) && httpErr.StatusCode == 404 {
-				cfg.Warningf("Remote stack already deleted")
+				cfg.Warningf("Remote stack already removed")
+			} else if errors.As(err, &httpErr) && httpErr.StatusCode == 422 {
+				cfg.Errorf("Cannot unstack remote stack: %s", httpErr.Message)
+				return nil, ErrAPIFailure
 			} else {
-				cfg.Errorf("failed to delete remote stack: %v", err)
+				cfg.Errorf("failed to unstack remote stack: %v", err)
 				return nil, ErrAPIFailure
 			}
+		} else if dissolved {
+			cfg.Successf("Remote stack removed")
 		} else {
-			cfg.Successf("Remote stack deleted")
+			cfg.Warningf("Some pull requests could not be unstacked and remain on GitHub")
 		}
 		localStack.ID = ""
+		localStack.Number = 0
 		if err := stack.Save(gitDir, sf); err != nil {
 			return nil, handleSaveError(cfg, err)
 		}
@@ -475,6 +467,7 @@ func importRemoteStack(
 	trunk string,
 	prs []*github.PullRequest,
 	remoteStackID string,
+	remoteStackNumber int,
 ) (*stack.Stack, error) {
 	// Fetch latest refs from remote
 	if err := git.Fetch(remote); err != nil {
@@ -512,7 +505,8 @@ func importRemoteStack(
 
 	trunkSHA, _ := git.RevParse(trunk)
 	newStack := stack.Stack{
-		ID: remoteStackID,
+		ID:     remoteStackID,
+		Number: remoteStackNumber,
 		Trunk: stack.BranchRef{
 			Branch: trunk,
 			Head:   trunkSHA,

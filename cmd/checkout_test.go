@@ -160,7 +160,7 @@ func TestCheckout_NumericTarget_StacksNotAvailable(t *testing.T) {
 	cfg, outR, errR := config.NewTestConfig()
 	setTestTokenForHost(cfg, "gho_test_oauth_token")
 	cfg.GitHubClientOverride = &github.MockClient{
-		ListStacksFn: func() ([]github.RemoteStack, error) {
+		FindStackForPRFn: func(int) (*github.RemoteStack, error) {
 			return nil, &api.HTTPError{StatusCode: 404, Message: "Not Found"}
 		},
 	}
@@ -184,10 +184,8 @@ func TestCheckout_NumericTarget_PRNotInStack(t *testing.T) {
 
 	cfg, outR, errR := config.NewTestConfig()
 	cfg.GitHubClientOverride = &github.MockClient{
-		ListStacksFn: func() ([]github.RemoteStack, error) {
-			return []github.RemoteStack{
-				{ID: 1, PullRequests: []int{10, 11}},
-			}, nil
+		FindStackForPRFn: func(int) (*github.RemoteStack, error) {
+			return nil, nil // PR 99 is not part of any stack
 		},
 	}
 
@@ -243,10 +241,8 @@ func TestCheckout_NumericTarget_NewStack(t *testing.T) {
 
 	cfg, outR, errR := config.NewTestConfig()
 	cfg.GitHubClientOverride = &github.MockClient{
-		ListStacksFn: func() ([]github.RemoteStack, error) {
-			return []github.RemoteStack{
-				{ID: 42, PullRequests: []int{10, 11, 12}},
-			}, nil
+		FindStackForPRFn: func(int) (*github.RemoteStack, error) {
+			return &github.RemoteStack{ID: 42, Number: 42, PullRequests: []int{10, 11, 12}}, nil
 		},
 		FindPRByNumberFn: func(number int) (*github.PullRequest, error) {
 			prs := map[int]*github.PullRequest{
@@ -331,10 +327,8 @@ func TestCheckout_NumericTarget_BranchExistsNoStack(t *testing.T) {
 
 	cfg, outR, errR := config.NewTestConfig()
 	cfg.GitHubClientOverride = &github.MockClient{
-		ListStacksFn: func() ([]github.RemoteStack, error) {
-			return []github.RemoteStack{
-				{ID: 99, PullRequests: []int{10, 11}},
-			}, nil
+		FindStackForPRFn: func(int) (*github.RemoteStack, error) {
+			return &github.RemoteStack{ID: 99, Number: 99, PullRequests: []int{10, 11}}, nil
 		},
 		FindPRByNumberFn: func(number int) (*github.PullRequest, error) {
 			prs := map[int]*github.PullRequest{
@@ -445,11 +439,9 @@ func TestCheckout_NumericTarget_LocalMiss_RemoteMatch(t *testing.T) {
 	apiCalled := false
 	cfg, outR, errR := config.NewTestConfig()
 	cfg.GitHubClientOverride = &github.MockClient{
-		ListStacksFn: func() ([]github.RemoteStack, error) {
+		FindStackForPRFn: func(int) (*github.RemoteStack, error) {
 			apiCalled = true
-			return []github.RemoteStack{
-				{ID: 99, PullRequests: []int{10, 11}},
-			}, nil
+			return &github.RemoteStack{ID: 99, Number: 99, PullRequests: []int{10, 11}}, nil
 		},
 		FindPRByNumberFn: func(number int) (*github.PullRequest, error) {
 			prs := map[int]*github.PullRequest{
@@ -464,7 +456,7 @@ func TestCheckout_NumericTarget_LocalMiss_RemoteMatch(t *testing.T) {
 	_ = collectOutput(cfg, outR, errR)
 
 	require.NoError(t, err)
-	assert.True(t, apiCalled, "should have called ListStacks API when local miss")
+	assert.True(t, apiCalled, "should have queried the remote stack API when local miss")
 	assert.Equal(t, "feat-2", checkedOut)
 }
 
@@ -493,8 +485,8 @@ func TestCheckout_NumericTarget_FallbackToBranchName(t *testing.T) {
 
 	cfg, outR, errR := config.NewTestConfig()
 	cfg.GitHubClientOverride = &github.MockClient{
-		ListStacksFn: func() ([]github.RemoteStack, error) {
-			return []github.RemoteStack{}, nil // no remote stacks
+		FindStackForPRFn: func(int) (*github.RemoteStack, error) {
+			return nil, nil // no remote stack contains this PR
 		},
 	}
 
@@ -527,11 +519,9 @@ func TestCheckout_NumericTarget_CompositionMismatch_NonInteractive(t *testing.T)
 
 	cfg, outR, errR := config.NewTestConfig()
 	cfg.GitHubClientOverride = &github.MockClient{
-		ListStacksFn: func() ([]github.RemoteStack, error) {
+		FindStackForPRFn: func(int) (*github.RemoteStack, error) {
 			// Remote stack has PRs 10, 11, 12 (extra PR added)
-			return []github.RemoteStack{
-				{ID: 42, PullRequests: []int{10, 11, 12}},
-			}, nil
+			return &github.RemoteStack{ID: 42, Number: 42, PullRequests: []int{10, 11, 12}}, nil
 		},
 		FindPRByNumberFn: func(number int) (*github.PullRequest, error) {
 			prs := map[int]*github.PullRequest{
@@ -590,10 +580,8 @@ func TestCheckout_NumericTarget_ClosedMergedPR(t *testing.T) {
 
 	cfg, outR, errR := config.NewTestConfig()
 	cfg.GitHubClientOverride = &github.MockClient{
-		ListStacksFn: func() ([]github.RemoteStack, error) {
-			return []github.RemoteStack{
-				{ID: 50, PullRequests: []int{10, 11}},
-			}, nil
+		FindStackForPRFn: func(int) (*github.RemoteStack, error) {
+			return &github.RemoteStack{ID: 50, Number: 50, PullRequests: []int{10, 11}}, nil
 		},
 		FindPRByNumberFn: func(number int) (*github.PullRequest, error) {
 			prs := map[int]*github.PullRequest{
@@ -662,10 +650,8 @@ func TestCheckout_NumericTarget_MergedBranchDeletedFromRemote(t *testing.T) {
 
 	cfg, outR, errR := config.NewTestConfig()
 	cfg.GitHubClientOverride = &github.MockClient{
-		ListStacksFn: func() ([]github.RemoteStack, error) {
-			return []github.RemoteStack{
-				{ID: 60, PullRequests: []int{10, 11}},
-			}, nil
+		FindStackForPRFn: func(int) (*github.RemoteStack, error) {
+			return &github.RemoteStack{ID: 60, Number: 60, PullRequests: []int{10, 11}}, nil
 		},
 		FindPRByNumberFn: func(number int) (*github.PullRequest, error) {
 			prs := map[int]*github.PullRequest{
@@ -698,10 +684,8 @@ func TestCheckout_NumericTarget_AllPRsMerged(t *testing.T) {
 
 	cfg, outR, errR := config.NewTestConfig()
 	cfg.GitHubClientOverride = &github.MockClient{
-		ListStacksFn: func() ([]github.RemoteStack, error) {
-			return []github.RemoteStack{
-				{ID: 70, PullRequests: []int{10, 11}},
-			}, nil
+		FindStackForPRFn: func(int) (*github.RemoteStack, error) {
+			return &github.RemoteStack{ID: 70, Number: 70, PullRequests: []int{10, 11}}, nil
 		},
 		FindPRByNumberFn: func(number int) (*github.PullRequest, error) {
 			prs := map[int]*github.PullRequest{
@@ -732,7 +716,7 @@ func TestCheckout_NumericTarget_APIError(t *testing.T) {
 
 	cfg, outR, errR := config.NewTestConfig()
 	cfg.GitHubClientOverride = &github.MockClient{
-		ListStacksFn: func() ([]github.RemoteStack, error) {
+		FindStackForPRFn: func(int) (*github.RemoteStack, error) {
 			return nil, fmt.Errorf("network error")
 		},
 	}
@@ -796,8 +780,8 @@ func TestCheckout_NumericTarget_EmptyStacks(t *testing.T) {
 
 	cfg, outR, errR := config.NewTestConfig()
 	cfg.GitHubClientOverride = &github.MockClient{
-		ListStacksFn: func() ([]github.RemoteStack, error) {
-			return []github.RemoteStack{}, nil // no stacks at all
+		FindStackForPRFn: func(int) (*github.RemoteStack, error) {
+			return nil, nil // no stacks at all
 		},
 	}
 
@@ -903,34 +887,6 @@ func TestStackCompositionMatches(t *testing.T) {
 	}
 }
 
-func TestFindRemoteStackForPR(t *testing.T) {
-	mock := &github.MockClient{
-		ListStacksFn: func() ([]github.RemoteStack, error) {
-			return []github.RemoteStack{
-				{ID: 1, PullRequests: []int{10, 11}},
-				{ID: 2, PullRequests: []int{20, 21, 22}},
-			}, nil
-		},
-	}
-
-	// Found in first stack
-	rs, err := findRemoteStackForPR(mock, 11)
-	require.NoError(t, err)
-	require.NotNil(t, rs)
-	assert.Equal(t, 1, rs.ID)
-
-	// Found in second stack
-	rs, err = findRemoteStackForPR(mock, 21)
-	require.NoError(t, err)
-	require.NotNil(t, rs)
-	assert.Equal(t, 2, rs.ID)
-
-	// Not found
-	rs, err = findRemoteStackForPR(mock, 99)
-	require.NoError(t, err)
-	assert.Nil(t, rs)
-}
-
 func TestCheckout_ByPRURL_Local(t *testing.T) {
 	// When a PR URL resolves to a locally tracked stack, no API call needed
 	gitDir := t.TempDir()
@@ -973,14 +929,14 @@ func TestCheckout_ByPRURL_Remote(t *testing.T) {
 	}
 
 	restore := git.SetOps(&git.MockOps{
-		GitDirFn:        func() (string, error) { return gitDir, nil },
-		CurrentBranchFn: func() (string, error) { return "main", nil },
-		BranchExistsFn:  func(name string) bool { return name == "main" },
-		FetchFn:         func(string) error { return nil },
-		CreateBranchFn:  func(string, string) error { return nil },
+		GitDirFn:              func() (string, error) { return gitDir, nil },
+		CurrentBranchFn:       func() (string, error) { return "main", nil },
+		BranchExistsFn:        func(name string) bool { return name == "main" },
+		FetchFn:               func(string) error { return nil },
+		CreateBranchFn:        func(string, string) error { return nil },
 		SetUpstreamTrackingFn: func(string, string) error { return nil },
-		RevParseFn:      func(string) (string, error) { return "abc123", nil },
-		ResolveRemoteFn: func(string) (string, error) { return "origin", nil },
+		RevParseFn:            func(string) (string, error) { return "abc123", nil },
+		ResolveRemoteFn:       func(string) (string, error) { return "origin", nil },
 		CheckoutBranchFn: func(name string) error {
 			checkedOut = name
 			return nil
@@ -993,10 +949,8 @@ func TestCheckout_ByPRURL_Remote(t *testing.T) {
 
 	cfg, outR, errR := config.NewTestConfig()
 	cfg.GitHubClientOverride = &github.MockClient{
-		ListStacksFn: func() ([]github.RemoteStack, error) {
-			return []github.RemoteStack{
-				{ID: 1, PullRequests: []int{10, 11}},
-			}, nil
+		FindStackForPRFn: func(int) (*github.RemoteStack, error) {
+			return &github.RemoteStack{ID: 1, Number: 1, PullRequests: []int{10, 11}}, nil
 		},
 		FindPRByNumberFn: func(n int) (*github.PullRequest, error) {
 			if pr, ok := prDB[n]; ok {

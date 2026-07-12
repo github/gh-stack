@@ -12,9 +12,11 @@ type ClientOps interface {
 	MarkPRReadyForReview(prID string) error
 	DisableAutoMerge(prID string) error
 	ListStacks() ([]RemoteStack, error)
-	CreateStack(prNumbers []int) (int, error)
-	UpdateStack(stackID string, prNumbers []int) error
-	DeleteStack(stackID string) error
+	FindStackForPR(prNumber int) (*RemoteStack, error)
+	GetStack(stackNumber int) (*RemoteStack, error)
+	CreateStack(prNumbers []int) (*RemoteStack, error)
+	AddToStack(stackNumber int, prNumbers []int) (*RemoteStack, error)
+	Unstack(stackNumber int) (*RemoteStack, bool, error)
 }
 
 // Compile-time check that Client satisfies ClientOps.
