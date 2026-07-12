@@ -161,9 +161,11 @@ Small, incidental fixes (e.g., fixing a typo you noticed) can go in the current 
 | View stack details (JSON) | `gh stack view --json` |
 | Switch branches up/down in stack | `gh stack up [n]` / `gh stack down [n]` |
 | Switch to top/bottom branch | `gh stack top` / `gh stack bottom` |
+| Check out by stack number | `gh stack checkout 7` |
 | Check out by PR | `gh stack checkout 42` |
 | Check out by branch (local only) | `gh stack checkout feature-auth` |
-| Tear down a stack to restructure it | `gh stack unstack` |
+| Tear down the current stack to restructure it | `gh stack unstack` |
+| Tear down a specific stack by number | `gh stack unstack 7` |
 
 ---
 
