@@ -45,6 +45,11 @@ type Options struct {
 	RepoLabel string
 	// Version is the CLI version string.
 	Version string
+	// CanCreateStack reports that the local stack has no remote stack object yet
+	// but one could be created (stacked PRs are available on the repo). When
+	// true, and once the user has deselected all new PRs, the TUI offers a
+	// "STACK N PRs" action to link the existing open PRs into a stack.
+	CanCreateStack bool
 }
 
 // Model is the Bubble Tea model backing the interactive `gh stack submit` TUI.
@@ -53,6 +58,10 @@ type Model struct {
 	trunk     stack.BranchRef
 	repoLabel string
 	version   string
+
+	// canCreateStack mirrors Options.CanCreateStack: the local stack has no
+	// remote stack object yet, but one could be created.
+	canCreateStack bool
 
 	cursor int // index into nodes (the focused branch)
 
@@ -138,6 +147,8 @@ func New(opts Options) Model {
 		repoLabel: opts.RepoLabel,
 		version:   opts.Version,
 		cursor:    cursor,
+
+		canCreateStack: opts.CanCreateStack,
 
 		titleArea:    tia,
 		descArea:     ta,
@@ -261,6 +272,15 @@ func (m Model) anyEdited() bool {
 		}
 	}
 	return false
+}
+
+// canStackExistingPRs reports whether the "STACK N PRs" action should be offered:
+// the local stack has no remote stack object yet, the user has deselected every
+// new PR, and there are at least two existing open PRs to link into a stack.
+func (m Model) canStackExistingPRs() bool {
+	return m.canCreateStack &&
+		CountSelected(m.nodes) == 0 &&
+		CountOpenPRs(m.nodes) >= 2
 }
 
 // quit marks the session cancelled and exits. If the user has unsaved edits, it

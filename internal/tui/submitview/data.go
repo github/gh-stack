@@ -123,6 +123,20 @@ func CountSelected(nodes []SubmitNode) int {
 	return n
 }
 
+// CountOpenPRs returns the number of branches that already have an open pull
+// request (open or draft). These are the PRs that can be linked into a stack via
+// the "STACK N PRs" action. Queued, merged, and closed PRs are excluded because
+// they cannot form a new stack.
+func CountOpenPRs(nodes []SubmitNode) int {
+	n := 0
+	for _, node := range nodes {
+		if node.State == StateOpen || node.State == StateDraft {
+			n++
+		}
+	}
+	return n
+}
+
 // HasClosed reports whether any branch in the list has a closed PR, which blocks
 // the stack and triggers the closed-branch callout.
 func HasClosed(nodes []SubmitNode) bool {

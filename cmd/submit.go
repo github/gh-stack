@@ -40,6 +40,10 @@ and draft each PR's title, description, and draft state, then submit them all at
 once with Ctrl+S. Pass --auto (or run in a non-interactive terminal) to skip the
 editor and use auto-generated titles.
 
+If your branches already have open PRs but no stack on GitHub yet (for example,
+after deleting the stack) and you deselect every new PR, press Ctrl+B (or click
+the "STACK N PRs" button) to link the existing open PRs into a stack.
+
 This command performs several steps:
   1. Pushes all branches to the remote
   2. Creates new PRs for the included branches
@@ -202,7 +206,8 @@ func runSubmit(cfg *config.Config, opts *submitOptions) error {
 	// auto-generated titles and bodies (today's behavior).
 	var drafts map[string]*submitview.PRDraft
 	if cfg.IsInteractive() && !opts.auto {
-		collected, cancelled, tuiErr := collectPRDrafts(cfg, client, s, currentBranch, prDetails, templateContent)
+		canCreateStack := stacksAvailable && s.ID == ""
+		collected, cancelled, tuiErr := collectPRDrafts(cfg, client, s, currentBranch, prDetails, templateContent, canCreateStack)
 		if tuiErr != nil {
 			cfg.Errorf("failed to run the submit editor: %s", tuiErr)
 			return ErrSilent
@@ -263,7 +268,7 @@ func runSubmit(cfg *config.Config, opts *submitOptions) error {
 // returns the per-branch overrides, whether the user cancelled, and any error.
 // When the stack contains no branches without a PR, it skips the TUI and
 // returns nil drafts so the normal push/relink path runs.
-func collectPRDrafts(cfg *config.Config, client github.ClientOps, s *stack.Stack, currentBranch string, prDetails map[string]*github.PRDetails, templateContent string) (map[string]*submitview.PRDraft, bool, error) {
+func collectPRDrafts(cfg *config.Config, client github.ClientOps, s *stack.Stack, currentBranch string, prDetails map[string]*github.PRDetails, templateContent string, canCreateStack bool) (map[string]*submitview.PRDraft, bool, error) {
 	// Fill in the real title/description for existing PRs that were synced
 	// without them (e.g. merged branches) so the read-only cards show API data.
 	enrichPRContent(client, prDetails)
@@ -290,10 +295,11 @@ func collectPRDrafts(cfg *config.Config, client github.ClientOps, s *stack.Stack
 	}
 
 	model := submitview.New(submitview.Options{
-		Nodes:     nodes,
-		Trunk:     s.Trunk,
-		RepoLabel: repoLabel,
-		Version:   Version,
+		Nodes:          nodes,
+		Trunk:          s.Trunk,
+		RepoLabel:      repoLabel,
+		Version:        Version,
+		CanCreateStack: canCreateStack,
 	})
 
 	// Use cell-motion mouse mode (clicks, drag, and wheel) rather than all-motion.

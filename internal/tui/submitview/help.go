@@ -53,6 +53,7 @@ var helpSections = []helpSection{
 		heading: "Existing PRs",
 		entries: []helpEntry{
 			{"^o", "open the focused branch's PR on the web"},
+			{"^b", "link the existing open PRs into a stack (when there's no stack on GitHub)"},
 		},
 	},
 	{
