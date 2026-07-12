@@ -194,7 +194,7 @@ func checkoutRemoteStack(cfg *config.Config, sf *stack.StackFile, gitDir string,
 	if err != nil {
 		var httpErr *api.HTTPError
 		if errors.As(err, &httpErr) && httpErr.StatusCode == 404 {
-			warnStacksUnavailableOrPAT(cfg)
+			warnStacksUnavailable(cfg)
 			return nil, "", ErrAPIFailure
 		}
 		cfg.Errorf("failed to list stacks: %v", err)

@@ -366,7 +366,7 @@ func listStacksSafe(cfg *config.Config, client github.ClientOps) ([]github.Remot
 	if err != nil {
 		var httpErr *api.HTTPError
 		if errors.As(err, &httpErr) && httpErr.StatusCode == 404 {
-			warnStacksUnavailableOrPAT(cfg)
+			warnStacksUnavailable(cfg)
 			return nil, ErrStacksUnavailable
 		}
 		cfg.Errorf("failed to list stacks: %v", err)
@@ -559,7 +559,7 @@ func createLink(cfg *config.Config, client github.ClientOps, prNumbers []int) er
 				cfg.Errorf("Cannot create stack: %s", httpErr.Message)
 				return ErrAPIFailure
 			case 404:
-				warnStacksUnavailableOrPAT(cfg)
+				warnStacksUnavailable(cfg)
 				return ErrStacksUnavailable
 			default:
 				cfg.Errorf("Failed to create stack (HTTP %d): %s", httpErr.StatusCode, httpErr.Message)

@@ -113,16 +113,11 @@ func runSubmit(cfg *config.Config, opts *submitOptions) error {
 		return ErrAPIFailure
 	}
 
-	// Pre-flight: abort early if the user is authenticating with a PAT.
-	if cfg.WarnIfPAT() {
-		return ErrStacksUnavailable
-	}
-
 	// Verify that the repository has stacked PRs enabled.
 	stacksAvailable := s.ID != ""
 	if !stacksAvailable {
 		if _, err := client.ListStacks(); err != nil {
-			warnStacksUnavailableOrPAT(cfg)
+			warnStacksUnavailable(cfg)
 			if cfg.IsInteractive() {
 				p := prompter.New(cfg.In, cfg.Out, cfg.Err)
 				proceed, promptErr := p.Confirm("Would you still like to create regular PRs?", false)
@@ -917,7 +912,7 @@ func createNewStack(cfg *config.Config, client github.ClientOps, s *stack.Stack,
 	case 422:
 		return handleCreate422(cfg, httpErr, prNumbers)
 	case 404:
-		warnStacksUnavailableOrPAT(cfg)
+		warnStacksUnavailable(cfg)
 		return false
 	default:
 		cfg.Warningf("Failed to create stack on GitHub: %s", httpErr.Message)

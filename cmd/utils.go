@@ -72,13 +72,9 @@ func printInterrupt(cfg *config.Config) {
 	cfg.Infof("Received interrupt, aborting operation")
 }
 
-// warnStacksUnavailableOrPAT prints an appropriate warning when a stacks API
-// call returns 404. If the token is a PAT the message focuses on the auth
-// issue; otherwise it falls back to the generic "not enabled" message.
-func warnStacksUnavailableOrPAT(cfg *config.Config) {
-	if cfg.WarnIfPAT() {
-		return
-	}
+// warnStacksUnavailable prints a warning when a stacks API call returns 404,
+// indicating stacked PRs are not enabled for the repository.
+func warnStacksUnavailable(cfg *config.Config) {
 	cfg.Warningf("Stacked PRs are not enabled for this repository")
 }
 

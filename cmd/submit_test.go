@@ -1590,9 +1590,7 @@ func TestSubmit_PreflightCheck_404_BailsOut(t *testing.T) {
 		},
 	}
 
-	// Use an OAuth token so the PAT pre-flight check passes and we
-	// exercise the ListStacks 404 path.
-	setTestTokenForHost(cfg, "gho_test_oauth_token")
+	setTestRepo(cfg)
 
 	cmd := SubmitCmd(cfg)
 	cmd.SetArgs([]string{"--auto"})
@@ -1645,9 +1643,7 @@ func TestSubmit_PreflightCheck_404_Interactive_UserDeclinesAborts(t *testing.T) 
 		},
 	}
 
-	// Use an OAuth token so the PAT pre-flight check passes and we
-	// exercise the ListStacks 404 path.
-	setTestTokenForHost(cfg, "gho_test_oauth_token")
+	setTestRepo(cfg)
 
 	cmd := SubmitCmd(cfg)
 	cmd.SetArgs([]string{"--auto"})
@@ -2343,91 +2339,6 @@ func TestSubmit_NoTemplate_UsesFooter(t *testing.T) {
 	assert.NoError(t, err)
 	assert.Contains(t, capturedBody, "GitHub Stacks CLI", "footer should be present when no template")
 	assert.Contains(t, capturedBody, feedbackURL)
-}
-
-func TestSubmit_PreflightCheck_PAT_BailsOut(t *testing.T) {
-	s := stack.Stack{
-		Trunk: stack.BranchRef{Branch: "main"},
-		Branches: []stack.BranchRef{
-			{Branch: "b1"},
-			{Branch: "b2"},
-		},
-	}
-
-	tmpDir := t.TempDir()
-	writeStackFile(t, tmpDir, s)
-
-	pushed := false
-	mock := newSubmitMock(tmpDir, "b1")
-	mock.PushFn = func(string, []string, bool, bool) error {
-		pushed = true
-		return nil
-	}
-	restore := git.SetOps(mock)
-	defer restore()
-
-	listStacksCalled := false
-	cfg, _, errR := config.NewTestConfig()
-	cfg.GitHubClientOverride = &github.MockClient{
-		ListStacksFn: func() ([]github.RemoteStack, error) {
-			listStacksCalled = true
-			return nil, nil
-		},
-	}
-
-	// Simulate a classic PAT — the pre-flight check should abort.
-	setTestTokenForHost(cfg, "ghp_classic_pat_token")
-
-	cmd := SubmitCmd(cfg)
-	cmd.SetArgs([]string{"--auto"})
-	cmd.SetOut(io.Discard)
-	cmd.SetErr(io.Discard)
-	err := cmd.Execute()
-
-	cfg.Err.Close()
-	errOut, _ := io.ReadAll(errR)
-	output := string(errOut)
-
-	assert.ErrorIs(t, err, ErrStacksUnavailable)
-	assert.Contains(t, output, "Personal access tokens are not supported by gh stack")
-	assert.Contains(t, output, "gh auth login")
-	assert.False(t, pushed, "should not push when using a PAT")
-	assert.False(t, listStacksCalled, "should not call ListStacks when PAT detected")
-}
-
-func TestSubmit_PreflightCheck_FinegrainedPAT_BailsOut(t *testing.T) {
-	s := stack.Stack{
-		Trunk: stack.BranchRef{Branch: "main"},
-		Branches: []stack.BranchRef{
-			{Branch: "b1"},
-			{Branch: "b2"},
-		},
-	}
-
-	tmpDir := t.TempDir()
-	writeStackFile(t, tmpDir, s)
-
-	mock := newSubmitMock(tmpDir, "b1")
-	restore := git.SetOps(mock)
-	defer restore()
-
-	cfg, _, errR := config.NewTestConfig()
-	cfg.GitHubClientOverride = &github.MockClient{}
-
-	setTestTokenForHost(cfg, "github_pat_11AABBCC_xxxx")
-
-	cmd := SubmitCmd(cfg)
-	cmd.SetArgs([]string{"--auto"})
-	cmd.SetOut(io.Discard)
-	cmd.SetErr(io.Discard)
-	err := cmd.Execute()
-
-	cfg.Err.Close()
-	errOut, _ := io.ReadAll(errR)
-	output := string(errOut)
-
-	assert.ErrorIs(t, err, ErrStacksUnavailable)
-	assert.Contains(t, output, "Personal access tokens are not supported by gh stack")
 }
 
 func TestSubmit_DisablesAutoMergeOnExistingPR(t *testing.T) {

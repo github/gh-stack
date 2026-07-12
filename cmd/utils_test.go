@@ -691,39 +691,21 @@ func TestStackNeedsRebase_SkipsMergedBranches(t *testing.T) {
 	assert.False(t, stackNeedsRebase(s), "should skip merged branches and find stack up to date")
 }
 
-// setTestTokenForHost sets cfg.TokenForHostFn to return the given token for
-// any host. Also sets RepoOverride so tests don't depend on real git context.
-func setTestTokenForHost(cfg *config.Config, token string) {
-	cfg.TokenForHostFn = func(string) (string, string) { return token, "test" }
+// setTestRepo sets RepoOverride so tests don't depend on real git context.
+func setTestRepo(cfg *config.Config) {
 	cfg.RepoOverride = &repository.Repository{Host: "github.com", Owner: "o", Name: "r"}
 }
 
-func TestWarnStacksUnavailableOrPAT_ShowsPATMessage(t *testing.T) {
+func TestWarnStacksUnavailable_ShowsNotEnabled(t *testing.T) {
 	cfg, _, errR := config.NewTestConfig()
-	setTestTokenForHost(cfg, "github_pat_fine_grained")
 
-	warnStacksUnavailableOrPAT(cfg)
-
-	cfg.Err.Close()
-	errOut, _ := io.ReadAll(errR)
-	output := string(errOut)
-
-	assert.Contains(t, output, "Personal access tokens are not supported by gh stack")
-	assert.NotContains(t, output, "Stacked PRs are not enabled")
-}
-
-func TestWarnStacksUnavailableOrPAT_ShowsNotEnabledForOAuth(t *testing.T) {
-	cfg, _, errR := config.NewTestConfig()
-	setTestTokenForHost(cfg, "gho_oauth_token")
-
-	warnStacksUnavailableOrPAT(cfg)
+	warnStacksUnavailable(cfg)
 
 	cfg.Err.Close()
 	errOut, _ := io.ReadAll(errR)
 	output := string(errOut)
 
 	assert.Contains(t, output, "Stacked PRs are not enabled for this repository")
-	assert.NotContains(t, output, "Personal access tokens")
 }
 
 func TestEnsureLocalTrunk_AlreadyExists(t *testing.T) {
