@@ -63,13 +63,14 @@ var keys = keyMap{
 
 // Model is the Bubbletea model for the interactive stack view.
 type Model struct {
-	nodes   []BranchNode
-	trunk   stack.BranchRef
-	version string
-	cursor  int // index into nodes (displayed top-down, so 0 = top of stack)
-	help    help.Model
-	width   int
-	height  int
+	nodes       []BranchNode
+	trunk       stack.BranchRef
+	version     string
+	stackNumber int
+	cursor      int // index into nodes (displayed top-down, so 0 = top of stack)
+	help        help.Model
+	width       int
+	height      int
 
 	// scrollOffset tracks vertical scroll position for tall stacks.
 	scrollOffset int
@@ -78,8 +79,9 @@ type Model struct {
 	checkoutBranch string
 }
 
-// New creates a new stack view model.
-func New(nodes []BranchNode, trunk stack.BranchRef, version string) Model {
+// New creates a new stack view model. stackNumber is the human-facing stack
+// number shown in the header; pass 0 when it is not known.
+func New(nodes []BranchNode, trunk stack.BranchRef, version string, stackNumber int) Model {
 	h := help.New()
 	h.ShowAll = true
 
@@ -103,11 +105,12 @@ func New(nodes []BranchNode, trunk stack.BranchRef, version string) Model {
 	}
 
 	return Model{
-		nodes:   nodes,
-		trunk:   trunk,
-		version: version,
-		cursor:  cursor,
-		help:    h,
+		nodes:       nodes,
+		trunk:       trunk,
+		version:     version,
+		stackNumber: stackNumber,
+		cursor:      cursor,
+		help:        h,
 	}
 }
 
@@ -443,15 +446,22 @@ func (m Model) buildHeaderConfig() shared.HeaderConfig {
 	// is hidden and the actions that depend on it are dimmed; only quit works.
 	allMerged := branchCount > 0 && mergedCount == branchCount
 
+	infoLines := make([]shared.HeaderInfoLine, 0, 3)
+	if m.stackNumber > 0 {
+		infoLines = append(infoLines, shared.HeaderInfoLine{Icon: "◆", Label: fmt.Sprintf("Stack #%d", m.stackNumber)})
+	} else {
+		infoLines = append(infoLines, shared.HeaderInfoLine{Icon: "✓", Label: "Stack initialized"})
+	}
+	infoLines = append(infoLines,
+		shared.HeaderInfoLine{Icon: "◼", Label: "Base: " + m.trunk.Branch},
+		shared.HeaderInfoLine{Icon: branchIcon, Label: branchInfo},
+	)
+
 	return shared.HeaderConfig{
-		ShowArt:  true,
-		Title:    "View Stack",
-		Subtitle: "v" + m.version,
-		InfoLines: []shared.HeaderInfoLine{
-			{Icon: "✓", Label: "Stack initialized"},
-			{Icon: "◆", Label: "Base: " + m.trunk.Branch},
-			{Icon: branchIcon, Label: branchInfo},
-		},
+		ShowArt:         true,
+		Title:           "View Stack",
+		Subtitle:        "v" + m.version,
+		InfoLines:       infoLines,
 		ShortcutColumns: 1,
 		Shortcuts: []shared.ShortcutEntry{
 			{Key: "↑↓", Desc: "navigate", Disabled: allMerged},

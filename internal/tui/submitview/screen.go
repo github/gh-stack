@@ -765,8 +765,12 @@ func leftPanelBox(content string, width, height int) string {
 // nodes/cursor/width, so the mouse layer can recompute it to resolve clicks.
 func (m Model) buildLeftRows(fullW int) []leftRow {
 	cur := m.cursor
+	stackLabel := "STACK"
+	if m.stackNumber > 0 {
+		stackLabel = fmt.Sprintf("STACK #%d", m.stackNumber)
+	}
 	rows := []leftRow{
-		{text: pad(1, false) + sectionLabelStyle.Render("STACK"), branch: -1},
+		{text: pad(1, false) + sectionLabelStyle.Render(stackLabel), branch: -1},
 		{text: m.gapRow(fullW, false, cur == 0), branch: -1}, // blank under STACK; top pad for branch 0
 	}
 	for i := range m.nodes {

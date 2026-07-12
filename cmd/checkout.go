@@ -327,7 +327,7 @@ func reconcileAndImportRemoteStack(cfg *config.Config, client github.ClientOps, 
 			if err := stack.Save(gitDir, sf); err != nil {
 				return nil, "", handleSaveError(cfg, err)
 			}
-			cfg.Successf("Local stack matches remote — switching to branch")
+			cfg.Successf("Local stack matches remote — switching to branch%s", stackLabel(remoteStack.Number))
 			return localStack, targetBranch, nil
 		}
 
@@ -592,7 +592,7 @@ func importRemoteStack(
 	// Update base SHAs from actual local refs
 	updateBaseSHAs(s)
 
-	cfg.Successf("Imported stack with %d branches from GitHub", len(prs))
+	cfg.Successf("Imported stack with %d branches from GitHub%s", len(prs), stackLabel(remoteStackNumber))
 	return s, nil
 }
 

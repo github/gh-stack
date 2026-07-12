@@ -551,7 +551,8 @@ func findMatchingStack(stacks []github.RemoteStack, prNumbers []int) (*github.Re
 
 // createLink creates a new stack with the given PR numbers.
 func createLink(cfg *config.Config, client github.ClientOps, prNumbers []int) error {
-	if _, err := client.CreateStack(prNumbers); err != nil {
+	rs, err := client.CreateStack(prNumbers)
+	if err != nil {
 		var httpErr *api.HTTPError
 		if errors.As(err, &httpErr) {
 			switch httpErr.StatusCode {
@@ -570,7 +571,7 @@ func createLink(cfg *config.Config, client github.ClientOps, prNumbers []int) er
 		return ErrAPIFailure
 	}
 
-	cfg.Successf("Created stack with %d PRs", len(prNumbers))
+	cfg.Successf("Created stack with %d PRs%s", len(prNumbers), stackLabel(rs.Number))
 	return nil
 }
 
@@ -617,7 +618,8 @@ func updateLink(cfg *config.Config, client github.ClientOps, existing *github.Re
 		return ErrInvalidArgs
 	}
 
-	if _, err := client.AddToStack(existing.Number, delta); err != nil {
+	rs, err := client.AddToStack(existing.Number, delta)
+	if err != nil {
 		var httpErr *api.HTTPError
 		if errors.As(err, &httpErr) {
 			switch httpErr.StatusCode {
@@ -637,7 +639,7 @@ func updateLink(cfg *config.Config, client github.ClientOps, existing *github.Re
 		return ErrAPIFailure
 	}
 
-	cfg.Successf("Updated stack to %d PRs", len(prNumbers))
+	cfg.Successf("Updated stack to %d PRs%s", len(prNumbers), stackLabel(rs.Number))
 	return nil
 }
 

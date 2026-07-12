@@ -130,7 +130,7 @@ func runUnstack(cfg *config.Config, opts *unstackOptions) error {
 				cfg.Printf("The stack was left in place — local tracking is unchanged")
 				return nil
 			} else {
-				cfg.Successf("Stack removed on GitHub")
+				cfg.Successf("Stack removed on GitHub%s", stackLabel(number))
 			}
 		}
 	}

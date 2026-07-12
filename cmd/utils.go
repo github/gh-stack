@@ -78,6 +78,16 @@ func warnStacksUnavailable(cfg *config.Config) {
 	cfg.Warningf("Stacked PRs are not enabled for this repository")
 }
 
+// stackLabel returns a " (stack #N)" suffix for appending to user-facing
+// messages when the human-facing stack number is known, or an empty string
+// otherwise.
+func stackLabel(number int) string {
+	if number <= 0 {
+		return ""
+	}
+	return fmt.Sprintf(" (stack #%d)", number)
+}
+
 // stackNumberByID resolves an internal stack ID (as stored in the local stack
 // file) to its human-facing stack number by consulting the remote stack list.
 // Returns ok=false when no remote stack matches the ID (e.g. it was deleted).
