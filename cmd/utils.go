@@ -1268,7 +1268,11 @@ func reconcileRemoteStack(cfg *config.Config, sf *stack.StackFile, s *stack.Stac
 
 	switch classifyRemoteStack(localActive, remoteActive) {
 	case remoteStackInSync, remoteStackLocalAhead:
-		// Nothing to pull; the existing flow pushes/updates the remote.
+		// Nothing to pull; the existing flow pushes/updates the remote. Copy the
+		// freshly fetched PR state (merged/queued) onto the local branches so the
+		// fast-forward/rebase/push steps skip merged and merge-queued branches
+		// rather than rewriting them before the later PR-sync step runs.
+		syncRemotePRState(s, prs)
 		return res, nil
 	case remoteStackCleanAhead:
 		return pullRemoteAdditions(cfg, sf, s, gitDir, remote, prs)
@@ -1365,6 +1369,21 @@ func pullRemoteAdditions(cfg *config.Config, sf *stack.StackFile, s *stack.Stack
 		return res, nil
 	}
 
+	// A remote-added branch must not collide with a branch already tracked by
+	// another local stack, or with an existing local branch we would otherwise
+	// adopt as "pulled" without actually fetching it. Abort rather than persist
+	// duplicate ownership or a stale branch.
+	for _, pr := range newPRs {
+		if err := sf.ValidateNoDuplicateBranch(pr.HeadRefName); err != nil {
+			cfg.Errorf("Cannot pull %s from the remote stack: %s", pr.HeadRefName, err)
+			return res, ErrSilent
+		}
+		if git.BranchExists(pr.HeadRefName) {
+			cfg.Errorf("Cannot pull %s from the remote stack: a local branch with that name already exists", pr.HeadRefName)
+			return res, ErrSilent
+		}
+	}
+
 	newBranchNames := make([]string, len(newPRs))
 	for i, pr := range newPRs {
 		newBranchNames[i] = pr.HeadRefName
@@ -1397,6 +1416,9 @@ func pullRemoteAdditions(cfg *config.Config, sf *stack.StackFile, s *stack.Stack
 	}
 
 	if added > 0 {
+		// Copy the freshly fetched PR state (including the transient queued flag)
+		// onto the pulled branches so the rebase/push steps skip merge-queued ones.
+		syncRemotePRState(s, prs)
 		updateBaseSHAs(s)
 		if err := stack.Save(gitDir, sf); err != nil {
 			return res, handleSaveError(cfg, err)
@@ -1469,7 +1491,15 @@ func resolveStackDivergence(cfg *config.Config, client github.ClientOps, sf *sta
 func resolveDivergenceUseRemote(cfg *config.Config, sf *stack.StackFile, s *stack.Stack, currentBranch, gitDir, remote string, prs []*github.PullRequest) (remoteReconcileResult, error) {
 	var res remoteReconcileResult
 
-	if dirty, err := git.HasUncommittedChanges(); err == nil && dirty {
+	// Replacing the local stack is destructive, so require a known-clean working
+	// tree. Treat an inability to inspect the tree as a reason to abort (a failed
+	// status must not be read as "clean").
+	dirty, err := git.HasUncommittedChanges()
+	if err != nil {
+		cfg.Errorf("Could not determine whether the working tree is clean: %v", err)
+		return res, ErrSilent
+	}
+	if dirty {
 		cfg.Errorf("You have uncommitted changes — commit or stash them before replacing your local stack with the remote")
 		return res, ErrSilent
 	}
@@ -1479,10 +1509,25 @@ func resolveDivergenceUseRemote(cfg *config.Config, sf *stack.StackFile, s *stac
 	oldBranches := s.BranchNames()
 
 	removeLocalStack(sf, s)
+
+	// A remote PR branch must not already be owned by another local stack, or
+	// importing it would write the same branch into two stacks. Validate against
+	// the remaining stacks (the current one has been removed above).
+	for _, pr := range prs {
+		if err := sf.ValidateNoDuplicateBranch(pr.HeadRefName); err != nil {
+			cfg.Errorf("Cannot adopt the remote stack: %s", err)
+			return res, ErrSilent
+		}
+	}
+
 	newStack, err := importRemoteStack(cfg, sf, gitDir, remote, trunk, prs, remoteStackID)
 	if err != nil {
 		return res, err
 	}
+
+	// Populate the transient queued/merged state so the rebase/push steps skip
+	// merge-queued or merged branches in the adopted stack.
+	syncRemotePRState(newStack, prs)
 
 	// If the user was on a branch that the remote stack no longer contains,
 	// move them to the nearest surviving branch so they don't end up detached

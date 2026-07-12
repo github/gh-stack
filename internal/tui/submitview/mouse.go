@@ -151,7 +151,9 @@ func (m Model) leftStackButtonHit(x, y int) bool {
 	if y-m.panelTopRow() != m.leftVisibleHeight()+1 {
 		return false
 	}
-	return x < lipgloss.Width(m.renderStackButton(leftW-2))
+	// The button is rendered inside the panel's one-cell left border, so the
+	// hit target starts at screen column 1, not 0.
+	return x >= 1 && x < 1+lipgloss.Width(m.renderStackButton(leftW-2))
 }
 
 // handleClick routes a left click to a branch row (left map) or an editor

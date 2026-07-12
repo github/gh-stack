@@ -2060,6 +2060,133 @@ func TestSync_RemoteAhead_PullsNewBranches(t *testing.T) {
 	assert.Equal(t, []string{"b1", "b2", "b3", "b4", "b5"}, sf.Stacks[0].BranchNames())
 }
 
+// TestSync_RemoteAhead_QueuedBranchNotPushed verifies that a pulled branch whose
+// PR is in the merge queue has its transient queued state copied from the fresh
+// PR details during reconciliation, so it is not force-pushed by the later push
+// step.
+func TestSync_RemoteAhead_QueuedBranchNotPushed(t *testing.T) {
+	s := stack.Stack{
+		ID:    "9",
+		Trunk: stack.BranchRef{Branch: "main"},
+		Branches: []stack.BranchRef{
+			{Branch: "b1", PullRequest: &stack.PullRequestRef{Number: 101}},
+			{Branch: "b2", PullRequest: &stack.PullRequestRef{Number: 102}},
+		},
+	}
+	tmpDir := t.TempDir()
+	writeStackFile(t, tmpDir, s)
+
+	var created []string
+	var pushes []pushCall
+	mock := newSyncMockNoRebase(tmpDir, "b1")
+	mock.BranchExistsFn = func(name string) bool { return name != "b3" }
+	mock.CreateBranchFn = func(name, base string) error { created = append(created, name); return nil }
+	mock.SetUpstreamTrackingFn = func(string, string) error { return nil }
+	mock.PushFn = func(remote string, branches []string, force, atomic bool) error {
+		pushes = append(pushes, pushCall{remote, branches, force, atomic})
+		return nil
+	}
+
+	ghMock := &github.MockClient{
+		ListStacksFn: func() ([]github.RemoteStack, error) {
+			return []github.RemoteStack{{ID: 9, PullRequests: []int{101, 102, 103}}}, nil
+		},
+		FindPRByNumberFn: func(n int) (*github.PullRequest, error) {
+			branch := map[int]string{101: "b1", 102: "b2", 103: "b3"}[n]
+			if branch == "" {
+				return nil, nil
+			}
+			pr := &github.PullRequest{
+				Number: n, ID: fmt.Sprintf("PR_%d", n),
+				URL:         fmt.Sprintf("https://github.com/o/r/pull/%d", n),
+				HeadRefName: branch, State: "OPEN",
+			}
+			if n == 103 {
+				pr.MergeQueueEntry = &github.MergeQueueEntry{ID: "MQ1"}
+			}
+			return pr, nil
+		},
+	}
+
+	_, err := runSyncCfg(t, mock, func(cfg *config.Config) { cfg.GitHubClientOverride = ghMock })
+	require.NoError(t, err)
+
+	assert.Contains(t, created, "b3", "the queued branch is still pulled into the local stack")
+	for _, pc := range pushes {
+		assert.NotContains(t, pc.branches, "b3", "a merge-queued branch must not be pushed")
+	}
+}
+
+// TestSync_RemoteAhead_DuplicateBranchAborts verifies that pulling a remote
+// addition whose branch is already owned by another local stack aborts rather
+// than writing the branch into two stacks.
+func TestSync_RemoteAhead_DuplicateBranchAborts(t *testing.T) {
+	tmpDir := t.TempDir()
+	writeStackFileMulti(t, tmpDir,
+		stack.Stack{
+			ID:    "9",
+			Trunk: stack.BranchRef{Branch: "main"},
+			Branches: []stack.BranchRef{
+				{Branch: "b1", PullRequest: &stack.PullRequestRef{Number: 101}},
+				{Branch: "b2", PullRequest: &stack.PullRequestRef{Number: 102}},
+			},
+		},
+		stack.Stack{
+			Trunk:    stack.BranchRef{Branch: "main"},
+			Branches: []stack.BranchRef{{Branch: "b3"}}, // another stack already owns b3
+		},
+	)
+
+	var created []string
+	mock := newSyncMockNoRebase(tmpDir, "b1")
+	mock.CreateBranchFn = func(name, base string) error { created = append(created, name); return nil }
+
+	ghMock := &github.MockClient{
+		ListStacksFn: func() ([]github.RemoteStack, error) {
+			return []github.RemoteStack{{ID: 9, PullRequests: []int{101, 102, 103}}}, nil
+		},
+		FindPRByNumberFn: prByNumberFinder(map[int]string{101: "b1", 102: "b2", 103: "b3"}),
+	}
+
+	output, err := runSyncCfg(t, mock, func(cfg *config.Config) { cfg.GitHubClientOverride = ghMock })
+
+	assert.Error(t, err)
+	assert.Contains(t, output, "Cannot pull b3")
+	assert.NotContains(t, created, "b3", "must not pull a branch owned by another stack")
+
+	sf, loadErr := stack.Load(tmpDir)
+	require.NoError(t, loadErr)
+	assert.Equal(t, []string{"b1", "b2"}, sf.Stacks[0].BranchNames(), "tracked stack unchanged")
+}
+
+// TestSync_Divergent_UseRemote_DirtyCheckErrorAborts verifies that when the
+// working-tree status cannot be determined, "use remote" aborts instead of
+// treating the tree as clean and running the destructive replace.
+func TestSync_Divergent_UseRemote_DirtyCheckErrorAborts(t *testing.T) {
+	tmpDir := t.TempDir()
+	divergentStack(t, tmpDir)
+
+	ghMock := divergentRemoteMock()
+	var created []string
+	mock := newSyncMockNoRebase(tmpDir, "b1")
+	mock.CreateBranchFn = func(name, base string) error { created = append(created, name); return nil }
+	mock.HasUncommittedChangesFn = func() (bool, error) { return false, fmt.Errorf("git status failed") }
+
+	output, err := runSyncCfg(t, mock, func(cfg *config.Config) {
+		cfg.GitHubClientOverride = ghMock
+		cfg.ForceInteractive = true
+		cfg.SelectFn = func(_, _ string, _ []string) (int, error) { return 0, nil }
+	})
+
+	assert.Error(t, err)
+	assert.Contains(t, output, "Could not determine whether the working tree is clean")
+	assert.Empty(t, created, "must not replace the local stack when the working-tree check fails")
+
+	sf, loadErr := stack.Load(tmpDir)
+	require.NoError(t, loadErr)
+	assert.Equal(t, []string{"b1", "b2", "b3"}, sf.Stacks[0].BranchNames(), "local stack untouched")
+}
+
 // TestSync_RemoteInSync_NoPull verifies that when local and remote match, no
 // branches are pulled and no divergence is reported.
 func TestSync_RemoteInSync_NoPull(t *testing.T) {
