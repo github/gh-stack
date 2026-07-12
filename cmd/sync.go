@@ -43,8 +43,8 @@ If PRs have been added to the stack on GitHub, their branches are pulled
 down and appended to your local stack so it mirrors the remote. A clean
 "remote is ahead" update happens automatically without prompting. If the
 local and remote stacks have diverged, sync prompts (in an interactive
-terminal) to use the remote as the source of truth, use your local stack
-as the source of truth, disassociate them, or cancel. Cancelling — or a
+terminal) to use the remote as the source of truth, delete the stack on
+GitHub and recreate it later with sync/submit, or cancel. Cancelling — or a
 divergence in a non-interactive terminal — aborts the sync without pushing
 branches or updating PRs.
 
@@ -126,11 +126,11 @@ func runSync(cfg *config.Config, opts *syncOptions) error {
 	if reconcileRes.stack != nil {
 		s = reconcileRes.stack
 	}
-	if reconcileRes.abort {
-		// The user cancelled a divergence (or it can't be resolved
-		// non-interactively). Stop before touching any branches or PRs.
-		cfg.Printf("")
-		cfg.Infof("Sync aborted — no changes were made")
+	if reconcileRes.stop {
+		// The reconcile step resolved the situation and there is nothing more to
+		// do (the user cancelled or deleted the remote stack, or a divergence was
+		// detected non-interactively). The resolving path already reported the
+		// outcome, so just exit successfully.
 		return nil
 	}
 	// Reconciling "use remote as source of truth" may have moved us off a
@@ -277,10 +277,8 @@ func runSync(cfg *config.Config, opts *syncOptions) error {
 	// stack object actually reflects the local stack, which determines the final
 	// summary message below.
 	stackSynced := false
-	if !reconcileRes.skipStackObjectSync {
-		if client, err := cfg.GitHubClient(); err == nil {
-			stackSynced = syncStack(cfg, client, s)
-		}
+	if client, err := cfg.GitHubClient(); err == nil {
+		stackSynced = syncStack(cfg, client, s)
 	}
 
 	// --- Step 6: Prune merged branches (optional) ---

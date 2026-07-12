@@ -1200,15 +1200,11 @@ type remoteReconcileResult struct {
 	// original pointer).
 	stack *stack.Stack
 
-	// skipStackObjectSync tells runSync to skip the later syncStack step so we
-	// never push the local stack over a divergent remote. Set when disassociating.
-	skipStackObjectSync bool
-
-	// abort tells runSync to stop the whole sync immediately (before any
-	// fast-forward, rebase, or push) and exit successfully without changes. Set
-	// when the user cancels an interactive divergence prompt, or when a
-	// divergence is detected in a non-interactive terminal.
-	abort bool
+	// stop tells runSync to end the sync immediately after reconcile (before any
+	// fast-forward, rebase, or push) and exit successfully. Set when the user
+	// cancels or deletes the remote stack, and when a divergence is detected in a
+	// non-interactive terminal. The resolving path prints its own outcome message.
+	stop bool
 }
 
 // remoteStackClass classifies the relationship between the local stack's active
@@ -1424,14 +1420,14 @@ func resolveStackDivergence(cfg *config.Config, client github.ClientOps, sf *sta
 	if !cfg.IsInteractive() {
 		cfg.Printf("  Re-run in an interactive terminal to resolve, or import the remote stack with `%s`.",
 			cfg.ColorCyan("gh stack checkout <pr>"))
-		return remoteReconcileResult{abort: true}, nil
+		cfg.Infof("Sync aborted — no changes were made")
+		return remoteReconcileResult{stop: true}, nil
 	}
 
 	options := []string{
-		"Use the remote stack as the source of truth (update local to match)",
-		"Use your local stack as the source of truth (update remote to match)",
-		"Disassociate — unlink local stack with remote on GitHub",
-		"Cancel — abort the sync and do not make any changes",
+		"Update local to match remote — replace your local stack with the remote version",
+		"Delete the remote stack on GitHub — keep your local stack and recreate on remote later",
+		"Cancel — make no changes",
 	}
 	p := prompter.New(cfg.In, cfg.Out, cfg.Err)
 	selectFn := func(prompt, def string, opts []string) (int, error) {
@@ -1447,7 +1443,7 @@ func resolveStackDivergence(cfg *config.Config, client github.ClientOps, sf *sta
 				clearSelectPrompt(cfg, len(options))
 			}
 			printInterrupt(cfg)
-			return remoteReconcileResult{abort: true}, errInterrupt
+			return remoteReconcileResult{stop: true}, errInterrupt
 		}
 		cfg.Errorf("selection failed: %v", err)
 		return remoteReconcileResult{}, ErrSilent
@@ -1457,12 +1453,11 @@ func resolveStackDivergence(cfg *config.Config, client github.ClientOps, sf *sta
 	case 0:
 		return resolveDivergenceUseRemote(cfg, sf, s, currentBranch, gitDir, remote, prs)
 	case 1:
-		return resolveDivergenceUseLocal(cfg, client, sf, s, gitDir)
-	case 2:
-		return resolveDivergenceDisassociate(cfg, sf, s, gitDir)
+		return resolveDivergenceDeleteRemote(cfg, client, sf, s, gitDir)
 	default:
-		// Cancel: abort the whole sync without touching branches or PRs.
-		return remoteReconcileResult{abort: true}, nil
+		// Cancel: stop the sync without touching branches or PRs.
+		cfg.Infof("Sync aborted — no changes were made")
+		return remoteReconcileResult{stop: true}, nil
 	}
 }
 
@@ -1476,7 +1471,6 @@ func resolveDivergenceUseRemote(cfg *config.Config, sf *stack.StackFile, s *stac
 
 	if dirty, err := git.HasUncommittedChanges(); err == nil && dirty {
 		cfg.Errorf("You have uncommitted changes — commit or stash them before replacing your local stack with the remote")
-		res.skipStackObjectSync = true
 		return res, ErrSilent
 	}
 
@@ -1487,7 +1481,6 @@ func resolveDivergenceUseRemote(cfg *config.Config, sf *stack.StackFile, s *stac
 	removeLocalStack(sf, s)
 	newStack, err := importRemoteStack(cfg, sf, gitDir, remote, trunk, prs, remoteStackID)
 	if err != nil {
-		res.skipStackObjectSync = true
 		return res, err
 	}
 
@@ -1503,7 +1496,6 @@ func resolveDivergenceUseRemote(cfg *config.Config, sf *stack.StackFile, s *stac
 	}
 
 	if err := stack.Save(gitDir, sf); err != nil {
-		res.skipStackObjectSync = true
 		return res, handleSaveError(cfg, err)
 	}
 
@@ -1539,12 +1531,13 @@ func nearestBranchAfterReplace(oldBranches []string, currentBranch string, newSt
 	return newStack.Trunk.Branch
 }
 
-// resolveDivergenceUseLocal makes the remote match the local stack by deleting
-// the diverged remote stack object and clearing the local ID. The normal
-// syncStack step then recreates the stack from the local PR list (when two or
-// more PRs exist). Remote PRs dropped from the stack remain open but unstacked.
-func resolveDivergenceUseLocal(cfg *config.Config, client github.ClientOps, sf *stack.StackFile, s *stack.Stack, gitDir string) (remoteReconcileResult, error) {
-	var res remoteReconcileResult
+// resolveDivergenceDeleteRemote deletes the diverged stack object on GitHub and
+// removes the local association (clearing the stack ID). The PRs and local
+// branches are left untouched — only the stack grouping on GitHub is removed. It
+// stops the sync and points the user at `gh stack submit` to recreate the stack
+// (which, unlike sync, also creates PRs for any un-submitted branches).
+func resolveDivergenceDeleteRemote(cfg *config.Config, client github.ClientOps, sf *stack.StackFile, s *stack.Stack, gitDir string) (remoteReconcileResult, error) {
+	res := remoteReconcileResult{stop: true}
 
 	if err := client.DeleteStack(s.ID); err != nil {
 		var httpErr *api.HTTPError
@@ -1552,30 +1545,20 @@ func resolveDivergenceUseLocal(cfg *config.Config, client github.ClientOps, sf *
 			cfg.Warningf("Remote stack already deleted")
 		} else {
 			cfg.Errorf("failed to delete remote stack: %v", err)
-			res.skipStackObjectSync = true
 			return res, ErrAPIFailure
 		}
 	} else {
-		cfg.Successf("Deleted the diverged stack on GitHub — it will be recreated from your local stack")
+		cfg.Successf("Deleted the stack on GitHub")
 	}
 
 	s.ID = ""
 	if err := stack.Save(gitDir, sf); err != nil {
-		res.skipStackObjectSync = true
 		return res, handleSaveError(cfg, err)
 	}
-	return res, nil
-}
 
-// resolveDivergenceDisassociate removes the local stack's remote stack ID so
-// the local and remote stacks become independent. The remote stack object is
-// left untouched; syncStack is skipped so nothing is pushed over it.
-func resolveDivergenceDisassociate(cfg *config.Config, sf *stack.StackFile, s *stack.Stack, gitDir string) (remoteReconcileResult, error) {
-	res := remoteReconcileResult{skipStackObjectSync: true}
-	s.ID = ""
-	if err := stack.Save(gitDir, sf); err != nil {
-		return res, handleSaveError(cfg, err)
-	}
-	cfg.Successf("Stopped tracking this stack on GitHub — your local and remote stacks are now independent")
+	cfg.Printf("")
+	cfg.Printf("Your PRs and local branches are unchanged — only the stack on GitHub was removed.")
+	cfg.Printf("  Run `%s` to recreate the stack on GitHub.", cfg.ColorCyan("gh stack submit"))
+	cfg.Printf("  Run `%s` first if you want to change the stack's structure.", cfg.ColorCyan("gh stack modify"))
 	return res, nil
 }
