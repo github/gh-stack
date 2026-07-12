@@ -2,6 +2,7 @@ package cmd
 
 import (
 	"errors"
+	"strconv"
 
 	"github.com/cli/go-gh/v2/pkg/api"
 	"github.com/github/gh-stack/internal/config"
@@ -11,24 +12,44 @@ import (
 )
 
 type unstackOptions struct {
-	local bool
+	local       bool
+	stackNumber int
 }
 
 func UnstackCmd(cfg *config.Config) *cobra.Command {
 	opts := &unstackOptions{}
 
 	cmd := &cobra.Command{
-		Use:     "unstack",
+		Use:     "unstack [<stack-number>]",
 		Aliases: []string{"delete"},
-		Short:   "Delete a stack locally and on GitHub",
-		Long:    "Remove the current active stack from local tracking and delete it on GitHub. Use --local to only remove local tracking. Full unstack is blocked when every pull request is queued for merge, merging, or already merged",
-		Example: `  # Delete the stack locally and on GitHub
+		Short:   "Remove a stack locally and on GitHub",
+		Long: `Remove a stack from local tracking and unstack it on GitHub.
+
+With no argument, the current active stack is used. Provide a stack number (the
+identifier shown in the github.com stack UI) to unstack a specific locally
+tracked stack instead. Use --local to only remove local tracking.
+
+GitHub decides which pull requests can be unstacked: PRs that are queued for
+merge or have auto-merge enabled are left stacked. When some pull requests
+remain stacked, local tracking is kept.`,
+		Example: `  # Unstack the current stack locally and on GitHub
   $ gh stack unstack
+
+  # Unstack a specific stack by its stack number
+  $ gh stack unstack 7
 
   # Only remove local tracking (keep the stack on GitHub)
   $ gh stack unstack --local`,
-		Args: cobra.NoArgs,
+		Args: cobra.MaximumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
+			if len(args) == 1 {
+				n, err := strconv.Atoi(args[0])
+				if err != nil || n <= 0 {
+					cfg.Errorf("invalid stack number %q", args[0])
+					return ErrInvalidArgs
+				}
+				opts.stackNumber = n
+			}
 			return runUnstack(cfg, opts)
 		},
 	}
@@ -39,7 +60,13 @@ func UnstackCmd(cfg *config.Config) *cobra.Command {
 }
 
 func runUnstack(cfg *config.Config, opts *unstackOptions) error {
-	result, err := loadStack(cfg, "")
+	var result *loadStackResult
+	var err error
+	if opts.stackNumber > 0 {
+		result, err = loadStackByNumber(cfg, opts.stackNumber)
+	} else {
+		result, err = loadStack(cfg, "")
+	}
 	if err != nil {
 		return ErrNotInStack
 	}

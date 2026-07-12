@@ -403,3 +403,83 @@ func TestUnstack_NumberLookupFailure_StopsDeletion(t *testing.T) {
 	require.NoError(t, loadErr)
 	require.Len(t, sf.Stacks, 1)
 }
+
+func TestUnstack_ByStackNumber(t *testing.T) {
+	// Target a specific stack by its number, regardless of the current branch.
+	gitDir := t.TempDir()
+	restore := git.SetOps(&git.MockOps{
+		GitDirFn:        func() (string, error) { return gitDir, nil },
+		CurrentBranchFn: func() (string, error) { return "b1", nil },
+	})
+	defer restore()
+
+	s1 := stack.Stack{
+		ID:       "42",
+		Number:   42,
+		Trunk:    stack.BranchRef{Branch: "main"},
+		Branches: []stack.BranchRef{{Branch: "b1"}, {Branch: "b2"}},
+	}
+	s2 := stack.Stack{
+		ID:       "99",
+		Number:   7,
+		Trunk:    stack.BranchRef{Branch: "main"},
+		Branches: []stack.BranchRef{{Branch: "b3"}, {Branch: "b4"}},
+	}
+	writeTwoStacks(t, gitDir, s1, s2)
+
+	var unstackedNumber int
+	cfg, outR, errR := config.NewTestConfig()
+	cfg.GitHubClientOverride = &github.MockClient{
+		UnstackFn: func(n int) (*github.RemoteStack, bool, error) {
+			unstackedNumber = n
+			return nil, true, nil
+		},
+	}
+	err := runUnstack(cfg, &unstackOptions{stackNumber: 7})
+	output := collectOutput(cfg, outR, errR)
+
+	require.NoError(t, err)
+	assert.Equal(t, 7, unstackedNumber)
+	assert.Contains(t, output, "Stack removed from local tracking")
+
+	// The targeted stack (number 7 / b3,b4) is removed; the other is kept.
+	sf, err := stack.Load(gitDir)
+	require.NoError(t, err)
+	require.Len(t, sf.Stacks, 1)
+	assert.Equal(t, []string{"b1", "b2"}, sf.Stacks[0].BranchNames())
+}
+
+func TestUnstack_ByStackNumber_NotTrackedLocally(t *testing.T) {
+	gitDir := t.TempDir()
+	restore := git.SetOps(&git.MockOps{
+		GitDirFn:        func() (string, error) { return gitDir, nil },
+		CurrentBranchFn: func() (string, error) { return "b1", nil },
+	})
+	defer restore()
+
+	writeStackFile(t, gitDir, stack.Stack{
+		ID:       "42",
+		Number:   42,
+		Trunk:    stack.BranchRef{Branch: "main"},
+		Branches: []stack.BranchRef{{Branch: "b1"}, {Branch: "b2"}},
+	})
+
+	unstackCalled := false
+	cfg, outR, errR := config.NewTestConfig()
+	cfg.GitHubClientOverride = &github.MockClient{
+		UnstackFn: func(int) (*github.RemoteStack, bool, error) {
+			unstackCalled = true
+			return nil, true, nil
+		},
+	}
+	err := runUnstack(cfg, &unstackOptions{stackNumber: 999})
+	output := collectOutput(cfg, outR, errR)
+
+	assert.ErrorIs(t, err, ErrNotInStack)
+	assert.False(t, unstackCalled, "should not unstack when the number isn't tracked locally")
+	assert.Contains(t, output, "stack #999 is not tracked locally")
+
+	sf, err := stack.Load(gitDir)
+	require.NoError(t, err)
+	require.Len(t, sf.Stacks, 1)
+}

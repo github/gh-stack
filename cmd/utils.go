@@ -249,6 +249,39 @@ func loadStack(cfg *config.Config, branch string) (*loadStackResult, error) {
 	}, nil
 }
 
+// loadStackByNumber loads the locally tracked stack whose stack number matches
+// the given value. It prints a helpful error and returns a non-nil error when
+// no local stack has that number.
+func loadStackByNumber(cfg *config.Config, number int) (*loadStackResult, error) {
+	gitDir, err := git.GitDir()
+	if err != nil {
+		cfg.Errorf("not a git repository")
+		return nil, fmt.Errorf("not a git repository")
+	}
+
+	sf, err := stack.Load(gitDir)
+	if err != nil {
+		cfg.Errorf("failed to load stack state: %s", err)
+		return nil, fmt.Errorf("failed to load stack state: %w", err)
+	}
+
+	for i := range sf.Stacks {
+		if sf.Stacks[i].Number == number {
+			currentBranch, _ := git.CurrentBranch()
+			return &loadStackResult{
+				GitDir:        gitDir,
+				StackFile:     sf,
+				Stack:         &sf.Stacks[i],
+				CurrentBranch: currentBranch,
+			}, nil
+		}
+	}
+
+	cfg.Errorf("stack #%d is not tracked locally", number)
+	cfg.Printf("Run `%s` to check it out first", cfg.ColorCyan(fmt.Sprintf("gh stack checkout %d", number)))
+	return nil, fmt.Errorf("stack #%d is not tracked locally", number)
+}
+
 // handleSaveError translates a stack.Save error into the appropriate user
 // message and exit error.  Lock contention and stale-file detection both
 // return ErrLockFailed (exit 8); other write failures return ErrSilent (exit 1).
