@@ -8,6 +8,7 @@ import (
 	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/charmbracelet/lipgloss"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
@@ -249,6 +250,31 @@ func TestView_NarrowTerminalDoesNotPanic(t *testing.T) {
 			_ = mm.View()
 		})
 	}
+}
+
+func TestView_NoLineExceedsWidth(t *testing.T) {
+	// Every rendered line must fit within the terminal width so nothing wraps
+	// (which would break the inline picker's bounded height).
+	m := New(sampleRows())
+	for _, w := range []int{100, 60, 40, 24, 12} {
+		mm := drive(m, tea.WindowSizeMsg{Width: w, Height: 20})
+		for _, ln := range strings.Split(mm.View(), "\n") {
+			assert.LessOrEqualf(t, lipgloss.Width(ln), w, "line wider than %d: %q", w, stripANSI(ln))
+		}
+	}
+}
+
+func TestSearchTogglingKeepsCursorVisible(t *testing.T) {
+	// On a short terminal, entering search shrinks the body; the selected row
+	// must not scroll out of view (Enter would otherwise select a hidden row).
+	m := drive(New(manyRows(20)), tea.WindowSizeMsg{Width: 90, Height: 11})
+	for m.cursor < m.bodyHeight()-1 {
+		m = drive(m, tea.KeyMsg{Type: tea.KeyDown})
+	}
+	m = drive(m, runeKey("/"))
+	require.True(t, m.searching)
+	assert.GreaterOrEqual(t, m.cursor, m.scrollOffset)
+	assert.Less(t, m.cursor, m.scrollOffset+m.bodyHeight(), "cursor stays visible after entering search")
 }
 
 func TestView_ZeroSizeReturnsEmpty(t *testing.T) {

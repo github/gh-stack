@@ -137,6 +137,9 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 
 	case key.Matches(msg, keys.Search) && !m.searching:
 		m.searching = true
+		// Entering search adds the search line, shrinking the body; keep the
+		// cursor visible so Enter can't select an off-screen row.
+		m.ensureVisible()
 		return m, nil
 
 	case !m.searching && key.Matches(msg, keys.Quit):
@@ -378,7 +381,25 @@ func (m Model) View() string {
 	}
 	b.WriteString(m.renderFooter())
 
-	return b.String()
+	// Guarantee no rendered line exceeds the terminal width. Otherwise a line
+	// wraps, the inline renderer's line count is off, and the bounded/clear
+	// behavior breaks on narrow terminals.
+	return clampToWidth(b.String(), m.width)
+}
+
+// clampToWidth truncates every line of s to at most width cells so nothing
+// wraps.
+func clampToWidth(s string, width int) string {
+	if width <= 0 {
+		return s
+	}
+	lines := strings.Split(s, "\n")
+	for i, ln := range lines {
+		if lipgloss.Width(ln) > width {
+			lines[i] = truncate(ln, width)
+		}
+	}
+	return strings.Join(lines, "\n")
 }
 
 func (m Model) renderTitle() string {
