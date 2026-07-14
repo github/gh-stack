@@ -248,9 +248,11 @@ func checkoutRemoteStack(cfg *config.Config, sf *stack.StackFile, gitDir string,
 		// Case A: branch is in a local stack — check composition
 		if stackCompositionMatches(localStack, remoteStack.PRNumbers()) {
 			// Composition matches — checkout
-			if localStack.ID == "" {
-				localStack.ID = remoteStackID
-			}
+			// remoteStack is authoritative for both identifiers here, so
+			// refresh them together. Updating only one (e.g. the number while
+			// keeping a stale ID) breaks later ID-based discovery when the old
+			// remote stack was replaced by a new one holding the same PRs.
+			localStack.ID = remoteStackID
 			localStack.Number = remoteStack.Number
 			if err := stack.Save(gitDir, sf); err != nil {
 				return nil, "", handleSaveError(cfg, err)
