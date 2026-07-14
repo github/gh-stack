@@ -258,7 +258,7 @@ This is useful when you need to restructure a stack — remove a branch, insert 
 # Unstack the current stack on GitHub and remove local tracking
 gh stack unstack
 
-# Unstack a specific stack by its numbe
+# Unstack a specific stack by its number
 gh stack unstack 7
 
 # Only remove local tracking

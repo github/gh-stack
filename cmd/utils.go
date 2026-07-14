@@ -269,8 +269,11 @@ func loadStack(cfg *config.Config, branch string) (*loadStackResult, error) {
 //
 // Stack files created before the number was tracked store only the internal ID
 // (Number == 0); such legacy stacks are resolved by mapping their ID to a remote
-// stack number so they can still be targeted by number.
-func lookupStackByNumber(cfg *config.Config, number int) (result *loadStackResult, ok bool, err error) {
+// stack number so they can still be targeted by number. That mapping contacts
+// GitHub (ListStacks), so it is only attempted when allowRemote is true — callers
+// that must stay purely local (e.g. `--local`) pass false, and legacy stacks
+// whose number isn't recorded locally are reported as not tracked.
+func lookupStackByNumber(cfg *config.Config, number int, allowRemote bool) (result *loadStackResult, ok bool, err error) {
 	gitDir, err := git.GitDir()
 	if err != nil {
 		// Not a git repository — nothing can be tracked locally.
@@ -290,8 +293,9 @@ func lookupStackByNumber(cfg *config.Config, number int) (result *loadStackResul
 
 	// No direct match — backfill legacy stacks' numbers from the remote and
 	// retry, so `gh stack unstack <number>` also works for stacks tracked
-	// before the number was recorded locally.
-	if backfillLegacyStackNumbers(cfg, sf, gitDir) {
+	// before the number was recorded locally. This reaches GitHub, so it is
+	// skipped when the caller requires a purely local lookup.
+	if allowRemote && backfillLegacyStackNumbers(cfg, sf, gitDir) {
 		if result := stackResultByNumber(sf, gitDir, number); result != nil {
 			return result, true, nil
 		}

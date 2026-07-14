@@ -72,7 +72,8 @@ func runUnstack(cfg *config.Config, opts *unstackOptions) error {
 	// GitHub by number (remote-first), so this works from anywhere in the
 	// repository whether or not the stack is tracked locally.
 	if opts.stackNumber > 0 {
-		result, ok, err := lookupStackByNumber(cfg, opts.stackNumber)
+		// --local must never contact GitHub, so it uses a strictly local lookup
+		result, ok, err := lookupStackByNumber(cfg, opts.stackNumber, !opts.local)
 		if err != nil {
 			return ErrNotInStack
 		}

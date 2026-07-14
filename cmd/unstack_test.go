@@ -632,6 +632,55 @@ func TestUnstack_ByStackNumber_NotTracked_LocalFlag(t *testing.T) {
 	require.Len(t, sf.Stacks, 1)
 }
 
+func TestUnstack_ByStackNumber_LocalFlag_LegacyStack_NoRemoteCall(t *testing.T) {
+	// --local must never contact GitHub. A legacy stack (Number == 0) can only
+	// be matched by number via a remote backfill (ListStacks); under --local
+	// that lookup must be skipped and the number reported as not tracked.
+	gitDir := t.TempDir()
+	restore := git.SetOps(&git.MockOps{
+		GitDirFn:        func() (string, error) { return gitDir, nil },
+		CurrentBranchFn: func() (string, error) { return "b1", nil },
+	})
+	defer restore()
+
+	// Legacy: internal ID present, Number unset (0).
+	writeStackFile(t, gitDir, stack.Stack{
+		ID:    "99",
+		Trunk: stack.BranchRef{Branch: "main"},
+		Branches: []stack.BranchRef{
+			{Branch: "b1", PullRequest: &stack.PullRequestRef{Number: 101}},
+			{Branch: "b2", PullRequest: &stack.PullRequestRef{Number: 102}},
+		},
+	})
+
+	listCalled := false
+	unstackCalled := false
+	cfg, outR, errR := config.NewTestConfig()
+	cfg.GitHubClientOverride = &github.MockClient{
+		ListStacksFn: func() ([]github.RemoteStack, error) {
+			listCalled = true
+			return []github.RemoteStack{{ID: 99, Number: 7, PullRequests: []int{101, 102}}}, nil
+		},
+		UnstackFn: func(int) (*github.RemoteStack, bool, error) {
+			unstackCalled = true
+			return nil, true, nil
+		},
+	}
+
+	err := runUnstack(cfg, &unstackOptions{stackNumber: 7, local: true})
+	output := collectOutput(cfg, outR, errR)
+
+	assert.ErrorIs(t, err, ErrNotInStack)
+	assert.False(t, listCalled, "--local must not contact GitHub (no ListStacks backfill)")
+	assert.False(t, unstackCalled, "--local must not contact GitHub")
+	assert.Contains(t, output, "stack #7 is not tracked locally")
+
+	// Local tracking is untouched.
+	sf, loadErr := stack.Load(gitDir)
+	require.NoError(t, loadErr)
+	require.Len(t, sf.Stacks, 1)
+}
+
 func TestUnstack_ByStackNumber_LegacyStackResolvedByID(t *testing.T) {
 	// A stack tracked before the number was recorded (Number == 0) is resolved
 	// by mapping its internal ID to the remote stack number, and the backfilled
