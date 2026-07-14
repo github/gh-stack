@@ -6,12 +6,14 @@ import (
 	"strconv"
 	"strings"
 
+	tea "github.com/charmbracelet/bubbletea"
 	"github.com/cli/go-gh/v2/pkg/api"
 	"github.com/cli/go-gh/v2/pkg/prompter"
 	"github.com/github/gh-stack/internal/config"
 	"github.com/github/gh-stack/internal/git"
 	"github.com/github/gh-stack/internal/github"
 	"github.com/github/gh-stack/internal/stack"
+	"github.com/github/gh-stack/internal/tui/checkoutview"
 	"github.com/spf13/cobra"
 )
 
@@ -42,8 +44,10 @@ it simply switches to the branch.
 When a branch name is provided, the command resolves it against
 locally tracked stacks only.
 
-When run without arguments, shows a menu of all locally available
-stacks to choose from.`,
+When run without arguments, opens an interactive picker listing every
+stack available to you — both the stacks tracked locally and the stacks
+that exist only on GitHub — so you can search, filter, and check one out.
+Fully merged stacks are omitted.`,
 		Example: `  # Check out a stack by its stack number
   $ gh stack checkout 7
 
@@ -56,7 +60,7 @@ stacks to choose from.`,
   # Check out a stack by branch name
   $ gh stack checkout feat/api-routes
 
-  # Show a menu of all locally tracked stacks
+  # Open the interactive picker of all available stacks (local and remote)
   $ gh stack checkout`,
 		Args: cobra.MaximumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
@@ -91,18 +95,21 @@ func runCheckout(cfg *config.Config, opts *checkoutOptions) error {
 	var targetBranch string
 
 	if opts.target == "" {
-		// Interactive picker mode
-		s, err = interactiveStackPicker(cfg, sf)
+		// Interactive picker mode (local + remote stacks).
+		s, targetBranch, err = interactiveCheckout(cfg, sf, gitDir)
 		if err != nil {
-			if !errors.Is(err, errInterrupt) {
-				cfg.Errorf("%s", err)
+			var exitErr *ExitError
+			if errors.As(err, &exitErr) {
+				// The callee already printed a message and chose an exit code.
+				return err
 			}
+			cfg.Errorf("%s", err)
 			return ErrSilent
 		}
 		if s == nil {
+			// No stacks available, or the user cancelled.
 			return nil
 		}
-		targetBranch = s.Branches[len(s.Branches)-1].Branch
 	} else if prNumber, ok := parsePRURL(opts.target); ok {
 		// Target is a PR URL — extract number and resolve like a numeric target
 		s, targetBranch, err = resolveNumericTarget(cfg, sf, gitDir, prNumber, opts.target)
@@ -625,40 +632,101 @@ func syncRemotePRState(s *stack.Stack, prs []*github.PullRequest) {
 	}
 }
 
-// interactiveStackPicker shows a menu of all locally tracked stacks and returns
-// the one the user selects. Returns nil, nil if the user has no stacks.
-func interactiveStackPicker(cfg *config.Config, sf *stack.StackFile) (*stack.Stack, error) {
+// interactiveCheckout opens the interactive stack picker, which lists every
+// stack available to the user (locally tracked and remote-only, reconciled and
+// with fully-merged stacks filtered out), and resolves the user's choice to a
+// stack and the branch to check out. It returns (nil, "", nil) when the user
+// cancels or has no stacks. Remote-only selections are cloned down through the
+// same path as `gh stack checkout <number>`.
+func interactiveCheckout(cfg *config.Config, sf *stack.StackFile, gitDir string) (*stack.Stack, string, error) {
 	if !cfg.IsInteractive() {
-		return nil, fmt.Errorf("no target specified; provide a branch name or PR number, or run interactively to select a stack")
+		return nil, "", fmt.Errorf("no target specified; provide a branch name or PR number, or run interactively to select a stack")
 	}
 
-	if len(sf.Stacks) == 0 {
-		cfg.Infof("No locally tracked stacks found")
-		cfg.Printf("Create a stack with `%s` or check out a remote stack with `%s`",
+	rows := gatherCheckoutRows(cfg, sf)
+	if len(rows) == 0 {
+		cfg.Infof("No stacks available to check out")
+		cfg.Printf("Create a stack with `%s` or check out a stack by number with `%s`",
 			cfg.ColorCyan("gh stack init"),
-			cfg.ColorCyan("gh stack checkout 123"))
-		return nil, nil
+			cfg.ColorCyan("gh stack checkout <number>"))
+		return nil, "", nil
 	}
 
-	options := make([]string, len(sf.Stacks))
-	for i := range sf.Stacks {
-		options[i] = sf.Stacks[i].DisplayChain()
-	}
-
-	p := prompter.New(cfg.In, cfg.Out, cfg.Err)
-	selected, err := p.Select(
-		"Select a stack to check out (showing locally tracked stacks only)",
-		"",
-		options,
-	)
+	selected, ok, err := launchCheckoutPicker(rows)
 	if err != nil {
-		if isInterruptError(err) {
-			clearSelectPrompt(cfg, len(options))
-			printInterrupt(cfg)
-			return nil, errInterrupt
-		}
-		return nil, fmt.Errorf("stack selection: %w", err)
+		return nil, "", err
+	}
+	if !ok {
+		// The user dismissed the picker without selecting.
+		return nil, "", nil
 	}
 
-	return &sf.Stacks[selected], nil
+	return resolveCheckoutSelection(cfg, sf, gitDir, selected)
+}
+
+// gatherCheckoutRows fetches the remote stacks (best-effort) and reconciles them
+// with the local stacks into the picker's rows. Any GitHub failure (stacks not
+// enabled for the repo, no auth, network error) gracefully degrades to a
+// local-only list.
+func gatherCheckoutRows(cfg *config.Config, sf *stack.StackFile) []checkoutview.StackRow {
+	var remote []github.RemoteStack
+	if client, err := cfg.GitHubClient(); err == nil {
+		if stacks, err := client.ListStacks(); err == nil {
+			remote = stacks
+		}
+	}
+	return checkoutview.BuildRows(sf.Stacks, remote)
+}
+
+// resolveCheckoutSelection resolves a picker selection to a local stack and the
+// branch to check out. Locally available stacks are used directly; remote-only
+// stacks are cloned down by stack number through the same import/reconcile flow
+// as `gh stack checkout <number>`.
+func resolveCheckoutSelection(cfg *config.Config, sf *stack.StackFile, gitDir string, selected checkoutview.StackRow) (*stack.Stack, string, error) {
+	if selected.Type == checkoutview.TypeLocal && selected.LocalStack != nil {
+		return selected.LocalStack, topUnmergedBranch(selected.LocalStack), nil
+	}
+
+	s, targetBranch, err := checkoutStackByNumber(cfg, sf, gitDir, selected.Number)
+	if err != nil {
+		if errors.Is(err, errStackNumberNotFound) {
+			cfg.Errorf("stack #%d could not be loaded from GitHub", selected.Number)
+			return nil, "", ErrAPIFailure
+		}
+		return nil, "", err
+	}
+	return s, targetBranch, nil
+}
+
+// launchCheckoutPicker runs the Bubble Tea stack picker and returns the selected
+// row (and whether one was chosen). It renders inline (no alt-screen) so the
+// picker occupies only a few lines and leaves the surrounding terminal output
+// intact. Mouse motion is intentionally not enabled so the search field never
+// receives stray mouse bytes.
+func launchCheckoutPicker(rows []checkoutview.StackRow) (checkoutview.StackRow, bool, error) {
+	p := tea.NewProgram(checkoutview.New(rows))
+	finalModel, err := p.Run()
+	if err != nil {
+		return checkoutview.StackRow{}, false, fmt.Errorf("running stack picker: %w", err)
+	}
+	m, ok := finalModel.(checkoutview.Model)
+	if !ok {
+		return checkoutview.StackRow{}, false, nil
+	}
+	row, selected := m.Result()
+	return row, selected, nil
+}
+
+// topUnmergedBranch returns the top-most branch of a local stack that has not
+// been merged, falling back to the very top branch when every branch is merged.
+func topUnmergedBranch(s *stack.Stack) string {
+	if len(s.Branches) == 0 {
+		return ""
+	}
+	for i := len(s.Branches) - 1; i >= 0; i-- {
+		if !s.Branches[i].IsMerged() {
+			return s.Branches[i].Branch
+		}
+	}
+	return s.Branches[len(s.Branches)-1].Branch
 }
