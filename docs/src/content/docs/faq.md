@@ -50,7 +50,7 @@ gh stack init db-migrations api-routes frontend
 
 ### How do I delete my stack?
 
-**From the CLI** — Run `gh stack unstack` (or `gh stack delete`) to delete the stack on GitHub and remove local tracking. Use `--local` to only remove local tracking.
+**From the CLI** — Run `gh stack unstack` (or `gh stack delete`) to delete the stack on GitHub and remove local tracking. You can also unstack any stack by its number from anywhere in the repository — `gh stack unstack 7` — whether or not it's checked out locally. Use `--local` to only remove local tracking.
 
 **From the UI** — You can unstack PRs from the GitHub UI — see [Unstacking](/gh-stack/guides/ui/#unstacking) for a walkthrough. This dissolves the association between PRs, turning them back into standard independent PRs.
 
