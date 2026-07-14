@@ -540,6 +540,43 @@ func TestSyncStackPRs_RemoteStack_UsesStackAPI(t *testing.T) {
 	assert.True(t, s.Branches[1].PullRequest.Merged)
 }
 
+func TestSyncStackPRs_BackfillsStackNumber(t *testing.T) {
+	// A stack tracked before the number was recorded (Number == 0) gets its
+	// number backfilled from the remote during the shared sync, so callers can
+	// display it.
+	s := &stack.Stack{
+		ID:    "100", // legacy: Number unset
+		Trunk: stack.BranchRef{Branch: "main"},
+		Branches: []stack.BranchRef{
+			{Branch: "b1"},
+			{Branch: "b2"},
+		},
+	}
+
+	cfg, outR, errR := config.NewTestConfig()
+	cfg.GitHubClientOverride = &github.MockClient{
+		ListStacksFn: func() ([]github.RemoteStack, error) {
+			return []github.RemoteStack{
+				{ID: 100, Number: 5, PullRequests: []int{10, 11}},
+			}, nil
+		},
+		FindPRByNumberFn: func(number int) (*github.PullRequest, error) {
+			switch number {
+			case 10:
+				return &github.PullRequest{Number: 10, HeadRefName: "b1", State: "OPEN"}, nil
+			case 11:
+				return &github.PullRequest{Number: 11, HeadRefName: "b2", State: "OPEN"}, nil
+			}
+			return nil, nil
+		},
+	}
+
+	_ = syncStackPRs(cfg, s)
+	collectOutput(cfg, outR, errR)
+
+	assert.Equal(t, 5, s.Number, "the stack number should be backfilled from the remote")
+}
+
 func TestSyncStackPRs_RemoteStack_ClosedPRStaysAssociated(t *testing.T) {
 	// When using the stack API, a closed (not merged) PR should remain
 	// associated — the stack API is the source of truth, not PR state.

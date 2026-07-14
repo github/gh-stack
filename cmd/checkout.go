@@ -110,7 +110,7 @@ func runCheckout(cfg *config.Config, opts *checkoutOptions) error {
 			return err
 		}
 	} else if prNumber, parseErr := strconv.Atoi(opts.target); parseErr == nil && prNumber > 0 {
-		// Target is a pure integer — try local PR, then remote API, then branch name
+		// Target is a pure integer — try stack number, then PR, then branch name
 		s, targetBranch, err = resolveNumericTarget(cfg, sf, gitDir, prNumber, opts.target)
 		if err != nil {
 			return err
@@ -145,18 +145,23 @@ func runCheckout(cfg *config.Config, opts *checkoutOptions) error {
 	return nil
 }
 
-// resolveNumericTarget handles the case where the user passes a pure integer.
-// The integer is interpreted as, in order:
+// resolveNumericTarget handles the case where the user passes a pure integer or
+// a PR URL. The number is interpreted as, in order:
 //  1. A stack number (the primary identifier)
 //  2. A locally tracked PR number
 //  3. A PR number whose stack is discovered from GitHub
 //  4. A branch name (for numeric branch names like "123")
+//
+// Stack, PR, and issue numbers share a single repo-scoped numberspace,
+// so a given number is only ever one object type; a number that is not a stack
+// simply misses at step 1 and resolves at a later step.
 func resolveNumericTarget(cfg *config.Config, sf *stack.StackFile, gitDir string, number int, raw string) (*stack.Stack, string, error) {
 	// 1. Try as a stack number (the primary identifier).
 	if s, targetBranch, err := checkoutStackByNumber(cfg, sf, gitDir, number); err == nil {
 		return s, targetBranch, nil
 	} else if !errors.Is(err, errStackNumberNotFound) {
-		// A real error (composition conflict, interrupted import, etc.) — surface it.
+		// A real error during import/reconcile (composition conflict, interrupted
+		// import, etc.) — surface it rather than trying other interpretations.
 		return nil, "", err
 	}
 
@@ -254,7 +259,10 @@ var errStackNumberNotFound = errors.New("stack number not found")
 // checkoutStackByNumber discovers a stack from GitHub by its stack number,
 // reconciles it with any local state, and checks out the top-most unmerged
 // branch. It returns errStackNumberNotFound when the number does not resolve to
-// a stack so the caller can fall back to other interpretations.
+// a stack so the caller can fall back to other interpretations. Because stack,
+// PR, and issue numbers share one repo-scoped numberspace, a number that
+// belongs to a PR (or nothing) simply misses here and is resolved by the
+// caller's later steps.
 func checkoutStackByNumber(cfg *config.Config, sf *stack.StackFile, gitDir string, stackNumber int) (*stack.Stack, string, error) {
 	client, err := cfg.GitHubClient()
 	if err != nil {

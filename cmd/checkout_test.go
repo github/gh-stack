@@ -354,6 +354,53 @@ func TestCheckout_ByStackNumber(t *testing.T) {
 	assert.Equal(t, 7, sf.Stacks[0].Number)
 }
 
+func TestCheckout_ByStackNumber_404FallsThroughToPR(t *testing.T) {
+	// A 404 from GetStack means no such stack, so the number is tried as a PR.
+	gitDir := t.TempDir()
+	var checkedOut string
+	restore := git.SetOps(&git.MockOps{
+		GitDirFn:              func() (string, error) { return gitDir, nil },
+		CurrentBranchFn:       func() (string, error) { return "main", nil },
+		BranchExistsFn:        func(name string) bool { return name == "main" },
+		FetchFn:               func(string) error { return nil },
+		CreateBranchFn:        func(string, string) error { return nil },
+		SetUpstreamTrackingFn: func(string, string) error { return nil },
+		RevParseFn:            func(string) (string, error) { return "abc123", nil },
+		ResolveRemoteFn:       func(string) (string, error) { return "origin", nil },
+		CheckoutBranchFn: func(name string) error {
+			checkedOut = name
+			return nil
+		},
+	})
+	defer restore()
+
+	writeStackFile(t, gitDir, stack.Stack{})
+
+	cfg, outR, errR := config.NewTestConfig()
+	cfg.GitHubClientOverride = &github.MockClient{
+		GetStackFn: func(int) (*github.RemoteStack, error) {
+			return nil, &api.HTTPError{StatusCode: 404, Message: "Not Found"}
+		},
+		FindStackForPRFn: func(int) (*github.RemoteStack, error) {
+			return &github.RemoteStack{ID: 1, Number: 1, PullRequests: []int{11, 12}}, nil
+		},
+		FindPRByNumberFn: func(n int) (*github.PullRequest, error) {
+			prs := map[int]*github.PullRequest{
+				11: {ID: "PR_11", Number: 11, HeadRefName: "feat-2", BaseRefName: "main", URL: "https://github.com/o/r/pull/11"},
+				12: {ID: "PR_12", Number: 12, HeadRefName: "feat-3", BaseRefName: "feat-2", URL: "https://github.com/o/r/pull/12"},
+			}
+			return prs[n], nil
+		},
+	}
+
+	err := runCheckout(cfg, &checkoutOptions{target: "11"})
+	output := collectOutput(cfg, outR, errR)
+
+	require.NoError(t, err)
+	assert.Equal(t, "feat-2", checkedOut, "the number should resolve as PR #11 after a stack 404")
+	assert.Contains(t, output, "Imported stack with 2 branches")
+}
+
 func TestCheckout_NumericTarget_BranchExistsNoStack(t *testing.T) {
 	gitDir := t.TempDir()
 	var checkedOut string

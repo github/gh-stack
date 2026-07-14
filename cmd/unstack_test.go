@@ -483,3 +483,50 @@ func TestUnstack_ByStackNumber_NotTrackedLocally(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, sf.Stacks, 1)
 }
+
+func TestUnstack_ByStackNumber_LegacyStackResolvedByID(t *testing.T) {
+	// A stack tracked before the number was recorded (Number == 0) is resolved
+	// by mapping its internal ID to the remote stack number, and the backfilled
+	// number is persisted.
+	gitDir := t.TempDir()
+	restore := git.SetOps(&git.MockOps{
+		GitDirFn:        func() (string, error) { return gitDir, nil },
+		CurrentBranchFn: func() (string, error) { return "b1", nil },
+	})
+	defer restore()
+
+	writeStackFile(t, gitDir, stack.Stack{
+		ID:    "99", // legacy: internal ID present, Number unset (0)
+		Trunk: stack.BranchRef{Branch: "main"},
+		Branches: []stack.BranchRef{
+			{Branch: "b1", PullRequest: &stack.PullRequestRef{Number: 101}},
+			{Branch: "b2", PullRequest: &stack.PullRequestRef{Number: 102}},
+		},
+	})
+
+	var unstackedNumber int
+	cfg, outR, errR := config.NewTestConfig()
+	cfg.GitHubClientOverride = &github.MockClient{
+		ListStacksFn: func() ([]github.RemoteStack, error) {
+			return []github.RemoteStack{{ID: 99, Number: 7, PullRequests: []int{101, 102}}}, nil
+		},
+		UnstackFn: func(n int) (*github.RemoteStack, bool, error) {
+			unstackedNumber = n
+			// Some PRs remain stacked, so local tracking is kept.
+			return &github.RemoteStack{ID: 99, Number: 7, PullRequests: []int{102}}, false, nil
+		},
+	}
+
+	err := runUnstack(cfg, &unstackOptions{stackNumber: 7})
+	output := collectOutput(cfg, outR, errR)
+
+	require.NoError(t, err)
+	assert.Equal(t, 7, unstackedNumber, "should resolve the legacy stack and unstack by its remote number")
+	assert.Contains(t, output, "remain stacked on GitHub")
+
+	// The backfilled number is persisted to the stack file.
+	sf, loadErr := stack.Load(gitDir)
+	require.NoError(t, loadErr)
+	require.Len(t, sf.Stacks, 1)
+	assert.Equal(t, 7, sf.Stacks[0].Number, "the resolved stack number should be persisted")
+}
