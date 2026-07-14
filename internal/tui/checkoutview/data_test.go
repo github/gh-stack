@@ -219,6 +219,31 @@ func TestBuildRows_ClosedNonMergedStackIsKept(t *testing.T) {
 	assert.Equal(t, StatusCounts{Closed: 2}, rows[0].Status)
 }
 
+func TestBuildRows_PopulatesAllBranchesForSearch(t *testing.T) {
+	local := []stack.Stack{{
+		Number: 3,
+		Trunk:  stack.BranchRef{Branch: "main"},
+		Branches: []stack.BranchRef{
+			{Branch: "a"}, {Branch: "b"}, {Branch: "c"},
+		},
+	}}
+	rows := BuildRows(local, nil)
+	require.Len(t, rows, 1)
+	assert.Equal(t, []string{"a", "b", "c"}, rows[0].Branches, "local rows carry every branch name for search")
+
+	remote := []github.RemoteStack{{
+		ID: 1, Number: 9, Base: github.RemoteStackBase{Ref: "main"},
+		PRDetails: []github.RemoteStackPR{
+			{Number: 1, State: "open", Head: github.RemoteStackPRHead{Ref: "r1"}},
+			{Number: 2, State: "open", Head: github.RemoteStackPRHead{Ref: "r2"}},
+			{Number: 3, State: "open", Head: github.RemoteStackPRHead{Ref: "r3"}},
+		},
+	}}
+	rrows := BuildRows(nil, remote)
+	require.Len(t, rrows, 1)
+	assert.Equal(t, []string{"r1", "r2", "r3"}, rrows[0].Branches, "remote rows carry every branch name for search")
+}
+
 func TestBuildRows_UntrackedLocalWithMergedPRFlag(t *testing.T) {
 	local := []stack.Stack{{
 		Number: 3,

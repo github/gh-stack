@@ -123,6 +123,25 @@ func TestSearchMatchesNumberAndType(t *testing.T) {
 	assert.Equal(t, TypeRemote, m.filtered[0].Type)
 }
 
+func TestSearchMatchesMidStackBranch(t *testing.T) {
+	rows := []StackRow{
+		{Number: 7, Type: TypeLocal, BottomBranch: "feat/bottom", TopBranch: "feat/top",
+			Branches: []string{"feat/bottom", "feat/middle-xyz", "feat/top"}, Base: "main"},
+		{Number: 8, Type: TypeRemote, BottomBranch: "other/a", TopBranch: "other/b",
+			Branches: []string{"other/a", "other/b"}, Base: "main"},
+	}
+	m := sized(New(rows))
+	m = drive(m, runeKey("/"))
+	for _, r := range "middle" {
+		m = drive(m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{r}})
+	}
+
+	require.Len(t, m.filtered, 1, "a mid-stack branch name should match")
+	assert.Equal(t, 7, m.filtered[0].Number)
+	// The matched mid-stack branch is not shown in the Branches column.
+	assert.NotContains(t, stripANSI(m.View()), "middle-xyz")
+}
+
 func TestCursorNavigationClamps(t *testing.T) {
 	m := sized(New(sampleRows()))
 	// Up at the top stays at 0.

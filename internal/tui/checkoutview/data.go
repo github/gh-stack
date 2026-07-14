@@ -66,6 +66,11 @@ type StackRow struct {
 	Created      time.Time
 	HasCreated   bool
 
+	// Branches is the full ordered list of branch names in the stack. Only
+	// BottomBranch and TopBranch are displayed; the complete list exists so
+	// search can match any branch, including mid-stack ones.
+	Branches []string
+
 	// LocalStack points at the local stack when Type == TypeLocal, so the caller
 	// can check out its branches directly without cloning. It is nil for
 	// remote-only rows, which are cloned by stack number instead.
@@ -185,6 +190,10 @@ func localRow(ls *stack.Stack, rs *github.RemoteStack) (StackRow, bool) {
 		row.BottomBranch = ls.Branches[0].Branch
 		row.TopBranch = ls.Branches[len(ls.Branches)-1].Branch
 	}
+	row.Branches = make([]string, len(ls.Branches))
+	for i := range ls.Branches {
+		row.Branches[i] = ls.Branches[i].Branch
+	}
 
 	if rs != nil {
 		if rs.Number != 0 {
@@ -218,6 +227,10 @@ func remoteRow(rs *github.RemoteStack) (StackRow, bool) {
 		Base:         rs.Base.Ref,
 		BottomBranch: rs.PRDetails[0].Head.Ref,
 		TopBranch:    rs.PRDetails[len(rs.PRDetails)-1].Head.Ref,
+	}
+	row.Branches = make([]string, len(rs.PRDetails))
+	for i, p := range rs.PRDetails {
+		row.Branches[i] = p.Head.Ref
 	}
 	if t, ok := parseTime(rs.CreatedAt); ok {
 		row.Created, row.HasCreated = t, true

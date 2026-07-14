@@ -214,9 +214,12 @@ func matchesQuery(r StackRow, q string) bool {
 	if q == "" {
 		return true
 	}
-	hay := strings.ToLower(strings.Join([]string{
-		r.NumberDisplay(), r.Summary(), r.Base, r.Type.String(),
-	}, " "))
+	// Search the stack number, base, type, and every branch name — including
+	// mid-stack branches that are not shown in the Branches column.
+	parts := make([]string, 0, len(r.Branches)+5)
+	parts = append(parts, r.NumberDisplay(), r.Base, r.Type.String(), r.BottomBranch, r.TopBranch)
+	parts = append(parts, r.Branches...)
+	hay := strings.ToLower(strings.Join(parts, " "))
 	return strings.Contains(hay, q)
 }
 
