@@ -259,28 +259,33 @@ func loadStack(cfg *config.Config, branch string) (*loadStackResult, error) {
 	}, nil
 }
 
-// loadStackByNumber loads the locally tracked stack whose stack number matches
-// the given value. Stack files created before the number was tracked store only
-// the internal ID (Number == 0); such legacy stacks are resolved by mapping
-// their ID to a remote stack number so they can still be targeted by number. It
-// prints a helpful error and returns a non-nil error when no local stack
-// resolves to that number.
-func loadStackByNumber(cfg *config.Config, number int) (*loadStackResult, error) {
+// lookupStackByNumber looks up the locally tracked stack whose stack number
+// matches the given value, without printing a "not tracked" error. It returns
+// ok=false (with a nil error) when no local stack resolves to that number —
+// including when there is no git repository, since a stack cannot be tracked
+// locally without one — so callers can fall back to a remote-only operation. A
+// non-nil error signals a real failure (the stack file could not be loaded) that
+// has already been reported via cfg.
+//
+// Stack files created before the number was tracked store only the internal ID
+// (Number == 0); such legacy stacks are resolved by mapping their ID to a remote
+// stack number so they can still be targeted by number.
+func lookupStackByNumber(cfg *config.Config, number int) (result *loadStackResult, ok bool, err error) {
 	gitDir, err := git.GitDir()
 	if err != nil {
-		cfg.Errorf("not a git repository")
-		return nil, fmt.Errorf("not a git repository")
+		// Not a git repository — nothing can be tracked locally.
+		return nil, false, nil
 	}
 
 	sf, err := stack.Load(gitDir)
 	if err != nil {
 		cfg.Errorf("failed to load stack state: %s", err)
-		return nil, fmt.Errorf("failed to load stack state: %w", err)
+		return nil, false, fmt.Errorf("failed to load stack state: %w", err)
 	}
 
 	// Direct match on the tracked stack number.
 	if result := stackResultByNumber(sf, gitDir, number); result != nil {
-		return result, nil
+		return result, true, nil
 	}
 
 	// No direct match — backfill legacy stacks' numbers from the remote and
@@ -288,13 +293,11 @@ func loadStackByNumber(cfg *config.Config, number int) (*loadStackResult, error)
 	// before the number was recorded locally.
 	if backfillLegacyStackNumbers(cfg, sf, gitDir) {
 		if result := stackResultByNumber(sf, gitDir, number); result != nil {
-			return result, nil
+			return result, true, nil
 		}
 	}
 
-	cfg.Errorf("stack #%d is not tracked locally", number)
-	cfg.Printf("Run `%s` to check it out first", cfg.ColorCyan(fmt.Sprintf("gh stack checkout %d", number)))
-	return nil, fmt.Errorf("stack #%d is not tracked locally", number)
+	return nil, false, nil
 }
 
 // stackResultByNumber returns a loadStackResult for the locally tracked stack
