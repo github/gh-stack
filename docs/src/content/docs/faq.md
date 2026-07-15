@@ -116,7 +116,7 @@ jobs:
 | `github.event.pull_request.stack.base.ref` | The branch the entire stack ultimately targets (e.g., `main`). |
 | `github.event.pull_request.stack.base.sha` | The HEAD SHA of the stack's base branch. |
 
-See the [Webhooks reference](/gh-stack/reference/webhooks/) for the full details on the `stack` object in webhook payloads.
+See the [Webhooks reference](/gh-stack/reference/webhooks/) for the full details on the `stack` object in webhook payloads, or the [REST API reference](/gh-stack/reference/rest-api/) to read the same object on demand from a pull request.
 
 ### Do all previous PRs need to be passing checks before I can merge?
 
