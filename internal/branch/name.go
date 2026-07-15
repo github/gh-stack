@@ -1,9 +1,7 @@
 package branch
 
 import (
-	"fmt"
 	"regexp"
-	"strconv"
 	"strings"
 	"time"
 	"unicode"
@@ -12,9 +10,8 @@ import (
 )
 
 var (
-	nonAlphanumRe    = regexp.MustCompile(`[^a-z0-9-]+`)
-	multiHyphenRe    = regexp.MustCompile(`-{2,}`)
-	numberedBranchRe = regexp.MustCompile(`/(\d+)$`)
+	nonAlphanumRe = regexp.MustCompile(`[^a-z0-9-]+`)
+	multiHyphenRe = regexp.MustCompile(`-{2,}`)
 )
 
 // Slugify converts a message into a URL/branch-safe slug.
@@ -54,6 +51,8 @@ func Slugify(message string) string {
 }
 
 // DateSlug returns a branch name in the format YYYY-MM-DD-slugified-message.
+// It is used to auto-generate a branch name from a commit message when no
+// explicit branch name is provided.
 func DateSlug(message string) string {
 	date := time.Now().Format("2006-01-02")
 	slug := Slugify(message)
@@ -61,72 +60,4 @@ func DateSlug(message string) string {
 		return date
 	}
 	return date + "-" + slug
-}
-
-// FollowsNumbering returns true if branchName matches the pattern {prefix}/\d+.
-func FollowsNumbering(prefix, branchName string) bool {
-	if !strings.HasPrefix(branchName, prefix+"/") {
-		return false
-	}
-	suffix := branchName[len(prefix)+1:]
-	_, err := strconv.Atoi(suffix)
-	return err == nil
-}
-
-// NextNumberedName scans existingBranches for the highest number matching
-// {prefix}/NN and returns {prefix}/{next} with zero-padded two digits.
-func NextNumberedName(prefix string, existingBranches []string) string {
-	maxNum := 0
-	for _, b := range existingBranches {
-		if m := numberedBranchRe.FindStringSubmatch(b); m != nil {
-			if strings.HasPrefix(b, prefix+"/") {
-				n, _ := strconv.Atoi(m[1])
-				if n > maxNum {
-					maxNum = n
-				}
-			}
-		}
-	}
-	return fmt.Sprintf("%s/%02d", prefix, maxNum+1)
-}
-
-// ResolveBranchName implements the full decision tree for branch name generation.
-//
-// Parameters:
-//   - prefix: configured stack prefix (may be empty)
-//   - message: commit message (from -m flag; may be empty if not using auto-naming)
-//   - explicitName: branch name provided as argument (may be empty)
-//   - existingBranches: current branch names in the stack
-//   - numbered: true if the stack uses auto-incrementing numbered branches
-//
-// Returns the resolved branch name and an informational message (may be empty).
-func ResolveBranchName(prefix, message, explicitName string, existingBranches []string, numbered bool) (name string, info string) {
-	if explicitName != "" {
-		// Explicit name provided
-		if prefix != "" {
-			name = prefix + "/" + explicitName
-			info = fmt.Sprintf("Branch name prefixed: %s", name)
-		} else {
-			name = explicitName
-		}
-		return
-	}
-
-	// Auto-generate from message
-	if message == "" {
-		return "", ""
-	}
-
-	if prefix != "" {
-		if numbered {
-			name = NextNumberedName(prefix, existingBranches)
-		} else {
-			name = prefix + "/" + DateSlug(message)
-		}
-	} else {
-		// No prefix — always use date+slug
-		name = DateSlug(message)
-	}
-
-	return
 }

@@ -125,14 +125,12 @@ func ensureStackNumber(client github.ClientOps, s *stack.Stack) (int, error) {
 	return number, nil
 }
 
-// inputWithPrefill prompts the user for text input with the given prefill
-// already editable in the input field. Unlike survey.Input's Default (which
-// shows in parentheses), this places the prefill text directly in the
-// editable line so the user can append to or modify it. The user's input
-// is rendered in cyan for visual distinction from the prompt message.
-func inputWithPrefill(cfg *config.Config, prompt, prefill string) (string, error) {
+// promptInput prompts the user for a single line of text input. The user's
+// input is rendered in the accent (cyan) color for visual distinction from the
+// prompt message.
+func promptInput(cfg *config.Config, prompt string) (string, error) {
 	if cfg.InputFn != nil {
-		return cfg.InputFn(prompt, prefill)
+		return cfg.InputFn(prompt)
 	}
 
 	stdio := terminal.Stdio{In: cfg.In, Out: cfg.Out, Err: cfg.Err}
@@ -156,7 +154,7 @@ func inputWithPrefill(cfg *config.Config, prompt, prefill string) (string, error
 		fmt.Fprint(cfg.Out, cyanStart)
 	}
 
-	line, err := rr.ReadLineWithDefault(0, []rune(prefill))
+	line, err := rr.ReadLine(0)
 
 	// Reset color after input
 	if useColor {

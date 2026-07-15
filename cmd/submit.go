@@ -548,11 +548,9 @@ func maybeForkFromMergedBase(cfg *config.Config, client github.ClientOps, sf *st
 		return s // nothing new to fork — the whole stack is merged and done
 	}
 
-	// Capture trunk/prefix before mutating sf.Stacks (RemoveStack/AddStack can
+	// Capture trunk before mutating sf.Stacks (RemoveStack/AddStack can
 	// reallocate the slice and invalidate the s pointer).
 	trunk := s.Trunk
-	prefix := s.Prefix
-	numbered := s.Numbered
 
 	// The bottom surviving branch re-bases onto the trunk.
 	if base, err := git.MergeBase(forkBranches[0].Branch, trunk.Branch); err == nil {
@@ -581,8 +579,6 @@ func maybeForkFromMergedBase(cfg *config.Config, client github.ClientOps, sf *st
 	}
 
 	sf.AddStack(stack.Stack{
-		Prefix:   prefix,
-		Numbered: numbered,
 		Trunk:    trunk,
 		Branches: forkBranches,
 	})

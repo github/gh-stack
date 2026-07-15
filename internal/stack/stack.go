@@ -44,8 +44,6 @@ type BranchRef struct {
 type Stack struct {
 	ID       string      `json:"id,omitempty"`
 	Number   int         `json:"number,omitempty"`
-	Prefix   string      `json:"prefix,omitempty"`
-	Numbered bool        `json:"numbered,omitempty"`
 	Trunk    BranchRef   `json:"trunk"`
 	Branches []BranchRef `json:"branches"`
 }

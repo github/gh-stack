@@ -2,6 +2,7 @@ package cmd
 
 import (
 	"testing"
+	"time"
 
 	"github.com/github/gh-stack/internal/config"
 	"github.com/github/gh-stack/internal/git"
@@ -212,18 +213,17 @@ func TestAdd_BranchWithCommitsCreatesNew(t *testing.T) {
 	assert.True(t, commitCalled, "expected Commit to be called on the new branch")
 }
 
-func TestAdd_PrefixAppliedWithSlash(t *testing.T) {
+func TestAdd_ExplicitNameUsedVerbatim(t *testing.T) {
 	gitDir := t.TempDir()
 	saveStack(t, gitDir, stack.Stack{
-		Prefix:   "feat",
 		Trunk:    stack.BranchRef{Branch: "main"},
-		Branches: []stack.BranchRef{{Branch: "feat/01"}},
+		Branches: []stack.BranchRef{{Branch: "b1"}},
 	})
 
 	var createdBranch string
 	restore := git.SetOps(&git.MockOps{
 		GitDirFn:        func() (string, error) { return gitDir, nil },
-		CurrentBranchFn: func() (string, error) { return "feat/01", nil },
+		CurrentBranchFn: func() (string, error) { return "b1", nil },
 		CreateBranchFn: func(name, base string) error {
 			createdBranch = name
 			return nil
@@ -236,22 +236,20 @@ func TestAdd_PrefixAppliedWithSlash(t *testing.T) {
 	output := collectOutput(cfg, outR, errR)
 
 	require.NotContains(t, output, "\u2717", "unexpected error")
-	assert.Equal(t, "feat/mybranch", createdBranch)
+	assert.Equal(t, "mybranch", createdBranch)
 }
 
-func TestAdd_NumberedNaming(t *testing.T) {
+func TestAdd_MessageAutoGeneratesDateSlug(t *testing.T) {
 	gitDir := t.TempDir()
 	saveStack(t, gitDir, stack.Stack{
-		Prefix:   "feat",
-		Numbered: true,
 		Trunk:    stack.BranchRef{Branch: "main"},
-		Branches: []stack.BranchRef{{Branch: "feat/01"}},
+		Branches: []stack.BranchRef{{Branch: "b1"}},
 	})
 
 	var createdBranch string
 	restore := git.SetOps(&git.MockOps{
 		GitDirFn:        func() (string, error) { return gitDir, nil },
-		CurrentBranchFn: func() (string, error) { return "feat/01", nil },
+		CurrentBranchFn: func() (string, error) { return "b1", nil },
 		RevParseMultiFn: func(refs []string) ([]string, error) {
 			return []string{"aaa", "bbb"}, nil
 		},
@@ -271,7 +269,8 @@ func TestAdd_NumberedNaming(t *testing.T) {
 	output := collectOutput(cfg, outR, errR)
 
 	require.NotContains(t, output, "\u2717", "unexpected error")
-	assert.Equal(t, "feat/02", createdBranch)
+	today := time.Now().Format("2006-01-02")
+	assert.Equal(t, today+"-next-feature", createdBranch)
 }
 
 func TestAdd_FullyMergedStackBlocked(t *testing.T) {
@@ -322,47 +321,7 @@ func TestAdd_NothingToCommit(t *testing.T) {
 	assert.Contains(t, output, "no changes to commit")
 }
 
-func TestAdd_PromptPrefillsPrefix(t *testing.T) {
-	gitDir := t.TempDir()
-	saveStack(t, gitDir, stack.Stack{
-		Prefix:   "feat",
-		Trunk:    stack.BranchRef{Branch: "main"},
-		Branches: []stack.BranchRef{{Branch: "feat/01"}},
-	})
-
-	var createdBranch string
-	restore := git.SetOps(&git.MockOps{
-		GitDirFn:        func() (string, error) { return gitDir, nil },
-		CurrentBranchFn: func() (string, error) { return "feat/01", nil },
-		CreateBranchFn: func(name, base string) error {
-			createdBranch = name
-			return nil
-		},
-		CheckoutBranchFn: func(name string) error { return nil },
-		RevParseFn:       func(ref string) (string, error) { return "abc", nil },
-	})
-	defer restore()
-
-	cfg, outR, errR := config.NewTestConfig()
-
-	var gotPrompt, gotDefault string
-	cfg.InputFn = func(prompt, defaultValue string) (string, error) {
-		gotPrompt = prompt
-		gotDefault = defaultValue
-		return "feat/my-branch", nil
-	}
-
-	err := runAdd(cfg, &addOptions{}, nil)
-	output := collectOutput(cfg, outR, errR)
-
-	require.NoError(t, err)
-	require.NotContains(t, output, "\u2717", "unexpected error")
-	assert.Contains(t, gotPrompt, ":", "prompt should end with a colon")
-	assert.Equal(t, "feat/", gotDefault, "prompt should pre-fill prefix/")
-	assert.Equal(t, "feat/my-branch", createdBranch, "full input should be used as branch name")
-}
-
-func TestAdd_PromptNoPrefixEmptyDefault(t *testing.T) {
+func TestAdd_PromptForBranchName(t *testing.T) {
 	gitDir := t.TempDir()
 	saveStack(t, gitDir, stack.Stack{
 		Trunk:    stack.BranchRef{Branch: "main"},
@@ -384,9 +343,9 @@ func TestAdd_PromptNoPrefixEmptyDefault(t *testing.T) {
 
 	cfg, outR, errR := config.NewTestConfig()
 
-	var gotDefault string
-	cfg.InputFn = func(prompt, defaultValue string) (string, error) {
-		gotDefault = defaultValue
+	var gotPrompt string
+	cfg.InputFn = func(prompt string) (string, error) {
+		gotPrompt = prompt
 		return "my-branch", nil
 	}
 
@@ -395,22 +354,21 @@ func TestAdd_PromptNoPrefixEmptyDefault(t *testing.T) {
 
 	require.NoError(t, err)
 	require.NotContains(t, output, "\u2717", "unexpected error")
-	assert.Equal(t, "", gotDefault, "prompt should have empty default when no prefix")
+	assert.Contains(t, gotPrompt, ":", "prompt should end with a colon")
 	assert.Equal(t, "my-branch", createdBranch, "input should be used as-is")
 }
 
-func TestAdd_PromptUserModifiesPrefix(t *testing.T) {
+func TestAdd_PromptInputUsedVerbatim(t *testing.T) {
 	gitDir := t.TempDir()
 	saveStack(t, gitDir, stack.Stack{
-		Prefix:   "feat",
 		Trunk:    stack.BranchRef{Branch: "main"},
-		Branches: []stack.BranchRef{{Branch: "feat/01"}},
+		Branches: []stack.BranchRef{{Branch: "b1"}},
 	})
 
 	var createdBranch string
 	restore := git.SetOps(&git.MockOps{
 		GitDirFn:        func() (string, error) { return gitDir, nil },
-		CurrentBranchFn: func() (string, error) { return "feat/01", nil },
+		CurrentBranchFn: func() (string, error) { return "b1", nil },
 		CreateBranchFn: func(name, base string) error {
 			createdBranch = name
 			return nil
@@ -422,8 +380,7 @@ func TestAdd_PromptUserModifiesPrefix(t *testing.T) {
 
 	cfg, outR, errR := config.NewTestConfig()
 
-	cfg.InputFn = func(prompt, defaultValue string) (string, error) {
-		// Simulate user changing the prefix entirely
+	cfg.InputFn = func(prompt string) (string, error) {
 		return "custom/other-name", nil
 	}
 
@@ -432,7 +389,7 @@ func TestAdd_PromptUserModifiesPrefix(t *testing.T) {
 
 	require.NoError(t, err)
 	require.NotContains(t, output, "\u2717", "unexpected error")
-	assert.Equal(t, "custom/other-name", createdBranch, "user-modified input should be used verbatim")
+	assert.Equal(t, "custom/other-name", createdBranch, "typed input should be used verbatim")
 }
 
 func TestAdd_FromTrunk(t *testing.T) {
