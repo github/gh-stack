@@ -81,13 +81,19 @@ func (m Model) buildHeaderConfig() shared.HeaderConfig {
 }
 
 // headerShortcuts returns the six primary single-screen keyboard shortcuts shown
-// in the header (the help overlay lists the full set).
+// in the header (the help overlay lists the full set). When the STACK action is
+// offered (no stack yet and every new PR deselected), the submit hint is swapped
+// for the "^b stack PRs" action, which is the relevant control in that state.
 func (m Model) headerShortcuts() []shared.ShortcutEntry {
+	primary := shared.ShortcutEntry{Key: "^s", Desc: "submit PRs"}
+	if m.canStackExistingPRs() {
+		primary = shared.ShortcutEntry{Key: "^b", Desc: "stack PRs"}
+	}
 	return []shared.ShortcutEntry{
 		{Key: "↑↓", Desc: "select branch"},
 		{Key: "tab", Desc: "cycle field"},
 		{Key: "^x", Desc: "skip/include"},
-		{Key: "^s", Desc: "submit PRs"},
+		primary,
 		{Key: "^h", Desc: "help"},
 		{Key: "esc", Desc: "quit"},
 	}

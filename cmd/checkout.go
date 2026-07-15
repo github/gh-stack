@@ -491,21 +491,9 @@ func importRemoteStack(
 	// Skip merged PRs whose branches were deleted from the remote —
 	// these no longer exist upstream and can't be created locally.
 	for _, pr := range prs {
-		branch := pr.HeadRefName
-		if git.BranchExists(branch) {
-			continue
+		if _, err := ensureLocalBranchFromRemote(cfg, remote, pr); err != nil {
+			return nil, err
 		}
-		remoteRef := remote + "/" + branch
-		if err := git.CreateBranch(branch, remoteRef); err != nil {
-			if pr.Merged {
-				cfg.Infof("Skipping merged branch %s", branch)
-				continue
-			}
-			cfg.Errorf("failed to pull branch %s from %s: %v", branch, remoteRef, err)
-			return nil, ErrSilent
-		}
-		_ = git.SetUpstreamTracking(branch, remote)
-		cfg.Successf("Pulled branch %s", branch)
 	}
 
 	// Build the stack

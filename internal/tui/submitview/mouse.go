@@ -137,6 +137,25 @@ func (m Model) leftCheckboxHit(x, y int) bool {
 	return x >= leftW-5 && x < leftW-2
 }
 
+// leftStackButtonHit reports whether (x,y) lands on the bottom-left "STACK N PRs"
+// button, when it is shown. The button occupies the last reserved row of the
+// left panel (one blank separator row sits above it).
+func (m Model) leftStackButtonHit(x, y int) bool {
+	if !m.canStackExistingPRs() {
+		return false
+	}
+	leftW, _ := m.panelWidths()
+	if x < 0 || x >= leftW {
+		return false
+	}
+	if y-m.panelTopRow() != m.leftVisibleHeight()+1 {
+		return false
+	}
+	// The button is rendered inside the panel's one-cell left border, so the
+	// hit target starts at screen column 1, not 0.
+	return x >= 1 && x < 1+lipgloss.Width(m.renderStackButton(leftW-2))
+}
+
 // handleClick routes a left click to a branch row (left map) or an editor
 // element (right panel).
 func (m Model) handleClick(x, y int) (tea.Model, tea.Cmd) {
@@ -144,6 +163,12 @@ func (m Model) handleClick(x, y int) (tea.Model, tea.Cmd) {
 	m.statusIsError = false
 
 	leftW, rightW := m.panelWidths()
+
+	// Bottom-left STACK button: link the existing open PRs into a stack.
+	if m.leftStackButtonHit(x, y) {
+		m.saveEditor()
+		return m.requestSubmit()
+	}
 
 	// Left panel: focus a branch, toggling include when its checkbox is clicked.
 	if idx := m.branchRowAt(x, y); idx != -1 {

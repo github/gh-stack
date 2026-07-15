@@ -305,7 +305,7 @@ gh stack push
 ### Routine sync after merges
 
 ```bash
-# Single command: fetch, rebase, push, sync PR state
+# Single command: fetch, rebase, push, sync PR and stack state
 gh stack sync
 
 # Sync and automatically clean up local branches for merged PRs
@@ -313,6 +313,8 @@ gh stack sync --prune
 ```
 
 > **Note for agents:** In non-interactive environments, the prune prompt is not shown. Use `--prune` explicitly to delete local branches for merged PRs.
+
+> **Note for agents:** `sync` also mirrors the stack on GitHub locally. If PRs were added to the stack on github.com, their branches are pulled down and appended to the local stack automatically. If the local and remote stacks have **diverged** (you changed the local stack while the remote stack changed differently), sync can only prompt to resolve it in an interactive terminal — in non-interactive environments it aborts the sync (nothing is pushed or updated) and exits successfully with `ℹ Sync aborted`. Resolve a divergence by unstacking and recreating the stack.
 
 ### Squash-merge recovery
 
@@ -628,16 +630,20 @@ gh stack sync [flags]
 **What it does (in order):**
 
 1. **Fetch** latest changes from the remote
-2. **Fast-forward trunk** to match remote (skips if already up to date, warns if diverged)
-3. **Cascade rebase** all stack branches onto their updated parents (only if trunk moved). Handles merged PRs automatically. If a conflict is detected, **all branches are restored** to their pre-rebase state and the command exits with code 3 — see [Handle rebase conflicts](#handle-rebase-conflicts-agent-workflow) for the resolution workflow
-4. **Push** all active branches atomically
-5. **Sync PR state** from GitHub and report the status of each PR
-6. **Sync the stack object** — link the open PRs into a stack on GitHub. If the PRs are not yet in a stack, a new stack is created; if some PRs are already in a stack, it is updated (additive only). This only happens when two or more PRs exist. Sync **never opens PRs** — use `gh stack submit` for that
-7. **Prune** — in interactive terminals, prompts to delete local branches for merged PRs. Use `--prune` to skip the prompt. In non-interactive environments, pruning only happens when `--prune` is passed explicitly
+2. **Reconcile the remote stack** — mirror the GitHub stack locally. If PRs were added to the stack on GitHub, pull their branches down and append them to the local stack. If the local and remote stacks have diverged, aborts the sync in a non-interactive terminal. In an interactive terminal, offers prompts to resolve any divergence (replace local stack with remote version, delete stack on GitHub so it can be recreated, or cancel).
+3. **Fast-forward trunk** to match remote (skips if already up to date, warns if diverged)
+4. **Cascade rebase** all stack branches onto their updated parents (only if trunk moved). Handles merged PRs automatically. If a conflict is detected, **all branches are restored** to their pre-rebase state and the command exits with code 3 — see [Handle rebase conflicts](#handle-rebase-conflicts-agent-workflow) for the resolution workflow
+5. **Push** all active branches atomically
+6. **Sync PR state** from GitHub and report the status of each PR
+7. **Sync the stack object** — link the open PRs into a stack on GitHub. If the PRs are not yet in a stack, a new stack is created; if some PRs are already in a stack, it is updated (additive only). This only happens when two or more PRs exist. Sync **never opens PRs** — use `gh stack submit` for that
+8. **Prune** — in interactive terminals, prompts to delete local branches for merged PRs. Use `--prune` to skip the prompt. In non-interactive environments, pruning only happens when `--prune` is passed explicitly
 
 **Output (stderr):**
 
 - `✓ Fetched latest changes from origin`
+- `Pulling N new branches from the remote stack ...` then `✓ Pulled N new branches into the stack from the remote` (when the remote stack is ahead)
+- `⚠ Your local stack has diverged from the stack on GitHub` (with `Local:` / `Remote:` chains) when the stacks have diverged
+- `ℹ Sync aborted — no changes were made` when a sync is cancelled
 - `✓ Trunk main fast-forwarded to <sha>` or `✓ Trunk main is already up to date`
 - `✓ Rebased <branch> onto <base>` per branch (if base moved)
 - `✓ Pushed N branches`
@@ -645,7 +651,7 @@ gh stack sync [flags]
 - `Merged: #N, #M` for merged branches
 - `✓ Stack created on GitHub with N PRs` / `✓ Stack updated on GitHub with N PRs` / `✓ Linked to the existing stack on GitHub` (when two or more PRs exist)
 - `✓ Pruned <branch> (merged)` per pruned branch (when pruning)
-- `✓ Stack synced` when the stack object on GitHub was created/updated to match local, or `✓ Branches synced` when only the branches were synced (fewer than two PRs, stacked PRs unavailable, or a divergence)
+- `✓ Stack synced` when the stack object on GitHub was created/updated to match local, or `✓ Branches synced` when only the branches were synced (fewer than two PRs or stacked PRs unavailable)
 
 ---
 

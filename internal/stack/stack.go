@@ -193,6 +193,39 @@ func (s *Stack) IsFullyMerged() bool {
 	return len(s.Branches) > 0
 }
 
+// NearestSurvivingBranch returns the branch nearest to target within the ordered
+// branch-name list `order` for which `survives` reports true, preferring the
+// neighbor above (later in the slice, away from the trunk) and then the neighbor
+// below (earlier in the slice, toward the trunk).
+//
+// It returns "" when target is not present in order, or when no other branch in
+// order survives. Callers layer their own fallback and any name translation
+// around this search. It is shared by the checkout-branch selection in
+// `gh stack modify` and `gh stack sync`.
+func NearestSurvivingBranch(order []string, target string, survives func(string) bool) string {
+	pos := -1
+	for i, name := range order {
+		if name == target {
+			pos = i
+			break
+		}
+	}
+	if pos < 0 {
+		return ""
+	}
+	for i := pos + 1; i < len(order); i++ {
+		if survives(order[i]) {
+			return order[i]
+		}
+	}
+	for i := pos - 1; i >= 0; i-- {
+		if survives(order[i]) {
+			return order[i]
+		}
+	}
+	return ""
+}
+
 // StackFile represents the JSON file stored in .git/gh-stack.
 type StackFile struct {
 	SchemaVersion int     `json:"schemaVersion"`

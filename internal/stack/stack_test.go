@@ -625,3 +625,34 @@ func TestIsFullyMerged_NotAffectedByQueued(t *testing.T) {
 		assert.False(t, s.IsFullyMerged())
 	})
 }
+
+func TestNearestSurvivingBranch(t *testing.T) {
+	// survivesIn returns a predicate reporting membership in the given set.
+	survivesIn := func(names ...string) func(string) bool {
+		set := make(map[string]bool, len(names))
+		for _, n := range names {
+			set[n] = true
+		}
+		return func(name string) bool { return set[name] }
+	}
+
+	tests := []struct {
+		name     string
+		order    []string
+		target   string
+		survives func(string) bool
+		want     string
+	}{
+		{"prefers neighbor above", []string{"a", "b", "c"}, "b", survivesIn("a", "c"), "c"},
+		{"falls to neighbor below", []string{"a", "b", "c"}, "c", survivesIn("a", "b"), "b"},
+		{"skips dead neighbors above", []string{"a", "b", "c", "d"}, "b", survivesIn("a", "d"), "d"},
+		{"target not in order", []string{"a", "b"}, "z", survivesIn("a", "b"), ""},
+		{"no other survives", []string{"a", "b", "c"}, "b", survivesIn("b"), ""},
+		{"empty order", nil, "a", survivesIn("a"), ""},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			assert.Equal(t, tt.want, NearestSurvivingBranch(tt.order, tt.target, tt.survives))
+		})
+	}
+}

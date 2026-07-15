@@ -130,14 +130,27 @@ gh stack sync
 
 This command:
 1. Fetches the latest changes from the remote
-2. Fast-forwards the trunk branch
-3. Rebases all remaining stack branches onto the updated trunk
-4. Pushes the updated branches
-5. Syncs PR state from GitHub
-6. Links the open PRs into a Stack on GitHub (creating or updating the remote stack when two or more PRs exist)
-7. Prompts to prune local branches for merged PRs (use `--prune` to prune automatically)
+2. Reconciles the remote stack with your local stack
+3. Fast-forwards the trunk branch
+4. Rebases all remaining stack branches onto the updated trunk
+5. Pushes the updated branches
+6. Syncs PR state from GitHub
+7. Links the open PRs into a Stack on GitHub (creating or updating the remote stack when two or more PRs exist)
+8. Prompts to prune local branches for merged PRs (use `--prune` to prune automatically)
 
 If a conflict is detected during the rebase, all branches are restored to their original state, and you're advised to run `gh stack rebase` to resolve conflicts interactively.
+
+### Pulling in PRs added to the stack on GitHub
+
+If PRs are added to the stack on GitHub by someone else, `gh stack sync` fetches the new PRs' branches and appends them to your local stack so it mirrors the remote.
+
+If your local and remote stacks have diverged — for example, you added a branch locally while different PRs/branches were added to the same stack on GitHub — sync can't merge them automatically. In an interactive terminal it offers three choices:
+
+- **Use the remote stack as the source of truth** — replaces your local stack composition with the remote's, pulling any missing branches. If you were on a branch that the remote stack no longer contains, you're moved to the nearest surviving branch. Requires a clean working state with no uncommitted changes.
+- **Delete the stack on GitHub** — deletes the stack object on GitHub and stops the sync. Your PRs and local branches are untouched (only the stack on GitHub is removed); recreate the stack with `gh stack submit` (run `gh stack modify` first if you want to change its structure). This is the way to make GitHub match your local stack, because `submit` — unlike `sync` — also creates PRs for any branches you haven't submitted yet.
+- **Cancel** — aborts the sync without pushing branches or updating any PRs.
+
+In a non-interactive terminal, a divergence aborts the sync (exit success) without pushing branches or updating PRs; resolve it by unstacking and recreating the stack.
 
 ## Rebasing Your Stack
 

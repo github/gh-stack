@@ -278,6 +278,8 @@ In an interactive terminal, `submit` opens a full-screen editor on a single scre
 
 Press <kbd>Ctrl</kbd>+<kbd>S</kbd> to submit all included PRs at once. The editor supports both keyboard and mouse input. Pass `--auto` (or run in a non-interactive terminal, such as CI) to skip the editor and use auto-generated titles.
 
+If the branches already have open PRs but no stack exists on GitHub, you will have the option to link the PRs into a stack with <kbd>Ctrl</kbd>+<kbd>B</kbd>.
+
 In the editor, new PRs default to **ready for review**; flip any PR to **draft** with the ready ↔ draft toggle. With `--auto`, new PRs are created as **drafts** unless you pass `--open`.
 
 | Flag | Description |
@@ -302,15 +304,28 @@ Fetch, rebase, push, and sync PR state in a single command.
 gh stack sync [flags]
 ```
 
-Performs a safe, non-interactive synchronization of the entire stack:
+Performs a synchronization of the entire stack:
 
 1. **Fetch** — fetches the latest changes from `origin`.
-2. **Fast-forward trunk** — fast-forwards the trunk branch to match the remote (skips if diverged).
-3. **Cascade rebase** — rebases all stack branches onto their updated parents (only if trunk moved). If a conflict is detected, all branches are restored to their original state, and you are advised to run `gh stack rebase` to resolve conflicts interactively.
-4. **Push** — pushes all branches (uses `--force-with-lease` if a rebase occurred).
-5. **Sync PRs** — syncs PR state from GitHub and reports the status of each PR.
-6. **Sync the stack** — links the stack's open PRs into a stack on GitHub, creating the remote stack object if it doesn't exist yet or updating it if it's partially formed. This only happens when two or more PRs exist; sync never opens PRs (use `gh stack submit` for that).
-7. **Prune** — in interactive terminals, prompts to delete local branches for merged PRs. Use `--prune` to prune automatically.
+2. **Reconcile the remote stack** — mirrors the GitHub stack locally. When PRs have been added to the stack on GitHub (the remote is ahead of your local stack), their branches are pulled down and appended to your local stack automatically. When the local and remote stacks have genuinely diverged (for example, you added a branch locally while different PRs were added to the stack on GitHub), you are prompted to resolve (see [Diverged stacks](#diverged-stacks) below). In a non-interactive terminal a divergence aborts the sync (nothing is pushed or updated).
+3. **Fast-forward trunk** — fast-forwards the trunk branch to match the remote (skips if diverged).
+4. **Cascade rebase** — rebases all stack branches onto their updated parents (only if trunk moved). If a conflict is detected, all branches are restored to their original state, and you are advised to run `gh stack rebase` to resolve conflicts interactively.
+5. **Push** — pushes all branches (uses `--force-with-lease` if a rebase occurred).
+6. **Sync PRs** — syncs PR state from GitHub and reports the status of each PR.
+7. **Sync the stack** — links the stack's open PRs into a stack on GitHub, creating the remote stack object if it doesn't exist yet or updating it if it's partially formed. This only happens when two or more PRs exist; sync never opens PRs (use `gh stack submit` for that).
+8. **Prune** — in interactive terminals, prompts to delete local branches for merged PRs. Use `--prune` to prune automatically.
+
+A clean remote-ahead update (PRs added on top of your local stack) is pulled down automatically without prompting, so `sync` is safe to run in automation. Sync only prompts when the stacks have truly diverged.
+
+#### Diverged stacks
+
+When neither stack is a clean prefix of the other — for example, you added a branch locally while separate PRs were added to the same stack on GitHub — sync cannot merge the two automatically. In an interactive terminal it offers three choices:
+
+- **Use the remote stack as the source of truth** — replaces your local stack composition with the remote's, pulling any missing branches. If you were on a branch that the remote stack no longer contains, you're moved to the nearest surviving branch. Requires a clean working state with no uncommitted changes.
+- **Delete the stack on GitHub** — deletes the stack object on GitHub and stops the sync. Your PRs and local branches are untouched (only the stack on GitHub is removed); recreate the stack with `gh stack submit` (run `gh stack modify` first if you want to change its structure). This is the way to make GitHub match your local stack, because `submit` — unlike `sync` — also creates PRs for any branches you haven't submitted yet.
+- **Cancel** — aborts the sync without pushing branches or updating any PRs.
+
+In a non-interactive terminal, a divergence aborts the sync (exit success) without pushing branches or updating PRs; resolve it by unstacking and recreating the stack.
 
 | Flag | Description |
 |------|-------------|

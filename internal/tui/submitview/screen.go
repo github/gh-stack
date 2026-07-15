@@ -13,6 +13,14 @@ import (
 
 // updateScreen handles all key input on the single submit screen.
 func (m Model) updateScreen(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	// Ctrl+B links the existing open PRs into a stack. It is only intercepted
+	// while the STACK action is offered; otherwise it falls through so the
+	// editor's textarea keeps Ctrl+B (move cursor back) while editing.
+	if msg.Type == tea.KeyCtrlB && m.canStackExistingPRs() {
+		m.saveEditor()
+		return m.requestSubmit()
+	}
+
 	// Global keys, handled regardless of focus.
 	switch msg.Type {
 	case tea.KeyCtrlC:
@@ -688,7 +696,8 @@ func (m Model) renderLeftPanel(width, height int) string {
 		fullW = 6
 	}
 	rows := m.buildLeftRows(fullW)
-	visH := height - 2
+	buttonRows := m.leftButtonRows()
+	visH := height - 2 - buttonRows
 	if visH < 1 {
 		visH = 1
 	}
@@ -698,14 +707,36 @@ func (m Model) renderLeftPanel(width, height int) string {
 		end = len(rows)
 	}
 
-	var b strings.Builder
-	for i, r := range rows[scroll:end] {
-		if i > 0 {
-			b.WriteString("\n")
-		}
-		b.WriteString(r.text)
+	lines := make([]string, 0, visH+buttonRows)
+	for _, r := range rows[scroll:end] {
+		lines = append(lines, r.text)
 	}
-	return leftPanelBox(b.String(), width, height)
+	// Pad the scroll area to its full height so the button sits at the bottom.
+	for len(lines) < visH {
+		lines = append(lines, "")
+	}
+	if buttonRows > 0 {
+		lines = append(lines, "", m.renderStackButton(fullW))
+	}
+	return leftPanelBox(strings.Join(lines, "\n"), width, height)
+}
+
+// leftButtonRows returns the number of inner rows reserved at the bottom of the
+// left panel for the "STACK N PRs" button (a blank separator plus the button),
+// or 0 when the button is not shown.
+func (m Model) leftButtonRows() int {
+	if m.canStackExistingPRs() {
+		return 2
+	}
+	return 0
+}
+
+// renderStackButton renders the bottom-left "(^b) STACK N PRs" action, styled
+// like the right-panel SUBMIT button. The keyboard hint sits to the left.
+func (m Model) renderStackButton(fullW int) string {
+	n := CountOpenPRs(m.nodes)
+	label := hintStyle.Render("(^b) ") + submitButtonStyle.Render(fmt.Sprintf("STACK %d PRs", n))
+	return pad(1, false) + label
 }
 
 // leftPanelBox frames the left panel with the shared rounded border but no inner
@@ -892,7 +923,7 @@ func pad(n int, focused bool) string {
 
 // leftVisibleHeight is the number of timeline rows the left panel can show.
 func (m Model) leftVisibleHeight() int {
-	h := m.contentHeight() - 2 // panel border
+	h := m.contentHeight() - 2 - m.leftButtonRows() // panel border + reserved button rows
 	if h < 1 {
 		h = 1
 	}

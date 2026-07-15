@@ -4,11 +4,13 @@ import (
 	"errors"
 	"fmt"
 	"net/url"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
 
 	"github.com/AlecAivazis/survey/v2/terminal"
+	"github.com/cli/go-gh/v2/pkg/api"
 	"github.com/cli/go-gh/v2/pkg/prompter"
 	"github.com/github/gh-stack/internal/config"
 	"github.com/github/gh-stack/internal/git"
@@ -1163,4 +1165,445 @@ func confirmSaveRemote(cfg *config.Config, remote string) (bool, error) {
 		return false, err
 	}
 	return ok, nil
+}
+
+// ensureLocalBranchFromRemote creates a local branch tracking remote/<branch>
+// if it does not already exist. Merged PRs whose remote ref has been deleted
+// are skipped (returns skipped=true, err=nil). A non-merged branch that cannot
+// be created is a hard failure (returns ErrSilent). Shared by importRemoteStack
+// and the sync remote-ahead pull.
+func ensureLocalBranchFromRemote(cfg *config.Config, remote string, pr *github.PullRequest) (skipped bool, err error) {
+	branch := pr.HeadRefName
+	if git.BranchExists(branch) {
+		return false, nil
+	}
+	remoteRef := remote + "/" + branch
+	if createErr := git.CreateBranch(branch, remoteRef); createErr != nil {
+		if pr.Merged {
+			cfg.Infof("Skipping merged branch %s", branch)
+			return true, nil
+		}
+		cfg.Errorf("failed to pull branch %s from %s: %v", branch, remoteRef, createErr)
+		return false, ErrSilent
+	}
+	_ = git.SetUpstreamTracking(branch, remote)
+	cfg.Successf("Pulled branch %s", branch)
+	return false, nil
+}
+
+// remoteReconcileResult reports how reconcileRemoteStack resolved the
+// relationship between the local stack and its tracked remote stack.
+type remoteReconcileResult struct {
+	// stack, when non-nil, is the stack the caller should continue with. It
+	// differs from the input stack only when "use remote as source of truth"
+	// rebuilt the stack (which reslices StackFile.Stacks and invalidates the
+	// original pointer).
+	stack *stack.Stack
+
+	// stop tells runSync to end the sync immediately after reconcile (before any
+	// fast-forward, rebase, or push) and exit successfully. Set when the user
+	// cancels or deletes the remote stack, and when a divergence is detected in a
+	// non-interactive terminal. The resolving path prints its own outcome message.
+	stop bool
+}
+
+// remoteStackClass classifies the relationship between the local stack's active
+// (non-merged) branches and its tracked remote stack's active branches.
+type remoteStackClass int
+
+const (
+	remoteStackInSync     remoteStackClass = iota // sequences are identical
+	remoteStackCleanAhead                         // local is a strict prefix of remote (remote appended on top)
+	remoteStackLocalAhead                         // remote is a strict prefix of local (local appended on top)
+	remoteStackDivergent                          // neither is a prefix of the other
+)
+
+// reconcileRemoteStack brings remote-ahead stack changes into the local stack
+// and resolves divergences. It runs early in `sync` (after fetch, before
+// rebase/push) so any pulled branches participate in the normal flow.
+//
+// It only acts on stacks tracked on the remote (s.ID != ""). It is best-effort:
+// a missing client, stacked PRs being unavailable, or any API error causes it
+// to skip so the rest of sync still runs. Untracked stacks (s.ID == "") are
+// left to the syncStack/reconcileUntrackedStack path.
+func reconcileRemoteStack(cfg *config.Config, sf *stack.StackFile, s *stack.Stack, currentBranch, gitDir, remote string) (remoteReconcileResult, error) {
+	var res remoteReconcileResult
+
+	if s.ID == "" {
+		return res, nil
+	}
+
+	client, err := cfg.GitHubClient()
+	if err != nil {
+		return res, nil
+	}
+
+	stacks, err := client.ListStacks()
+	if err != nil {
+		// Covers 404 (stacked PRs unavailable) and transient API errors.
+		return res, nil
+	}
+
+	var remotePRNumbers []int
+	found := false
+	for _, rs := range stacks {
+		if strconv.Itoa(rs.ID) == s.ID {
+			remotePRNumbers = rs.PullRequests
+			found = true
+			break
+		}
+	}
+	if !found {
+		// The remote stack was deleted; the existing updateStack 404 → recreate
+		// path in syncStack handles this.
+		return res, nil
+	}
+
+	prs, err := fetchStackPRDetails(client, remotePRNumbers)
+	if err != nil {
+		return res, nil
+	}
+
+	localActive, remoteActive := activeStackSequences(s, prs)
+
+	switch classifyRemoteStack(localActive, remoteActive) {
+	case remoteStackInSync, remoteStackLocalAhead:
+		// Nothing to pull; the existing flow pushes/updates the remote. Copy the
+		// freshly fetched PR state (merged/queued) onto the local branches so the
+		// fast-forward/rebase/push steps skip merged and merge-queued branches
+		// rather than rewriting them before the later PR-sync step runs.
+		syncRemotePRState(s, prs)
+		return res, nil
+	case remoteStackCleanAhead:
+		return pullRemoteAdditions(cfg, sf, s, gitDir, remote, prs)
+	default:
+		return resolveStackDivergence(cfg, client, sf, s, currentBranch, gitDir, remote, prs, remoteActive)
+	}
+}
+
+// activeStackSequences returns the ordered active (non-merged) branch-name
+// sequences for the local stack and the fetched remote PRs. Merged state is
+// taken from the freshly fetched remote PRs (by branch name) when available so
+// that a locally pruned merged branch does not look like a divergence.
+func activeStackSequences(s *stack.Stack, prs []*github.PullRequest) (localActive, remoteActive []string) {
+	remoteMerged := make(map[string]bool, len(prs))
+	for _, pr := range prs {
+		remoteMerged[pr.HeadRefName] = pr.Merged
+		if !pr.Merged {
+			remoteActive = append(remoteActive, pr.HeadRefName)
+		}
+	}
+	for _, b := range s.Branches {
+		merged := b.IsMerged()
+		if m, ok := remoteMerged[b.Branch]; ok {
+			merged = m
+		}
+		if !merged {
+			localActive = append(localActive, b.Branch)
+		}
+	}
+	return localActive, remoteActive
+}
+
+// classifyRemoteStack compares the active local and remote branch sequences.
+func classifyRemoteStack(localActive, remoteActive []string) remoteStackClass {
+	if slicesEqualStr(localActive, remoteActive) {
+		return remoteStackInSync
+	}
+	if isStrictPrefix(localActive, remoteActive) {
+		return remoteStackCleanAhead
+	}
+	if isStrictPrefix(remoteActive, localActive) {
+		return remoteStackLocalAhead
+	}
+	return remoteStackDivergent
+}
+
+// isStrictPrefix reports whether a is a strict prefix of b: a is shorter than b
+// and every element of a equals the element at the same position in b.
+func isStrictPrefix(a, b []string) bool {
+	if len(a) >= len(b) {
+		return false
+	}
+	for i := range a {
+		if a[i] != b[i] {
+			return false
+		}
+	}
+	return true
+}
+
+// slicesEqualStr reports whether two string slices are element-wise equal.
+func slicesEqualStr(a, b []string) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if a[i] != b[i] {
+			return false
+		}
+	}
+	return true
+}
+
+// pullRemoteAdditions handles the clean append-on-top case: it fetches and
+// creates local branches for the remote PRs not yet tracked locally, appends
+// them (in remote order) to the stack, and persists. Merged remote PRs with no
+// local branch are ignored (they are not part of ongoing local work).
+func pullRemoteAdditions(cfg *config.Config, sf *stack.StackFile, s *stack.Stack, gitDir, remote string, prs []*github.PullRequest) (remoteReconcileResult, error) {
+	var res remoteReconcileResult
+
+	existing := make(map[string]bool, len(s.Branches))
+	for _, b := range s.Branches {
+		existing[b.Branch] = true
+	}
+
+	var newPRs []*github.PullRequest
+	for _, pr := range prs {
+		if pr.Merged || existing[pr.HeadRefName] {
+			continue
+		}
+		newPRs = append(newPRs, pr)
+	}
+	if len(newPRs) == 0 {
+		return res, nil
+	}
+
+	// A remote-added branch must not collide with a branch already tracked by
+	// another local stack, or with an existing local branch we would otherwise
+	// adopt as "pulled" without actually fetching it. Abort rather than persist
+	// duplicate ownership or a stale branch.
+	for _, pr := range newPRs {
+		if err := sf.ValidateNoDuplicateBranch(pr.HeadRefName); err != nil {
+			cfg.Errorf("Cannot pull %s from the remote stack: %s", pr.HeadRefName, err)
+			return res, ErrSilent
+		}
+		if git.BranchExists(pr.HeadRefName) {
+			cfg.Errorf("Cannot pull %s from the remote stack: a local branch with that name already exists", pr.HeadRefName)
+			return res, ErrSilent
+		}
+	}
+
+	newBranchNames := make([]string, len(newPRs))
+	for i, pr := range newPRs {
+		newBranchNames[i] = pr.HeadRefName
+	}
+	_ = git.FetchBranches(remote, newBranchNames)
+
+	cfg.Printf("")
+	cfg.Printf("Pulling %d new %s from the remote stack ...",
+		len(newPRs), plural(len(newPRs), "branch", "branches"))
+
+	added := 0
+	for _, pr := range newPRs {
+		skipped, err := ensureLocalBranchFromRemote(cfg, remote, pr)
+		if err != nil {
+			return res, err
+		}
+		if skipped {
+			continue
+		}
+		s.Branches = append(s.Branches, stack.BranchRef{
+			Branch: pr.HeadRefName,
+			PullRequest: &stack.PullRequestRef{
+				Number: pr.Number,
+				ID:     pr.ID,
+				URL:    pr.URL,
+				Merged: pr.Merged,
+			},
+		})
+		added++
+	}
+
+	if added > 0 {
+		// Copy the freshly fetched PR state (including the transient queued flag)
+		// onto the pulled branches so the rebase/push steps skip merge-queued ones.
+		syncRemotePRState(s, prs)
+		updateBaseSHAs(s)
+		if err := stack.Save(gitDir, sf); err != nil {
+			return res, handleSaveError(cfg, err)
+		}
+		cfg.Successf("Pulled %d new %s into the stack from the remote",
+			added, plural(added, "branch", "branches"))
+	}
+	return res, nil
+}
+
+// resolveStackDivergence handles a stack whose local composition has diverged
+// from the remote (neither is a prefix of the other). In an interactive
+// terminal it prompts the user to resolve it; otherwise (or when the user
+// cancels) it aborts the sync so nothing is pushed or updated.
+func resolveStackDivergence(cfg *config.Config, client github.ClientOps, sf *stack.StackFile, s *stack.Stack, currentBranch, gitDir, remote string, prs []*github.PullRequest, remoteActive []string) (remoteReconcileResult, error) {
+	cfg.Printf("")
+	cfg.Warningf("Your local stack has diverged from the stack on GitHub")
+	cfg.Printf("  Local:  %s", s.DisplayChain())
+	cfg.Printf("  Remote: (%s) <- %s", s.Trunk.Branch, strings.Join(remoteActive, " <- "))
+
+	if !cfg.IsInteractive() {
+		cfg.Printf("  Re-run in an interactive terminal to resolve, or import the remote stack with `%s`.",
+			cfg.ColorCyan("gh stack checkout <pr>"))
+		cfg.Infof("Sync aborted — no changes were made")
+		return remoteReconcileResult{stop: true}, nil
+	}
+
+	options := []string{
+		"Update local to match remote — replace your local stack with the remote version",
+		"Delete the remote stack on GitHub — keep your local stack and recreate on remote later",
+		"Cancel — make no changes",
+	}
+	p := prompter.New(cfg.In, cfg.Out, cfg.Err)
+	selectFn := func(prompt, def string, opts []string) (int, error) {
+		if cfg.SelectFn != nil {
+			return cfg.SelectFn(prompt, def, opts)
+		}
+		return p.Select(prompt, def, opts)
+	}
+	selected, err := selectFn("How would you like to resolve?", "", options)
+	if err != nil {
+		if isInterruptError(err) {
+			if cfg.SelectFn == nil {
+				clearSelectPrompt(cfg, len(options))
+			}
+			printInterrupt(cfg)
+			return remoteReconcileResult{stop: true}, errInterrupt
+		}
+		cfg.Errorf("selection failed: %v", err)
+		return remoteReconcileResult{}, ErrSilent
+	}
+
+	switch selected {
+	case 0:
+		return resolveDivergenceUseRemote(cfg, sf, s, currentBranch, gitDir, remote, prs)
+	case 1:
+		return resolveDivergenceDeleteRemote(cfg, client, sf, s, gitDir)
+	default:
+		// Cancel: stop the sync without touching branches or PRs.
+		cfg.Infof("Sync aborted — no changes were made")
+		return remoteReconcileResult{stop: true}, nil
+	}
+}
+
+// resolveDivergenceUseRemote replaces the local stack composition with the
+// remote's. It refuses when the working tree is dirty (the rebuild is
+// destructive to stack tracking). Local-only branches remain as git refs but
+// are no longer part of the stack. Returns the rebuilt stack pointer so the
+// caller can continue with it (importRemoteStack reslices StackFile.Stacks).
+func resolveDivergenceUseRemote(cfg *config.Config, sf *stack.StackFile, s *stack.Stack, currentBranch, gitDir, remote string, prs []*github.PullRequest) (remoteReconcileResult, error) {
+	var res remoteReconcileResult
+
+	// Replacing the local stack is destructive, so require a known-clean working
+	// tree. Treat an inability to inspect the tree as a reason to abort (a failed
+	// status must not be read as "clean").
+	dirty, err := git.HasUncommittedChanges()
+	if err != nil {
+		cfg.Errorf("Could not determine whether the working tree is clean: %v", err)
+		return res, ErrSilent
+	}
+	if dirty {
+		cfg.Errorf("You have uncommitted changes — commit or stash them before replacing your local stack with the remote")
+		return res, ErrSilent
+	}
+
+	trunk := s.Trunk.Branch
+	remoteStackID := s.ID
+	oldBranches := s.BranchNames()
+
+	removeLocalStack(sf, s)
+
+	// A remote PR branch must not already be owned by another local stack, or
+	// importing it would write the same branch into two stacks. Validate against
+	// the remaining stacks (the current one has been removed above).
+	for _, pr := range prs {
+		if err := sf.ValidateNoDuplicateBranch(pr.HeadRefName); err != nil {
+			cfg.Errorf("Cannot adopt the remote stack: %s", err)
+			return res, ErrSilent
+		}
+	}
+
+	newStack, err := importRemoteStack(cfg, sf, gitDir, remote, trunk, prs, remoteStackID)
+	if err != nil {
+		return res, err
+	}
+
+	// Populate the transient queued/merged state so the rebase/push steps skip
+	// merge-queued or merged branches in the adopted stack.
+	syncRemotePRState(newStack, prs)
+
+	// If the user was on a branch that the remote stack no longer contains,
+	// move them to the nearest surviving branch so they don't end up detached
+	// from the stack.
+	if target := nearestBranchAfterReplace(oldBranches, currentBranch, newStack); target != currentBranch {
+		if err := git.CheckoutBranch(target); err != nil {
+			cfg.Warningf("Failed to switch from %s to %s: %v", currentBranch, target, err)
+		} else {
+			cfg.Printf("Switched to %s (original branch %s is no longer in the stack)", target, currentBranch)
+		}
+	}
+
+	if err := stack.Save(gitDir, sf); err != nil {
+		return res, handleSaveError(cfg, err)
+	}
+
+	res.stack = newStack
+	cfg.Successf("Local stack replaced with the remote version")
+	return res, nil
+}
+
+// nearestBranchAfterReplace decides which branch to check out after the local
+// stack has been replaced with the remote version. If currentBranch still
+// exists in newStack (or the user was on the trunk / a non-stack branch), it is
+// returned unchanged. Otherwise it delegates to stack.NearestSurvivingBranch to
+// pick the nearest branch from the pre-replacement ordering (neighbor above,
+// then below), falling back to the top of the new stack, or the trunk if the new
+// stack has no branches. Mirrors the checkout behavior of `gh stack modify`.
+func nearestBranchAfterReplace(oldBranches []string, currentBranch string, newStack *stack.Stack) string {
+	// Still in the new stack, or never a stack branch (e.g. the trunk): stay put.
+	if newStack.IndexOf(currentBranch) >= 0 || slices.Index(oldBranches, currentBranch) < 0 {
+		return currentBranch
+	}
+
+	if nearest := stack.NearestSurvivingBranch(oldBranches, currentBranch, func(name string) bool {
+		return newStack.IndexOf(name) >= 0
+	}); nearest != "" {
+		return nearest
+	}
+
+	// A dropped stack branch with no surviving neighbor — fall back to the top
+	// of the new stack, then the trunk.
+	if len(newStack.Branches) > 0 {
+		return newStack.Branches[len(newStack.Branches)-1].Branch
+	}
+	return newStack.Trunk.Branch
+}
+
+// resolveDivergenceDeleteRemote deletes the diverged stack object on GitHub and
+// removes the local association (clearing the stack ID). The PRs and local
+// branches are left untouched — only the stack grouping on GitHub is removed. It
+// stops the sync and points the user at `gh stack submit` to recreate the stack
+// (which, unlike sync, also creates PRs for any un-submitted branches).
+func resolveDivergenceDeleteRemote(cfg *config.Config, client github.ClientOps, sf *stack.StackFile, s *stack.Stack, gitDir string) (remoteReconcileResult, error) {
+	res := remoteReconcileResult{stop: true}
+
+	if err := client.DeleteStack(s.ID); err != nil {
+		var httpErr *api.HTTPError
+		if errors.As(err, &httpErr) && httpErr.StatusCode == 404 {
+			cfg.Warningf("Remote stack already deleted")
+		} else {
+			cfg.Errorf("failed to delete remote stack: %v", err)
+			return res, ErrAPIFailure
+		}
+	} else {
+		cfg.Successf("Deleted the stack on GitHub")
+	}
+
+	s.ID = ""
+	if err := stack.Save(gitDir, sf); err != nil {
+		return res, handleSaveError(cfg, err)
+	}
+
+	cfg.Printf("")
+	cfg.Printf("Your PRs and local branches are unchanged — only the stack on GitHub was removed.")
+	cfg.Printf("  Run `%s` to recreate the stack on GitHub.", cfg.ColorCyan("gh stack submit"))
+	cfg.Printf("  Run `%s` first if you want to change the stack's structure.", cfg.ColorCyan("gh stack modify"))
+	return res, nil
 }
