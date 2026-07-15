@@ -165,21 +165,26 @@ gh stack add -m "Refactor utils" cleanup-layer
 
 ### `gh stack checkout`
 
-Check out a stack from a pull request number, URL, or branch name.
+Check out a stack by its stack number, a pull request number, a PR URL, or a branch name.
 
 ```
-gh stack checkout [<pr-number> | <pr-url> | <branch>]
+gh stack checkout [<stack-number> | <pr-number> | <pr-url> | <branch>]
 ```
 
-When a PR number or URL is provided (e.g. `123` or `https://github.com/owner/repo/pull/123`), the command fetches the stack on GitHub, pulls the branches, and sets up the stack locally. If the stack already exists locally and matches, it switches to the branch. If the local and remote stacks have different compositions, you'll be prompted to resolve the conflict.
+A bare number is interpreted first as a stack or PR number (repo-scoped identifiers shown in the GitHub UI). If nothing matches the number, it is tried as a branch name.
+
+When a remote stack is referenced, the command fetches the stack on GitHub, pulls the branches, and sets up the stack locally. If the stack already exists locally and matches, it switches to the branch. If the local and remote stacks have different compositions, you'll be prompted to resolve the conflict.
 
 When a branch name is provided, the command resolves it against locally tracked stacks only.
 
-When run without arguments in an interactive terminal, shows a menu of all locally available stacks to choose from.
+When run without arguments in an interactive terminal, opens a searchable picker listing every stack available to you — both the stacks tracked locally and the stacks that exist only on GitHub. Each row shows the stack number, its bottom and top branch, base branch, a status bar summarizing how many of its pull requests are merged, open, closed, or not yet pushed, and whether the stack is available locally or only on the remote. Filter with the All / Local / Remote tabs or type `/` to search; fully merged stacks are omitted. Selecting a remote-only stack clones it locally before switching to it.
 
 **Examples:**
 
 ```sh
+# Check out a stack by its stack number
+gh stack checkout 7
+
 # Check out a stack by PR number
 gh stack checkout 42
 
@@ -189,7 +194,7 @@ gh stack checkout https://github.com/owner/repo/pull/42
 # Check out a stack by branch name (local only)
 gh stack checkout feature-auth
 
-# Interactive — select from locally tracked stacks
+# Interactive — pick from all available stacks (local and remote)
 gh stack checkout
 ```
 
