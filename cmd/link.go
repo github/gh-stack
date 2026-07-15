@@ -153,15 +153,16 @@ func runLink(cfg *config.Config, opts *linkOptions, args []string) error {
 // of that stack. It returns the matched stack (or nil) and the PR arguments to
 // resolve — args[1:] in add mode, or all args otherwise.
 //
-// Only a bare positive integer can name a stack. Because stack, PR, and issue
-// numbers share one repo-scoped numberspace, a number that matches a stack can
-// never also be a PR number, so this never shadows a create/update invocation.
+// Only a bare positive integer that isn't also a local branch name can name a
+// stack. Stack, PR, and issue numbers share one repo-scoped numberspace (so a
+// number never doubles as a PR), but branch names don't — a branch literally
+// named like a stack number is kept as a branch.
 func detectAddMode(args []string, stacks []github.RemoteStack) (*github.RemoteStack, []string) {
 	if len(args) < 2 {
 		return nil, args
 	}
 	n, err := strconv.Atoi(args[0])
-	if err != nil || n <= 0 {
+	if err != nil || n <= 0 || git.BranchExists(args[0]) {
 		return nil, args
 	}
 	for i := range stacks {

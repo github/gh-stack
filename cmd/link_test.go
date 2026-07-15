@@ -1177,6 +1177,51 @@ func TestLink_NumericArg_PRNotFound_TreatedAsBranch(t *testing.T) {
 	assert.Equal(t, []int{50, 51}, stackedPRs)
 }
 
+func TestLink_NumericFirstArgIsLocalBranch_NotAddMode(t *testing.T) {
+	// Branch "123" exists locally and stack #123 also exists. The numeric
+	// branch name must win over add mode, so the args form a new stack rather
+	// than appending #456 to the unrelated stack #123.
+	restore := git.SetOps(newLinkGitMock("123", "456"))
+	defer restore()
+
+	var createdPRs []int
+	cfg, _, _ := config.NewTestConfig()
+	cfg.GitHubClientOverride = &github.MockClient{
+		FindPRByNumberFn: func(int) (*github.PullRequest, error) { return nil, nil },
+		FindPRForBranchFn: func(branch string) (*github.PullRequest, error) {
+			switch branch {
+			case "123":
+				return &github.PullRequest{Number: 50, HeadRefName: "123", BaseRefName: "main", URL: "https://github.com/o/r/pull/50"}, nil
+			case "456":
+				return &github.PullRequest{Number: 51, HeadRefName: "456", BaseRefName: "123", URL: "https://github.com/o/r/pull/51"}, nil
+			}
+			return nil, nil
+		},
+		ListStacksFn: func() ([]github.RemoteStack, error) {
+			return []github.RemoteStack{
+				linkRemoteStack(123, linkPR(90, "unrelated-a"), linkPR(91, "unrelated-b")),
+			}, nil
+		},
+		AddToStackFn: func(int, []int) (*github.RemoteStack, error) {
+			t.Fatal("AddToStack must not be called: a numeric branch name should not trigger add mode")
+			return nil, nil
+		},
+		CreateStackFn: func(prNumbers []int) (*github.RemoteStack, error) {
+			createdPRs = prNumbers
+			return &github.RemoteStack{ID: 42, Number: 42}, nil
+		},
+	}
+
+	cmd := LinkCmd(cfg)
+	cmd.SetArgs([]string{"123", "456"})
+	cmd.SetOut(io.Discard)
+	cmd.SetErr(io.Discard)
+	err := cmd.Execute()
+
+	assert.NoError(t, err)
+	assert.Equal(t, []int{50, 51}, createdPRs)
+}
+
 func TestLink_FixesBaseBranches(t *testing.T) {
 	restore := git.SetOps(newLinkGitMock("feat-a", "feat-b"))
 	defer restore()
