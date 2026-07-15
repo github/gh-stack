@@ -76,19 +76,15 @@ Initialize a new stack in the current repository.
 gh stack init [flags] [branches...]
 ```
 
-Initializes a new stack locally. In interactive mode (no arguments), prompts for a branch name and offers to use the current branch as the first layer. If a branch name contains slashes (e.g., `feat/api`), prompts if you would like to use a prefix (e.g., `feat/`) for all branches in the stack.
+Initializes a new stack locally. In interactive mode (no arguments), prompts for a branch name and offers to use the current branch as the first layer.
 
 When explicit branch names are given, existing branches are adopted automatically and any missing branches are created. The trunk defaults to the repository's default branch unless overridden with `--base`.
-
-Use `--numbered` with `--prefix` to enable auto-incrementing numbered branch names (`prefix/01`, `prefix/02`, …). Without `--numbered`, you'll always be prompted to provide a meaningful branch name.
 
 Enables `git rerere` automatically so that conflict resolutions are remembered across rebases.
 
 | Flag | Description |
 |------|-------------|
 | `-b, --base <branch>` | Trunk branch for the stack (defaults to the repository's default branch) |
-| `-p, --prefix <string>` | Set a branch name prefix for the stack |
-| `-n, --numbered` | Use auto-incrementing numbered branch names (requires `--prefix`) |
 
 **Examples:**
 
@@ -104,15 +100,6 @@ gh stack init --base develop feature-auth
 
 # Adopt existing branches into a stack
 gh stack init feature-auth feature-api
-
-# Set a prefix — you'll be prompted for a branch name
-gh stack init -p feat
-#    → prompts "Enter a name for the first branch (will be prefixed with feat/)"
-#    → type "auth" → creates feat/auth
-
-# Use numbered auto-incrementing branch names
-gh stack init -p feat --numbered
-#    → creates feat/01 automatically
 ```
 
 ### `gh stack add`
@@ -125,7 +112,7 @@ gh stack add [flags] [branch]
 
 Creates a new branch at the current HEAD, adds it to the top of the stack, and checks it out. Must be run while on the topmost branch of a stack. If no branch name is given, prompts for one.
 
-You can optionally stage changes and create a commit as part of the `add` flow. When `-m` is provided without an explicit branch name, the branch name is auto-generated. If the stack was created with `--numbered`, auto-generated names use numbered format (`prefix/01`, `prefix/02`); otherwise, date+slug format is used (e.g., `prefix/2025-03-24-add-login`).
+You can optionally stage changes and create a commit as part of the `add` flow. When `-m` is provided without an explicit branch name, the branch name is auto-generated in date+slug format (e.g., `03-24-add_login`).
 
 | Flag | Description |
 |------|-------------|
@@ -616,21 +603,21 @@ gh stack sync
 
 ## Abbreviated workflow
 
-If you want to minimize keystrokes, use a branch prefix with `--numbered` and the `-Am` flags to fold staging, committing, and branch creation into a single command. Branch names are auto-generated as `prefix/01`, `prefix/02`, etc.
+If you want to minimize keystrokes, use the `-Am` flags to fold staging, committing, and branch creation into a single command. When you don't pass a branch name, one is auto-generated from the commit message in date+slug format (e.g., `03-24-auth_middleware`).
 
 When a branch has no commits yet (e.g., right after `init`), `add -Am` stages and commits directly on that branch instead of creating a new one. Once a branch has commits, `add -Am` creates a new branch, checks it out, and commits there.
 
 ```sh
-# 1. Start a stack with a prefix and numbered branches
-gh stack init -p feat --numbered
-#    → creates feat/01 and checks it out
+# 1. Start a stack
+gh stack init auth
+#    → creates auth and checks it out
 
 # 2. Write code for the first layer
 #    ... write code ...
 
 # 3. Stage and commit on the current branch
 gh stack add -Am "Auth middleware"
-#    → feat/01 has no commits yet, so the commit lands here
+#    → auth has no commits yet, so the commit lands here
 #      (no new branch is created)
 
 # 4. Write code for the next layer
@@ -638,20 +625,20 @@ gh stack add -Am "Auth middleware"
 
 # 5. Create the next branch and commit
 gh stack add -Am "API routes"
-#    → feat/01 already has commits, so a new branch feat/02 is
-#      created, checked out, and the commit lands there
+#    → auth already has commits, so a new branch is created from the
+#      commit message, checked out, and the commit lands there
 
 # 6. Keep going
 #    ... write code ...
 
 gh stack add -Am "Frontend components"
-#    → feat/02 already has commits, creates feat/03 and commits there
+#    → creates another branch and commits there
 
 # 7. Push everything and create PRs
 gh stack submit
 ```
 
-Compared to the typical workflow, there's no need to name branches, run `git add`, or run `git commit` separately. Each `gh stack add -Am "..."` does it all.
+Compared to the typical workflow, there's no need to name branches, run `git add`, or run `git commit` separately. Each `gh stack add -Am "..."` does it all. Pass an explicit branch name any time you want to control it: `gh stack add -Am "API routes" api-routes`.
 
 ## Terminal theme
 

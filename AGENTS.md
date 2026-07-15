@@ -41,7 +41,7 @@ internal/
     schema.json              # JSON Schema for the stack file format
   config/                    # Config struct (I/O, colors, test overrides)
     testing.go               # NewTestConfig(). Returns *Config + stdout/stderr pipes.
-  branch/                    # branch naming (Slugify, DateSlug, NextNumberedName)
+  branch/                    # branch naming (Slugify, DateSlug)
   modify/                    # interactive stack modification state machine
   pr/                        # PR template discovery
   tui/                       # bubbletea/bubbles/lipgloss terminal UI

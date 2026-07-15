@@ -27,19 +27,15 @@ Initialize a new stack in the current repository.
 gh stack init [flags] [branches...]
 ```
 
-Initializes a new stack locally. In interactive mode (no arguments), prompts for a branch name and offers to use the current branch as the first layer. If a branch name contains slashes (e.g., `feat/api`), prompts if you would like to use a prefix (e.g., `feat/`) for all branches in the stack.
+Initializes a new stack locally. In interactive mode (no arguments), prompts for a branch name and offers to use the current branch as the first layer.
 
 When explicit branch names are given, existing branches are adopted automatically and any missing branches are created. The trunk defaults to the repository's default branch unless overridden with `--base`.
-
-Use `--numbered` with `--prefix` to enable auto-incrementing branch names (`prefix/01`, `prefix/02`, …).
 
 Enables `git rerere` automatically so that conflict resolutions are remembered across rebases.
 
 | Flag | Description |
 |------|-------------|
 | `-b, --base <branch>` | Trunk branch for the stack (defaults to the repository's default branch) |
-| `-p, --prefix <string>` | Set a branch name prefix for the stack |
-| `-n, --numbered` | Use auto-incrementing numbered branch names (requires `--prefix`) |
 
 **Examples:**
 
@@ -55,14 +51,6 @@ gh stack init --base develop feature-auth
 
 # Adopt or create multiple branches at once
 gh stack init feature-auth feature-api feature-ui
-
-# Set a prefix — prompts for a branch name suffix
-gh stack init -p feat
-#    → type "auth" → creates feat/auth
-
-# Use numbered auto-incrementing branch names
-gh stack init -p feat --numbered
-#    → creates feat/01 automatically
 ```
 
 ### `gh stack add`
@@ -75,7 +63,7 @@ gh stack add [flags] [branch]
 
 Creates a new branch at the current HEAD, adds it to the top of the stack, and checks it out. Must be run while on the topmost branch of a stack. If no branch name is given, prompts for one.
 
-You can optionally stage changes and create a commit as part of the `add` flow. When `-m` is provided without an explicit branch name, the branch name is auto-generated. If the stack was created with `--numbered`, auto-generated names use numbered format (`prefix/01`, `prefix/02`); otherwise, date+slug format is used.
+You can optionally stage changes and create a commit as part of the `add` flow. When `-m` is provided without an explicit branch name, the branch name is auto-generated in date+slug format (e.g., `03-24-add_login`).
 
 | Flag | Description |
 |------|-------------|
