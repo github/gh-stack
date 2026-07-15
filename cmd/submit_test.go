@@ -2184,6 +2184,65 @@ func TestSubmit_UsesPRTemplate(t *testing.T) {
 	assert.NotContains(t, capturedBody, feedbackURL)
 }
 
+// TestSubmit_IgnoresSymlinkedPRTemplate verifies that `gh stack submit --auto`
+// does not follow a symlinked PR template. The non-interactive and
+// interactive-prefill flows share the same pr.FindTemplate chokepoint, so they
+// are covered transitively.
+func TestSubmit_IgnoresSymlinkedPRTemplate(t *testing.T) {
+	s := stack.Stack{
+		Trunk: stack.BranchRef{Branch: "main"},
+		Branches: []stack.BranchRef{
+			{Branch: "b1"},
+		},
+	}
+
+	tmpDir := t.TempDir()
+	writeStackFile(t, tmpDir, s)
+
+	// The repo's PR template is a symlink to a file outside the repository;
+	// gh-stack must not follow it.
+	linked := filepath.Join(t.TempDir(), "linked.txt")
+	require.NoError(t, os.WriteFile(linked, []byte("LINKED_FILE_CONTENTS"), 0o600))
+
+	ghDir := filepath.Join(tmpDir, ".github")
+	require.NoError(t, os.MkdirAll(ghDir, 0o755))
+	if err := os.Symlink(linked, filepath.Join(ghDir, "pull_request_template.md")); err != nil {
+		t.Skipf("symlinks not supported on this platform: %v", err)
+	}
+
+	var capturedBody string
+
+	mock := newSubmitMock(tmpDir, "b1")
+	mock.PushFn = func(string, []string, bool, bool) error { return nil }
+	mock.LogRangeFn = func(base, head string) ([]git.CommitInfo, error) {
+		return []git.CommitInfo{{Subject: "add feature", Body: "detailed commit body"}}, nil
+	}
+	restore := git.SetOps(mock)
+	defer restore()
+
+	cfg, _, _ := config.NewTestConfig()
+	cfg.GitHubClientOverride = &github.MockClient{
+		ListStacksFn:      func() ([]github.RemoteStack, error) { return nil, nil },
+		FindPRForBranchFn: func(string) (*github.PullRequest, error) { return nil, nil },
+		CreatePRFn: func(base, head, title, body string, draft bool) (*github.PullRequest, error) {
+			capturedBody = body
+			return &github.PullRequest{Number: 1, ID: "PR_1", URL: "https://github.com/o/r/pull/1"}, nil
+		},
+		CreateStackFn: func([]int) (int, error) { return 1, nil },
+	}
+
+	cmd := SubmitCmd(cfg)
+	cmd.SetArgs([]string{"--auto"})
+	cmd.SetOut(io.Discard)
+	cmd.SetErr(io.Discard)
+	err := cmd.Execute()
+
+	assert.NoError(t, err)
+	assert.NotContains(t, capturedBody, "LINKED_FILE_CONTENTS", "symlinked template contents must not be included in the PR body")
+	// The template was ignored, so the standard footer fallback is used.
+	assert.Contains(t, capturedBody, "GitHub Stacks CLI")
+}
+
 func TestSubmit_NoTemplate_UsesFooter(t *testing.T) {
 	s := stack.Stack{
 		Trunk: stack.BranchRef{Branch: "main"},
