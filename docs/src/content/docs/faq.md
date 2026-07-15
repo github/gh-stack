@@ -255,7 +255,14 @@ This doesn't create any local tracking and only hits the APIs to create Stacked 
 
 If the provided branches already have open PRs, `link` will use them. If not, it creates draft PRs by default with the correct base branch chaining.
 
-To add more to the stack, run `link` again, but be sure to include the full list of PRs/branches in the stack:
+To add more to the stack, pass the stack number (shown in the GitHub stack UI) as the first argument, followed by just the new PRs or branches — you no longer need to re-list the PRs already in the stack:
+
+```bash
+# 42 is the stack number; change4 and change5 are appended to its top
+gh stack link 42 change4 change5
+```
+
+You can also pass the full list of PRs/branches (without a leading stack number) to create a stack or additively update an existing one:
 
 ```bash
 gh stack link 123 124 125 change4 change5

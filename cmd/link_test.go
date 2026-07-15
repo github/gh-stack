@@ -1177,6 +1177,51 @@ func TestLink_NumericArg_PRNotFound_TreatedAsBranch(t *testing.T) {
 	assert.Equal(t, []int{50, 51}, stackedPRs)
 }
 
+func TestLink_NumericFirstArgIsLocalBranch_NotAddMode(t *testing.T) {
+	// Branch "123" exists locally and stack #123 also exists. The numeric
+	// branch name must win over add mode, so the args form a new stack rather
+	// than appending #456 to the unrelated stack #123.
+	restore := git.SetOps(newLinkGitMock("123", "456"))
+	defer restore()
+
+	var createdPRs []int
+	cfg, _, _ := config.NewTestConfig()
+	cfg.GitHubClientOverride = &github.MockClient{
+		FindPRByNumberFn: func(int) (*github.PullRequest, error) { return nil, nil },
+		FindPRForBranchFn: func(branch string) (*github.PullRequest, error) {
+			switch branch {
+			case "123":
+				return &github.PullRequest{Number: 50, HeadRefName: "123", BaseRefName: "main", URL: "https://github.com/o/r/pull/50"}, nil
+			case "456":
+				return &github.PullRequest{Number: 51, HeadRefName: "456", BaseRefName: "123", URL: "https://github.com/o/r/pull/51"}, nil
+			}
+			return nil, nil
+		},
+		ListStacksFn: func() ([]github.RemoteStack, error) {
+			return []github.RemoteStack{
+				linkRemoteStack(123, linkPR(90, "unrelated-a"), linkPR(91, "unrelated-b")),
+			}, nil
+		},
+		AddToStackFn: func(int, []int) (*github.RemoteStack, error) {
+			t.Fatal("AddToStack must not be called: a numeric branch name should not trigger add mode")
+			return nil, nil
+		},
+		CreateStackFn: func(prNumbers []int) (*github.RemoteStack, error) {
+			createdPRs = prNumbers
+			return &github.RemoteStack{ID: 42, Number: 42}, nil
+		},
+	}
+
+	cmd := LinkCmd(cfg)
+	cmd.SetArgs([]string{"123", "456"})
+	cmd.SetOut(io.Discard)
+	cmd.SetErr(io.Discard)
+	err := cmd.Execute()
+
+	assert.NoError(t, err)
+	assert.Equal(t, []int{50, 51}, createdPRs)
+}
+
 func TestLink_FixesBaseBranches(t *testing.T) {
 	restore := git.SetOps(newLinkGitMock("feat-a", "feat-b"))
 	defer restore()
@@ -1912,4 +1957,561 @@ func TestLink_MixedURLsAndNumbers(t *testing.T) {
 	assert.NoError(t, err)
 	assert.Equal(t, []int{10, 20, 30}, createdPRs)
 	assert.Contains(t, output, "Created stack with 3 PRs")
+}
+
+// --- add-mode tests (first arg is a stack number) ---
+
+// linkPR builds an open RemoteStackPR with the given number and head ref.
+func linkPR(num int, head string) github.RemoteStackPR {
+	return github.RemoteStackPR{
+		Number: num,
+		State:  "open",
+		Head:   github.RemoteStackPRHead{Ref: head},
+	}
+}
+
+// linkRemoteStack builds a RemoteStack with matching PullRequests and PRDetails
+// (bottom to top) for add-mode tests, so stackTopBranch can resolve the top ref.
+func linkRemoteStack(number int, details ...github.RemoteStackPR) github.RemoteStack {
+	rs := github.RemoteStack{ID: number, Number: number}
+	for _, d := range details {
+		rs.PullRequests = append(rs.PullRequests, d.Number)
+		rs.PRDetails = append(rs.PRDetails, d)
+	}
+	return rs
+}
+
+func TestLink_AddMode_AppendsPRNumberToStack(t *testing.T) {
+	var addNumber int
+	var addPRs []int
+	cfg, _, errR := config.NewTestConfig()
+	cfg.GitHubClientOverride = &github.MockClient{
+		FindPRByNumberFn: func(n int) (*github.PullRequest, error) {
+			return &github.PullRequest{
+				Number: n, State: "OPEN",
+				HeadRefName: fmt.Sprintf("branch-%d", n),
+				BaseRefName: "branch-20", // already chained on the stack top
+				URL:         fmt.Sprintf("https://github.com/o/r/pull/%d", n),
+			}, nil
+		},
+		ListStacksFn: func() ([]github.RemoteStack, error) {
+			return []github.RemoteStack{
+				linkRemoteStack(7, linkPR(10, "branch-10"), linkPR(20, "branch-20")),
+			}, nil
+		},
+		AddToStackFn: func(stackNumber int, prNumbers []int) (*github.RemoteStack, error) {
+			addNumber = stackNumber
+			addPRs = prNumbers
+			return &github.RemoteStack{ID: 7, Number: 7}, nil
+		},
+		CreateStackFn: func([]int) (*github.RemoteStack, error) {
+			t.Fatal("CreateStack should not be called in add mode")
+			return nil, nil
+		},
+	}
+
+	cmd := LinkCmd(cfg)
+	cmd.SetArgs([]string{"7", "30"})
+	cmd.SetOut(io.Discard)
+	cmd.SetErr(io.Discard)
+	err := cmd.Execute()
+
+	cfg.Err.Close()
+	errOut, _ := io.ReadAll(errR)
+	output := string(errOut)
+
+	assert.NoError(t, err)
+	assert.Equal(t, 7, addNumber)
+	assert.Equal(t, []int{30}, addPRs)
+	assert.Contains(t, output, "Added 1 PR to stack #7")
+}
+
+func TestLink_AddMode_CreatesPRForBranchOnTopOfStack(t *testing.T) {
+	restore := git.SetOps(newLinkGitMock("feature-c"))
+	defer restore()
+
+	var created []struct{ base, head string }
+	var addPRs []int
+	cfg, _, errR := config.NewTestConfig()
+	cfg.GitHubClientOverride = &github.MockClient{
+		FindPRForBranchFn: func(string) (*github.PullRequest, error) { return nil, nil },
+		CreatePRFn: func(base, head, title, body string, draft bool) (*github.PullRequest, error) {
+			created = append(created, struct{ base, head string }{base, head})
+			return &github.PullRequest{
+				Number: 99, State: "OPEN", HeadRefName: head, BaseRefName: base,
+				URL: "https://github.com/o/r/pull/99",
+			}, nil
+		},
+		ListStacksFn: func() ([]github.RemoteStack, error) {
+			return []github.RemoteStack{
+				linkRemoteStack(7, linkPR(10, "branch-10"), linkPR(20, "branch-20")),
+			}, nil
+		},
+		AddToStackFn: func(stackNumber int, prNumbers []int) (*github.RemoteStack, error) {
+			addPRs = prNumbers
+			return &github.RemoteStack{ID: 7, Number: 7}, nil
+		},
+	}
+
+	cmd := LinkCmd(cfg)
+	cmd.SetArgs([]string{"7", "feature-c"})
+	cmd.SetOut(io.Discard)
+	cmd.SetErr(io.Discard)
+	err := cmd.Execute()
+
+	cfg.Err.Close()
+	errOut, _ := io.ReadAll(errR)
+	output := string(errOut)
+
+	assert.NoError(t, err)
+	require.Len(t, created, 1)
+	assert.Equal(t, "branch-20", created[0].base) // chains on the stack top branch
+	assert.Equal(t, "feature-c", created[0].head)
+	assert.Equal(t, []int{99}, addPRs)
+	assert.Contains(t, output, "Added 1 PR to stack #7")
+}
+
+func TestLink_AddMode_IdempotentWhenAllPresent(t *testing.T) {
+	cfg, _, errR := config.NewTestConfig()
+	cfg.GitHubClientOverride = &github.MockClient{
+		FindPRByNumberFn: func(n int) (*github.PullRequest, error) {
+			return &github.PullRequest{
+				Number: n, State: "OPEN",
+				HeadRefName: fmt.Sprintf("branch-%d", n), BaseRefName: "branch-10",
+				URL: fmt.Sprintf("https://github.com/o/r/pull/%d", n),
+			}, nil
+		},
+		ListStacksFn: func() ([]github.RemoteStack, error) {
+			return []github.RemoteStack{
+				linkRemoteStack(7, linkPR(10, "branch-10"), linkPR(20, "branch-20")),
+			}, nil
+		},
+		AddToStackFn: func(int, []int) (*github.RemoteStack, error) {
+			t.Fatal("AddToStack should not be called when nothing new to append")
+			return nil, nil
+		},
+	}
+
+	cmd := LinkCmd(cfg)
+	cmd.SetArgs([]string{"7", "20"})
+	cmd.SetOut(io.Discard)
+	cmd.SetErr(io.Discard)
+	err := cmd.Execute()
+
+	cfg.Err.Close()
+	errOut, _ := io.ReadAll(errR)
+	output := string(errOut)
+
+	assert.NoError(t, err)
+	assert.Contains(t, output, "already in stack #7")
+	assert.Contains(t, output, "Stack #7 is already up to date")
+}
+
+func TestLink_AddMode_SkipsPresentAppendsNew(t *testing.T) {
+	var addPRs []int
+	cfg, _, errR := config.NewTestConfig()
+	cfg.GitHubClientOverride = &github.MockClient{
+		FindPRByNumberFn: func(n int) (*github.PullRequest, error) {
+			base := "branch-20" // new PR chains on the stack top
+			if n == 20 {
+				base = "branch-10"
+			}
+			return &github.PullRequest{
+				Number: n, State: "OPEN",
+				HeadRefName: fmt.Sprintf("branch-%d", n), BaseRefName: base,
+				URL: fmt.Sprintf("https://github.com/o/r/pull/%d", n),
+			}, nil
+		},
+		ListStacksFn: func() ([]github.RemoteStack, error) {
+			return []github.RemoteStack{
+				linkRemoteStack(7, linkPR(10, "branch-10"), linkPR(20, "branch-20")),
+			}, nil
+		},
+		AddToStackFn: func(stackNumber int, prNumbers []int) (*github.RemoteStack, error) {
+			addPRs = prNumbers
+			return &github.RemoteStack{ID: 7, Number: 7}, nil
+		},
+	}
+
+	cmd := LinkCmd(cfg)
+	cmd.SetArgs([]string{"7", "20", "30"})
+	cmd.SetOut(io.Discard)
+	cmd.SetErr(io.Discard)
+	err := cmd.Execute()
+
+	cfg.Err.Close()
+	errOut, _ := io.ReadAll(errR)
+	output := string(errOut)
+
+	assert.NoError(t, err)
+	assert.Equal(t, []int{30}, addPRs)
+	assert.Contains(t, output, "already in stack #7")
+	assert.Contains(t, output, "Added 1 PR to stack #7")
+}
+
+func TestLink_AddMode_RejectsPRFromAnotherStack(t *testing.T) {
+	cfg, _, errR := config.NewTestConfig()
+	cfg.GitHubClientOverride = &github.MockClient{
+		FindPRByNumberFn: func(n int) (*github.PullRequest, error) {
+			return &github.PullRequest{
+				Number: n, State: "OPEN",
+				HeadRefName: fmt.Sprintf("branch-%d", n), BaseRefName: "main",
+				URL: fmt.Sprintf("https://github.com/o/r/pull/%d", n),
+			}, nil
+		},
+		ListStacksFn: func() ([]github.RemoteStack, error) {
+			return []github.RemoteStack{
+				linkRemoteStack(7, linkPR(10, "branch-10"), linkPR(20, "branch-20")),
+				linkRemoteStack(8, linkPR(30, "branch-30"), linkPR(40, "branch-40")),
+			}, nil
+		},
+		AddToStackFn: func(int, []int) (*github.RemoteStack, error) {
+			t.Fatal("AddToStack should not be called when a PR is in another stack")
+			return nil, nil
+		},
+	}
+
+	cmd := LinkCmd(cfg)
+	cmd.SetArgs([]string{"7", "30"})
+	cmd.SetOut(io.Discard)
+	cmd.SetErr(io.Discard)
+	err := cmd.Execute()
+
+	cfg.Err.Close()
+	errOut, _ := io.ReadAll(errR)
+	output := string(errOut)
+
+	assert.ErrorIs(t, err, ErrInvalidArgs)
+	assert.Contains(t, output, "already belongs to stack #8")
+}
+
+func TestLink_AddMode_RejectsIneligibleNewPR(t *testing.T) {
+	cfg, _, errR := config.NewTestConfig()
+	cfg.GitHubClientOverride = &github.MockClient{
+		FindPRByNumberFn: func(n int) (*github.PullRequest, error) {
+			pr := &github.PullRequest{
+				Number: n, State: "OPEN",
+				HeadRefName: fmt.Sprintf("branch-%d", n), BaseRefName: "branch-20",
+				URL: fmt.Sprintf("https://github.com/o/r/pull/%d", n),
+			}
+			if n == 30 {
+				pr.MergeQueueEntry = &github.MergeQueueEntry{ID: "MQE_1"}
+			}
+			return pr, nil
+		},
+		ListStacksFn: func() ([]github.RemoteStack, error) {
+			return []github.RemoteStack{
+				linkRemoteStack(7, linkPR(10, "branch-10"), linkPR(20, "branch-20")),
+			}, nil
+		},
+		AddToStackFn: func(int, []int) (*github.RemoteStack, error) {
+			t.Fatal("AddToStack should not be called for an ineligible PR")
+			return nil, nil
+		},
+	}
+
+	cmd := LinkCmd(cfg)
+	cmd.SetArgs([]string{"7", "30"})
+	cmd.SetOut(io.Discard)
+	cmd.SetErr(io.Discard)
+	err := cmd.Execute()
+
+	cfg.Err.Close()
+	errOut, _ := io.ReadAll(errR)
+	output := string(errOut)
+
+	assert.ErrorIs(t, err, ErrInvalidArgs)
+	assert.Contains(t, output, "cannot be added to a stack")
+	assert.Contains(t, output, "queued for merge")
+}
+
+func TestLink_AddMode_ExemptsIneligibleExistingMember(t *testing.T) {
+	var addPRs []int
+	cfg, _, errR := config.NewTestConfig()
+	cfg.GitHubClientOverride = &github.MockClient{
+		FindPRByNumberFn: func(n int) (*github.PullRequest, error) {
+			pr := &github.PullRequest{
+				Number: n, State: "OPEN",
+				HeadRefName: fmt.Sprintf("branch-%d", n), BaseRefName: "branch-20",
+				URL: fmt.Sprintf("https://github.com/o/r/pull/%d", n),
+			}
+			if n == 20 {
+				// A queued PR that is already a stack member: it is skipped,
+				// so its ineligibility must not block appending PR 30.
+				pr.MergeQueueEntry = &github.MergeQueueEntry{ID: "MQE_1"}
+				pr.BaseRefName = "branch-10"
+			}
+			return pr, nil
+		},
+		ListStacksFn: func() ([]github.RemoteStack, error) {
+			return []github.RemoteStack{
+				linkRemoteStack(7, linkPR(10, "branch-10"), linkPR(20, "branch-20")),
+			}, nil
+		},
+		AddToStackFn: func(stackNumber int, prNumbers []int) (*github.RemoteStack, error) {
+			addPRs = prNumbers
+			return &github.RemoteStack{ID: 7, Number: 7}, nil
+		},
+	}
+
+	cmd := LinkCmd(cfg)
+	cmd.SetArgs([]string{"7", "20", "30"})
+	cmd.SetOut(io.Discard)
+	cmd.SetErr(io.Discard)
+	err := cmd.Execute()
+
+	cfg.Err.Close()
+	errOut, _ := io.ReadAll(errR)
+	output := string(errOut)
+
+	assert.NoError(t, err)
+	assert.Equal(t, []int{30}, addPRs)
+	assert.Contains(t, output, "already in stack #7")
+}
+
+func TestLink_NumericFirstArgNotAStack_UsesCreateMode(t *testing.T) {
+	var createdPRs []int
+	cfg, _, errR := config.NewTestConfig()
+	cfg.GitHubClientOverride = &github.MockClient{
+		FindPRByNumberFn: func(n int) (*github.PullRequest, error) {
+			return &github.PullRequest{
+				Number: n, State: "OPEN",
+				HeadRefName: fmt.Sprintf("branch-%d", n), BaseRefName: "main",
+				URL: fmt.Sprintf("https://github.com/o/r/pull/%d", n),
+			}, nil
+		},
+		ListStacksFn: func() ([]github.RemoteStack, error) {
+			// A stack exists but its number (7) does not match arg[0] (10).
+			return []github.RemoteStack{
+				linkRemoteStack(7, linkPR(50, "branch-50"), linkPR(60, "branch-60")),
+			}, nil
+		},
+		CreateStackFn: func(prNumbers []int) (*github.RemoteStack, error) {
+			createdPRs = prNumbers
+			return &github.RemoteStack{ID: 42, Number: 42}, nil
+		},
+		AddToStackFn: func(int, []int) (*github.RemoteStack, error) {
+			t.Fatal("AddToStack should not be called in create mode")
+			return nil, nil
+		},
+	}
+
+	cmd := LinkCmd(cfg)
+	cmd.SetArgs([]string{"10", "20"})
+	cmd.SetOut(io.Discard)
+	cmd.SetErr(io.Discard)
+	err := cmd.Execute()
+
+	cfg.Err.Close()
+	errOut, _ := io.ReadAll(errR)
+	output := string(errOut)
+
+	assert.NoError(t, err)
+	assert.Equal(t, []int{10, 20}, createdPRs)
+	assert.Contains(t, output, "Created stack with 2 PRs")
+}
+
+func TestLink_AddMode_WarnsWhenBaseFlagSet(t *testing.T) {
+	var addPRs []int
+	cfg, _, errR := config.NewTestConfig()
+	cfg.GitHubClientOverride = &github.MockClient{
+		FindPRByNumberFn: func(n int) (*github.PullRequest, error) {
+			return &github.PullRequest{
+				Number: n, State: "OPEN",
+				HeadRefName: fmt.Sprintf("branch-%d", n), BaseRefName: "branch-20",
+				URL: fmt.Sprintf("https://github.com/o/r/pull/%d", n),
+			}, nil
+		},
+		ListStacksFn: func() ([]github.RemoteStack, error) {
+			return []github.RemoteStack{
+				linkRemoteStack(7, linkPR(10, "branch-10"), linkPR(20, "branch-20")),
+			}, nil
+		},
+		AddToStackFn: func(stackNumber int, prNumbers []int) (*github.RemoteStack, error) {
+			addPRs = prNumbers
+			return &github.RemoteStack{ID: 7, Number: 7}, nil
+		},
+	}
+
+	cmd := LinkCmd(cfg)
+	cmd.SetArgs([]string{"--base", "develop", "7", "30"})
+	cmd.SetOut(io.Discard)
+	cmd.SetErr(io.Discard)
+	err := cmd.Execute()
+
+	cfg.Err.Close()
+	errOut, _ := io.ReadAll(errR)
+	output := string(errOut)
+
+	assert.NoError(t, err)
+	assert.Equal(t, []int{30}, addPRs)
+	assert.Contains(t, output, "--base is ignored")
+}
+
+func TestLink_AddMode_ChainsMultipleCreatedPRs(t *testing.T) {
+	restore := git.SetOps(newLinkGitMock("feat-c", "feat-d"))
+	defer restore()
+
+	var created []struct{ base, head string }
+	var addPRs []int
+	prNum := 100
+	cfg, _, errR := config.NewTestConfig()
+	cfg.GitHubClientOverride = &github.MockClient{
+		FindPRForBranchFn: func(string) (*github.PullRequest, error) { return nil, nil },
+		CreatePRFn: func(base, head, title, body string, draft bool) (*github.PullRequest, error) {
+			prNum++
+			created = append(created, struct{ base, head string }{base, head})
+			return &github.PullRequest{
+				Number: prNum, State: "OPEN", HeadRefName: head, BaseRefName: base,
+				URL: fmt.Sprintf("https://github.com/o/r/pull/%d", prNum),
+			}, nil
+		},
+		ListStacksFn: func() ([]github.RemoteStack, error) {
+			return []github.RemoteStack{
+				linkRemoteStack(7, linkPR(10, "branch-10"), linkPR(20, "branch-20")),
+			}, nil
+		},
+		AddToStackFn: func(stackNumber int, prNumbers []int) (*github.RemoteStack, error) {
+			addPRs = prNumbers
+			return &github.RemoteStack{ID: 7, Number: 7}, nil
+		},
+	}
+
+	cmd := LinkCmd(cfg)
+	cmd.SetArgs([]string{"7", "feat-c", "feat-d"})
+	cmd.SetOut(io.Discard)
+	cmd.SetErr(io.Discard)
+	err := cmd.Execute()
+
+	cfg.Err.Close()
+	errOut, _ := io.ReadAll(errR)
+	output := string(errOut)
+
+	assert.NoError(t, err)
+	require.Len(t, created, 2)
+	assert.Equal(t, "branch-20", created[0].base) // first new PR on the stack top
+	assert.Equal(t, "feat-c", created[0].head)
+	assert.Equal(t, "feat-c", created[1].base) // second new PR chains off the first
+	assert.Equal(t, "feat-d", created[1].head)
+	assert.Equal(t, []int{101, 102}, addPRs)
+	assert.Contains(t, output, "Added 2 PRs to stack #7")
+}
+
+func TestLink_AddMode_AddToStack422(t *testing.T) {
+	cfg, _, errR := config.NewTestConfig()
+	cfg.GitHubClientOverride = &github.MockClient{
+		FindPRByNumberFn: func(n int) (*github.PullRequest, error) {
+			return &github.PullRequest{
+				Number: n, State: "OPEN",
+				HeadRefName: fmt.Sprintf("branch-%d", n), BaseRefName: "branch-20",
+				URL: fmt.Sprintf("https://github.com/o/r/pull/%d", n),
+			}, nil
+		},
+		ListStacksFn: func() ([]github.RemoteStack, error) {
+			return []github.RemoteStack{
+				linkRemoteStack(7, linkPR(10, "branch-10"), linkPR(20, "branch-20")),
+			}, nil
+		},
+		AddToStackFn: func(int, []int) (*github.RemoteStack, error) {
+			return nil, &api.HTTPError{StatusCode: 422, Message: "cannot append"}
+		},
+	}
+
+	cmd := LinkCmd(cfg)
+	cmd.SetArgs([]string{"7", "30"})
+	cmd.SetOut(io.Discard)
+	cmd.SetErr(io.Discard)
+	err := cmd.Execute()
+
+	cfg.Err.Close()
+	errOut, _ := io.ReadAll(errR)
+	output := string(errOut)
+
+	assert.ErrorIs(t, err, ErrAPIFailure)
+	assert.Contains(t, output, "Cannot add to stack")
+	assert.Contains(t, output, "cannot append")
+}
+
+func TestLink_AddMode_AddToStack404_StackGone(t *testing.T) {
+	cfg, _, errR := config.NewTestConfig()
+	cfg.GitHubClientOverride = &github.MockClient{
+		FindPRByNumberFn: func(n int) (*github.PullRequest, error) {
+			return &github.PullRequest{
+				Number: n, State: "OPEN",
+				HeadRefName: fmt.Sprintf("branch-%d", n), BaseRefName: "branch-20",
+				URL: fmt.Sprintf("https://github.com/o/r/pull/%d", n),
+			}, nil
+		},
+		ListStacksFn: func() ([]github.RemoteStack, error) {
+			return []github.RemoteStack{
+				linkRemoteStack(7, linkPR(10, "branch-10"), linkPR(20, "branch-20")),
+			}, nil
+		},
+		AddToStackFn: func(int, []int) (*github.RemoteStack, error) {
+			return nil, &api.HTTPError{StatusCode: 404, Message: "Not Found"}
+		},
+	}
+
+	cmd := LinkCmd(cfg)
+	cmd.SetArgs([]string{"7", "30"})
+	cmd.SetOut(io.Discard)
+	cmd.SetErr(io.Discard)
+	err := cmd.Execute()
+
+	cfg.Err.Close()
+	errOut, _ := io.ReadAll(errR)
+	output := string(errOut)
+
+	assert.ErrorIs(t, err, ErrNotInStack)
+	assert.Contains(t, output, "no longer exists")
+}
+
+func TestLink_AddMode_FetchesFullStackWhenListLacksHeadRefs(t *testing.T) {
+	var addPRs []int
+	var getStackCalls int
+	cfg, _, errR := config.NewTestConfig()
+	cfg.GitHubClientOverride = &github.MockClient{
+		FindPRByNumberFn: func(n int) (*github.PullRequest, error) {
+			return &github.PullRequest{
+				Number: n, State: "OPEN",
+				HeadRefName: fmt.Sprintf("branch-%d", n), BaseRefName: "branch-20",
+				URL: fmt.Sprintf("https://github.com/o/r/pull/%d", n),
+			}, nil
+		},
+		ListStacksFn: func() ([]github.RemoteStack, error) {
+			// The list response carries PR numbers but omits per-PR head refs.
+			return []github.RemoteStack{{
+				ID: 7, Number: 7,
+				PullRequests: []int{10, 20},
+				PRDetails: []github.RemoteStackPR{
+					{Number: 10, State: "open"},
+					{Number: 20, State: "open"},
+				},
+			}}, nil
+		},
+		GetStackFn: func(number int) (*github.RemoteStack, error) {
+			getStackCalls++
+			s := linkRemoteStack(7, linkPR(10, "branch-10"), linkPR(20, "branch-20"))
+			return &s, nil
+		},
+		AddToStackFn: func(stackNumber int, prNumbers []int) (*github.RemoteStack, error) {
+			addPRs = prNumbers
+			return &github.RemoteStack{ID: 7, Number: 7}, nil
+		},
+	}
+
+	cmd := LinkCmd(cfg)
+	cmd.SetArgs([]string{"7", "30"})
+	cmd.SetOut(io.Discard)
+	cmd.SetErr(io.Discard)
+	err := cmd.Execute()
+
+	cfg.Err.Close()
+	errOut, _ := io.ReadAll(errR)
+	output := string(errOut)
+
+	assert.NoError(t, err)
+	assert.Equal(t, 1, getStackCalls) // fell back to fetch the full stack
+	assert.Equal(t, []int{30}, addPRs)
+	assert.Contains(t, output, "Added 1 PR to stack #7")
 }

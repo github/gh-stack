@@ -14,16 +14,17 @@ import (
 )
 
 type linkOptions struct {
-	base   string
-	open   bool
-	remote string
+	base        string
+	open        bool
+	remote      string
+	baseChanged bool
 }
 
 func LinkCmd(cfg *config.Config) *cobra.Command {
 	opts := &linkOptions{}
 
 	cmd := &cobra.Command{
-		Use:   "link <branch-or-pr> <branch-or-pr> [<branch-or-pr>...]",
+		Use:   "link <stack-number | branch-or-pr> <branch-or-pr> [<branch-or-pr>...]",
 		Short: "Link PRs into a stack on GitHub without local tracking",
 		Long: `Create or update a stack on GitHub from branch names, PR numbers, or PR URLs.
 
@@ -46,7 +47,15 @@ automatically with the correct base branch chaining.
 
 If the PRs are not yet in a stack, a new stack is created. If some of
 the PRs are already in a stack, the existing stack is updated to include
-the new PRs (existing PRs are never removed).`,
+the new PRs (existing PRs are never removed).
+
+As a shortcut for growing an existing stack, pass a stack number as the
+first argument (the number shown in the GitHub stack UI). The remaining
+arguments are appended to the top of that stack, so you don't have to
+re-list its current PRs. Arguments already in the stack are skipped;
+arguments that belong to a different stack are rejected. Because stack and
+PR numbers never overlap, a numeric first argument is treated as a stack
+only when it matches an existing stack.`,
 		Example: `  # Link branches into a stack (bottom to top)
   $ gh stack link auth-layer api-routes ui-components
 
@@ -56,10 +65,14 @@ the new PRs (existing PRs are never removed).`,
   # Link existing PRs by URL
   $ gh stack link https://github.com/owner/repo/pull/41 https://github.com/owner/repo/pull/42
 
+  # Add PRs to the top of an existing stack (7 is a stack number)
+  $ gh stack link 7 48 ui-polish
+
   # Specify a custom base branch for stack
   $ gh stack link --base develop auth-layer api-routes`,
 		Args: cobra.MinimumNArgs(2),
 		RunE: func(cmd *cobra.Command, args []string) error {
+			opts.baseChanged = cmd.Flags().Changed("base")
 			return runLink(cfg, opts, args)
 		},
 	}
@@ -92,31 +105,83 @@ func runLink(cfg *config.Config, opts *linkOptions, args []string) error {
 		return ErrAPIFailure
 	}
 
-	// Phase 1: Push branch args to the remote so PRs can be found/created
-	if err := pushBranchArgs(cfg, opts, args); err != nil {
-		return err
-	}
-
-	// Phase 2: Find existing PRs for all args (don't create yet)
-	cfg.Printf("Looking up PRs for %d %s...", len(args), plural(len(args), "branch", "branches"))
-	found, err := findExistingPRs(cfg, client, args)
+	// Fetch existing stacks up front. They are needed to detect whether the
+	// first argument names an existing stack (add mode) and, in the
+	// create/update path, to find the stack the PRs already belong to.
+	cfg.Printf("Checking existing stacks...")
+	stacks, err := listStacksSafe(cfg, client)
 	if err != nil {
 		return err
 	}
 
-	// Phase 2b: Fetch existing stacks first so eligibility validation and
-	// stack pre-validation can account for PRs that are already members of
-	// the target stack. The stacks are also reused in the upsert phase.
+	// Detect "add mode": when the first argument is a bare stack number that
+	// matches an existing stack, the remaining arguments are appended to the
+	// top of that stack. Stack, PR, and issue numbers share one repo-scoped
+	// numberspace, so a number that names a stack never also names a PR.
+	targetStack, prArgs := detectAddMode(args, stacks)
+
+	// Phase 1: Push branch args to the remote so PRs can be found/created.
+	if err := pushBranchArgs(cfg, opts, prArgs); err != nil {
+		return err
+	}
+
+	// Phase 2: Find existing PRs for all PR args (don't create yet).
+	cfg.Printf("Looking up PRs for %d %s...", len(prArgs), plural(len(prArgs), "branch", "branches"))
+	found, err := findExistingPRs(cfg, client, prArgs)
+	if err != nil {
+		return err
+	}
+
+	// Look up the repository's PR template (best-effort; skip if not in a repo).
+	var templateContent string
+	if repoRoot, tlErr := git.RootDir(); tlErr == nil {
+		templateContent = pr.FindTemplate(repoRoot)
+	}
+
+	// Add mode: append the PR args to the top of the named stack.
+	if targetStack != nil {
+		return runLinkAdd(cfg, client, opts, targetStack, stacks, prArgs, found, templateContent)
+	}
+
+	// Create/update mode: create a new stack or additively update the stack
+	// the PRs already belong to.
+	return runLinkCreateOrUpdate(cfg, client, opts, stacks, prArgs, found, templateContent)
+}
+
+// detectAddMode reports whether the first argument names an existing stack,
+// enabling "add mode" in which the remaining arguments are appended to the top
+// of that stack. It returns the matched stack (or nil) and the PR arguments to
+// resolve — args[1:] in add mode, or all args otherwise.
+//
+// Only a bare positive integer that isn't also a local branch name can name a
+// stack. Stack, PR, and issue numbers share one repo-scoped numberspace (so a
+// number never doubles as a PR), but branch names don't — a branch literally
+// named like a stack number is kept as a branch.
+func detectAddMode(args []string, stacks []github.RemoteStack) (*github.RemoteStack, []string) {
+	if len(args) < 2 {
+		return nil, args
+	}
+	n, err := strconv.Atoi(args[0])
+	if err != nil || n <= 0 || git.BranchExists(args[0]) {
+		return nil, args
+	}
+	for i := range stacks {
+		if stacks[i].Number == n {
+			return &stacks[i], args[1:]
+		}
+	}
+	return nil, args
+}
+
+// runLinkCreateOrUpdate creates a new stack from the resolved PR args, or
+// additively updates the single stack the PRs already belong to. This is the
+// original link behavior, where every PR in the stack must be listed.
+func runLinkCreateOrUpdate(cfg *config.Config, client github.ClientOps, opts *linkOptions, stacks []github.RemoteStack, prArgs []string, found []*resolvedArg, templateContent string) error {
 	knownPRNumbers := make([]int, 0, len(found))
 	for _, r := range found {
 		if r != nil {
 			knownPRNumbers = append(knownPRNumbers, r.prNumber)
 		}
-	}
-	cfg.Printf("Checking existing stacks...")
-	stacks, err := listStacksSafe(cfg, client)
-	if err != nil {
-		return err
 	}
 
 	// Determine the stack these PRs already belong to (if any). PRs that are
@@ -135,22 +200,16 @@ func runLink(cfg *config.Config, opts *linkOptions, args []string) error {
 		return err
 	}
 
-	// Phase 3: Pre-validate the stack — check that adding these PRs won't
-	// drop existing PRs from the target stack before creating any new PRs,
-	// so we can fail early without leaving orphaned PRs.
+	// Pre-validate the stack — check that adding these PRs won't drop existing
+	// PRs from the target stack before creating any new PRs, so we can fail
+	// early without leaving orphaned PRs.
 	if targetStack != nil {
 		if err := prevalidateStack(cfg, targetStack, knownPRNumbers); err != nil {
 			return err
 		}
 	}
 
-	// Look up the repository's PR template (best-effort; skip if not in a repo).
-	var templateContent string
-	if repoRoot, tlErr := git.RootDir(); tlErr == nil {
-		templateContent = pr.FindTemplate(repoRoot)
-	}
-
-	// Phase 4: Create PRs for branches that don't have one yet
+	// Create PRs for branches that don't have one yet.
 	needsCreation := 0
 	for _, r := range found {
 		if r == nil {
@@ -160,21 +219,174 @@ func runLink(cfg *config.Config, opts *linkOptions, args []string) error {
 	if needsCreation > 0 {
 		cfg.Printf("Creating %d %s...", needsCreation, plural(needsCreation, "PR", "PRs"))
 	}
-	resolved, err := createMissingPRs(cfg, client, opts, args, found, templateContent)
+	resolved, err := createMissingPRs(cfg, client, opts, prArgs, found, templateContent, opts.base)
 	if err != nil {
 		return err
 	}
 
-	// Phase 5: Fix base branches for existing PRs with wrong bases
-	fixBaseBranches(cfg, client, opts, resolved)
+	// Fix base branches for existing PRs with wrong bases.
+	fixBaseBranches(cfg, client, opts, resolved, opts.base)
 
-	// Phase 6: Upsert the stack (reuse stacks from phase 3)
+	// Upsert the stack (reuse the stacks fetched above).
 	prNumbers := make([]int, len(resolved))
 	for i, r := range resolved {
 		prNumbers[i] = r.prNumber
 	}
 
 	return upsertStack(cfg, client, stacks, prNumbers)
+}
+
+// runLinkAdd appends the resolved PR args to the top of an existing stack. PRs
+// already in the target stack are skipped (idempotent); PRs that belong to a
+// different stack are rejected. Branch args without a PR get one created and
+// chained on top of the stack's current top branch.
+func runLinkAdd(cfg *config.Config, client github.ClientOps, opts *linkOptions, target *github.RemoteStack, stacks []github.RemoteStack, prArgs []string, found []*resolvedArg, templateContent string) error {
+	if opts.baseChanged {
+		cfg.Warningf("--base is ignored when adding to stack #%d (its base is fixed by the existing stack)", target.Number)
+	}
+
+	inTarget := make(map[int]bool, len(target.PRNumbers()))
+	for _, n := range target.PRNumbers() {
+		inTarget[n] = true
+	}
+
+	// Partition the args into those already in the target stack (skipped) and
+	// those to append. found is parallel to prArgs; a nil entry is a branch
+	// with no PR yet, which is always new.
+	var appendArgs []string
+	var appendFound []*resolvedArg
+	for i, arg := range prArgs {
+		r := found[i]
+		if r != nil && inTarget[r.prNumber] {
+			cfg.Infof("PR %s is already in stack #%d — skipping",
+				cfg.PRLink(r.prNumber, r.prURL), target.Number)
+			continue
+		}
+		appendArgs = append(appendArgs, arg)
+		appendFound = append(appendFound, r)
+	}
+
+	// Enforce the one-stack constraint: none of the PRs being appended may
+	// belong to a different stack.
+	if err := ensureNotInOtherStack(cfg, stacks, target.Number, appendFound); err != nil {
+		return err
+	}
+
+	if len(appendArgs) == 0 {
+		cfg.Successf("Stack #%d is already up to date", target.Number)
+		return nil
+	}
+
+	// Validate eligibility of the PRs being appended. Target members were
+	// filtered out above, so every remaining PR faces the full checks.
+	if err := validatePREligibility(cfg, appendFound, nil); err != nil {
+		return err
+	}
+
+	// New PRs chain on top of the stack's current top branch. The stack list
+	// response should carry per-PR head refs, but fall back to fetching the
+	// full stack if the top branch can't be resolved from the listed stack.
+	topBranch, err := stackTopBranch(target)
+	if err != nil {
+		if full, gerr := client.GetStack(target.Number); gerr == nil && full != nil {
+			topBranch, err = stackTopBranch(full)
+		}
+		if err != nil {
+			cfg.Errorf("%s", err)
+			return ErrAPIFailure
+		}
+	}
+
+	needsCreation := 0
+	for _, r := range appendFound {
+		if r == nil {
+			needsCreation++
+		}
+	}
+	if needsCreation > 0 {
+		cfg.Printf("Creating %d %s...", needsCreation, plural(needsCreation, "PR", "PRs"))
+	}
+	resolved, err := createMissingPRs(cfg, client, opts, appendArgs, appendFound, templateContent, topBranch)
+	if err != nil {
+		return err
+	}
+
+	// Correct base branches so the appended PRs chain on top of the stack.
+	fixBaseBranches(cfg, client, opts, resolved, topBranch)
+
+	delta := make([]int, len(resolved))
+	for i, r := range resolved {
+		delta[i] = r.prNumber
+	}
+
+	return addToStack(cfg, client, target.Number, delta)
+}
+
+// ensureNotInOtherStack verifies that none of the resolved PRs belong to a
+// stack other than the target. PRs in no stack are allowed. Reports every
+// offender before returning an error.
+func ensureNotInOtherStack(cfg *config.Config, stacks []github.RemoteStack, targetNumber int, found []*resolvedArg) error {
+	owner := make(map[int]int)
+	for i := range stacks {
+		for _, n := range stacks[i].PRNumbers() {
+			owner[n] = stacks[i].Number
+		}
+	}
+
+	invalid := 0
+	for _, r := range found {
+		if r == nil {
+			continue
+		}
+		if sn, ok := owner[r.prNumber]; ok && sn != targetNumber {
+			cfg.Errorf("PR %s already belongs to stack #%d — unstack it first",
+				cfg.PRLink(r.prNumber, r.prURL), sn)
+			invalid++
+		}
+	}
+	if invalid > 0 {
+		return ErrInvalidArgs
+	}
+	return nil
+}
+
+// stackTopBranch returns the head branch of the pull request at the top of the
+// stack — the base for the first PR appended on top of it.
+func stackTopBranch(s *github.RemoteStack) (string, error) {
+	if len(s.PRDetails) == 0 {
+		return "", fmt.Errorf("stack #%d has no pull requests to append to", s.Number)
+	}
+	top := s.PRDetails[len(s.PRDetails)-1]
+	if top.Head.Ref == "" {
+		return "", fmt.Errorf("could not determine the top branch of stack #%d", s.Number)
+	}
+	return top.Head.Ref, nil
+}
+
+// addToStack appends the delta PR numbers to the top of the target stack and
+// reports the result, translating API errors into typed exit codes.
+func addToStack(cfg *config.Config, client github.ClientOps, stackNumber int, delta []int) error {
+	if _, err := client.AddToStack(stackNumber, delta); err != nil {
+		var httpErr *api.HTTPError
+		if errors.As(err, &httpErr) {
+			switch httpErr.StatusCode {
+			case 404:
+				cfg.Errorf("Stack #%d no longer exists", stackNumber)
+				return ErrNotInStack
+			case 422:
+				cfg.Errorf("Cannot add to stack: %s", httpErr.Message)
+				return ErrAPIFailure
+			default:
+				cfg.Errorf("Failed to add to stack (HTTP %d): %s", httpErr.StatusCode, httpErr.Message)
+				return ErrAPIFailure
+			}
+		}
+		cfg.Errorf("Failed to add to stack: %v", err)
+		return ErrAPIFailure
+	}
+
+	cfg.Successf("Added %d %s to stack #%d", len(delta), plural(len(delta), "PR", "PRs"), stackNumber)
+	return nil
 }
 
 // pushBranchArgs pushes all arguments that correspond to local branches
@@ -410,8 +622,10 @@ func prevalidateStack(cfg *config.Config, matchedStack *github.RemoteStack, know
 }
 
 // createMissingPRs creates PRs for branches that don't have one yet.
-// Returns the fully resolved list with all branches mapped to PRs.
-func createMissingPRs(cfg *config.Config, client github.ClientOps, opts *linkOptions, args []string, found []*resolvedArg, templateContent string) ([]resolvedArg, error) {
+// Returns the fully resolved list with all branches mapped to PRs. bottomBase
+// is the base branch for the first PR in the chain; each subsequent PR bases
+// off the previous PR's head branch.
+func createMissingPRs(cfg *config.Config, client github.ClientOps, opts *linkOptions, args []string, found []*resolvedArg, templateContent, bottomBase string) ([]resolvedArg, error) {
 	resolved := make([]resolvedArg, len(args))
 
 	for i, arg := range args {
@@ -421,7 +635,7 @@ func createMissingPRs(cfg *config.Config, client github.ClientOps, opts *linkOpt
 		}
 
 		// Determine the base branch for this PR
-		baseBranch := opts.base
+		baseBranch := bottomBase
 		if i > 0 {
 			baseBranch = resolved[i-1].branch
 		}
@@ -448,17 +662,17 @@ func createMissingPRs(cfg *config.Config, client github.ClientOps, opts *linkOpt
 }
 
 // fixBaseBranches updates the base branch of existing PRs to match the
-// expected stack chain. The first PR should have base = opts.base,
+// expected stack chain. The first PR should have base = bottomBase,
 // each subsequent PR should have base = previous PR's head branch.
 // Newly created PRs (created=true) are skipped since they already have
 // the correct base from creation.
-func fixBaseBranches(cfg *config.Config, client github.ClientOps, opts *linkOptions, resolved []resolvedArg) {
+func fixBaseBranches(cfg *config.Config, client github.ClientOps, opts *linkOptions, resolved []resolvedArg, bottomBase string) {
 	for i, r := range resolved {
 		if r.created {
 			continue
 		}
 
-		expectedBase := opts.base
+		expectedBase := bottomBase
 		if i > 0 {
 			expectedBase = resolved[i-1].branch
 		}
