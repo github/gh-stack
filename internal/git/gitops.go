@@ -69,8 +69,10 @@ type Ops interface {
 	ValidateRefName(name string) error
 	RenameBranch(oldName, newName string) error
 	CherryPick(commits []string) error
+	CherryPickQuit() error
 	CherryPickAbort() error
 	CherryPickContinue() error
+	IsCherryPickInProgress() bool
 	HasUncommittedChanges() (bool, error)
 	LogMerges(base, head string) ([]CommitInfo, error)
 }
@@ -612,14 +614,38 @@ func (d *defaultOps) CherryPick(commits []string) error {
 	return runSilent(args...)
 }
 
-func (d *defaultOps) CherryPickAbort() error {
+// CherryPickQuit clears the in-progress cherry-pick sequencer state without
+// touching the working tree or index (git cherry-pick --quit). Used to clear
+// any stale sequencer state before starting a fresh cherry-pick.
+func (d *defaultOps) CherryPickQuit() error {
 	return runSilent("cherry-pick", "--quit")
+}
+
+// CherryPickAbort cancels an in-progress cherry-pick and restores the working
+// tree and index to the state before the cherry-pick began
+// (git cherry-pick --abort). Errors if no cherry-pick is in progress, so
+// callers should gate this with IsCherryPickInProgress.
+func (d *defaultOps) CherryPickAbort() error {
+	return runSilent("cherry-pick", "--abort")
 }
 
 func (d *defaultOps) CherryPickContinue() error {
 	cmd := exec.Command("git", "cherry-pick", "--continue")
 	cmd.Env = append(os.Environ(), "GIT_EDITOR=true")
 	return cmd.Run()
+}
+
+// IsCherryPickInProgress reports whether a cherry-pick is currently in progress
+// by checking for the CHERRY_PICK_HEAD marker in the git directory.
+func (d *defaultOps) IsCherryPickInProgress() bool {
+	gitDir, err := GitDir()
+	if err != nil {
+		return false
+	}
+	if _, err := os.Stat(filepath.Join(gitDir, "CHERRY_PICK_HEAD")); err == nil {
+		return true
+	}
+	return false
 }
 
 func (d *defaultOps) HasUncommittedChanges() (bool, error) {

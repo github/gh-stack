@@ -51,7 +51,7 @@ func newApplyMock(gitDir string, branchSHAs map[string]string) *git.MockOps {
 			}
 			return "sha-" + ref, nil
 		},
-		IsAncestorFn:        func(a, d string) (bool, error) { return false, nil },
+		IsAncestorFn:         func(a, d string) (bool, error) { return false, nil },
 		MergeBaseFn:          func(a, b string) (string, error) { return "merge-base", nil },
 		CheckoutBranchFn:     func(string) error { return nil },
 		RebaseOntoFn:         func(string, string, string, git.RebaseOpts) error { return nil },
@@ -60,11 +60,11 @@ func newApplyMock(gitDir string, branchSHAs map[string]string) *git.MockOps {
 		LogRangeFn: func(base, head string) ([]git.CommitInfo, error) {
 			return []git.CommitInfo{{SHA: "commit-1"}, {SHA: "commit-2"}}, nil
 		},
-		CherryPickFn:    func([]string) error { return nil },
+		CherryPickFn:      func([]string) error { return nil },
 		ConflictedFilesFn: func() ([]string, error) { return nil, nil },
-		ResetHardFn:     func(string) error { return nil },
-		CreateBranchFn:  func(string, string) error { return nil },
-		RebaseAbortFn:   func() error { return nil },
+		ResetHardFn:       func(string) error { return nil },
+		CreateBranchFn:    func(string, string) error { return nil },
+		RebaseAbortFn:     func() error { return nil },
 	}
 }
 
@@ -795,14 +795,14 @@ func TestContinueApply_MultiStackFindsCorrectStack(t *testing.T) {
 
 	// Create a state file pointing at Stack 1 (index 1)
 	state := &StateFile{
-		SchemaVersion:   1,
-		StackName:       "main",
-		StackIndex:      1, // The correct stack is at index 1
-		Phase:           PhaseConflict,
-		ConflictBranch:  "A",
-		ConflictType:    "rebase",
+		SchemaVersion:     1,
+		StackName:         "main",
+		StackIndex:        1, // The correct stack is at index 1
+		Phase:             PhaseConflict,
+		ConflictBranch:    "A",
+		ConflictType:      "rebase",
 		RemainingBranches: []string{"B", "C"},
-		OriginalRefs:    map[string]string{"B": "sha-A", "C": "sha-B"},
+		OriginalRefs:      map[string]string{"B": "sha-A", "C": "sha-B"},
 	}
 	require.NoError(t, SaveState(gitDir, state))
 
@@ -1044,13 +1044,13 @@ func TestContinueApply(t *testing.T) {
 
 	// Write a conflict state file
 	stateFile := &StateFile{
-		SchemaVersion:      1,
-		StackName:          "main",
-		StackIndex:         0,
-		Phase:              "conflict",
-		ConflictBranch:     "B",
-		RemainingBranches:  []string{"C"},
-		OriginalBranch:     "A",
+		SchemaVersion:     1,
+		StackName:         "main",
+		StackIndex:        0,
+		Phase:             "conflict",
+		ConflictBranch:    "B",
+		RemainingBranches: []string{"C"},
+		OriginalBranch:    "A",
 		OriginalRefs: map[string]string{
 			"A": "sha-A",
 			"B": "sha-B",
@@ -1064,9 +1064,9 @@ func TestContinueApply(t *testing.T) {
 	var checkoutCalls []string
 
 	mock := &git.MockOps{
-		GitDirFn:        func() (string, error) { return gitDir, nil },
-		CurrentBranchFn: func() (string, error) { return "B", nil },
-		BranchExistsFn:  func(string) bool { return true },
+		GitDirFn:             func() (string, error) { return gitDir, nil },
+		CurrentBranchFn:      func() (string, error) { return "B", nil },
+		BranchExistsFn:       func(string) bool { return true },
 		IsRebaseInProgressFn: func() bool { return true },
 		RebaseContinueFn: func(git.RebaseOpts) error {
 			rebaseContinueCalled = true
@@ -1081,8 +1081,8 @@ func TestContinueApply(t *testing.T) {
 			return nil
 		},
 		IsAncestorFn: func(a, d string) (bool, error) { return false, nil },
-		MergeBaseFn:   func(a, b string) (string, error) { return "merge-base", nil },
-		RevParseFn:    func(ref string) (string, error) { return "sha-" + ref, nil },
+		MergeBaseFn:  func(a, b string) (string, error) { return "merge-base", nil },
+		RevParseFn:   func(ref string) (string, error) { return "sha-" + ref, nil },
 	}
 
 	restore := git.SetOps(mock)
@@ -1201,6 +1201,220 @@ func TestUnwind_AbortsActiveRebase(t *testing.T) {
 	require.NoError(t, err)
 	assert.True(t, rebaseAbortCalled, "RebaseAbort should be called when rebase is in progress")
 	assert.False(t, StateExists(gitDir))
+}
+
+// ─── Unwind with active cherry-pick ─────────────────────────────────────────
+
+// A fold-down conflict leaves an in-progress cherry-pick with an unmerged
+// index. Unwind must abort it (git cherry-pick --abort) before restoring
+// branches, otherwise the restore checkouts fail on the unmerged index.
+func TestUnwind_AbortsActiveCherryPick(t *testing.T) {
+	s := stack.Stack{
+		Trunk: stack.BranchRef{Branch: "main"},
+		Branches: []stack.BranchRef{
+			{Branch: "A"},
+		},
+	}
+
+	gitDir := t.TempDir()
+	sf := writeTestStackFile(t, gitDir, s)
+
+	snapshotMock := &git.MockOps{
+		RevParseFn: func(ref string) (string, error) { return "sha-" + ref, nil },
+	}
+	restore := git.SetOps(snapshotMock)
+	snapshot, err := BuildSnapshot(&s)
+	require.NoError(t, err)
+	restore()
+
+	require.NoError(t, SaveState(gitDir, &StateFile{
+		SchemaVersion: 1, Phase: PhaseConflict, ConflictType: "cherry_pick", Snapshot: snapshot,
+	}))
+
+	var cherryPickAbortCalled bool
+	var rebaseAbortCalled bool
+	mock := &git.MockOps{
+		IsRebaseInProgressFn:     func() bool { return false },
+		IsCherryPickInProgressFn: func() bool { return true },
+		RebaseAbortFn:            func() error { rebaseAbortCalled = true; return nil },
+		CherryPickAbortFn:        func() error { cherryPickAbortCalled = true; return nil },
+		BranchExistsFn:           func(string) bool { return true },
+		CheckoutBranchFn:         func(string) error { return nil },
+		ResetHardFn:              func(string) error { return nil },
+		CreateBranchFn:           func(string, string) error { return nil },
+	}
+
+	restore = git.SetOps(mock)
+	defer restore()
+
+	cfg, _, _ := config.NewTestConfig()
+	defer cfg.Out.Close()
+	defer cfg.Err.Close()
+
+	err = Unwind(cfg, gitDir, snapshot, 0, sf, nil)
+	require.NoError(t, err)
+	assert.True(t, cherryPickAbortCalled, "CherryPickAbort should be called when a cherry-pick is in progress")
+	assert.False(t, rebaseAbortCalled, "RebaseAbort should not be called when no rebase is in progress")
+	assert.False(t, StateExists(gitDir))
+}
+
+// ─── ContinueApply: subsequent conflict after fold-down is a rebase ─────────
+
+// After resolving an initial fold-down (cherry-pick) conflict, the cascading
+// rebase over the remaining branches may itself conflict. That conflict is a
+// rebase, so ContinueApply must update ConflictType from "cherry_pick" to
+// "rebase" — otherwise the next --continue wrongly calls CherryPickContinue
+// and fails, stranding the user.
+func TestContinueApply_SubsequentConflictBecomesRebase(t *testing.T) {
+	s := stack.Stack{
+		Trunk: stack.BranchRef{Branch: "main"},
+		Branches: []stack.BranchRef{
+			{Branch: "A"},
+			{Branch: "B"},
+			{Branch: "C"},
+		},
+	}
+
+	gitDir := t.TempDir()
+	sf := writeTestStackFile(t, gitDir, s)
+	_ = sf
+
+	// State as written when a fold-down of B into A conflicts on cherry-pick.
+	// B is still present in the stack metadata (it is removed only after the
+	// cherry-pick succeeds in ContinueApply).
+	state := &StateFile{
+		SchemaVersion:     1,
+		StackName:         "main",
+		StackIndex:        0,
+		Phase:             PhaseConflict,
+		ConflictType:      "cherry_pick",
+		ConflictBranch:    "B",
+		FoldBranch:        "B",
+		FoldTarget:        "A",
+		RemainingBranches: []string{"A", "C"},
+		OriginalBranch:    "A",
+		OriginalRefs:      map[string]string{"A": "sha-main", "C": "sha-A-old"},
+	}
+	require.NoError(t, SaveState(gitDir, state))
+
+	mock := newApplyMock(gitDir, map[string]string{
+		"main": "sha-main", "A": "sha-A", "B": "sha-B", "C": "sha-C",
+	})
+	// The user resolved the cherry-pick; --continue finishes it cleanly.
+	mock.CherryPickContinueFn = func() error { return nil }
+	// A rebases cleanly onto main; C then conflicts.
+	mock.RebaseOntoFn = func(newBase, oldBase, branch string, opts git.RebaseOpts) error {
+		if branch == "C" {
+			return assert.AnError
+		}
+		return nil
+	}
+	mock.ConflictedFilesFn = func() ([]string, error) { return []string{"c.go"}, nil }
+
+	restore := git.SetOps(mock)
+	defer restore()
+
+	cfg, _, _ := config.NewTestConfig()
+	defer cfg.Out.Close()
+	defer cfg.Err.Close()
+
+	err := ContinueApply(cfg, gitDir, noopUpdateBaseSHAs)
+	require.Error(t, err)
+
+	got, loadErr := LoadState(gitDir)
+	require.NoError(t, loadErr)
+	require.NotNil(t, got)
+	assert.Equal(t, PhaseConflict, got.Phase)
+	assert.Equal(t, "rebase", got.ConflictType, "subsequent cascade conflict must be recorded as a rebase")
+	assert.Equal(t, "C", got.ConflictBranch)
+}
+
+// Regression test for the review on PR #167: after an initial fold-down
+// (cherry-pick) conflict is resolved, a subsequent cascade rebase conflict must
+// persist the fold-branch removal to disk. Otherwise the next --continue
+// re-reads stale on-disk metadata and — because ConflictType is now "rebase" —
+// skips the fold-removal step, silently resurrecting the folded branch as a
+// phantom entry once recovery completes.
+func TestContinueApply_FoldThenCascadeConflict_DoesNotResurrectFoldedBranch(t *testing.T) {
+	s := stack.Stack{
+		Trunk: stack.BranchRef{Branch: "main"},
+		Branches: []stack.BranchRef{
+			{Branch: "A"},
+			{Branch: "B"},
+			{Branch: "C"},
+		},
+	}
+
+	gitDir := t.TempDir()
+	writeTestStackFile(t, gitDir, s)
+
+	// State written by ApplyPlan when the fold-down of B into A conflicts on
+	// cherry-pick. B is still present in the on-disk metadata at this point.
+	state := &StateFile{
+		SchemaVersion:     1,
+		StackName:         "main",
+		StackIndex:        0,
+		Phase:             PhaseConflict,
+		ConflictType:      "cherry_pick",
+		ConflictBranch:    "B",
+		FoldBranch:        "B",
+		FoldTarget:        "A",
+		RemainingBranches: []string{"A", "C"},
+		OriginalBranch:    "A",
+		OriginalRefs:      map[string]string{"A": "sha-main", "C": "sha-A-old"},
+	}
+	require.NoError(t, SaveState(gitDir, state))
+
+	mock := newApplyMock(gitDir, map[string]string{
+		"main": "sha-main", "A": "sha-A", "B": "sha-B", "C": "sha-C",
+	})
+	mock.CherryPickContinueFn = func() error { return nil }
+	mock.IsRebaseInProgressFn = func() bool { return true }
+	mock.RebaseContinueFn = func(git.RebaseOpts) error { return nil }
+	// C conflicts on its first rebase attempt, then succeeds (user resolved it).
+	cRebases := 0
+	mock.RebaseOntoFn = func(newBase, oldBase, branch string, opts git.RebaseOpts) error {
+		if branch == "C" {
+			cRebases++
+			if cRebases == 1 {
+				return assert.AnError
+			}
+		}
+		return nil
+	}
+	mock.ConflictedFilesFn = func() ([]string, error) { return []string{"c.go"}, nil }
+
+	restore := git.SetOps(mock)
+	defer restore()
+
+	cfg, _, _ := config.NewTestConfig()
+	defer cfg.Out.Close()
+	defer cfg.Err.Close()
+
+	// First --continue: finishes the fold, then conflicts rebasing C.
+	err := ContinueApply(cfg, gitDir, noopUpdateBaseSHAs)
+	require.Error(t, err)
+
+	// The fold-branch removal must already be persisted on disk, even though
+	// the cascade hit a conflict.
+	afterFirst, err := stack.Load(gitDir)
+	require.NoError(t, err)
+	assert.Equal(t, -1, afterFirst.Stacks[0].IndexOf("B"),
+		"folded branch B must not be present on disk after the cascade conflict")
+
+	// Second --continue: rebase resolves and recovery completes.
+	err = ContinueApply(cfg, gitDir, noopUpdateBaseSHAs)
+	require.NoError(t, err)
+
+	final, err := stack.Load(gitDir)
+	require.NoError(t, err)
+	names := make([]string, len(final.Stacks[0].Branches))
+	for i, b := range final.Stacks[0].Branches {
+		names[i] = b.Branch
+	}
+	assert.Equal(t, []string{"A", "C"}, names,
+		"folded branch B must stay removed after recovery completes")
+	assert.False(t, StateExists(gitDir), "state should be cleared after successful recovery")
 }
 
 // ─── Unwind restores renamed branch ─────────────────────────────────────────

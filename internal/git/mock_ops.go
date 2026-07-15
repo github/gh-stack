@@ -6,56 +6,60 @@ import "fmt"
 // Each field is an optional function that, when set, handles the corresponding
 // Ops method call. When nil, a reasonable default is returned.
 type MockOps struct {
-	GitDirFn                func() (string, error)
-	RootDirFn               func() (string, error)
-	CurrentBranchFn         func() (string, error)
-	BranchExistsFn          func(string) bool
-	CheckoutBranchFn        func(string) error
-	FetchFn                 func(string) error
-	FetchBranchesFn         func(string, []string) error
-	DefaultBranchFn         func() (string, error)
-	CreateBranchFn          func(string, string) error
-	PushFn                  func(string, []string, bool, bool) error
-	ResolveRemoteFn         func(string) (string, error)
-	RebaseFn                func(string, RebaseOpts) error
-	EnableRerereFn          func() error
-	IsRerereEnabledFn       func() (bool, error)
-	IsRerereDeclinedFn      func() (bool, error)
-	SaveRerereDeclinedFn    func() error
-	GetSavedRemoteFn        func() (string, error)
-	SaveRemoteFn            func(string) error
-	ClearRemoteFn           func() error
-	RebaseOntoFn            func(string, string, string, RebaseOpts) error
-	RebaseContinueFn        func(RebaseOpts) error
-	RebaseAbortFn           func() error
-	IsRebaseInProgressFn    func() bool
-	ConflictedFilesFn       func() ([]string, error)
-	FindConflictMarkersFn   func(string) (*ConflictMarkerInfo, error)
-	IsAncestorFn            func(string, string) (bool, error)
-	RevParseFn              func(string) (string, error)
-	RevParseMultiFn         func([]string) ([]string, error)
-	MergeBaseFn             func(string, string) (string, error)
-	LogFn                   func(string, int) ([]CommitInfo, error)
-	LogRangeFn              func(string, string) ([]CommitInfo, error)
-	DiffStatRangeFn         func(string, string) (int, int, error)
-	DiffStatFilesFn         func(string, string) ([]FileDiffStat, error)
-	DeleteBranchFn          func(string, bool) error
-	DeleteRemoteBranchFn    func(string, string) error
-	DeleteTrackingRefFn     func(string, string) error
-	ResetHardFn             func(string) error
-	SetUpstreamTrackingFn   func(string, string) error
-	MergeFFFn               func(string) error
-	UpdateBranchRefFn       func(string, string) error
-	StageAllFn              func() error
-	StageTrackedFn          func() error
-	HasStagedChangesFn      func() bool
-	CommitFn                func(string) (string, error)
-	CommitInteractiveFn     func() (string, error)
-	ValidateRefNameFn       func(string) error
-	RenameBranchFn          func(string, string) error
-	CherryPickFn            func([]string) error
-	HasUncommittedChangesFn func() (bool, error)
-	LogMergesFn             func(string, string) ([]CommitInfo, error)
+	GitDirFn                 func() (string, error)
+	RootDirFn                func() (string, error)
+	CurrentBranchFn          func() (string, error)
+	BranchExistsFn           func(string) bool
+	CheckoutBranchFn         func(string) error
+	FetchFn                  func(string) error
+	FetchBranchesFn          func(string, []string) error
+	DefaultBranchFn          func() (string, error)
+	CreateBranchFn           func(string, string) error
+	PushFn                   func(string, []string, bool, bool) error
+	ResolveRemoteFn          func(string) (string, error)
+	RebaseFn                 func(string, RebaseOpts) error
+	EnableRerereFn           func() error
+	IsRerereEnabledFn        func() (bool, error)
+	IsRerereDeclinedFn       func() (bool, error)
+	SaveRerereDeclinedFn     func() error
+	GetSavedRemoteFn         func() (string, error)
+	SaveRemoteFn             func(string) error
+	ClearRemoteFn            func() error
+	RebaseOntoFn             func(string, string, string, RebaseOpts) error
+	RebaseContinueFn         func(RebaseOpts) error
+	RebaseAbortFn            func() error
+	IsRebaseInProgressFn     func() bool
+	ConflictedFilesFn        func() ([]string, error)
+	FindConflictMarkersFn    func(string) (*ConflictMarkerInfo, error)
+	IsAncestorFn             func(string, string) (bool, error)
+	RevParseFn               func(string) (string, error)
+	RevParseMultiFn          func([]string) ([]string, error)
+	MergeBaseFn              func(string, string) (string, error)
+	LogFn                    func(string, int) ([]CommitInfo, error)
+	LogRangeFn               func(string, string) ([]CommitInfo, error)
+	DiffStatRangeFn          func(string, string) (int, int, error)
+	DiffStatFilesFn          func(string, string) ([]FileDiffStat, error)
+	DeleteBranchFn           func(string, bool) error
+	DeleteRemoteBranchFn     func(string, string) error
+	DeleteTrackingRefFn      func(string, string) error
+	ResetHardFn              func(string) error
+	SetUpstreamTrackingFn    func(string, string) error
+	MergeFFFn                func(string) error
+	UpdateBranchRefFn        func(string, string) error
+	StageAllFn               func() error
+	StageTrackedFn           func() error
+	HasStagedChangesFn       func() bool
+	CommitFn                 func(string) (string, error)
+	CommitInteractiveFn      func() (string, error)
+	ValidateRefNameFn        func(string) error
+	RenameBranchFn           func(string, string) error
+	CherryPickFn             func([]string) error
+	CherryPickQuitFn         func() error
+	CherryPickAbortFn        func() error
+	CherryPickContinueFn     func() error
+	IsCherryPickInProgressFn func() bool
+	HasUncommittedChangesFn  func() (bool, error)
+	LogMergesFn              func(string, string) ([]CommitInfo, error)
 }
 
 var _ Ops = (*MockOps)(nil)
@@ -405,11 +409,31 @@ func (m *MockOps) CherryPick(commits []string) error {
 	return nil
 }
 
-func (m *MockOps) CherryPickAbort() error {
+func (m *MockOps) CherryPickQuit() error {
+	if m.CherryPickQuitFn != nil {
+		return m.CherryPickQuitFn()
+	}
 	return nil
 }
 
+func (m *MockOps) CherryPickAbort() error {
+	if m.CherryPickAbortFn != nil {
+		return m.CherryPickAbortFn()
+	}
+	return nil
+}
+
+func (m *MockOps) IsCherryPickInProgress() bool {
+	if m.IsCherryPickInProgressFn != nil {
+		return m.IsCherryPickInProgressFn()
+	}
+	return false
+}
+
 func (m *MockOps) CherryPickContinue() error {
+	if m.CherryPickContinueFn != nil {
+		return m.CherryPickContinueFn()
+	}
 	return nil
 }
 
