@@ -27,8 +27,7 @@ func AddCmd(cfg *config.Config) *cobra.Command {
 
 When -m is omitted but -A or -u is used, your editor opens for the
 commit message. When -m is provided without an explicit branch name,
-the branch name is auto-generated based on the commit message and
-stack prefix.`,
+the branch name is auto-generated from the commit message.`,
 		Example: `  # Add a new named branch to the stack
   $ gh stack add my-feature
 
@@ -119,55 +118,41 @@ func runAdd(cfg *config.Config, opts *addOptions, args []string) error {
 		return nil
 	}
 
-	// Resolve branch name
+	// Resolve branch name:
+	//   explicit name    -> used verbatim
+	//   -m without a name -> auto-generated from the commit message
+	//   neither          -> prompt for a name
 	var branchName string
 	var explicitName string
 	if len(args) > 0 {
 		explicitName = args[0]
 	}
-	existingBranches := s.BranchNames()
 
-	if opts.message != "" {
-		// Auto-naming mode
-		name, info := branch.ResolveBranchName(s.Prefix, opts.message, explicitName, existingBranches, s.Numbered)
-		if name == "" {
+	if explicitName != "" {
+		branchName = explicitName
+	} else if opts.message != "" {
+		branchName = branch.DateSlug(opts.message)
+		if branchName == "" {
 			cfg.Errorf("could not generate branch name")
 			return ErrSilent
 		}
-		branchName = name
-		if info != "" {
-			cfg.Infof("%s", info)
-		}
-	} else if explicitName != "" {
-		branchName = applyPrefix(cfg, s.Prefix, explicitName)
 	} else {
-		// No -m, no explicit name — auto-generate if using numbered
-		// convention, otherwise prompt for a name.
-		if s.Numbered && s.Prefix != "" {
-			branchName = branch.NextNumberedName(s.Prefix, existingBranches)
-		} else {
-			// Pre-fill the prompt with the prefix so the user can see
-			// (and optionally edit) the full branch name.
-			prefill := ""
-			if s.Prefix != "" {
-				prefill = s.Prefix + "/"
-			}
-			for {
-				input, err := inputWithPrefill(cfg, "Enter a name for the new branch:", prefill)
-				if err != nil {
-					if isInterruptError(err) {
-						printInterrupt(cfg)
-						return ErrSilent
-					}
-					return fmt.Errorf("could not read branch name: %w", err)
+		// No -m and no explicit name — prompt for one.
+		for {
+			input, err := promptInput(cfg, "Enter a name for the new branch:")
+			if err != nil {
+				if isInterruptError(err) {
+					printInterrupt(cfg)
+					return ErrSilent
 				}
-				if input == "" {
-					cfg.Warningf("branch name cannot be empty, please try again")
-					continue
-				}
-				branchName = input
-				break
+				return fmt.Errorf("could not read branch name: %w", err)
 			}
+			if input == "" {
+				cfg.Warningf("branch name cannot be empty, please try again")
+				continue
+			}
+			branchName = input
+			break
 		}
 	}
 
@@ -280,13 +265,4 @@ func doCommit(message string) (string, error) {
 		return git.Commit(message)
 	}
 	return git.CommitInteractive()
-}
-
-// applyPrefix prepends the stack prefix to a branch name if set.
-func applyPrefix(cfg *config.Config, prefix, name string) string {
-	if prefix != "" {
-		name = prefix + "/" + name
-		cfg.Infof("Branch name prefixed: %s", name)
-	}
-	return name
 }

@@ -94,25 +94,7 @@ func TestInit_AdoptExistingBranches(t *testing.T) {
 	assert.Equal(t, []string{"b1", "b2", "b3"}, names)
 }
 
-func TestInit_PrefixStoredInStack(t *testing.T) {
-	gitDir := t.TempDir()
-	restore := git.SetOps(&git.MockOps{
-		GitDirFn:        func() (string, error) { return gitDir, nil },
-		DefaultBranchFn: func() (string, error) { return "main", nil },
-		CurrentBranchFn: func() (string, error) { return "main", nil },
-	})
-	defer restore()
-
-	cfg, outR, errR := config.NewTestConfig()
-	runInit(cfg, &initOptions{branches: []string{"myBranch"}, prefix: "feat"})
-	collectOutput(cfg, outR, errR)
-
-	sf, err := stack.Load(gitDir)
-	require.NoError(t, err, "loading stack")
-	assert.Equal(t, "feat", sf.Stacks[0].Prefix)
-}
-
-func TestInit_PrefixAppliedToExplicitBranches(t *testing.T) {
+func TestInit_ExplicitBranchNamesUsedVerbatim(t *testing.T) {
 	gitDir := t.TempDir()
 	var created []string
 	restore := git.SetOps(&git.MockOps{
@@ -127,43 +109,16 @@ func TestInit_PrefixAppliedToExplicitBranches(t *testing.T) {
 	defer restore()
 
 	cfg, outR, errR := config.NewTestConfig()
-	err := runInit(cfg, &initOptions{branches: []string{"b1", "b2"}, prefix: "feat"})
+	err := runInit(cfg, &initOptions{branches: []string{"feat/a", "feat/b"}})
 	output := collectOutput(cfg, outR, errR)
 
 	require.NoError(t, err, "runInit should succeed")
 	require.NotContains(t, output, "\u2717", "unexpected error")
-	assert.Equal(t, []string{"feat/b1", "feat/b2"}, created, "branches should be created with prefix")
+	assert.Equal(t, []string{"feat/a", "feat/b"}, created, "branches should be created verbatim")
 
 	sf, err := stack.Load(gitDir)
 	require.NoError(t, err, "loading stack")
-	names := sf.Stacks[0].BranchNames()
-	assert.Equal(t, []string{"feat/b1", "feat/b2"}, names, "stack should store prefixed branch names")
-}
-
-func TestInit_InvalidPrefixRejectedBeforeBranchCreation(t *testing.T) {
-	gitDir := t.TempDir()
-	var created []string
-	restore := git.SetOps(&git.MockOps{
-		GitDirFn:        func() (string, error) { return gitDir, nil },
-		DefaultBranchFn: func() (string, error) { return "main", nil },
-		CurrentBranchFn: func() (string, error) { return "main", nil },
-		ValidateRefNameFn: func(name string) error {
-			return fmt.Errorf("invalid ref name: %s", name)
-		},
-		CreateBranchFn: func(name, base string) error {
-			created = append(created, name)
-			return nil
-		},
-	})
-	defer restore()
-
-	cfg, outR, errR := config.NewTestConfig()
-	err := runInit(cfg, &initOptions{branches: []string{"mybranch"}, prefix: "bad..prefix"})
-	output := collectOutput(cfg, outR, errR)
-
-	assert.ErrorIs(t, err, ErrInvalidArgs, "should reject invalid prefix")
-	assert.Contains(t, output, "invalid prefix")
-	assert.Empty(t, created, "no branches should be created when prefix is invalid")
+	assert.Equal(t, []string{"feat/a", "feat/b"}, sf.Stacks[0].BranchNames(), "stack should store branch names verbatim")
 }
 
 func TestInit_AdoptFlagShowsDeprecationWarning(t *testing.T) {
@@ -464,110 +419,6 @@ func TestInit_ImplicitAdopt_Mixed(t *testing.T) {
 	assert.Equal(t, []string{"existing1", "new1", "existing2"}, sf.Stacks[0].BranchNames())
 }
 
-func TestInit_PrefixDetection_ArgsCommonPrefix(t *testing.T) {
-	// Explicit branch names with a common prefix should NOT auto-detect
-	// a prefix — the slash is part of the branch name, not a convention.
-	// Users who want a prefix should use --prefix.
-	gitDir := t.TempDir()
-	restore := git.SetOps(&git.MockOps{
-		GitDirFn:        func() (string, error) { return gitDir, nil },
-		DefaultBranchFn: func() (string, error) { return "main", nil },
-		CurrentBranchFn: func() (string, error) { return "main", nil },
-		CreateBranchFn:  func(name, base string) error { return nil },
-	})
-	defer restore()
-
-	cfg, outR, errR := config.NewTestConfig()
-	err := runInit(cfg, &initOptions{branches: []string{"feat/a", "feat/b", "feat/c"}})
-	collectOutput(cfg, outR, errR)
-
-	require.NoError(t, err)
-	sf, _ := stack.Load(gitDir)
-	assert.Equal(t, "", sf.Stacks[0].Prefix)
-}
-
-func TestInit_PrefixDetection_ArgsMixedPrefix(t *testing.T) {
-	// Scenario 10: args mixed prefixes → no prefix
-	gitDir := t.TempDir()
-	restore := git.SetOps(&git.MockOps{
-		GitDirFn:        func() (string, error) { return gitDir, nil },
-		DefaultBranchFn: func() (string, error) { return "main", nil },
-		CurrentBranchFn: func() (string, error) { return "main", nil },
-		CreateBranchFn:  func(name, base string) error { return nil },
-	})
-	defer restore()
-
-	cfg, outR, errR := config.NewTestConfig()
-	err := runInit(cfg, &initOptions{branches: []string{"feat/a", "bug/b"}})
-	collectOutput(cfg, outR, errR)
-
-	require.NoError(t, err)
-	sf, _ := stack.Load(gitDir)
-	assert.Equal(t, "", sf.Stacks[0].Prefix)
-}
-
-func TestInit_PrefixDetection_ArgsNoSlash(t *testing.T) {
-	// No slashes → no prefix
-	gitDir := t.TempDir()
-	restore := git.SetOps(&git.MockOps{
-		GitDirFn:        func() (string, error) { return gitDir, nil },
-		DefaultBranchFn: func() (string, error) { return "main", nil },
-		CurrentBranchFn: func() (string, error) { return "main", nil },
-		CreateBranchFn:  func(name, base string) error { return nil },
-	})
-	defer restore()
-
-	cfg, outR, errR := config.NewTestConfig()
-	err := runInit(cfg, &initOptions{branches: []string{"auth", "api", "ui"}})
-	collectOutput(cfg, outR, errR)
-
-	require.NoError(t, err)
-	sf, _ := stack.Load(gitDir)
-	assert.Equal(t, "", sf.Stacks[0].Prefix)
-}
-
-func TestInit_PrefixDetection_NestedPrefix(t *testing.T) {
-	// Explicit branch names with nested slashes should NOT auto-detect
-	// a prefix — the user typed the full branch name deliberately.
-	gitDir := t.TempDir()
-	restore := git.SetOps(&git.MockOps{
-		GitDirFn:        func() (string, error) { return gitDir, nil },
-		DefaultBranchFn: func() (string, error) { return "main", nil },
-		CurrentBranchFn: func() (string, error) { return "main", nil },
-		CreateBranchFn:  func(name, base string) error { return nil },
-	})
-	defer restore()
-
-	cfg, outR, errR := config.NewTestConfig()
-	err := runInit(cfg, &initOptions{branches: []string{"sameen/feat/a", "sameen/feat/b"}})
-	collectOutput(cfg, outR, errR)
-
-	require.NoError(t, err)
-	sf, _ := stack.Load(gitDir)
-	assert.Equal(t, "", sf.Stacks[0].Prefix)
-}
-
-func TestInit_ExplicitPrefixSkipsDetection(t *testing.T) {
-	// Scenario 14: --prefix with args → explicit wins
-	gitDir := t.TempDir()
-	restore := git.SetOps(&git.MockOps{
-		GitDirFn:        func() (string, error) { return gitDir, nil },
-		DefaultBranchFn: func() (string, error) { return "main", nil },
-		CurrentBranchFn: func() (string, error) { return "main", nil },
-		CreateBranchFn:  func(name, base string) error { return nil },
-	})
-	defer restore()
-
-	cfg, outR, errR := config.NewTestConfig()
-	err := runInit(cfg, &initOptions{branches: []string{"b1", "b2"}, prefix: "foo"})
-	collectOutput(cfg, outR, errR)
-
-	require.NoError(t, err)
-	sf, _ := stack.Load(gitDir)
-	assert.Equal(t, "foo", sf.Stacks[0].Prefix)
-	assert.Equal(t, []string{"foo/b1", "foo/b2"}, sf.Stacks[0].BranchNames())
-}
-
 func TestInit_WhatsNext_Fresh(t *testing.T) {
 	// Scenario 17: fresh single-branch → fresh format
 	gitDir := t.TempDir()
@@ -730,8 +581,6 @@ func TestInit_Interactive_OnFeatureBranch_UseCurrent(t *testing.T) {
 	sf, _ := stack.Load(gitDir)
 	require.Len(t, sf.Stacks, 1)
 	assert.Equal(t, []string{"feat/auth"}, sf.Stacks[0].BranchNames())
-	// Prefix detection Y/n prompt fails gracefully without a TTY,
-	// so prefix is not set. The args-path prefix detection is tested separately.
 }
 
 func TestInit_TwoPassValidation_NoBranchCreatedOnError(t *testing.T) {

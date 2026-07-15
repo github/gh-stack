@@ -58,8 +58,7 @@ func TestViewJSON(t *testing.T) {
 		{
 			name: "basic stack with PRs",
 			stack: &stack.Stack{
-				Prefix: "feat",
-				Trunk:  stack.BranchRef{Branch: "main", Head: "aaa"},
+				Trunk: stack.BranchRef{Branch: "main", Head: "aaa"},
 				Branches: []stack.BranchRef{
 					{
 						Branch:      "feat/01",
@@ -151,8 +150,7 @@ func TestViewJSON_BranchFields(t *testing.T) {
 	})
 
 	s := &stack.Stack{
-		Prefix: "feat",
-		Trunk:  stack.BranchRef{Branch: "main", Head: "aaa111"},
+		Trunk: stack.BranchRef{Branch: "main", Head: "aaa111"},
 		Branches: []stack.BranchRef{
 			{
 				Branch:      "feat/01",
@@ -181,8 +179,6 @@ func TestViewJSON_BranchFields(t *testing.T) {
 
 	var got viewJSONOutput
 	require.NoError(t, json.Unmarshal(raw, &got))
-
-	assert.Equal(t, "feat", got.Prefix)
 
 	// First branch: merged
 	b0 := got.Branches[0]
@@ -497,8 +493,7 @@ func TestRunViewJSON_MultipleStacks(t *testing.T) {
 func TestRunViewJSON_SingleStack(t *testing.T) {
 	tmpDir := t.TempDir()
 	writeStackFile(t, tmpDir, stack.Stack{
-		Prefix: "feat",
-		Trunk:  stack.BranchRef{Branch: "main", Head: "aaa"},
+		Trunk: stack.BranchRef{Branch: "main", Head: "aaa"},
 		Branches: []stack.BranchRef{
 			{
 				Branch:      "feat/01",
@@ -531,7 +526,6 @@ func TestRunViewJSON_SingleStack(t *testing.T) {
 	var got viewJSONOutput
 	require.NoError(t, json.Unmarshal(raw, &got), "output should be valid JSON: %s", string(raw))
 	assert.Equal(t, "main", got.Trunk)
-	assert.Equal(t, "feat", got.Prefix)
 	assert.Len(t, got.Branches, 1)
 	assert.Equal(t, "feat/01", got.Branches[0].Name)
 	assert.True(t, got.Branches[0].IsCurrent)

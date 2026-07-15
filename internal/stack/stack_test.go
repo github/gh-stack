@@ -236,7 +236,6 @@ func TestLoad_Save_RoundTrip(t *testing.T) {
 				{
 					ID:     "s1",
 					Number: 7,
-					Prefix: "feat",
 					Trunk:  BranchRef{Branch: "main", Head: "abc123"},
 					Branches: []BranchRef{
 						{Branch: "b1", Head: "def456", Base: "abc123"},
@@ -258,7 +257,6 @@ func TestLoad_Save_RoundTrip(t *testing.T) {
 		s := loaded.Stacks[0]
 		assert.Equal(t, "s1", s.ID)
 		assert.Equal(t, 7, s.Number)
-		assert.Equal(t, "feat", s.Prefix)
 		assert.Equal(t, "main", s.Trunk.Branch)
 		assert.Equal(t, "abc123", s.Trunk.Head)
 		require.Len(t, s.Branches, 2)

@@ -208,7 +208,6 @@ func branchStatusIndicator(cfg *config.Config, s *stack.Stack, b stack.BranchRef
 // JSON output types for gh stack view --json.
 type viewJSONOutput struct {
 	Trunk         string           `json:"trunk"`
-	Prefix        string           `json:"prefix,omitempty"`
 	CurrentBranch string           `json:"currentBranch"`
 	Branches      []viewJSONBranch `json:"branches"`
 }
@@ -233,7 +232,6 @@ type viewJSONPR struct {
 func viewJSON(cfg *config.Config, s *stack.Stack, currentBranch string) error {
 	out := viewJSONOutput{
 		Trunk:         s.Trunk.Branch,
-		Prefix:        s.Prefix,
 		CurrentBranch: currentBranch,
 		Branches:      make([]viewJSONBranch, 0, len(s.Branches)),
 	}

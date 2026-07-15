@@ -34,14 +34,6 @@
           "type": "integer",
           "description": "Repo-scoped number identifying this stack, displayed in the GitHub UI. Used as the primary way to reference a stack."
         },
-        "prefix": {
-          "type": "string",
-          "description": "Branch name prefix for the stack (e.g. 'myfeature')."
-        },
-        "numbered": {
-          "type": "boolean",
-          "description": "Whether to use auto-incrementing numbered branch names."
-        },
         "trunk": {
           "$ref": "#/$defs/branchRef",
           "description": "The trunk (base) branch of the stack."
