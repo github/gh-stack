@@ -35,7 +35,7 @@ internal/
     gitops.go                # Ops interface (52 methods)
     mock_ops.go              # MockOps. Each method has a corresponding *Fn field.
   github/                    # github.ClientOps interface + real Client
-    client_interface.go      # ClientOps interface (11 methods)
+    client_interface.go      # ClientOps interface (13 methods)
     mock_client.go           # MockClient. Uses function-pointer fields for testing.
   stack/                     # stack file (.git/gh-stack) management, JSON schema, locking
     schema.json              # JSON Schema for the stack file format
@@ -109,13 +109,14 @@ if errors.As(err, &exitErr) { ... }
 ### Key interfaces
 
 - **`git.Ops`** (`internal/git/gitops.go`): 52 methods wrapping git CLI calls. The production implementation uses `cli/go-gh`'s `client.Command()` via `run()` and `runSilent()` helpers. Package-level functions (e.g., `git.CurrentBranch()`) delegate to a swappable package-level `ops` variable.
-- **`github.ClientOps`** (`internal/github/client_interface.go`): 11 methods for GitHub API (PRs, stacks). Injected via `cfg.GitHubClientOverride` in tests.
-- **`config.Config`** (`internal/config/config.go`): Central configuration passed to all commands. Holds I/O streams, color functions, and test hook fields (`SelectFn`, `ConfirmFn`, `InputFn`, `TokenForHostFn`, `RepoOverride`).
+- **`github.ClientOps`** (`internal/github/client_interface.go`): 13 methods for GitHub API (PRs, stacks). Stack operations use the public Stacks REST API (`/repos/{owner}/{repo}/stacks`): `ListStacks`, `FindStackForPR`, `GetStack`, `CreateStack`, `AddToStack` (delta append), `Unstack`. Injected via `cfg.GitHubClientOverride` in tests.
+- **`config.Config`** (`internal/config/config.go`): Central configuration passed to all commands. Holds I/O streams, color functions, and test hook fields (`SelectFn`, `ConfirmFn`, `InputFn`, `RepoOverride`).
 
 ### Stack file
 
 - **Location:** `.git/gh-stack` (JSON format, schema version 1).
 - **Schema:** `internal/stack/schema.json`.
+- **Identity:** each stack stores GitHub's global `id` (string) and repo-scoped `number` (int, shown in the GitHub UI and used as the primary way to reference a stack, e.g. `gh stack checkout <number>`). `number` may be `0` for stack files created before it was tracked; it is backfilled from the API on the next stack operation.
 - **Locking:** Exclusive file lock at `.git/gh-stack.lock` with 5-second timeout. Errors surface as `LockError`.
 - **Staleness:** Concurrent modifications detected via `StaleError`.
 

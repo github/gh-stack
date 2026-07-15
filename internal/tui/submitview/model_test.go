@@ -292,9 +292,9 @@ func TestHeaderConfig_InfoLines(t *testing.T) {
 	// Repo and base are the first two info lines, in order.
 	cfg := testModel(t, newNodes()).buildHeaderConfig()
 	require.GreaterOrEqual(t, len(cfg.InfoLines), 3)
-	assert.Equal(t, "○", cfg.InfoLines[0].Icon)
+	assert.Equal(t, "◆", cfg.InfoLines[0].Icon)
 	assert.Equal(t, "Repo: myorg/myrepo", cfg.InfoLines[0].Label)
-	assert.Equal(t, "◆", cfg.InfoLines[1].Icon)
+	assert.Equal(t, "○", cfg.InfoLines[1].Icon)
 	assert.Equal(t, "Base: main", cfg.InfoLines[1].Label)
 
 	// Two included NEW branches -> solid (styled) square, pluralized.
@@ -318,6 +318,45 @@ func TestHeaderConfig_InfoLines(t *testing.T) {
 	assert.Equal(t, "□", noneLast.Icon)
 	assert.Equal(t, "No pending PRs", noneLast.Label)
 	assert.Nil(t, noneLast.IconStyle, "the empty line uses the default icon style")
+}
+
+func TestHeaderConfig_StackNumberInRepoLine(t *testing.T) {
+	// When the stack has a number, it is folded into the first info line
+	// alongside the repo; otherwise the line shows just the repo.
+	m := New(Options{
+		Nodes:       newNodes(),
+		Trunk:       stack.BranchRef{Branch: "main"},
+		RepoLabel:   "myorg/myrepo",
+		Version:     "1.0.0",
+		StackNumber: 7,
+	})
+	assert.Equal(t, "Stack #7 • myorg/myrepo", m.buildHeaderConfig().InfoLines[0].Label)
+
+	// Without a stack number, the first line is just the repo.
+	assert.Equal(t, "Repo: myorg/myrepo", testModel(t, newNodes()).buildHeaderConfig().InfoLines[0].Label)
+}
+
+func TestLeftPanel_HeaderShowsStackNumber(t *testing.T) {
+	// The left-panel "STACK" header includes the stack number when known.
+	withNum := New(Options{
+		Nodes:       newNodes(),
+		Trunk:       stack.BranchRef{Branch: "main"},
+		RepoLabel:   "myorg/myrepo",
+		Version:     "1.0.0",
+		StackNumber: 42,
+	})
+	sized, _ := withNum.Update(tea.WindowSizeMsg{Width: 100, Height: 40})
+	withNum = sized.(Model)
+	leftW, _ := withNum.panelWidths()
+	header := withNum.buildLeftRows(leftW - 2)[0].text
+	assert.Contains(t, header, "STACK #42")
+
+	// Without a stack number, the header is the bare "STACK" label.
+	noNum := testModel(t, newNodes())
+	leftW2, _ := noNum.panelWidths()
+	header2 := noNum.buildLeftRows(leftW2 - 2)[0].text
+	assert.Contains(t, header2, "STACK")
+	assert.NotContains(t, header2, "STACK #")
 }
 
 func TestView_ClosedBanner(t *testing.T) {

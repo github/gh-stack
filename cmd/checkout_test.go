@@ -284,6 +284,123 @@ func TestCheckout_NumericTarget_NewStack(t *testing.T) {
 	assert.Equal(t, 12, sf.Stacks[0].Branches[2].PullRequest.Number)
 }
 
+func TestCheckout_ByStackNumber(t *testing.T) {
+	gitDir := t.TempDir()
+	var checkedOut string
+	var createdBranches []string
+
+	restore := git.SetOps(&git.MockOps{
+		GitDirFn:        func() (string, error) { return gitDir, nil },
+		CurrentBranchFn: func() (string, error) { return "main", nil },
+		BranchExistsFn:  func(name string) bool { return name == "main" },
+		FetchFn:         func(remote string) error { return nil },
+		CreateBranchFn: func(name, base string) error {
+			createdBranches = append(createdBranches, name)
+			return nil
+		},
+		SetUpstreamTrackingFn: func(branch, remote string) error { return nil },
+		ResolveRemoteFn:       func(branch string) (string, error) { return "origin", nil },
+		CheckoutBranchFn: func(name string) error {
+			checkedOut = name
+			return nil
+		},
+		RevParseFn: func(ref string) (string, error) { return "abc123", nil },
+		RevParseMultiFn: func(refs []string) ([]string, error) {
+			shas := make([]string, len(refs))
+			for i := range refs {
+				shas[i] = "abc123"
+			}
+			return shas, nil
+		},
+	})
+	defer restore()
+
+	require.NoError(t, stack.Save(gitDir, &stack.StackFile{SchemaVersion: 1, Stacks: []stack.Stack{}}))
+
+	var gotStackNumber int
+	cfg, outR, errR := config.NewTestConfig()
+	cfg.GitHubClientOverride = &github.MockClient{
+		GetStackFn: func(n int) (*github.RemoteStack, error) {
+			gotStackNumber = n
+			if n == 7 {
+				return &github.RemoteStack{ID: 42, Number: 7, PullRequests: []int{10, 11, 12}}, nil
+			}
+			return nil, &api.HTTPError{StatusCode: 404, Message: "Not Found"}
+		},
+		FindPRByNumberFn: func(number int) (*github.PullRequest, error) {
+			prs := map[int]*github.PullRequest{
+				10: {ID: "PR_10", Number: 10, HeadRefName: "feat-1", BaseRefName: "main", URL: "https://github.com/o/r/pull/10"},
+				11: {ID: "PR_11", Number: 11, HeadRefName: "feat-2", BaseRefName: "feat-1", URL: "https://github.com/o/r/pull/11"},
+				12: {ID: "PR_12", Number: 12, HeadRefName: "feat-3", BaseRefName: "feat-2", URL: "https://github.com/o/r/pull/12"},
+			}
+			return prs[number], nil
+		},
+	}
+
+	err := runCheckout(cfg, &checkoutOptions{target: "7"})
+	output := collectOutput(cfg, outR, errR)
+
+	require.NoError(t, err)
+	assert.Equal(t, 7, gotStackNumber, "should look the stack up by its number")
+	// The top-most (last) branch of the stack is checked out.
+	assert.Equal(t, "feat-3", checkedOut)
+	assert.Contains(t, output, "Imported stack with 3 branches")
+
+	// Verify the stack was imported with both its internal id and stack number.
+	sf, loadErr := stack.Load(gitDir)
+	require.NoError(t, loadErr)
+	require.Len(t, sf.Stacks, 1)
+	assert.Equal(t, "42", sf.Stacks[0].ID)
+	assert.Equal(t, 7, sf.Stacks[0].Number)
+}
+
+func TestCheckout_ByStackNumber_404FallsThroughToPR(t *testing.T) {
+	// A 404 from GetStack means no such stack, so the number is tried as a PR.
+	gitDir := t.TempDir()
+	var checkedOut string
+	restore := git.SetOps(&git.MockOps{
+		GitDirFn:              func() (string, error) { return gitDir, nil },
+		CurrentBranchFn:       func() (string, error) { return "main", nil },
+		BranchExistsFn:        func(name string) bool { return name == "main" },
+		FetchFn:               func(string) error { return nil },
+		CreateBranchFn:        func(string, string) error { return nil },
+		SetUpstreamTrackingFn: func(string, string) error { return nil },
+		RevParseFn:            func(string) (string, error) { return "abc123", nil },
+		ResolveRemoteFn:       func(string) (string, error) { return "origin", nil },
+		CheckoutBranchFn: func(name string) error {
+			checkedOut = name
+			return nil
+		},
+	})
+	defer restore()
+
+	writeStackFile(t, gitDir, stack.Stack{})
+
+	cfg, outR, errR := config.NewTestConfig()
+	cfg.GitHubClientOverride = &github.MockClient{
+		GetStackFn: func(int) (*github.RemoteStack, error) {
+			return nil, &api.HTTPError{StatusCode: 404, Message: "Not Found"}
+		},
+		FindStackForPRFn: func(int) (*github.RemoteStack, error) {
+			return &github.RemoteStack{ID: 1, Number: 1, PullRequests: []int{11, 12}}, nil
+		},
+		FindPRByNumberFn: func(n int) (*github.PullRequest, error) {
+			prs := map[int]*github.PullRequest{
+				11: {ID: "PR_11", Number: 11, HeadRefName: "feat-2", BaseRefName: "main", URL: "https://github.com/o/r/pull/11"},
+				12: {ID: "PR_12", Number: 12, HeadRefName: "feat-3", BaseRefName: "feat-2", URL: "https://github.com/o/r/pull/12"},
+			}
+			return prs[n], nil
+		},
+	}
+
+	err := runCheckout(cfg, &checkoutOptions{target: "11"})
+	output := collectOutput(cfg, outR, errR)
+
+	require.NoError(t, err)
+	assert.Equal(t, "feat-2", checkedOut, "the number should resolve as PR #11 after a stack 404")
+	assert.Contains(t, output, "Imported stack with 2 branches")
+}
+
 func TestCheckout_NumericTarget_BranchExistsNoStack(t *testing.T) {
 	gitDir := t.TempDir()
 	var checkedOut string

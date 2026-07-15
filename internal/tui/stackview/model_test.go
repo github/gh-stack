@@ -46,7 +46,7 @@ func TestNew_CursorAtCurrentBranch(t *testing.T) {
 	nodes := makeNodes("b1", "b2", "b3")
 	nodes[1].IsCurrent = true
 
-	m := New(nodes, testTrunk, "0.0.1")
+	m := New(nodes, testTrunk, "0.0.1", 0)
 
 	assert.Equal(t, 1, m.cursor)
 }
@@ -54,14 +54,14 @@ func TestNew_CursorAtCurrentBranch(t *testing.T) {
 func TestNew_CursorAtZeroWhenNoCurrent(t *testing.T) {
 	nodes := makeNodes("b1", "b2", "b3")
 
-	m := New(nodes, testTrunk, "0.0.1")
+	m := New(nodes, testTrunk, "0.0.1", 0)
 
 	assert.Equal(t, 0, m.cursor)
 }
 
 func TestUpdate_KeyboardNavigation(t *testing.T) {
 	nodes := makeNodes("b1", "b2", "b3")
-	m := New(nodes, testTrunk, "0.0.1")
+	m := New(nodes, testTrunk, "0.0.1", 0)
 	assert.Equal(t, 0, m.cursor)
 
 	// Down
@@ -98,7 +98,7 @@ func TestUpdate_KeyboardNavigation(t *testing.T) {
 func TestUpdate_ToggleCommits(t *testing.T) {
 	nodes := makeNodes("b1", "b2")
 	nodes[0].Commits = []git.CommitInfo{{SHA: "abc", Subject: "test"}}
-	m := New(nodes, testTrunk, "0.0.1")
+	m := New(nodes, testTrunk, "0.0.1", 0)
 
 	assert.False(t, m.nodes[0].CommitsExpanded)
 
@@ -114,7 +114,7 @@ func TestUpdate_ToggleCommits(t *testing.T) {
 
 func TestUpdate_ToggleFiles(t *testing.T) {
 	nodes := makeNodes("b1", "b2")
-	m := New(nodes, testTrunk, "0.0.1")
+	m := New(nodes, testTrunk, "0.0.1", 0)
 
 	assert.False(t, m.nodes[0].FilesExpanded)
 
@@ -130,7 +130,7 @@ func TestUpdate_ToggleFiles(t *testing.T) {
 
 func TestUpdate_Quit(t *testing.T) {
 	nodes := makeNodes("b1")
-	m := New(nodes, testTrunk, "0.0.1")
+	m := New(nodes, testTrunk, "0.0.1", 0)
 
 	quitKeys := []string{"q", "esc", "ctrl+c"}
 	for _, k := range quitKeys {
@@ -145,7 +145,7 @@ func TestUpdate_CheckoutOnEnter(t *testing.T) {
 	nodes := makeNodes("b1", "b2")
 	nodes[0].IsCurrent = true
 	nodes[1].PR = &ghapi.PRDetails{Number: 42, URL: "https://github.com/pr/42"}
-	m := New(nodes, testTrunk, "0.0.1")
+	m := New(nodes, testTrunk, "0.0.1", 0)
 
 	// Move to b2 (non-current)
 	updated, _ := m.Update(keyMsg("down"))
@@ -163,7 +163,7 @@ func TestUpdate_CheckoutOnEnter(t *testing.T) {
 func TestUpdate_EnterOnCurrentDoesNothing(t *testing.T) {
 	nodes := makeNodes("b1", "b2")
 	nodes[0].IsCurrent = true
-	m := New(nodes, testTrunk, "0.0.1")
+	m := New(nodes, testTrunk, "0.0.1", 0)
 	assert.Equal(t, 0, m.cursor)
 
 	// Press enter on current node
@@ -176,7 +176,7 @@ func TestUpdate_EnterOnCurrentDoesNothing(t *testing.T) {
 
 func TestView_HeaderShownWhenTallEnough(t *testing.T) {
 	nodes := makeNodes("b1", "b2")
-	m := New(nodes, testTrunk, "0.0.1")
+	m := New(nodes, testTrunk, "0.0.1", 0)
 
 	// Simulate a tall and wide terminal
 	updated, _ := m.Update(tea.WindowSizeMsg{Width: 100, Height: 40})
@@ -195,7 +195,7 @@ func TestView_HeaderShownWhenTallEnough(t *testing.T) {
 
 func TestView_HeaderHiddenWhenShort(t *testing.T) {
 	nodes := makeNodes("b1")
-	m := New(nodes, testTrunk, "0.0.1")
+	m := New(nodes, testTrunk, "0.0.1", 0)
 
 	// Simulate a short terminal (below minHeightForHeader)
 	updated, _ := m.Update(tea.WindowSizeMsg{Width: 80, Height: 20})
@@ -211,7 +211,7 @@ func TestView_HeaderHiddenWhenShort(t *testing.T) {
 
 func TestView_HeaderHiddenWhenNarrow(t *testing.T) {
 	nodes := makeNodes("b1")
-	m := New(nodes, testTrunk, "0.0.1")
+	m := New(nodes, testTrunk, "0.0.1", 0)
 
 	// Tall but too narrow for header (below minWidthForHeader)
 	updated, _ := m.Update(tea.WindowSizeMsg{Width: 35, Height: 40})
@@ -224,7 +224,7 @@ func TestView_HeaderHiddenWhenNarrow(t *testing.T) {
 
 func TestView_HeaderShortcutsAlwaysVisible(t *testing.T) {
 	nodes := makeNodes("b1", "b2")
-	m := New(nodes, testTrunk, "0.0.1")
+	m := New(nodes, testTrunk, "0.0.1", 0)
 
 	// Even at medium width, shortcuts should still be visible
 	updated, _ := m.Update(tea.WindowSizeMsg{Width: 60, Height: 40})
@@ -238,7 +238,7 @@ func TestView_HeaderShortcutsAlwaysVisible(t *testing.T) {
 func TestView_HeaderShowsMergedCount(t *testing.T) {
 	nodes := makeNodes("b1", "b2", "b3")
 	nodes[0].Ref.PullRequest = &stack.PullRequestRef{Merged: true}
-	m := New(nodes, testTrunk, "0.0.1")
+	m := New(nodes, testTrunk, "0.0.1", 0)
 
 	updated, _ := m.Update(tea.WindowSizeMsg{Width: 100, Height: 40})
 	m = updated.(Model)
@@ -251,7 +251,7 @@ func TestView_HeaderShowsQueuedCount(t *testing.T) {
 	nodes := makeNodes("b1", "b2", "b3")
 	nodes[1].Ref.Queued = true
 	nodes[1].Ref.PullRequest = &stack.PullRequestRef{Number: 10}
-	m := New(nodes, testTrunk, "0.0.1")
+	m := New(nodes, testTrunk, "0.0.1", 0)
 
 	updated, _ := m.Update(tea.WindowSizeMsg{Width: 100, Height: 40})
 	m = updated.(Model)
@@ -263,7 +263,7 @@ func TestView_HeaderShowsQueuedCount(t *testing.T) {
 func TestView_QueuedPRShowsQueuedLabel(t *testing.T) {
 	nodes := makeNodes("b1")
 	nodes[0].PR = &ghapi.PRDetails{Number: 99, IsQueued: true}
-	m := New(nodes, testTrunk, "0.0.1")
+	m := New(nodes, testTrunk, "0.0.1", 0)
 
 	updated, _ := m.Update(tea.WindowSizeMsg{Width: 80, Height: 30})
 	m = updated.(Model)
@@ -294,7 +294,7 @@ func TestView_BranchProgressIcon(t *testing.T) {
 			for _, idx := range tt.merged {
 				nodes[idx].Ref.PullRequest = &stack.PullRequestRef{Merged: true}
 			}
-			m := New(nodes, testTrunk, "0.0.1")
+			m := New(nodes, testTrunk, "0.0.1", 0)
 			updated, _ := m.Update(tea.WindowSizeMsg{Width: 100, Height: 40})
 			m = updated.(Model)
 
@@ -306,7 +306,7 @@ func TestView_BranchProgressIcon(t *testing.T) {
 
 func TestMouseClick_HeaderAreaIgnored(t *testing.T) {
 	nodes := makeNodes("b1", "b2")
-	m := New(nodes, testTrunk, "0.0.1")
+	m := New(nodes, testTrunk, "0.0.1", 0)
 	updated, _ := m.Update(tea.WindowSizeMsg{Width: 100, Height: 40})
 	m = updated.(Model)
 
@@ -323,7 +323,7 @@ func TestMouseClick_HeaderAreaIgnored(t *testing.T) {
 
 func TestScrollClamp_CannotScrollPastContent(t *testing.T) {
 	nodes := makeNodes("b1", "b2")
-	m := New(nodes, testTrunk, "0.0.1")
+	m := New(nodes, testTrunk, "0.0.1", 0)
 
 	// Tall terminal with plenty of room for content
 	updated, _ := m.Update(tea.WindowSizeMsg{Width: 80, Height: 40})
@@ -346,7 +346,7 @@ func TestScrollClamp_CannotScrollPastContent(t *testing.T) {
 func TestUpdate_CursorSkipsMergedBranches(t *testing.T) {
 	nodes := makeNodes("b1", "b2", "b3")
 	nodes[1].Ref.PullRequest = &stack.PullRequestRef{Number: 2, Merged: true}
-	m := New(nodes, testTrunk, "0.0.1")
+	m := New(nodes, testTrunk, "0.0.1", 0)
 	assert.Equal(t, 0, m.cursor, "cursor should start on first non-merged branch")
 
 	// Down should skip b2 (merged) and land on b3
@@ -363,7 +363,7 @@ func TestUpdate_CursorSkipsMergedBranches(t *testing.T) {
 func TestNew_CursorSkipsMergedBranch(t *testing.T) {
 	nodes := makeNodes("b1", "b2", "b3")
 	nodes[0].Ref.PullRequest = &stack.PullRequestRef{Number: 1, Merged: true}
-	m := New(nodes, testTrunk, "0.0.1")
+	m := New(nodes, testTrunk, "0.0.1", 0)
 	assert.Equal(t, 1, m.cursor, "cursor should skip merged b1 and start on b2")
 }
 
@@ -371,7 +371,7 @@ func TestNew_CursorSkipsMergedCurrentBranch(t *testing.T) {
 	nodes := makeNodes("b1", "b2", "b3")
 	nodes[0].IsCurrent = true
 	nodes[0].Ref.PullRequest = &stack.PullRequestRef{Number: 1, Merged: true}
-	m := New(nodes, testTrunk, "0.0.1")
+	m := New(nodes, testTrunk, "0.0.1", 0)
 	assert.Equal(t, 1, m.cursor, "cursor should not start on merged current branch")
 }
 
@@ -380,7 +380,7 @@ func TestUpdate_EnterOnMergedDoesNothing(t *testing.T) {
 	// by having b1 active and b2 merged and b3 active.
 	nodes := makeNodes("b1", "b2")
 	nodes[0].Ref.PullRequest = &stack.PullRequestRef{Number: 1, Merged: true}
-	m := New(nodes, testTrunk, "0.0.1")
+	m := New(nodes, testTrunk, "0.0.1", 0)
 	// Cursor is on b2 (first non-merged). Manually set to b1 to test guard.
 	m.cursor = 0
 
@@ -400,12 +400,12 @@ func makeAllMergedNodes(branches ...string) []BranchNode {
 }
 
 func TestNew_CursorHiddenWhenAllMerged(t *testing.T) {
-	m := New(makeAllMergedNodes("b1", "b2"), testTrunk, "0.0.1")
+	m := New(makeAllMergedNodes("b1", "b2"), testTrunk, "0.0.1", 0)
 	assert.Equal(t, -1, m.cursor, "cursor should be hidden when every branch is merged")
 }
 
 func TestUpdate_AllMergedCursorStaysHidden(t *testing.T) {
-	m := New(makeAllMergedNodes("b1", "b2", "b3"), testTrunk, "0.0.1")
+	m := New(makeAllMergedNodes("b1", "b2", "b3"), testTrunk, "0.0.1", 0)
 
 	updated, _ := m.Update(keyMsg("down"))
 	m = updated.(Model)
@@ -422,7 +422,7 @@ func TestUpdate_AllMergedCursorStaysHidden(t *testing.T) {
 }
 
 func TestView_AllMergedRendersWithoutPanic(t *testing.T) {
-	m := New(makeAllMergedNodes("b1", "b2"), testTrunk, "0.0.1")
+	m := New(makeAllMergedNodes("b1", "b2"), testTrunk, "0.0.1", 0)
 	updated, _ := m.Update(tea.WindowSizeMsg{Width: 100, Height: 40})
 	m = updated.(Model)
 	// Should not panic with a hidden (-1) cursor.
@@ -431,7 +431,7 @@ func TestView_AllMergedRendersWithoutPanic(t *testing.T) {
 }
 
 func TestBuildHeaderConfig_DisablesShortcutsWhenAllMerged(t *testing.T) {
-	m := New(makeAllMergedNodes("b1", "b2"), testTrunk, "0.0.1")
+	m := New(makeAllMergedNodes("b1", "b2"), testTrunk, "0.0.1", 0)
 	cfg := m.buildHeaderConfig()
 
 	require.NotEmpty(t, cfg.Shortcuts)
@@ -445,11 +445,30 @@ func TestBuildHeaderConfig_DisablesShortcutsWhenAllMerged(t *testing.T) {
 }
 
 func TestBuildHeaderConfig_ShortcutsEnabledWithActiveBranches(t *testing.T) {
-	m := New(makeNodes("b1", "b2"), testTrunk, "0.0.1")
+	m := New(makeNodes("b1", "b2"), testTrunk, "0.0.1", 0)
 	cfg := m.buildHeaderConfig()
 
 	require.NotEmpty(t, cfg.Shortcuts)
 	for _, sc := range cfg.Shortcuts {
 		assert.False(t, sc.Disabled, "%q should be enabled when there are active branches", sc.Desc)
+	}
+}
+
+func TestBuildHeaderConfig_ShowsStackNumber(t *testing.T) {
+	m := New(makeNodes("b1", "b2"), testTrunk, "0.0.1", 7)
+	cfg := m.buildHeaderConfig()
+
+	found := false
+	for _, line := range cfg.InfoLines {
+		if line.Label == "Stack #7" {
+			found = true
+		}
+	}
+	assert.True(t, found, "header should show the stack number when known")
+
+	// When the number is unknown (0), no stack-number line is shown.
+	m0 := New(makeNodes("b1", "b2"), testTrunk, "0.0.1", 0)
+	for _, line := range m0.buildHeaderConfig().InfoLines {
+		assert.NotContains(t, line.Label, "Stack #")
 	}
 }

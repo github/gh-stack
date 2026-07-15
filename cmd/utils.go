@@ -78,6 +78,16 @@ func warnStacksUnavailable(cfg *config.Config) {
 	cfg.Warningf("Stacked PRs are not enabled for this repository")
 }
 
+// stackLabel returns a " (stack #N)" suffix for appending to user-facing
+// messages when the human-facing stack number is known, or an empty string
+// otherwise.
+func stackLabel(number int) string {
+	if number <= 0 {
+		return ""
+	}
+	return fmt.Sprintf(" (stack #%d)", number)
+}
+
 // stackNumberByID resolves an internal stack ID (as stored in the local stack
 // file) to its human-facing stack number by consulting the remote stack list.
 // Returns ok=false when no remote stack matches the ID (e.g. it was deleted).
@@ -247,6 +257,110 @@ func loadStack(cfg *config.Config, branch string) (*loadStackResult, error) {
 		Stack:         s,
 		CurrentBranch: currentBranch,
 	}, nil
+}
+
+// loadStackByNumber loads the locally tracked stack whose stack number matches
+// the given value. Stack files created before the number was tracked store only
+// the internal ID (Number == 0); such legacy stacks are resolved by mapping
+// their ID to a remote stack number so they can still be targeted by number. It
+// prints a helpful error and returns a non-nil error when no local stack
+// resolves to that number.
+func loadStackByNumber(cfg *config.Config, number int) (*loadStackResult, error) {
+	gitDir, err := git.GitDir()
+	if err != nil {
+		cfg.Errorf("not a git repository")
+		return nil, fmt.Errorf("not a git repository")
+	}
+
+	sf, err := stack.Load(gitDir)
+	if err != nil {
+		cfg.Errorf("failed to load stack state: %s", err)
+		return nil, fmt.Errorf("failed to load stack state: %w", err)
+	}
+
+	// Direct match on the tracked stack number.
+	if result := stackResultByNumber(sf, gitDir, number); result != nil {
+		return result, nil
+	}
+
+	// No direct match — backfill legacy stacks' numbers from the remote and
+	// retry, so `gh stack unstack <number>` also works for stacks tracked
+	// before the number was recorded locally.
+	if backfillLegacyStackNumbers(cfg, sf, gitDir) {
+		if result := stackResultByNumber(sf, gitDir, number); result != nil {
+			return result, nil
+		}
+	}
+
+	cfg.Errorf("stack #%d is not tracked locally", number)
+	cfg.Printf("Run `%s` to check it out first", cfg.ColorCyan(fmt.Sprintf("gh stack checkout %d", number)))
+	return nil, fmt.Errorf("stack #%d is not tracked locally", number)
+}
+
+// stackResultByNumber returns a loadStackResult for the locally tracked stack
+// whose Number matches, or nil when none does.
+func stackResultByNumber(sf *stack.StackFile, gitDir string, number int) *loadStackResult {
+	for i := range sf.Stacks {
+		if sf.Stacks[i].Number == number {
+			currentBranch, _ := git.CurrentBranch()
+			return &loadStackResult{
+				GitDir:        gitDir,
+				StackFile:     sf,
+				Stack:         &sf.Stacks[i],
+				CurrentBranch: currentBranch,
+			}
+		}
+	}
+	return nil
+}
+
+// backfillLegacyStackNumbers fills in the human-facing Number for locally
+// tracked stacks that predate it (Number == 0 but ID set) by mapping their
+// internal ID to the remote stack list, persisting any updates. Returns true
+// when at least one number was filled in. Best-effort: returns false on any
+// client or API error rather than failing the caller.
+func backfillLegacyStackNumbers(cfg *config.Config, sf *stack.StackFile, gitDir string) bool {
+	needsResolve := false
+	for i := range sf.Stacks {
+		if sf.Stacks[i].Number == 0 && sf.Stacks[i].ID != "" {
+			needsResolve = true
+			break
+		}
+	}
+	if !needsResolve {
+		return false
+	}
+
+	client, err := cfg.GitHubClient()
+	if err != nil {
+		return false
+	}
+	stacks, err := client.ListStacks()
+	if err != nil {
+		return false
+	}
+	numberByID := make(map[string]int, len(stacks))
+	for _, rs := range stacks {
+		numberByID[strconv.Itoa(rs.ID)] = rs.Number
+	}
+
+	changed := false
+	for i := range sf.Stacks {
+		if sf.Stacks[i].Number != 0 || sf.Stacks[i].ID == "" {
+			continue
+		}
+		if n, ok := numberByID[sf.Stacks[i].ID]; ok && n != 0 {
+			sf.Stacks[i].Number = n
+			changed = true
+		}
+	}
+	if changed {
+		if err := stack.Save(gitDir, sf); err != nil {
+			// Non-fatal: the in-memory backfill still lets us resolve the target.
+			cfg.Warningf("could not persist stack numbers: %v", err)
+		}
+	}
+	return changed
 }
 
 // handleSaveError translates a stack.Save error into the appropriate user
@@ -565,6 +679,12 @@ func syncStackPRsFromRemote(client github.ClientOps, s *stack.Stack) (map[string
 	for _, rs := range stacks {
 		if strconv.Itoa(rs.ID) == s.ID {
 			remotePRNumbers = rs.PRNumbers()
+			// Backfill the human-facing stack number for stack files created
+			// before it was tracked, so callers (view, submit TUI) can display
+			// it. Persisted by whichever command later saves the stack file.
+			if s.Number == 0 {
+				s.Number = rs.Number
+			}
 			break
 		}
 	}

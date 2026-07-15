@@ -12,7 +12,7 @@ gh extension install github/gh-stack
 Requires the [GitHub CLI](https://cli.github.com/) (`gh`) v2.0+.
 
 :::note[Authentication]
-The `gh stack` CLI requires OAuth authentication via `gh auth login`. Personal access tokens (PATs) are not supported.
+The `gh stack` CLI uses your GitHub CLI authentication — run `gh auth login` if you haven't already.
 :::
 
 ---
@@ -135,13 +135,15 @@ gh stack view --json
 
 ### `gh stack checkout`
 
-Check out a stack from a pull request number, URL, or branch name.
+Check out a stack by its stack number, a pull request number, a PR URL, or a branch name.
 
 ```sh
-gh stack checkout [<pr-number> | <pr-url> | <branch>]
+gh stack checkout [<stack-number> | <pr-number> | <pr-url> | <branch>]
 ```
 
-When a PR number or URL is provided (e.g., `123` or `https://github.com/owner/repo/pull/123`), the command fetches the stack on GitHub, pulls the branches, and sets up the stack locally. If the stack already exists locally and matches, it switches to the branch. If the local and remote stacks have different compositions, you'll be prompted to resolve the conflict.
+A bare number is interpreted first as a stack or PR number (repo-scoped identifiers shown in the GitHub UI). If nothing matches the number, it is tried as a branch name.
+
+When a remote stack is referenced, the command fetches the stack on GitHub, pulls the branches, and sets up the stack locally. If the stack already exists locally and matches, it switches to the branch. If the local and remote stacks have different compositions, you'll be prompted to resolve the conflict.
 
 When a branch name is provided, the command resolves it against locally tracked stacks only.
 
@@ -150,6 +152,9 @@ When run without arguments in an interactive terminal, shows a menu of all local
 **Examples:**
 
 ```sh
+# Check out a stack by its stack number
+gh stack checkout 7
+
 # Check out a stack by PR number
 gh stack checkout 42
 
@@ -229,27 +234,30 @@ gh stack modify --abort
 
 ### `gh stack unstack`
 
-Remove a stack from local tracking and delete it on GitHub. Also available as `gh stack delete`.
+Remove a stack from local tracking and unstack it on GitHub. Also available as `gh stack delete`.
 
 ```sh
-gh stack unstack [flags]
+gh stack unstack [<stack-number>] [flags]
 ```
 
-You must have a branch from the stack checked out locally. The command targets the active stack — the one that contains the currently checked out branch.
+With no argument, the command targets the active stack — the one that contains the currently checked out branch. Provide a stack number (the identifier shown in the github.com stack UI) to target a specific locally tracked stack instead.
 
-Deletes the stack on GitHub first, if it exists, then removes it from local tracking. If the remote deletion fails, the local state is left untouched so you can retry. Use `--local` to skip the remote deletion and only remove local tracking.
+PRs that are merged, merging, or queued for merge cannot be removed from a stack on GitHub and are left part of the stack. When every pull request is removed, the stack is dissolved and local tracking is removed; when some pull requests remain stacked, local tracking is kept. Use `--local` to skip the remote operation and only remove local tracking.
 
 This is useful when you need to restructure a stack — remove a branch, insert a branch, reorder branches, rename branches, or make other large changes. After unstacking, use `gh stack init` to re-create the stack with the desired structure — existing branches are adopted automatically.
 
 | Flag | Description |
 |------|-------------|
-| `--local` | Only delete the stack locally (keep it on GitHub) |
+| `--local` | Only remove the stack locally (keep it on GitHub) |
 
 **Examples:**
 
 ```sh
-# Delete the stack on GitHub and remove local tracking
+# Unstack the current stack on GitHub and remove local tracking
 gh stack unstack
+
+# Unstack a specific stack by its stack number
+gh stack unstack 7
 
 # Only remove local tracking
 gh stack unstack --local
@@ -317,7 +325,7 @@ Performs a synchronization of the entire stack:
 
 A clean remote-ahead update (PRs added on top of your local stack) is pulled down automatically without prompting, so `sync` is safe to run in automation. Sync only prompts when the stacks have truly diverged.
 
-#### Diverged stacks
+**Diverged stacks**
 
 When neither stack is a clean prefix of the other — for example, you added a branch locally while separate PRs were added to the same stack on GitHub — sync cannot merge the two automatically. In an interactive terminal it offers three choices:
 

@@ -295,6 +295,7 @@ func collectPRDrafts(cfg *config.Config, client github.ClientOps, s *stack.Stack
 		RepoLabel:      repoLabel,
 		Version:        Version,
 		CanCreateStack: canCreateStack,
+		StackNumber:    s.Number,
 	})
 
 	// Use cell-motion mouse mode (clicks, drag, and wheel) rather than all-motion.
@@ -780,7 +781,7 @@ func reconcileUntrackedStack(cfg *config.Config, client github.ClientOps, s *sta
 	s.Number = matched.Number
 
 	if slicesEqual(matched.PRNumbers(), prNumbers) {
-		cfg.Successf("Linked to the existing stack on GitHub (%d PRs, already up to date)", len(prNumbers))
+		cfg.Successf("Linked to the existing stack on GitHub (%d PRs, already up to date)%s", len(prNumbers), stackLabel(matched.Number))
 		return true
 	}
 
@@ -836,7 +837,7 @@ func updateStack(cfg *config.Config, client github.ClientOps, s *stack.Stack, pr
 	if slicesEqual(current, prNumbers) {
 		s.ID = strconv.Itoa(remote.ID)
 		s.Number = remote.Number
-		cfg.Successf("Stack on GitHub is up to date with %d PRs", len(prNumbers))
+		cfg.Successf("Stack on GitHub is up to date with %d PRs%s", len(prNumbers), stackLabel(remote.Number))
 		return true
 	}
 
@@ -886,7 +887,7 @@ func updateStack(cfg *config.Config, client github.ClientOps, s *stack.Stack, pr
 
 	s.ID = strconv.Itoa(rs.ID)
 	s.Number = rs.Number
-	cfg.Successf("Stack updated on GitHub with %d PRs", len(prNumbers))
+	cfg.Successf("Stack updated on GitHub with %d PRs%s", len(prNumbers), stackLabel(rs.Number))
 	return true
 }
 
@@ -898,7 +899,7 @@ func createNewStack(cfg *config.Config, client github.ClientOps, s *stack.Stack,
 	if err == nil {
 		s.ID = strconv.Itoa(rs.ID)
 		s.Number = rs.Number
-		cfg.Successf("Stack created on GitHub with %d PRs", len(prNumbers))
+		cfg.Successf("Stack created on GitHub with %d PRs%s", len(prNumbers), stackLabel(rs.Number))
 		return true
 	}
 

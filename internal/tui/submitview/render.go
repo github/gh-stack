@@ -42,10 +42,13 @@ func (m Model) buildHeaderConfig() shared.HeaderConfig {
 		repo = "unknown"
 	}
 
-	infoLines := []shared.HeaderInfoLine{
-		{Icon: "○", Label: "Repo: " + repo},
-		{Icon: "◆", Label: "Base: " + m.trunk.Branch},
+	infoLines := make([]shared.HeaderInfoLine, 0, 3)
+	if m.stackNumber > 0 {
+		infoLines = append(infoLines, shared.HeaderInfoLine{Icon: "◆", Label: fmt.Sprintf("Stack #%d • %s", m.stackNumber, repo)})
+	} else {
+		infoLines = append(infoLines, shared.HeaderInfoLine{Icon: "◆", Label: "Repo: " + repo})
 	}
+	infoLines = append(infoLines, shared.HeaderInfoLine{Icon: "○", Label: "Base: " + m.trunk.Branch})
 
 	// Third line mirrors the modify header's pending line: a solid yellow square
 	// with the count when PRs will be created, or an empty square otherwise.

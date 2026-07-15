@@ -50,6 +50,9 @@ type Options struct {
 	// true, and once the user has deselected all new PRs, the TUI offers a
 	// "STACK N PRs" action to link the existing open PRs into a stack.
 	CanCreateStack bool
+	// StackNumber is the human-facing stack number shown in the header. Zero
+	// when the local stack has not yet been created on GitHub.
+	StackNumber int
 }
 
 // Model is the Bubble Tea model backing the interactive `gh stack submit` TUI.
@@ -62,6 +65,10 @@ type Model struct {
 	// canCreateStack mirrors Options.CanCreateStack: the local stack has no
 	// remote stack object yet, but one could be created.
 	canCreateStack bool
+
+	// stackNumber is the human-facing stack number shown in the header (0 when
+	// the stack has not been created on GitHub yet).
+	stackNumber int
 
 	cursor int // index into nodes (the focused branch)
 
@@ -149,6 +156,7 @@ func New(opts Options) Model {
 		cursor:    cursor,
 
 		canCreateStack: opts.CanCreateStack,
+		stackNumber:    opts.StackNumber,
 
 		titleArea:    tia,
 		descArea:     ta,

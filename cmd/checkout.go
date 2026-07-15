@@ -23,9 +23,14 @@ func CheckoutCmd(cfg *config.Config) *cobra.Command {
 	opts := &checkoutOptions{}
 
 	cmd := &cobra.Command{
-		Use:   "checkout [<pr-number> | <pr-url> | <branch>]",
-		Short: "Checkout a stack from a PR number, PR URL, or branch name",
-		Long: `Check out a stack from a pull request number, PR URL, or branch name.
+		Use:   "checkout [<stack-number> | <pr-number> | <pr-url> | <branch>]",
+		Short: "Checkout a stack by stack number, PR number, PR URL, or branch name",
+		Long: `Check out a stack by stack number, pull request number, PR URL, or branch name.
+
+A bare number is interpreted first as a stack number (the identifier shown in
+the GitHub stack UI). If no stack has that number, it is then tried as a
+locally tracked PR number, then a PR number whose stack is discovered from
+GitHub, and finally a branch name.
 
 When a PR number or PR URL is provided (e.g. 123 or
 https://github.com/owner/repo/pull/123), the command first checks
@@ -39,7 +44,10 @@ locally tracked stacks only.
 
 When run without arguments, shows a menu of all locally available
 stacks to choose from.`,
-		Example: `  # Check out a stack by PR number
+		Example: `  # Check out a stack by its stack number
+  $ gh stack checkout 7
+
+  # Check out a stack by PR number
   $ gh stack checkout 42
 
   # Check out a stack by PR URL
@@ -102,7 +110,7 @@ func runCheckout(cfg *config.Config, opts *checkoutOptions) error {
 			return err
 		}
 	} else if prNumber, parseErr := strconv.Atoi(opts.target); parseErr == nil && prNumber > 0 {
-		// Target is a pure integer — try local PR, then remote API, then branch name
+		// Target is a pure integer — try stack number, then PR, then branch name
 		s, targetBranch, err = resolveNumericTarget(cfg, sf, gitDir, prNumber, opts.target)
 		if err != nil {
 			return err
@@ -137,29 +145,41 @@ func runCheckout(cfg *config.Config, opts *checkoutOptions) error {
 	return nil
 }
 
-// resolveNumericTarget handles the case where the user passes a pure integer.
-// It tries, in order:
-//  1. Local stack lookup by PR number
-//  2. Remote API discovery (ListStacks → find → import)
-//  3. Local stack lookup by branch name (for numeric branch names like "123")
-func resolveNumericTarget(cfg *config.Config, sf *stack.StackFile, gitDir string, prNumber int, raw string) (*stack.Stack, string, error) {
-	// 1. Try local PR number lookup
-	if s, br := sf.FindStackByPRNumber(prNumber); s != nil && br != nil {
+// resolveNumericTarget handles the case where the user passes a pure integer or
+// a PR URL. The number is interpreted as, in order:
+//  1. A stack number (the primary identifier)
+//  2. A locally tracked PR number
+//  3. A PR number whose stack is discovered from GitHub
+//  4. A branch name (for numeric branch names like "123")
+//
+// Stack, PR, and issue numbers share a single repo-scoped numberspace,
+// so a given number is only ever one object type; a number that is not a stack
+// simply misses at step 1 and resolves at a later step.
+func resolveNumericTarget(cfg *config.Config, sf *stack.StackFile, gitDir string, number int, raw string) (*stack.Stack, string, error) {
+	// 1. Try as a stack number (the primary identifier).
+	if s, targetBranch, err := checkoutStackByNumber(cfg, sf, gitDir, number); err == nil {
+		return s, targetBranch, nil
+	} else if !errors.Is(err, errStackNumberNotFound) {
+		// A real error during import/reconcile (composition conflict, interrupted
+		// import, etc.) — surface it rather than trying other interpretations.
+		return nil, "", err
+	}
+
+	// 2. Try a locally tracked PR number.
+	if s, br := sf.FindStackByPRNumber(number); s != nil && br != nil {
 		return s, br.Branch, nil
 	}
 
-	// 2. Try remote API
-	s, targetBranch, err := checkoutRemoteStack(cfg, sf, gitDir, prNumber)
+	// 3. Try a PR number whose stack is on GitHub.
+	s, targetBranch, err := checkoutRemoteStack(cfg, sf, gitDir, number)
 	if err == nil {
 		return s, targetBranch, nil
 	}
-	// If the API returned a definitive "not in a stack" or a real error,
-	// fall through to the branch-name attempt only for "not in stack".
-	// For API failures (404, network errors), still fall through —
-	// the user might have a numeric branch name.
+	// For API failures or "not in a stack", still fall through to the branch-name
+	// attempt — the user might have a numeric branch name.
 	remoteErr := err
 
-	// 3. Fall back to branch name lookup (handles numeric branch names)
+	// 4. Fall back to branch name lookup (handles numeric branch names).
 	stacks := sf.FindAllStacksForBranch(raw)
 	if len(stacks) > 0 {
 		s := stacks[0]
@@ -212,16 +232,14 @@ func checkoutRemoteStack(cfg *config.Config, sf *stack.StackFile, gitDir string,
 		return nil, "", ErrAPIFailure
 	}
 
-	// Determine trunk (base branch of the first PR) and the target branch
+	// Determine trunk (base branch of the first PR) and the target branch (the
+	// branch for the requested PR).
 	trunk := prs[0].BaseRefName
 	var targetBranch string
-	allMerged := true
 	for _, pr := range prs {
 		if pr.Number == prNumber {
 			targetBranch = pr.HeadRefName
-		}
-		if !pr.Merged {
-			allMerged = false
+			break
 		}
 	}
 	if targetBranch == "" {
@@ -229,6 +247,66 @@ func checkoutRemoteStack(cfg *config.Config, sf *stack.StackFile, gitDir string,
 		return nil, "", ErrAPIFailure
 	}
 
+	return reconcileAndImportRemoteStack(cfg, client, sf, gitDir, remoteStack, prs, trunk, targetBranch)
+}
+
+// errStackNumberNotFound is returned by checkoutStackByNumber when a numeric
+// argument does not resolve to a stack (no such stack, stacks unavailable, or
+// any lookup failure), signalling the caller to try interpreting the argument
+// as a PR number or branch name instead.
+var errStackNumberNotFound = errors.New("stack number not found")
+
+// checkoutStackByNumber discovers a stack from GitHub by its stack number,
+// reconciles it with any local state, and checks out the top-most unmerged
+// branch. It returns errStackNumberNotFound when the number does not resolve to
+// a stack so the caller can fall back to other interpretations. Because stack,
+// PR, and issue numbers share one repo-scoped numberspace, a number that
+// belongs to a PR (or nothing) simply misses here and is resolved by the
+// caller's later steps.
+func checkoutStackByNumber(cfg *config.Config, sf *stack.StackFile, gitDir string, stackNumber int) (*stack.Stack, string, error) {
+	client, err := cfg.GitHubClient()
+	if err != nil {
+		return nil, "", errStackNumberNotFound
+	}
+
+	remoteStack, err := client.GetStack(stackNumber)
+	if err != nil || remoteStack == nil || len(remoteStack.PullRequests) == 0 {
+		// No such stack, stacks unavailable, or a transient failure — let the
+		// caller try the number as a PR number or branch name.
+		return nil, "", errStackNumberNotFound
+	}
+
+	prs, err := fetchStackPRDetails(client, remoteStack.PRNumbers())
+	if err != nil {
+		cfg.Errorf("failed to fetch PR details: %v", err)
+		return nil, "", ErrAPIFailure
+	}
+
+	trunk := prs[0].BaseRefName
+	// Target the top-most unmerged branch, falling back to the very top.
+	targetBranch := prs[len(prs)-1].HeadRefName
+	for i := len(prs) - 1; i >= 0; i-- {
+		if !prs[i].Merged {
+			targetBranch = prs[i].HeadRefName
+			break
+		}
+	}
+
+	return reconcileAndImportRemoteStack(cfg, client, sf, gitDir, remoteStack, prs, trunk, targetBranch)
+}
+
+// reconcileAndImportRemoteStack reconciles a resolved remote stack with local
+// state — adopting a matching local stack, resolving composition conflicts, or
+// importing the stack from the remote — and returns the resolved local stack
+// and the branch to check out.
+func reconcileAndImportRemoteStack(cfg *config.Config, client github.ClientOps, sf *stack.StackFile, gitDir string, remoteStack *github.RemoteStack, prs []*github.PullRequest, trunk, targetBranch string) (*stack.Stack, string, error) {
+	allMerged := true
+	for _, pr := range prs {
+		if !pr.Merged {
+			allMerged = false
+			break
+		}
+	}
 	if allMerged {
 		cfg.Infof("All PRs in this stack have been merged")
 		cfg.Printf("To start a new stack, use `%s`", cfg.ColorCyan("gh stack init"))
@@ -237,7 +315,7 @@ func checkoutRemoteStack(cfg *config.Config, sf *stack.StackFile, gitDir string,
 
 	remoteStackID := strconv.Itoa(remoteStack.ID)
 
-	// Step 3: Check if the target branch is already in a local stack
+	// Check if the target branch is already in a local stack.
 	localStack := findLocalStackForRemotePRs(sf, prs)
 
 	if localStack != nil {
@@ -257,7 +335,7 @@ func checkoutRemoteStack(cfg *config.Config, sf *stack.StackFile, gitDir string,
 			if err := stack.Save(gitDir, sf); err != nil {
 				return nil, "", handleSaveError(cfg, err)
 			}
-			cfg.Successf("Local stack matches remote — switching to branch")
+			cfg.Successf("Local stack matches remote — switching to branch%s", stackLabel(remoteStack.Number))
 			return localStack, targetBranch, nil
 		}
 
@@ -522,7 +600,7 @@ func importRemoteStack(
 	// Update base SHAs from actual local refs
 	updateBaseSHAs(s)
 
-	cfg.Successf("Imported stack with %d branches from GitHub", len(prs))
+	cfg.Successf("Imported stack with %d branches from GitHub%s", len(prs), stackLabel(remoteStackNumber))
 	return s, nil
 }
 

@@ -144,6 +144,10 @@ func viewShort(cfg *config.Config, s *stack.Stack, currentBranch string) error {
 		repoName = repo.Name
 	}
 
+	if s.Number > 0 {
+		cfg.Outf("%s\n", cfg.ColorBold(fmt.Sprintf("Stack #%d", s.Number)))
+	}
+
 	for i := len(s.Branches) - 1; i >= 0; i-- {
 		b := s.Branches[i]
 		merged := b.IsMerged()
@@ -311,7 +315,7 @@ func viewFullTUI(cfg *config.Config, s *stack.Stack, currentBranch string, prDet
 		reversed[len(nodes)-1-i] = n
 	}
 
-	model := stackview.New(reversed, s.Trunk, Version)
+	model := stackview.New(reversed, s.Trunk, Version, s.Number)
 
 	p := tea.NewProgram(
 		model,
@@ -350,6 +354,10 @@ func viewFullStatic(cfg *config.Config, s *stack.Stack, currentBranch string) er
 	}
 
 	var buf bytes.Buffer
+
+	if s.Number > 0 {
+		fmt.Fprintf(&buf, "%s\n\n", cfg.ColorBold(fmt.Sprintf("Stack #%d", s.Number)))
+	}
 
 	for i := len(s.Branches) - 1; i >= 0; i-- {
 		b := s.Branches[i]
