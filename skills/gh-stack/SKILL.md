@@ -815,16 +815,21 @@ When a branch name is provided, the command resolves it against locally tracked 
 
 Tear down a stack so you can restructure it — remove a branch, reorder branches, rename branches, or make other large changes. After unstacking, use `gh stack init` to re-create the stack with the desired structure.
 
-You must have a branch from the stack checked out locally. The command targets the active stack — the one that contains the currently checked out branch.
+With no argument, the command targets the active stack — the one containing the currently checked out branch — unstacking it on GitHub and removing local tracking.
+
+Provide a stack number to unstack a specific stack on GitHub. This works from anywhere in the repository, whether or not the stack is checked out locally — the number is unstacked directly through the GitHub API (like `gh stack link`, no local tracking required). If the stack is also tracked locally, its local tracking is removed as well.
 
 ```
-gh stack unstack [flags]
+gh stack unstack [<stack-number>] [flags]
 ```
 
 ```bash
-# Tear down the stack (locally and on GitHub), then rebuild
+# Tear down the current stack (locally and on GitHub), then rebuild
 gh stack unstack
 gh stack init --base main branch-2 branch-1 branch-3 # reordered
+
+# Unstack a specific stack by its number, from anywhere in the repo
+gh stack unstack 7
 
 # Only remove local tracking (keep the stack on GitHub)
 gh stack unstack --local
@@ -832,7 +837,9 @@ gh stack unstack --local
 
 | Flag | Description |
 |------|-------------|
-| `--local` | Only delete the stack locally (keep it on GitHub) |
+| `--local` | Only remove the stack locally (keep it on GitHub); never contacts GitHub |
+
+> **Note for agents:** `gh stack unstack <number>` is a remote-first API wrapper — it unstacks on GitHub by number from anywhere in the repo, tracked locally or not, and is safe for non-interactive use. `--local` never contacts GitHub; combining `--local` with a number that isn't tracked locally is an error. An unknown stack number returns a "not found on GitHub" error (exit code 2).
 
 ---
 

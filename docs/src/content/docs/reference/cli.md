@@ -240,9 +240,11 @@ Remove a stack from local tracking and unstack it on GitHub. Also available as `
 gh stack unstack [<stack-number>] [flags]
 ```
 
-With no argument, the command targets the active stack — the one that contains the currently checked out branch. Provide a stack number (the identifier shown in the github.com stack UI) to target a specific locally tracked stack instead.
+With no argument, the command targets the active stack — the one that contains the currently checked out branch — unstacking it on GitHub and removing local tracking.
 
-PRs that are merged, merging, or queued for merge cannot be removed from a stack on GitHub and are left part of the stack. When every pull request is removed, the stack is dissolved and local tracking is removed; when some pull requests remain stacked, local tracking is kept. Use `--local` to skip the remote operation and only remove local tracking.
+Provide a stack number (the identifier shown in the github.com stack UI) to unstack a specific stack on GitHub. This works from anywhere in the repository, whether or not the stack is checked out locally — the stack is unstacked directly through the GitHub API. When the stack is also available locally, its local tracking is removed as well.
+
+PRs that are merged, merging, or queued for merge cannot be removed from a stack on GitHub and are left part of the stack. When every pull request is removed, the stack is dissolved and any local tracking is removed; when some pull requests remain stacked, the stack is kept and local tracking, if any, is unchanged. Use `--local` to skip the remote operation and only remove local tracking.
 
 This is useful when you need to restructure a stack — remove a branch, insert a branch, reorder branches, rename branches, or make other large changes. After unstacking, use `gh stack init` to re-create the stack with the desired structure — existing branches are adopted automatically.
 
@@ -256,7 +258,7 @@ This is useful when you need to restructure a stack — remove a branch, insert 
 # Unstack the current stack on GitHub and remove local tracking
 gh stack unstack
 
-# Unstack a specific stack by its stack number
+# Unstack a specific stack by its number
 gh stack unstack 7
 
 # Only remove local tracking

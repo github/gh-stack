@@ -477,25 +477,32 @@ gh stack view --json
 
 ### `gh stack unstack`
 
-Remove a stack from local tracking and delete it on GitHub. Also available as `gh stack delete`.
+Remove a stack from local tracking and unstack it on GitHub. Also available as `gh stack delete`.
 
 ```
-gh stack unstack [flags]
+gh stack unstack [<stack-number>] [flags]
 ```
 
-You must have an active stack checked out locally. The command targets the active stack — the one that contains the currently checked out branch.
+With no argument, the command targets the active stack — the one that contains the currently checked out branch — unstacking it on GitHub and removing local tracking.
 
-Deletes the stack on GitHub first, if it exists, then removes local tracking. Use `--local` to only remove from local tracking.
+Provide a stack number (the identifier shown in the github.com stack UI) to unstack a specific stack on GitHub. This works from anywhere in the repository, whether or not the stack is checked out locally — the number is unstacked directly through the GitHub API. If the stack is also tracked locally, its local tracking is removed as well.
+
+Use `--local` to only remove local tracking without contacting GitHub.
+
+GitHub decides which pull requests can be unstacked: PRs that are queued for merge or have auto-merge enabled are left stacked. When some pull requests remain stacked, the stack is kept (and local tracking, if any, is unchanged).
 
 | Flag | Description |
 |------|-------------|
-| `--local` | Only delete the stack locally (keep it on GitHub) |
+| `--local` | Only remove the stack locally (keep it on GitHub) |
 
 **Examples:**
 
 ```sh
-# Remove the stack from local tracking and GitHub
+# Remove the current stack from local tracking and GitHub
 gh stack unstack
+
+# Unstack a specific stack by its number
+gh stack unstack 7
 
 # Only remove local tracking
 gh stack unstack --local
