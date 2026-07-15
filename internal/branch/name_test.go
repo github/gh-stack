@@ -20,6 +20,9 @@ func TestSlugify(t *testing.T) {
 		{"diacritics stripped", "café résumé", "cafe_resume"},
 		{"special chars become underscores", "feat: add login!", "feat_add_login"},
 		{"real hyphens preserved", "Add user-authentication", "add_user-authentication"},
+		{"adjacent hyphens preserved as a hyphen", "fix--retry", "fix-retry"},
+		{"hyphen next to a space preserved as a hyphen", "fix- retry", "fix-retry"},
+		{"spaced dash preserved as a hyphen", "fix - retry", "fix-retry"},
 		{"empty string", "", ""},
 	}
 

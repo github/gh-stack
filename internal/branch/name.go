@@ -35,8 +35,16 @@ func Slugify(message string) string {
 	// underscore. Hyphens present in the message are allowed and preserved.
 	s = nonAllowedRe.ReplaceAllString(s, "_")
 
-	// Collapse any run of adjacent separators into a single underscore.
-	s = multiSepRe.ReplaceAllString(s, "_")
+	// Collapse any run of adjacent separators into a single character. A run
+	// that contains a hyphen the user actually typed collapses to a hyphen so
+	// literal hyphens survive (e.g. "fix--retry" → "fix-retry"); runs of purely
+	// generated underscores collapse to a single underscore.
+	s = multiSepRe.ReplaceAllStringFunc(s, func(run string) string {
+		if strings.ContainsRune(run, '-') {
+			return "-"
+		}
+		return "_"
+	})
 
 	// Trim leading/trailing separators
 	s = strings.Trim(s, "-_")
