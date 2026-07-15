@@ -47,9 +47,9 @@ func TestLink_PRNumbers_CreateNewStack(t *testing.T) {
 		ListStacksFn: func() ([]github.RemoteStack, error) {
 			return []github.RemoteStack{}, nil
 		},
-		CreateStackFn: func(prNumbers []int) (int, error) {
+		CreateStackFn: func(prNumbers []int) (*github.RemoteStack, error) {
 			createdPRs = prNumbers
-			return 42, nil
+			return &github.RemoteStack{ID: 42, Number: 42}, nil
 		},
 	}
 
@@ -69,7 +69,7 @@ func TestLink_PRNumbers_CreateNewStack(t *testing.T) {
 }
 
 func TestLink_PRNumbers_UpdateExistingStack(t *testing.T) {
-	var updatedID string
+	var updatedNumber int
 	var updatedPRs []int
 	cfg, _, errR := config.NewTestConfig()
 	cfg.GitHubClientOverride = &github.MockClient{
@@ -83,13 +83,13 @@ func TestLink_PRNumbers_UpdateExistingStack(t *testing.T) {
 		},
 		ListStacksFn: func() ([]github.RemoteStack, error) {
 			return []github.RemoteStack{
-				{ID: 7, PullRequests: []int{10, 20}},
+				{ID: 7, Number: 7, PullRequests: []int{10, 20}},
 			}, nil
 		},
-		UpdateStackFn: func(stackID string, prNumbers []int) error {
-			updatedID = stackID
+		AddToStackFn: func(stackNumber int, prNumbers []int) (*github.RemoteStack, error) {
+			updatedNumber = stackNumber
 			updatedPRs = prNumbers
-			return nil
+			return &github.RemoteStack{ID: 7, Number: stackNumber, PullRequests: []int{10, 20, 30}}, nil
 		},
 	}
 
@@ -104,8 +104,8 @@ func TestLink_PRNumbers_UpdateExistingStack(t *testing.T) {
 	output := string(errOut)
 
 	assert.NoError(t, err)
-	assert.Equal(t, "7", updatedID)
-	assert.Equal(t, []int{10, 20, 30}, updatedPRs)
+	assert.Equal(t, 7, updatedNumber)
+	assert.Equal(t, []int{30}, updatedPRs)
 	assert.Contains(t, output, "Updated stack to 3 PRs")
 }
 
@@ -122,12 +122,12 @@ func TestLink_PRNumbers_ExactMatch_NoOp(t *testing.T) {
 		},
 		ListStacksFn: func() ([]github.RemoteStack, error) {
 			return []github.RemoteStack{
-				{ID: 7, PullRequests: []int{10, 20, 30}},
+				{ID: 7, Number: 7, PullRequests: []int{10, 20, 30}},
 			}, nil
 		},
-		UpdateStackFn: func(string, []int) error {
-			t.Fatal("UpdateStack should not be called for exact match")
-			return nil
+		AddToStackFn: func(int, []int) (*github.RemoteStack, error) {
+			t.Fatal("AddToStack should not be called for exact match")
+			return nil, nil
 		},
 	}
 
@@ -158,7 +158,7 @@ func TestLink_PRNumbers_WouldRemovePRs(t *testing.T) {
 		},
 		ListStacksFn: func() ([]github.RemoteStack, error) {
 			return []github.RemoteStack{
-				{ID: 7, PullRequests: []int{10, 20, 30}},
+				{ID: 7, Number: 7, PullRequests: []int{10, 20, 30}},
 			}, nil
 		},
 	}
@@ -190,8 +190,8 @@ func TestLink_PRNumbers_MultipleStacks(t *testing.T) {
 		},
 		ListStacksFn: func() ([]github.RemoteStack, error) {
 			return []github.RemoteStack{
-				{ID: 1, PullRequests: []int{10, 20}},
-				{ID: 2, PullRequests: []int{30, 40}},
+				{ID: 1, Number: 1, PullRequests: []int{10, 20}},
+				{ID: 2, Number: 2, PullRequests: []int{30, 40}},
 			}, nil
 		},
 	}
@@ -244,7 +244,7 @@ func TestLink_DuplicateArgs(t *testing.T) {
 
 func TestLink_StacksUnavailable(t *testing.T) {
 	cfg, _, errR := config.NewTestConfig()
-	setTestTokenForHost(cfg, "gho_test_oauth_token")
+	setTestRepo(cfg)
 	cfg.GitHubClientOverride = &github.MockClient{
 		FindPRByNumberFn: func(n int) (*github.PullRequest, error) {
 			return &github.PullRequest{Number: n, HeadRefName: "b", BaseRefName: "main"}, nil
@@ -277,8 +277,8 @@ func TestLink_Create422(t *testing.T) {
 		ListStacksFn: func() ([]github.RemoteStack, error) {
 			return []github.RemoteStack{}, nil
 		},
-		CreateStackFn: func(prNumbers []int) (int, error) {
-			return 0, &api.HTTPError{
+		CreateStackFn: func(prNumbers []int) (*github.RemoteStack, error) {
+			return &github.RemoteStack{ID: 0, Number: 0}, &api.HTTPError{
 				StatusCode: 422,
 				Message:    "Pull requests must form a stack",
 			}
@@ -379,9 +379,9 @@ func TestLink_RejectsQueuedPR(t *testing.T) {
 		ListStacksFn: func() ([]github.RemoteStack, error) {
 			return []github.RemoteStack{}, nil
 		},
-		CreateStackFn: func([]int) (int, error) {
+		CreateStackFn: func([]int) (*github.RemoteStack, error) {
 			t.Fatal("CreateStack should not be called for ineligible PRs")
-			return 0, nil
+			return &github.RemoteStack{ID: 0, Number: 0}, nil
 		},
 	}
 
@@ -419,9 +419,9 @@ func TestLink_RejectsAutoMergeEnabledPR(t *testing.T) {
 		ListStacksFn: func() ([]github.RemoteStack, error) {
 			return []github.RemoteStack{}, nil
 		},
-		CreateStackFn: func([]int) (int, error) {
+		CreateStackFn: func([]int) (*github.RemoteStack, error) {
 			t.Fatal("CreateStack should not be called for ineligible PRs")
-			return 0, nil
+			return &github.RemoteStack{ID: 0, Number: 0}, nil
 		},
 	}
 
@@ -561,7 +561,7 @@ func TestLink_ReportsMultipleIneligiblePRs(t *testing.T) {
 // Regression test to ensure a queued PR that is already a member of
 // the target stack does not block adding new PRs to that same stack.
 func TestLink_AllowsQueuedPRAlreadyInStack(t *testing.T) {
-	var updatedID string
+	var updatedNumber int
 	var updatedPRs []int
 	cfg, _, errR := config.NewTestConfig()
 	cfg.GitHubClientOverride = &github.MockClient{
@@ -581,17 +581,17 @@ func TestLink_AllowsQueuedPRAlreadyInStack(t *testing.T) {
 		},
 		ListStacksFn: func() ([]github.RemoteStack, error) {
 			return []github.RemoteStack{
-				{ID: 7, PullRequests: []int{100}},
+				{ID: 7, Number: 7, PullRequests: []int{100}},
 			}, nil
 		},
-		UpdateStackFn: func(stackID string, prNumbers []int) error {
-			updatedID = stackID
+		AddToStackFn: func(stackNumber int, prNumbers []int) (*github.RemoteStack, error) {
+			updatedNumber = stackNumber
 			updatedPRs = prNumbers
-			return nil
+			return &github.RemoteStack{ID: 7, Number: stackNumber, PullRequests: []int{100, 101, 102}}, nil
 		},
-		CreateStackFn: func([]int) (int, error) {
+		CreateStackFn: func([]int) (*github.RemoteStack, error) {
 			t.Fatal("CreateStack should not be called when updating an existing stack")
-			return 0, nil
+			return &github.RemoteStack{ID: 0, Number: 0}, nil
 		},
 	}
 
@@ -606,8 +606,8 @@ func TestLink_AllowsQueuedPRAlreadyInStack(t *testing.T) {
 	output := string(errOut)
 
 	require.NoError(t, err)
-	assert.Equal(t, "7", updatedID)
-	assert.Equal(t, []int{100, 101, 102}, updatedPRs)
+	assert.Equal(t, 7, updatedNumber)
+	assert.Equal(t, []int{101, 102}, updatedPRs)
 	assert.NotContains(t, output, "cannot be added to a stack")
 }
 
@@ -633,12 +633,12 @@ func TestLink_AllowsMergedPRAlreadyInStack(t *testing.T) {
 		},
 		ListStacksFn: func() ([]github.RemoteStack, error) {
 			return []github.RemoteStack{
-				{ID: 8, PullRequests: []int{100}},
+				{ID: 8, Number: 8, PullRequests: []int{100}},
 			}, nil
 		},
-		UpdateStackFn: func(_ string, prNumbers []int) error {
+		AddToStackFn: func(stackNumber int, prNumbers []int) (*github.RemoteStack, error) {
 			updatedPRs = prNumbers
-			return nil
+			return &github.RemoteStack{ID: 8, Number: stackNumber, PullRequests: []int{100, 101}}, nil
 		},
 	}
 
@@ -653,7 +653,7 @@ func TestLink_AllowsMergedPRAlreadyInStack(t *testing.T) {
 	output := string(errOut)
 
 	require.NoError(t, err)
-	assert.Equal(t, []int{100, 101}, updatedPRs)
+	assert.Equal(t, []int{101}, updatedPRs)
 	assert.NotContains(t, output, "cannot be added to a stack")
 }
 
@@ -678,12 +678,12 @@ func TestLink_AllowsAutoMergePRAlreadyInStack(t *testing.T) {
 		},
 		ListStacksFn: func() ([]github.RemoteStack, error) {
 			return []github.RemoteStack{
-				{ID: 9, PullRequests: []int{100}},
+				{ID: 9, Number: 9, PullRequests: []int{100}},
 			}, nil
 		},
-		UpdateStackFn: func(_ string, prNumbers []int) error {
+		AddToStackFn: func(stackNumber int, prNumbers []int) (*github.RemoteStack, error) {
 			updatedPRs = prNumbers
-			return nil
+			return &github.RemoteStack{ID: 9, Number: stackNumber, PullRequests: []int{100, 101}}, nil
 		},
 	}
 
@@ -698,7 +698,7 @@ func TestLink_AllowsAutoMergePRAlreadyInStack(t *testing.T) {
 	output := string(errOut)
 
 	require.NoError(t, err)
-	assert.Equal(t, []int{100, 101}, updatedPRs)
+	assert.Equal(t, []int{101}, updatedPRs)
 	assert.NotContains(t, output, "cannot be added to a stack")
 }
 
@@ -724,12 +724,12 @@ func TestLink_RejectsQueuedPRNotInStack_WhenAddingToExistingStack(t *testing.T) 
 		},
 		ListStacksFn: func() ([]github.RemoteStack, error) {
 			return []github.RemoteStack{
-				{ID: 7, PullRequests: []int{100}},
+				{ID: 7, Number: 7, PullRequests: []int{100}},
 			}, nil
 		},
-		UpdateStackFn: func(string, []int) error {
-			t.Fatal("UpdateStack should not be called when a new PR is ineligible")
-			return nil
+		AddToStackFn: func(int, []int) (*github.RemoteStack, error) {
+			t.Fatal("AddToStack should not be called when a new PR is ineligible")
+			return nil, nil
 		},
 	}
 
@@ -776,9 +776,9 @@ func TestLink_BranchNames_AllHavePRs(t *testing.T) {
 		ListStacksFn: func() ([]github.RemoteStack, error) {
 			return []github.RemoteStack{}, nil
 		},
-		CreateStackFn: func(prNumbers []int) (int, error) {
+		CreateStackFn: func(prNumbers []int) (*github.RemoteStack, error) {
 			stackedPRs = prNumbers
-			return 42, nil
+			return &github.RemoteStack{ID: 42, Number: 42}, nil
 		},
 	}
 
@@ -840,9 +840,9 @@ func TestLink_BranchNames_CreatesMissingPRs(t *testing.T) {
 		ListStacksFn: func() ([]github.RemoteStack, error) {
 			return []github.RemoteStack{}, nil
 		},
-		CreateStackFn: func(prNumbers []int) (int, error) {
+		CreateStackFn: func(prNumbers []int) (*github.RemoteStack, error) {
 			stackedPRs = prNumbers
-			return 42, nil
+			return &github.RemoteStack{ID: 42, Number: 42}, nil
 		},
 	}
 
@@ -900,8 +900,8 @@ func TestLink_BranchNames_AllNeedPRs(t *testing.T) {
 		ListStacksFn: func() ([]github.RemoteStack, error) {
 			return []github.RemoteStack{}, nil
 		},
-		CreateStackFn: func(prNumbers []int) (int, error) {
-			return 42, nil
+		CreateStackFn: func(prNumbers []int) (*github.RemoteStack, error) {
+			return &github.RemoteStack{ID: 42, Number: 42}, nil
 		},
 	}
 
@@ -960,7 +960,7 @@ func TestLink_BranchNames_DefaultDraft(t *testing.T) {
 		ListStacksFn: func() ([]github.RemoteStack, error) {
 			return []github.RemoteStack{}, nil
 		},
-		CreateStackFn: func([]int) (int, error) { return 1, nil },
+		CreateStackFn: func([]int) (*github.RemoteStack, error) { return &github.RemoteStack{ID: 1, Number: 1}, nil },
 	}
 
 	cmd := LinkCmd(cfg)
@@ -1004,7 +1004,7 @@ func TestLink_BranchNames_OpenFlag(t *testing.T) {
 		ListStacksFn: func() ([]github.RemoteStack, error) {
 			return []github.RemoteStack{}, nil
 		},
-		CreateStackFn: func([]int) (int, error) { return 1, nil },
+		CreateStackFn: func([]int) (*github.RemoteStack, error) { return &github.RemoteStack{ID: 1, Number: 1}, nil },
 	}
 
 	cmd := LinkCmd(cfg)
@@ -1062,7 +1062,7 @@ func TestLink_OpenFlag_ConvertsDraftPRs(t *testing.T) {
 		ListStacksFn: func() ([]github.RemoteStack, error) {
 			return []github.RemoteStack{}, nil
 		},
-		CreateStackFn: func([]int) (int, error) { return 1, nil },
+		CreateStackFn: func([]int) (*github.RemoteStack, error) { return &github.RemoteStack{ID: 1, Number: 1}, nil },
 	}
 
 	cmd := LinkCmd(cfg)
@@ -1109,9 +1109,9 @@ func TestLink_MixedArgs_PRNumberAndBranch(t *testing.T) {
 		ListStacksFn: func() ([]github.RemoteStack, error) {
 			return []github.RemoteStack{}, nil
 		},
-		CreateStackFn: func(prNumbers []int) (int, error) {
+		CreateStackFn: func(prNumbers []int) (*github.RemoteStack, error) {
 			stackedPRs = prNumbers
-			return 42, nil
+			return &github.RemoteStack{ID: 42, Number: 42}, nil
 		},
 	}
 
@@ -1161,9 +1161,9 @@ func TestLink_NumericArg_PRNotFound_TreatedAsBranch(t *testing.T) {
 		ListStacksFn: func() ([]github.RemoteStack, error) {
 			return []github.RemoteStack{}, nil
 		},
-		CreateStackFn: func(prNumbers []int) (int, error) {
+		CreateStackFn: func(prNumbers []int) (*github.RemoteStack, error) {
 			stackedPRs = prNumbers
-			return 42, nil
+			return &github.RemoteStack{ID: 42, Number: 42}, nil
 		},
 	}
 
@@ -1227,7 +1227,7 @@ func TestLink_FixesBaseBranches(t *testing.T) {
 		ListStacksFn: func() ([]github.RemoteStack, error) {
 			return []github.RemoteStack{}, nil
 		},
-		CreateStackFn: func([]int) (int, error) { return 42, nil },
+		CreateStackFn: func([]int) (*github.RemoteStack, error) { return &github.RemoteStack{ID: 42, Number: 42}, nil },
 	}
 
 	cmd := LinkCmd(cfg)
@@ -1282,15 +1282,15 @@ func TestLink_UpdateDeletedStack_FallsBackToCreate(t *testing.T) {
 		},
 		ListStacksFn: func() ([]github.RemoteStack, error) {
 			return []github.RemoteStack{
-				{ID: 7, PullRequests: []int{10}},
+				{ID: 7, Number: 7, PullRequests: []int{10}},
 			}, nil
 		},
-		UpdateStackFn: func(string, []int) error {
-			return &api.HTTPError{StatusCode: 404, Message: "Not Found"}
+		AddToStackFn: func(stackNumber int, _ []int) (*github.RemoteStack, error) {
+			return nil, &api.HTTPError{StatusCode: 404, Message: "Not Found"}
 		},
-		CreateStackFn: func(prNumbers []int) (int, error) {
+		CreateStackFn: func(prNumbers []int) (*github.RemoteStack, error) {
 			created = true
-			return 99, nil
+			return &github.RemoteStack{ID: 99, Number: 99}, nil
 		},
 	}
 
@@ -1338,7 +1338,7 @@ func TestLink_PushesBranchesBeforeResolution(t *testing.T) {
 			return &github.PullRequest{Number: n, HeadRefName: fmt.Sprintf("b%d", n), BaseRefName: "main"}, nil
 		},
 		ListStacksFn:  func() ([]github.RemoteStack, error) { return []github.RemoteStack{}, nil },
-		CreateStackFn: func([]int) (int, error) { return 1, nil },
+		CreateStackFn: func([]int) (*github.RemoteStack, error) { return &github.RemoteStack{ID: 1, Number: 1}, nil },
 	}
 
 	cmd := LinkCmd(cfg)
@@ -1383,7 +1383,7 @@ func TestLink_RemoteFlag(t *testing.T) {
 			return &github.PullRequest{Number: n, HeadRefName: fmt.Sprintf("b%d", n), BaseRefName: "main"}, nil
 		},
 		ListStacksFn:  func() ([]github.RemoteStack, error) { return []github.RemoteStack{}, nil },
-		CreateStackFn: func([]int) (int, error) { return 1, nil },
+		CreateStackFn: func([]int) (*github.RemoteStack, error) { return &github.RemoteStack{ID: 1, Number: 1}, nil },
 	}
 
 	cmd := LinkCmd(cfg)
@@ -1414,7 +1414,7 @@ func TestLink_SkipsPushForPRNumbersOnly(t *testing.T) {
 			return &github.PullRequest{Number: n, HeadRefName: "b", BaseRefName: "main"}, nil
 		},
 		ListStacksFn:  func() ([]github.RemoteStack, error) { return []github.RemoteStack{}, nil },
-		CreateStackFn: func([]int) (int, error) { return 1, nil },
+		CreateStackFn: func([]int) (*github.RemoteStack, error) { return &github.RemoteStack{ID: 1, Number: 1}, nil },
 	}
 
 	cmd := LinkCmd(cfg)
@@ -1453,7 +1453,7 @@ func TestLink_PrevalidatesBeforeCreatingPRs(t *testing.T) {
 		},
 		ListStacksFn: func() ([]github.RemoteStack, error) {
 			return []github.RemoteStack{
-				{ID: 7, PullRequests: []int{104, 105, 106}},
+				{ID: 7, Number: 7, PullRequests: []int{104, 105, 106}},
 			}, nil
 		},
 	}
@@ -1636,7 +1636,7 @@ func TestLink_SkipsBaseFix_ForNewlyCreatedPRs(t *testing.T) {
 			}, nil
 		},
 		ListStacksFn:  func() ([]github.RemoteStack, error) { return []github.RemoteStack{}, nil },
-		CreateStackFn: func([]int) (int, error) { return 1, nil },
+		CreateStackFn: func([]int) (*github.RemoteStack, error) { return &github.RemoteStack{ID: 1, Number: 1}, nil },
 	}
 
 	cmd := LinkCmd(cfg)
@@ -1687,7 +1687,7 @@ func TestLink_BranchNames_UsesPRTemplate(t *testing.T) {
 		ListStacksFn: func() ([]github.RemoteStack, error) {
 			return []github.RemoteStack{}, nil
 		},
-		CreateStackFn: func([]int) (int, error) { return 42, nil },
+		CreateStackFn: func([]int) (*github.RemoteStack, error) { return &github.RemoteStack{ID: 42, Number: 42}, nil },
 	}
 
 	cmd := LinkCmd(cfg)
@@ -1742,7 +1742,7 @@ func TestLink_IgnoresSymlinkedPRTemplate(t *testing.T) {
 		ListStacksFn: func() ([]github.RemoteStack, error) {
 			return []github.RemoteStack{}, nil
 		},
-		CreateStackFn: func([]int) (int, error) { return 42, nil },
+		CreateStackFn: func([]int) (*github.RemoteStack, error) { return &github.RemoteStack{ID: 42, Number: 42}, nil },
 	}
 
 	cmd := LinkCmd(cfg)
@@ -1795,7 +1795,7 @@ func TestLink_PRNumbers_NoTemplateUsesFooter(t *testing.T) {
 		ListStacksFn: func() ([]github.RemoteStack, error) {
 			return []github.RemoteStack{}, nil
 		},
-		CreateStackFn: func([]int) (int, error) { return 42, nil },
+		CreateStackFn: func([]int) (*github.RemoteStack, error) { return &github.RemoteStack{ID: 42, Number: 42}, nil },
 	}
 
 	cmd := LinkCmd(cfg)
@@ -1828,9 +1828,9 @@ func TestLink_PRURLs_CreateNewStack(t *testing.T) {
 		ListStacksFn: func() ([]github.RemoteStack, error) {
 			return []github.RemoteStack{}, nil
 		},
-		CreateStackFn: func(prNumbers []int) (int, error) {
+		CreateStackFn: func(prNumbers []int) (*github.RemoteStack, error) {
 			createdPRs = prNumbers
-			return 42, nil
+			return &github.RemoteStack{ID: 42, Number: 42}, nil
 		},
 	}
 
@@ -1893,9 +1893,9 @@ func TestLink_MixedURLsAndNumbers(t *testing.T) {
 		ListStacksFn: func() ([]github.RemoteStack, error) {
 			return []github.RemoteStack{}, nil
 		},
-		CreateStackFn: func(prNumbers []int) (int, error) {
+		CreateStackFn: func(prNumbers []int) (*github.RemoteStack, error) {
 			createdPRs = prNumbers
-			return 42, nil
+			return &github.RemoteStack{ID: 42, Number: 42}, nil
 		},
 	}
 

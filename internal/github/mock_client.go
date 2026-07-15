@@ -12,9 +12,11 @@ type MockClient struct {
 	MarkPRReadyForReviewFn   func(string) error
 	DisableAutoMergeFn       func(string) error
 	ListStacksFn             func() ([]RemoteStack, error)
-	CreateStackFn            func([]int) (int, error)
-	UpdateStackFn            func(string, []int) error
-	DeleteStackFn            func(string) error
+	FindStackForPRFn         func(int) (*RemoteStack, error)
+	GetStackFn               func(int) (*RemoteStack, error)
+	CreateStackFn            func([]int) (*RemoteStack, error)
+	AddToStackFn             func(int, []int) (*RemoteStack, error)
+	UnstackFn                func(int) (*RemoteStack, bool, error)
 }
 
 // Compile-time check that MockClient satisfies ClientOps.
@@ -76,23 +78,37 @@ func (m *MockClient) ListStacks() ([]RemoteStack, error) {
 	return nil, nil
 }
 
-func (m *MockClient) CreateStack(prNumbers []int) (int, error) {
+func (m *MockClient) FindStackForPR(prNumber int) (*RemoteStack, error) {
+	if m.FindStackForPRFn != nil {
+		return m.FindStackForPRFn(prNumber)
+	}
+	return nil, nil
+}
+
+func (m *MockClient) GetStack(stackNumber int) (*RemoteStack, error) {
+	if m.GetStackFn != nil {
+		return m.GetStackFn(stackNumber)
+	}
+	return &RemoteStack{}, nil
+}
+
+func (m *MockClient) CreateStack(prNumbers []int) (*RemoteStack, error) {
 	if m.CreateStackFn != nil {
 		return m.CreateStackFn(prNumbers)
 	}
-	return 0, nil
+	return &RemoteStack{}, nil
 }
 
-func (m *MockClient) UpdateStack(stackID string, prNumbers []int) error {
-	if m.UpdateStackFn != nil {
-		return m.UpdateStackFn(stackID, prNumbers)
+func (m *MockClient) AddToStack(stackNumber int, prNumbers []int) (*RemoteStack, error) {
+	if m.AddToStackFn != nil {
+		return m.AddToStackFn(stackNumber, prNumbers)
 	}
-	return nil
+	return &RemoteStack{}, nil
 }
 
-func (m *MockClient) DeleteStack(stackID string) error {
-	if m.DeleteStackFn != nil {
-		return m.DeleteStackFn(stackID)
+func (m *MockClient) Unstack(stackNumber int) (*RemoteStack, bool, error) {
+	if m.UnstackFn != nil {
+		return m.UnstackFn(stackNumber)
 	}
-	return nil
+	return nil, false, nil
 }

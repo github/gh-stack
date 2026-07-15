@@ -1757,13 +1757,13 @@ func TestSync_CreatesRemoteStackWhenPRsExist(t *testing.T) {
 			listCalls++
 			return nil, nil
 		},
-		CreateStackFn: func(prNumbers []int) (int, error) {
+		CreateStackFn: func(prNumbers []int) (*github.RemoteStack, error) {
 			createdWith = prNumbers
-			return 7, nil
+			return &github.RemoteStack{ID: 7, Number: 7}, nil
 		},
-		UpdateStackFn: func(string, []int) error {
-			t.Fatal("UpdateStack should not be called when no remote stack exists")
-			return nil
+		AddToStackFn: func(int, []int) (*github.RemoteStack, error) {
+			t.Fatal("AddToStack should not be called when no remote stack exists")
+			return nil, nil
 		},
 	}
 
@@ -1796,15 +1796,15 @@ func TestSync_AdoptsExistingEqualRemoteStack(t *testing.T) {
 	ghMock := &github.MockClient{
 		FindPRForBranchFn: openPRFinder(map[string]int{"b1": 101, "b2": 102}),
 		ListStacksFn: func() ([]github.RemoteStack, error) {
-			return []github.RemoteStack{{ID: 9, PullRequests: []int{101, 102}}}, nil
+			return []github.RemoteStack{{ID: 9, Number: 9, PullRequests: []int{101, 102}}}, nil
 		},
-		CreateStackFn: func([]int) (int, error) {
+		CreateStackFn: func([]int) (*github.RemoteStack, error) {
 			t.Fatal("CreateStack should not be called when the remote stack matches")
-			return 0, nil
+			return nil, nil
 		},
-		UpdateStackFn: func(string, []int) error {
-			t.Fatal("UpdateStack should not be called when the remote stack matches")
-			return nil
+		AddToStackFn: func(int, []int) (*github.RemoteStack, error) {
+			t.Fatal("AddToStack should not be called when the remote stack matches")
+			return nil, nil
 		},
 	}
 
@@ -1829,28 +1829,32 @@ func TestSync_UpdatesPartialRemoteStack(t *testing.T) {
 	tmpDir := t.TempDir()
 	writeStackFile(t, tmpDir, s)
 
-	var updatedID string
-	var updatedWith []int
+	var updatedNumber int
+	var addedWith []int
 	ghMock := &github.MockClient{
 		FindPRForBranchFn: openPRFinder(map[string]int{"b1": 101, "b2": 102, "b3": 103}),
 		ListStacksFn: func() ([]github.RemoteStack, error) {
-			return []github.RemoteStack{{ID: 9, PullRequests: []int{101, 102}}}, nil
+			return []github.RemoteStack{{ID: 9, Number: 9, PullRequests: []int{101, 102}}}, nil
 		},
-		CreateStackFn: func([]int) (int, error) {
+		CreateStackFn: func([]int) (*github.RemoteStack, error) {
 			t.Fatal("CreateStack should not be called when a matching stack exists")
-			return 0, nil
+			return nil, nil
 		},
-		UpdateStackFn: func(stackID string, prNumbers []int) error {
-			updatedID = stackID
-			updatedWith = prNumbers
-			return nil
+		GetStackFn: func(stackNumber int) (*github.RemoteStack, error) {
+			assert.Equal(t, 9, stackNumber)
+			return &github.RemoteStack{ID: 9, Number: 9, PullRequests: []int{101, 102}}, nil
+		},
+		AddToStackFn: func(stackNumber int, prNumbers []int) (*github.RemoteStack, error) {
+			updatedNumber = stackNumber
+			addedWith = prNumbers
+			return &github.RemoteStack{ID: 9, Number: 9, PullRequests: []int{101, 102, 103}}, nil
 		},
 	}
 
 	output := runSyncWithGitHub(t, newSyncMockNoRebase(tmpDir, "b1"), ghMock)
 
-	assert.Equal(t, "9", updatedID)
-	assert.Equal(t, []int{101, 102, 103}, updatedWith)
+	assert.Equal(t, 9, updatedNumber)
+	assert.Equal(t, []int{103}, addedWith)
 	assert.Contains(t, output, "Stack updated on GitHub with 3 PRs")
 	assert.Contains(t, output, "Stack synced")
 	assert.NotContains(t, output, "Branches synced")
@@ -1878,9 +1882,9 @@ func TestSync_FewerThanTwoPRs_BranchesSynced(t *testing.T) {
 			listCalled = true
 			return nil, nil
 		},
-		CreateStackFn: func([]int) (int, error) {
+		CreateStackFn: func([]int) (*github.RemoteStack, error) {
 			createCalled = true
-			return 0, nil
+			return &github.RemoteStack{}, nil
 		},
 	}
 
@@ -1905,8 +1909,8 @@ func TestSync_StacksUnavailable_BranchesSynced(t *testing.T) {
 	ghMock := &github.MockClient{
 		FindPRForBranchFn: openPRFinder(map[string]int{"b1": 101, "b2": 102}),
 		ListStacksFn:      func() ([]github.RemoteStack, error) { return nil, nil },
-		CreateStackFn: func([]int) (int, error) {
-			return 0, &api.HTTPError{StatusCode: 404, Message: "Not Found"}
+		CreateStackFn: func([]int) (*github.RemoteStack, error) {
+			return nil, &api.HTTPError{StatusCode: 404, Message: "Not Found"}
 		},
 	}
 
@@ -1932,18 +1936,18 @@ func TestSync_PRsSpanMultipleStacks_BranchesSynced(t *testing.T) {
 		FindPRForBranchFn: openPRFinder(map[string]int{"b1": 101, "b2": 102}),
 		ListStacksFn: func() ([]github.RemoteStack, error) {
 			return []github.RemoteStack{
-				{ID: 9, PullRequests: []int{101}},
-				{ID: 10, PullRequests: []int{102}},
+				{ID: 9, Number: 9, PullRequests: []int{101}},
+				{ID: 10, Number: 10, PullRequests: []int{102}},
 			}, nil
 		},
-		CreateStackFn: func([]int) (int, error) { createCalled = true; return 0, nil },
-		UpdateStackFn: func(string, []int) error { updateCalled = true; return nil },
+		CreateStackFn: func([]int) (*github.RemoteStack, error) { createCalled = true; return nil, nil },
+		AddToStackFn:  func(int, []int) (*github.RemoteStack, error) { updateCalled = true; return nil, nil },
 	}
 
 	output := runSyncWithGitHub(t, newSyncMockNoRebase(tmpDir, "b1"), ghMock)
 
 	assert.False(t, createCalled, "CreateStack should not be called on divergence")
-	assert.False(t, updateCalled, "UpdateStack should not be called on divergence")
+	assert.False(t, updateCalled, "AddToStack should not be called on divergence")
 	assert.Contains(t, output, "multiple stacks")
 	assert.NotContains(t, output, "submitting", "divergence guidance should be command-neutral, not submit-specific")
 	assert.Contains(t, output, "Branches synced")
@@ -2041,7 +2045,11 @@ func TestSync_RemoteAhead_PullsNewBranches(t *testing.T) {
 
 	ghMock := &github.MockClient{
 		ListStacksFn: func() ([]github.RemoteStack, error) {
-			return []github.RemoteStack{{ID: 9, PullRequests: []int{101, 102, 103, 104, 105}}}, nil
+			return []github.RemoteStack{{ID: 9, Number: 9, PullRequests: []int{101, 102, 103, 104, 105}}}, nil
+		},
+		GetStackFn: func(stackNumber int) (*github.RemoteStack, error) {
+			assert.Equal(t, 9, stackNumber)
+			return &github.RemoteStack{ID: 9, Number: 9, PullRequests: []int{101, 102, 103, 104, 105}}, nil
 		},
 		FindPRByNumberFn: prByNumberFinder(map[int]string{101: "b1", 102: "b2", 103: "b3", 104: "b4", 105: "b5"}),
 	}
@@ -2089,7 +2097,11 @@ func TestSync_RemoteAhead_QueuedBranchNotPushed(t *testing.T) {
 
 	ghMock := &github.MockClient{
 		ListStacksFn: func() ([]github.RemoteStack, error) {
-			return []github.RemoteStack{{ID: 9, PullRequests: []int{101, 102, 103}}}, nil
+			return []github.RemoteStack{{ID: 9, Number: 9, PullRequests: []int{101, 102, 103}}}, nil
+		},
+		GetStackFn: func(stackNumber int) (*github.RemoteStack, error) {
+			assert.Equal(t, 9, stackNumber)
+			return &github.RemoteStack{ID: 9, Number: 9, PullRequests: []int{101, 102, 103}}, nil
 		},
 		FindPRByNumberFn: func(n int) (*github.PullRequest, error) {
 			branch := map[int]string{101: "b1", 102: "b2", 103: "b3"}[n]
@@ -2143,7 +2155,7 @@ func TestSync_RemoteAhead_DuplicateBranchAborts(t *testing.T) {
 
 	ghMock := &github.MockClient{
 		ListStacksFn: func() ([]github.RemoteStack, error) {
-			return []github.RemoteStack{{ID: 9, PullRequests: []int{101, 102, 103}}}, nil
+			return []github.RemoteStack{{ID: 9, Number: 9, PullRequests: []int{101, 102, 103}}}, nil
 		},
 		FindPRByNumberFn: prByNumberFinder(map[int]string{101: "b1", 102: "b2", 103: "b3"}),
 	}
@@ -2207,7 +2219,11 @@ func TestSync_RemoteInSync_NoPull(t *testing.T) {
 
 	ghMock := &github.MockClient{
 		ListStacksFn: func() ([]github.RemoteStack, error) {
-			return []github.RemoteStack{{ID: 9, PullRequests: []int{101, 102}}}, nil
+			return []github.RemoteStack{{ID: 9, Number: 9, PullRequests: []int{101, 102}}}, nil
+		},
+		GetStackFn: func(stackNumber int) (*github.RemoteStack, error) {
+			assert.Equal(t, 9, stackNumber)
+			return &github.RemoteStack{ID: 9, Number: 9, PullRequests: []int{101, 102}}, nil
 		},
 		FindPRByNumberFn: prByNumberFinder(map[int]string{101: "b1", 102: "b2"}),
 	}
@@ -2240,7 +2256,10 @@ func divergentStack(t *testing.T, tmpDir string) {
 func divergentRemoteMock() *github.MockClient {
 	return &github.MockClient{
 		ListStacksFn: func() ([]github.RemoteStack, error) {
-			return []github.RemoteStack{{ID: 9, PullRequests: []int{101, 102, 104}}}, nil
+			return []github.RemoteStack{{ID: 9, Number: 9, PullRequests: []int{101, 102, 104}}}, nil
+		},
+		GetStackFn: func(stackNumber int) (*github.RemoteStack, error) {
+			return &github.RemoteStack{ID: 9, Number: 9, PullRequests: []int{101, 102, 104}}, nil
 		},
 		FindPRByNumberFn: prByNumberFinder(map[int]string{101: "b1", 102: "b2", 103: "b3", 104: "b4"}),
 	}
@@ -2260,9 +2279,18 @@ func TestSync_Divergent_NonInteractive_Aborts(t *testing.T) {
 	mock := newSyncMockNoRebase(tmpDir, "b1")
 	mock.CreateBranchFn = func(name, base string) error { created = append(created, name); return nil }
 	mock.PushFn = func(string, []string, bool, bool) error { pushed = true; return nil }
-	ghMock.CreateStackFn = func([]int) (int, error) { t.Fatal("CreateStack must not be called"); return 0, nil }
-	ghMock.UpdateStackFn = func(string, []int) error { t.Fatal("UpdateStack must not be called"); return nil }
-	ghMock.DeleteStackFn = func(string) error { t.Fatal("DeleteStack must not be called"); return nil }
+	ghMock.CreateStackFn = func([]int) (*github.RemoteStack, error) {
+		t.Fatal("CreateStack must not be called")
+		return nil, nil
+	}
+	ghMock.AddToStackFn = func(int, []int) (*github.RemoteStack, error) {
+		t.Fatal("AddToStack must not be called")
+		return nil, nil
+	}
+	ghMock.UnstackFn = func(int) (*github.RemoteStack, bool, error) {
+		t.Fatal("Unstack must not be called")
+		return nil, false, nil
+	}
 
 	output, err := runSyncCfg(t, mock, func(cfg *config.Config) { cfg.GitHubClientOverride = ghMock })
 	require.NoError(t, err)
@@ -2407,12 +2435,22 @@ func TestSync_Divergent_DeleteRemote(t *testing.T) {
 	divergentStack(t, tmpDir)
 
 	deleted := false
-	var deletedID string
+	var deletedNumber int
 	var pushed bool
 	ghMock := divergentRemoteMock()
-	ghMock.DeleteStackFn = func(id string) error { deleted = true; deletedID = id; return nil }
-	ghMock.CreateStackFn = func([]int) (int, error) { t.Fatal("CreateStack must not be called"); return 0, nil }
-	ghMock.UpdateStackFn = func(string, []int) error { t.Fatal("UpdateStack must not be called"); return nil }
+	ghMock.UnstackFn = func(number int) (*github.RemoteStack, bool, error) {
+		deleted = true
+		deletedNumber = number
+		return nil, true, nil
+	}
+	ghMock.CreateStackFn = func([]int) (*github.RemoteStack, error) {
+		t.Fatal("CreateStack must not be called")
+		return nil, nil
+	}
+	ghMock.AddToStackFn = func(int, []int) (*github.RemoteStack, error) {
+		t.Fatal("AddToStack must not be called")
+		return nil, nil
+	}
 	mock := newSyncMockNoRebase(tmpDir, "b1")
 	mock.PushFn = func(string, []string, bool, bool) error { pushed = true; return nil }
 
@@ -2424,7 +2462,7 @@ func TestSync_Divergent_DeleteRemote(t *testing.T) {
 	require.NoError(t, err)
 
 	assert.True(t, deleted, "remote stack should be deleted")
-	assert.Equal(t, "9", deletedID)
+	assert.Equal(t, 9, deletedNumber)
 	assert.False(t, pushed, "sync should stop after deleting the remote stack")
 	assert.Contains(t, output, "Deleted the stack on GitHub")
 	assert.Contains(t, output, "gh stack submit")
@@ -2443,9 +2481,18 @@ func TestSync_Divergent_Cancel(t *testing.T) {
 	divergentStack(t, tmpDir)
 
 	ghMock := divergentRemoteMock()
-	ghMock.DeleteStackFn = func(string) error { t.Fatal("DeleteStack must not be called"); return nil }
-	ghMock.CreateStackFn = func([]int) (int, error) { t.Fatal("CreateStack must not be called"); return 0, nil }
-	ghMock.UpdateStackFn = func(string, []int) error { t.Fatal("UpdateStack must not be called"); return nil }
+	ghMock.UnstackFn = func(int) (*github.RemoteStack, bool, error) {
+		t.Fatal("Unstack must not be called")
+		return nil, false, nil
+	}
+	ghMock.CreateStackFn = func([]int) (*github.RemoteStack, error) {
+		t.Fatal("CreateStack must not be called")
+		return nil, nil
+	}
+	ghMock.AddToStackFn = func(int, []int) (*github.RemoteStack, error) {
+		t.Fatal("AddToStack must not be called")
+		return nil, nil
+	}
 	var pushed bool
 	mock := newSyncMockNoRebase(tmpDir, "b1")
 	mock.PushFn = func(string, []string, bool, bool) error { pushed = true; return nil }
@@ -2490,7 +2537,11 @@ func TestSync_MergedBranchPruned_NoFalseDivergence(t *testing.T) {
 
 	ghMock := &github.MockClient{
 		ListStacksFn: func() ([]github.RemoteStack, error) {
-			return []github.RemoteStack{{ID: 9, PullRequests: []int{101, 102, 103}}}, nil
+			return []github.RemoteStack{{ID: 9, Number: 9, PullRequests: []int{101, 102, 103}}}, nil
+		},
+		GetStackFn: func(stackNumber int) (*github.RemoteStack, error) {
+			assert.Equal(t, 9, stackNumber)
+			return &github.RemoteStack{ID: 9, Number: 9, PullRequests: []int{101, 102, 103}}, nil
 		},
 		FindPRByNumberFn: func(n int) (*github.PullRequest, error) {
 			branch := map[int]string{101: "b1", 102: "b2", 103: "b3"}[n]

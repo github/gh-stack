@@ -321,7 +321,7 @@ func findExistingPR(cfg *config.Config, client github.ClientOps, arg string) (*r
 func validatePREligibility(cfg *config.Config, found []*resolvedArg, targetStack *github.RemoteStack) error {
 	inTargetStack := make(map[int]bool)
 	if targetStack != nil {
-		for _, n := range targetStack.PullRequests {
+		for _, n := range targetStack.PRNumbers() {
 			inTargetStack[n] = true
 		}
 	}
@@ -366,7 +366,7 @@ func listStacksSafe(cfg *config.Config, client github.ClientOps) ([]github.Remot
 	if err != nil {
 		var httpErr *api.HTTPError
 		if errors.As(err, &httpErr) && httpErr.StatusCode == 404 {
-			warnStacksUnavailableOrPAT(cfg)
+			warnStacksUnavailable(cfg)
 			return nil, ErrStacksUnavailable
 		}
 		cfg.Errorf("failed to list stacks: %v", err)
@@ -392,7 +392,7 @@ func prevalidateStack(cfg *config.Config, matchedStack *github.RemoteStack, know
 	}
 
 	var dropped []int
-	for _, n := range matchedStack.PullRequests {
+	for _, n := range matchedStack.PRNumbers() {
 		if !knownSet[n] {
 			dropped = append(dropped, n)
 		}
@@ -401,7 +401,7 @@ func prevalidateStack(cfg *config.Config, matchedStack *github.RemoteStack, know
 	if len(dropped) > 0 {
 		cfg.Errorf("Cannot update stack: this would remove %s from the stack",
 			formatPRList(dropped))
-		cfg.Printf("Current stack: %s", formatPRList(matchedStack.PullRequests))
+		cfg.Printf("Current stack: %s", formatPRList(matchedStack.PRNumbers()))
 		cfg.Printf("Include all existing PRs in the command to update the stack")
 		return ErrInvalidArgs
 	}
@@ -535,7 +535,7 @@ func findMatchingStack(stacks []github.RemoteStack, prNumbers []int) (*github.Re
 
 	var matched *github.RemoteStack
 	for i := range stacks {
-		for _, n := range stacks[i].PullRequests {
+		for _, n := range stacks[i].PRNumbers() {
 			if prSet[n] {
 				if matched != nil && matched.ID != stacks[i].ID {
 					return nil, fmt.Errorf("PRs belong to multiple stacks — unstack them first, then re-link")
@@ -551,8 +551,7 @@ func findMatchingStack(stacks []github.RemoteStack, prNumbers []int) (*github.Re
 
 // createLink creates a new stack with the given PR numbers.
 func createLink(cfg *config.Config, client github.ClientOps, prNumbers []int) error {
-	_, err := client.CreateStack(prNumbers)
-	if err != nil {
+	if _, err := client.CreateStack(prNumbers); err != nil {
 		var httpErr *api.HTTPError
 		if errors.As(err, &httpErr) {
 			switch httpErr.StatusCode {
@@ -560,7 +559,7 @@ func createLink(cfg *config.Config, client github.ClientOps, prNumbers []int) er
 				cfg.Errorf("Cannot create stack: %s", httpErr.Message)
 				return ErrAPIFailure
 			case 404:
-				warnStacksUnavailableOrPAT(cfg)
+				warnStacksUnavailable(cfg)
 				return ErrStacksUnavailable
 			default:
 				cfg.Errorf("Failed to create stack (HTTP %d): %s", httpErr.StatusCode, httpErr.Message)
@@ -576,10 +575,14 @@ func createLink(cfg *config.Config, client github.ClientOps, prNumbers []int) er
 }
 
 // updateLink updates an existing stack with the given PR numbers.
-// The update is additive-only: it errors if any existing PRs would be removed.
+// The update is additive-only: it errors if any existing PRs would be removed,
+// and (because the add endpoint appends to the top) if the existing PRs are not
+// an ordered prefix of the desired list.
 func updateLink(cfg *config.Config, client github.ClientOps, existing *github.RemoteStack, prNumbers []int) error {
+	current := existing.PRNumbers()
+
 	// Check if the input exactly matches the existing stack.
-	if slicesEqual(existing.PullRequests, prNumbers) {
+	if slicesEqual(current, prNumbers) {
 		cfg.Successf("Stack with %d PRs is already up to date", len(prNumbers))
 		return nil
 	}
@@ -591,7 +594,7 @@ func updateLink(cfg *config.Config, client github.ClientOps, existing *github.Re
 	}
 
 	var dropped []int
-	for _, n := range existing.PullRequests {
+	for _, n := range current {
 		if !newSet[n] {
 			dropped = append(dropped, n)
 		}
@@ -600,13 +603,21 @@ func updateLink(cfg *config.Config, client github.ClientOps, existing *github.Re
 	if len(dropped) > 0 {
 		cfg.Errorf("Cannot update stack: this would remove %s from the stack",
 			formatPRList(dropped))
-		cfg.Printf("Current stack: %s", formatPRList(existing.PullRequests))
+		cfg.Printf("Current stack: %s", formatPRList(current))
 		cfg.Printf("Include all existing PRs in the command to update the stack")
 		return ErrInvalidArgs
 	}
 
-	stackID := strconv.Itoa(existing.ID)
-	if err := client.UpdateStack(stackID, prNumbers); err != nil {
+	// The add endpoint appends to the top of the stack, so the existing PRs
+	// must be an ordered prefix of the desired list.
+	delta, ok := appendDelta(current, prNumbers)
+	if !ok {
+		cfg.Errorf("Cannot update stack: new PRs must be added to the top of the existing stack")
+		cfg.Printf("Current stack: %s", formatPRList(current))
+		return ErrInvalidArgs
+	}
+
+	if _, err := client.AddToStack(existing.Number, delta); err != nil {
 		var httpErr *api.HTTPError
 		if errors.As(err, &httpErr) {
 			switch httpErr.StatusCode {
@@ -640,6 +651,22 @@ func slicesEqual(a, b []int) bool {
 		}
 	}
 	return true
+}
+
+// appendDelta returns the PR numbers that must be appended to current to reach
+// desired, with ok=true, when current is an exact ordered prefix of desired.
+// When desired diverges from current (a reorder or removal), ok is false. This
+// mirrors the Stacks add endpoint, which only appends to the top of a stack.
+func appendDelta(current, desired []int) (delta []int, ok bool) {
+	if len(current) > len(desired) {
+		return nil, false
+	}
+	for i, n := range current {
+		if desired[i] != n {
+			return nil, false
+		}
+	}
+	return desired[len(current):], true
 }
 
 func formatPRList(numbers []int) string {

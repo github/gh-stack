@@ -113,16 +113,11 @@ func runSubmit(cfg *config.Config, opts *submitOptions) error {
 		return ErrAPIFailure
 	}
 
-	// Pre-flight: abort early if the user is authenticating with a PAT.
-	if cfg.WarnIfPAT() {
-		return ErrStacksUnavailable
-	}
-
 	// Verify that the repository has stacked PRs enabled.
 	stacksAvailable := s.ID != ""
 	if !stacksAvailable {
 		if _, err := client.ListStacks(); err != nil {
-			warnStacksUnavailableOrPAT(cfg)
+			warnStacksUnavailable(cfg)
 			if cfg.IsInteractive() {
 				p := prompter.New(cfg.In, cfg.Out, cfg.Err)
 				proceed, promptErr := p.Confirm("Would you still like to create regular PRs?", false)
@@ -609,7 +604,7 @@ func remoteStackPRs(client github.ClientOps, stackID string) []int {
 	}
 	for _, rs := range stacks {
 		if strconv.Itoa(rs.ID) == stackID {
-			return rs.PullRequests
+			return rs.PRNumbers()
 		}
 	}
 	return nil
@@ -661,7 +656,15 @@ func handlePendingModify(cfg *config.Config, client github.ClientOps, s *stack.S
 
 	// Delete the old remote stack
 	if state.PriorRemoteStackID != "" {
-		if err := client.DeleteStack(state.PriorRemoteStackID); err != nil {
+		number, found, lookupErr := stackNumberByID(client, state.PriorRemoteStackID)
+		if lookupErr != nil {
+			cfg.Warningf("Failed to look up existing stack: %v", lookupErr)
+			cfg.Printf("Run `%s` again to retry", cfg.ColorCyan("gh stack submit"))
+			return lookupErr
+		}
+		if !found {
+			cfg.Printf("Previous stack already deleted on GitHub")
+		} else if _, _, err := client.Unstack(number); err != nil {
 			var httpErr *api.HTTPError
 			if errors.As(err, &httpErr) && httpErr.StatusCode == 404 {
 				cfg.Printf("Previous stack already deleted on GitHub")
@@ -675,6 +678,7 @@ func handlePendingModify(cfg *config.Config, client github.ClientOps, s *stack.S
 		}
 		// Clear the old stack ID so syncStack creates a new one
 		s.ID = ""
+		s.Number = 0
 	}
 
 	return nil
@@ -761,7 +765,7 @@ func reconcileUntrackedStack(cfg *config.Config, client github.ClientOps, s *sta
 
 	// A remote stack already contains some of our PRs. Refuse to silently drop
 	// any PRs it holds that we aren't tracking locally; let the user reconcile.
-	if dropped := prsMissingFrom(matched.PullRequests, prNumbers); len(dropped) > 0 {
+	if dropped := prsMissingFrom(matched.PRNumbers(), prNumbers); len(dropped) > 0 {
 		cfg.Warningf("A stack on GitHub already contains %s, which %s not in your local stack",
 			formatPRList(dropped), plural(len(dropped), "is", "are"))
 		cfg.Printf("  Run `%s` to import the full stack",
@@ -773,8 +777,9 @@ func reconcileUntrackedStack(cfg *config.Config, client github.ClientOps, s *sta
 	// more on top). Adopt the remote stack ID — recording it locally — and
 	// update the stack with our full, ordered PR list to append any new PRs.
 	s.ID = strconv.Itoa(matched.ID)
+	s.Number = matched.Number
 
-	if slicesEqual(matched.PullRequests, prNumbers) {
+	if slicesEqual(matched.PRNumbers(), prNumbers) {
 		cfg.Successf("Linked to the existing stack on GitHub (%d PRs, already up to date)", len(prNumbers))
 		return true
 	}
@@ -799,12 +804,57 @@ func prsMissingFrom(remote, local []int) []int {
 	return missing
 }
 
-// updateStack calls the PUT endpoint to sync the full PR list for an existing stack.
-// If the remote stack was deleted (404), it clears the local ID and falls through
-// to createNewStack so the user doesn't need to re-run the command.
-// Returns true when the remote stack was updated (or recreated) successfully.
+// updateStack brings the remote stack in line with the local PR list by
+// appending any new PRs via the add endpoint. It reads the current remote stack
+// to compute the delta; when the desired list isn't a clean append onto the
+// remote stack (a reorder or a removal, e.g. merged PRs leaving the stack) it
+// leaves the remote stack untouched. If the remote stack is gone (404) it
+// clears the local ID and re-creates it. Returns true when the remote stack
+// reflects the local stack (updated, already in sync, or recreated).
 func updateStack(cfg *config.Config, client github.ClientOps, s *stack.Stack, prNumbers []int) bool {
-	if err := client.UpdateStack(s.ID, prNumbers); err != nil {
+	number, err := ensureStackNumber(client, s)
+	if err != nil || number == 0 {
+		// Can't resolve the remote stack — treat as missing and (re)create.
+		s.ID = ""
+		s.Number = 0
+		return createNewStack(cfg, client, s, prNumbers)
+	}
+
+	remote, err := client.GetStack(number)
+	if err != nil {
+		var httpErr *api.HTTPError
+		if errors.As(err, &httpErr) && httpErr.StatusCode == 404 {
+			s.ID = ""
+			s.Number = 0
+			return createNewStack(cfg, client, s, prNumbers)
+		}
+		cfg.Warningf("Failed to read stack on GitHub: %v", err)
+		return false
+	}
+
+	current := remote.PRNumbers()
+	if slicesEqual(current, prNumbers) {
+		s.ID = strconv.Itoa(remote.ID)
+		s.Number = remote.Number
+		cfg.Successf("Stack on GitHub is up to date with %d PRs", len(prNumbers))
+		return true
+	}
+
+	delta, isAppend := appendDelta(current, prNumbers)
+	if !isAppend || len(delta) == 0 {
+		// The desired list isn't a clean append onto the remote stack — the add
+		// endpoint can't express a reorder or removal. This is expected once
+		// part of the stack has landed and merged PRs have left the stack.
+		if len(s.MergedBranches()) > 0 {
+			cfg.Infof("Merged PRs have left the stack on GitHub, so it wasn't updated — your unmerged PRs were pushed and re-based onto the trunk")
+		} else {
+			cfg.Warningf("The stack on GitHub differs from your local stack and couldn't be updated automatically")
+		}
+		return false
+	}
+
+	rs, err := client.AddToStack(number, delta)
+	if err != nil {
 		var httpErr *api.HTTPError
 		if errors.As(err, &httpErr) {
 			switch httpErr.StatusCode {
@@ -812,6 +862,7 @@ func updateStack(cfg *config.Config, client github.ClientOps, s *stack.Stack, pr
 				// Stack was deleted on GitHub — clear the stale ID and
 				// immediately try to re-create it.
 				s.ID = ""
+				s.Number = 0
 				return createNewStack(cfg, client, s, prNumbers)
 			case 422:
 				// A merged branch whose ref has been deleted upstream breaks the
@@ -832,6 +883,9 @@ func updateStack(cfg *config.Config, client github.ClientOps, s *stack.Stack, pr
 		}
 		return false
 	}
+
+	s.ID = strconv.Itoa(rs.ID)
+	s.Number = rs.Number
 	cfg.Successf("Stack updated on GitHub with %d PRs", len(prNumbers))
 	return true
 }
@@ -840,9 +894,10 @@ func updateStack(cfg *config.Config, client github.ClientOps, s *stack.Stack, pr
 // three types of 422 errors the API may return.
 // Returns true when the stack was created or is confirmed already in sync.
 func createNewStack(cfg *config.Config, client github.ClientOps, s *stack.Stack, prNumbers []int) bool {
-	stackID, err := client.CreateStack(prNumbers)
+	rs, err := client.CreateStack(prNumbers)
 	if err == nil {
-		s.ID = strconv.Itoa(stackID)
+		s.ID = strconv.Itoa(rs.ID)
+		s.Number = rs.Number
 		cfg.Successf("Stack created on GitHub with %d PRs", len(prNumbers))
 		return true
 	}
@@ -857,7 +912,7 @@ func createNewStack(cfg *config.Config, client github.ClientOps, s *stack.Stack,
 	case 422:
 		return handleCreate422(cfg, httpErr, prNumbers)
 	case 404:
-		warnStacksUnavailableOrPAT(cfg)
+		warnStacksUnavailable(cfg)
 		return false
 	default:
 		cfg.Warningf("Failed to create stack on GitHub: %s", httpErr.Message)

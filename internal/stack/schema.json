@@ -28,7 +28,11 @@
       "properties": {
         "id": {
           "type": "string",
-          "description": "Identifier for this stack, populated from the API when available."
+          "description": "Global identifier for this stack, populated from the API when available."
+        },
+        "number": {
+          "type": "integer",
+          "description": "Repo-scoped number identifying this stack, displayed in the GitHub UI. Used as the primary way to reference a stack."
         },
         "prefix": {
           "type": "string",

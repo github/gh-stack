@@ -72,14 +72,47 @@ func printInterrupt(cfg *config.Config) {
 	cfg.Infof("Received interrupt, aborting operation")
 }
 
-// warnStacksUnavailableOrPAT prints an appropriate warning when a stacks API
-// call returns 404. If the token is a PAT the message focuses on the auth
-// issue; otherwise it falls back to the generic "not enabled" message.
-func warnStacksUnavailableOrPAT(cfg *config.Config) {
-	if cfg.WarnIfPAT() {
-		return
-	}
+// warnStacksUnavailable prints a warning when a stacks API call returns 404,
+// indicating stacked PRs are not enabled for the repository.
+func warnStacksUnavailable(cfg *config.Config) {
 	cfg.Warningf("Stacked PRs are not enabled for this repository")
+}
+
+// stackNumberByID resolves an internal stack ID (as stored in the local stack
+// file) to its human-facing stack number by consulting the remote stack list.
+// Returns ok=false when no remote stack matches the ID (e.g. it was deleted).
+func stackNumberByID(client github.ClientOps, id string) (number int, ok bool, err error) {
+	if id == "" {
+		return 0, false, nil
+	}
+	stacks, err := client.ListStacks()
+	if err != nil {
+		return 0, false, err
+	}
+	for _, rs := range stacks {
+		if strconv.Itoa(rs.ID) == id {
+			return rs.Number, true, nil
+		}
+	}
+	return 0, false, nil
+}
+
+// ensureStackNumber returns the stack number for s, resolving and caching it
+// from the remote stack list by internal ID when the local model predates the
+// Number field (older stack files stored only the ID). Returns 0 when the stack
+// number can't be determined.
+func ensureStackNumber(client github.ClientOps, s *stack.Stack) (int, error) {
+	if s.Number != 0 {
+		return s.Number, nil
+	}
+	number, found, err := stackNumberByID(client, s.ID)
+	if err != nil {
+		return 0, err
+	}
+	if found {
+		s.Number = number
+	}
+	return number, nil
 }
 
 // inputWithPrefill prompts the user for text input with the given prefill
@@ -531,7 +564,7 @@ func syncStackPRsFromRemote(client github.ClientOps, s *stack.Stack) (map[string
 	var remotePRNumbers []int
 	for _, rs := range stacks {
 		if strconv.Itoa(rs.ID) == s.ID {
-			remotePRNumbers = rs.PullRequests
+			remotePRNumbers = rs.PRNumbers()
 			break
 		}
 	}
@@ -1248,7 +1281,7 @@ func reconcileRemoteStack(cfg *config.Config, sf *stack.StackFile, s *stack.Stac
 	found := false
 	for _, rs := range stacks {
 		if strconv.Itoa(rs.ID) == s.ID {
-			remotePRNumbers = rs.PullRequests
+			remotePRNumbers = rs.PRNumbers()
 			found = true
 			break
 		}
@@ -1506,6 +1539,7 @@ func resolveDivergenceUseRemote(cfg *config.Config, sf *stack.StackFile, s *stac
 
 	trunk := s.Trunk.Branch
 	remoteStackID := s.ID
+	remoteStackNumber := s.Number
 	oldBranches := s.BranchNames()
 
 	removeLocalStack(sf, s)
@@ -1520,7 +1554,7 @@ func resolveDivergenceUseRemote(cfg *config.Config, sf *stack.StackFile, s *stac
 		}
 	}
 
-	newStack, err := importRemoteStack(cfg, sf, gitDir, remote, trunk, prs, remoteStackID)
+	newStack, err := importRemoteStack(cfg, sf, gitDir, remote, trunk, prs, remoteStackID, remoteStackNumber)
 	if err != nil {
 		return res, err
 	}
@@ -1584,19 +1618,25 @@ func nearestBranchAfterReplace(oldBranches []string, currentBranch string, newSt
 func resolveDivergenceDeleteRemote(cfg *config.Config, client github.ClientOps, sf *stack.StackFile, s *stack.Stack, gitDir string) (remoteReconcileResult, error) {
 	res := remoteReconcileResult{stop: true}
 
-	if err := client.DeleteStack(s.ID); err != nil {
+	number, err := ensureStackNumber(client, s)
+	if err != nil || number == 0 {
+		cfg.Warningf("Remote stack already deleted")
+	} else if _, dissolved, unstackErr := client.Unstack(number); unstackErr != nil {
 		var httpErr *api.HTTPError
-		if errors.As(err, &httpErr) && httpErr.StatusCode == 404 {
+		if errors.As(unstackErr, &httpErr) && httpErr.StatusCode == 404 {
 			cfg.Warningf("Remote stack already deleted")
 		} else {
-			cfg.Errorf("failed to delete remote stack: %v", err)
+			cfg.Errorf("failed to delete remote stack: %v", unstackErr)
 			return res, ErrAPIFailure
 		}
-	} else {
+	} else if dissolved {
 		cfg.Successf("Deleted the stack on GitHub")
+	} else {
+		cfg.Warningf("Some pull requests could not be unstacked and remain on GitHub")
 	}
 
 	s.ID = ""
+	s.Number = 0
 	if err := stack.Save(gitDir, sf); err != nil {
 		return res, handleSaveError(cfg, err)
 	}
