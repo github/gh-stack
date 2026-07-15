@@ -61,7 +61,7 @@ git config remote.pushDefault origin     # if multiple remotes exist (skips remo
 7. **Plan your stack layers by dependency order before writing code.** Foundational changes (models, APIs, shared utilities) go in lower branches; dependent changes (UI, consumers) go in higher branches. Think through the dependency chain before running `gh stack init`.
 8. **Use standard `git add` and `git commit` for staging and committing.** This gives you full control over which changes go into each branch. The `-Am` shortcut is available but should not be the default approach—stacked PRs are most effective when each branch contains a deliberate, logical set of changes.
 9. **Navigate down the stack when you need to change a lower layer.** If you're working on a frontend branch and realize you need API changes, don't hack around it at the current layer. Navigate to the appropriate branch (`gh stack down`, `gh stack checkout`, or `gh stack bottom`), make and commit the changes there, run `gh stack rebase --upstack`, then navigate back up to continue.
-10. **Use `gh stack link` for external tool workflows.** When branches are managed by an external tool (jj, Sapling, etc.), use `gh stack link branch-a branch-b`. `link` does not rely on local tracking state and is intended for API-driven PR and stack management. Always provide at least 2 branch names or PR numbers.
+10. **Use `gh stack link` for external tool workflows.** When branches are managed by an external tool (jj, Sapling, etc.), use `gh stack link branch-a branch-b`. `link` does not rely on local tracking state and is intended for API-driven PR and stack management. Provide at least two branches/PRs to create or update a stack, or a stack number followed by the new branches/PRs to append them to the top of an existing stack (e.g. `gh stack link 7 branch-c`).
 
 **Never do any of the following — each triggers an interactive prompt or TUI that will hang:**
 - ❌ `gh stack view` or `gh stack view --short` — always use `gh stack view --json`
@@ -573,7 +573,7 @@ gh stack submit --auto --open
 Link PRs into a stack on GitHub without creating any local tracking state. This is the recommended approach if you are managing stacked branches with other tools (jj, Sapling, git-town) and want to simply create GitHub Stacked PRs via an API.
 
 ```
-gh stack link [flags] <branch-or-pr> <branch-or-pr> [...]
+gh stack link [flags] <stack-number | branch-or-pr> <branch-or-pr> [...]
 ```
 
 ```bash
@@ -588,7 +588,13 @@ gh stack link 10 20 30
 
 # Add branches to an existing stack of PRs
 gh stack link 42 43 feature-auth feature-ui
+
+# Append to the top of an existing stack by its stack number
+# (7 is a stack number; only the new PRs/branches are listed)
+gh stack link 7 48 feature-auth
 ```
+
+When the first argument is a stack number, the remaining arguments are appended to the top of that stack, so you don't have to re-list its current PRs. Arguments already in the stack are skipped; arguments in a different stack are rejected. A numeric first argument is treated as a stack only when it matches an existing stack — otherwise it is a PR or branch.
 
 | Flag | Description |
 |------|---------|

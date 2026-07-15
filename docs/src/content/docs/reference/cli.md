@@ -430,7 +430,7 @@ gh stack push --remote upstream
 Link PRs into a stack on GitHub without local tracking.
 
 ```sh
-gh stack link [flags] <branch-or-pr> <branch-or-pr> [...]
+gh stack link [flags] <stack-number | branch-or-pr> <branch-or-pr> [...]
 ```
 
 Creates or updates a stack on GitHub from branch names or PR numbers/URLs. This command does not create or modify any `gh-stack` local tracking state. It is designed for users who manage branches with other tools locally (e.g., jj, Sapling, git-town) and want to simply open a stack of PRs.
@@ -439,9 +439,11 @@ Arguments are provided in stack order (bottom to top). Branch arguments are auto
 
 If the PRs are not yet in a stack, a new stack is created. If some of the PRs are already in a stack, the existing stack is updated to include the new PRs. Existing PRs are never removed from a stack — the update is additive only.
 
+To grow an existing stack without re-listing its PRs, pass a stack number (the number shown in the GitHub stack UI) as the first argument. The remaining arguments are appended to the top of that stack. Arguments already in the stack are skipped, and arguments that belong to a different stack are rejected. Because stack and PR numbers never overlap, a numeric first argument is treated as a stack only when it matches an existing stack — otherwise it is treated as a PR or branch.
+
 | Flag | Description |
 |------|-------------|
-| `--base <branch>` | Base branch for the bottom of the stack (default: `main`) |
+| `--base <branch>` | Base branch for the bottom of the stack (default: `main`); ignored when adding to an existing stack |
 | `--open` | Mark new and existing PRs as ready for review |
 | `--remote <name>` | Remote to push to (defaults to auto-detected remote) |
 
@@ -459,6 +461,10 @@ gh stack link https://github.com/owner/repo/pull/10 https://github.com/owner/rep
 
 # Add branches to an existing stack of PRs
 gh stack link 42 43 feature-auth feature-ui
+
+# Append to the top of an existing stack by its stack number (no need to
+# re-list the PRs already in stack 7)
+gh stack link 7 48 feature-ui
 
 # Use a different base branch and mark PRs as ready for review
 gh stack link --base develop --open feat-a feat-b feat-c
