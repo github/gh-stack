@@ -16,9 +16,10 @@ func TestSlugify(t *testing.T) {
 		input    string
 		expected string
 	}{
-		{"spaces to hyphens", "Hello World", "hello-world"},
-		{"diacritics stripped", "café résumé", "cafe-resume"},
-		{"special chars removed", "feat: add login!", "feat-add-login"},
+		{"spaces to underscores", "Hello World", "hello_world"},
+		{"diacritics stripped", "café résumé", "cafe_resume"},
+		{"special chars become underscores", "feat: add login!", "feat_add_login"},
+		{"real hyphens preserved", "Add user-authentication", "add_user-authentication"},
 		{"empty string", "", ""},
 	}
 
@@ -31,8 +32,9 @@ func TestSlugify(t *testing.T) {
 	t.Run("long string truncated at word boundary", func(t *testing.T) {
 		long := "this is a very long commit message that should definitely be truncated at a word boundary"
 		result := Slugify(long)
-		assert.LessOrEqual(t, len(result), 50)
-		assert.False(t, strings.HasSuffix(result, "-"), "should not end with hyphen")
+		assert.LessOrEqual(t, len(result), 30)
+		assert.False(t, strings.HasSuffix(result, "_"), "should not end with a separator")
+		assert.False(t, strings.HasSuffix(result, "-"), "should not end with a separator")
 		assert.NotEmpty(t, result)
 	})
 }
@@ -40,11 +42,11 @@ func TestSlugify(t *testing.T) {
 // --- DateSlug: date-prefixed auto-naming ---
 
 func TestDateSlug(t *testing.T) {
-	today := time.Now().Format("2006-01-02")
+	today := time.Now().Format("01-02")
 
 	t.Run("prefixes the date and slugifies the message", func(t *testing.T) {
 		name := DateSlug("Add login")
-		assert.Equal(t, today+"-add-login", name)
+		assert.Equal(t, today+"-add_login", name)
 	})
 
 	t.Run("empty message returns just the date", func(t *testing.T) {

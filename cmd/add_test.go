@@ -269,8 +269,8 @@ func TestAdd_MessageAutoGeneratesDateSlug(t *testing.T) {
 	output := collectOutput(cfg, outR, errR)
 
 	require.NotContains(t, output, "\u2717", "unexpected error")
-	today := time.Now().Format("2006-01-02")
-	assert.Equal(t, today+"-next-feature", createdBranch)
+	today := time.Now().Format("01-02")
+	assert.Equal(t, today+"-next_feature", createdBranch)
 }
 
 func TestAdd_FullyMergedStackBlocked(t *testing.T) {
