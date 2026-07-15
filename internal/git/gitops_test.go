@@ -361,6 +361,100 @@ func TestIntegration_Push_MixedStack(t *testing.T) {
 	assert.Equal(t, localB2, remoteBranchSHA(t, bareDir, "b2"))
 }
 
+// A stack branch whose name begins with "+" must push its own ref, not a
+// similarly named sibling. A leading "+" in a git refspec means "force update",
+// so passing a bare "+feature" (or "+feature:...") lets git treat it as a
+// refspec modifier for "feature". Fully-qualified refspecs keep the "+" part of
+// the branch name. Force path (used by push/submit).
+func TestIntegration_Push_PlusPrefixedBranch_Force(t *testing.T) {
+	bareDir, cloneDir := setupBareAndClone(t)
+	restore := withGitDir(t, cloneDir)
+	defer restore()
+
+	d := &defaultOps{}
+
+	// Create and push a normal "feature" branch (content A).
+	gitExec(t, cloneDir, "checkout", "-b", "feature")
+	writeFile(t, cloneDir, "feature.txt", "A")
+	gitExec(t, cloneDir, "add", ".")
+	gitExec(t, cloneDir, "commit", "-m", "feature A")
+	gitExec(t, cloneDir, "push", "origin", "feature")
+	remoteFeatureBefore := remoteBranchSHA(t, bareDir, "feature")
+
+	// Create a local "+feature" branch off main with different content (B).
+	gitExec(t, cloneDir, "checkout", "main")
+	gitExec(t, cloneDir, "checkout", "-b", "+feature")
+	writeFile(t, cloneDir, "plus.txt", "B")
+	gitExec(t, cloneDir, "add", ".")
+	gitExec(t, cloneDir, "commit", "-m", "plus B")
+	localPlus := gitExec(t, cloneDir, "rev-parse", "refs/heads/+feature")
+
+	// Advance local "feature" (content C) but do NOT push it. If the push
+	// followed refspec syntax, "+feature" would push this ref instead.
+	gitExec(t, cloneDir, "checkout", "feature")
+	writeFile(t, cloneDir, "feature.txt", "C")
+	gitExec(t, cloneDir, "add", ".")
+	gitExec(t, cloneDir, "commit", "-m", "feature C")
+	localFeature := gitExec(t, cloneDir, "rev-parse", "refs/heads/feature")
+	require.NotEqual(t, localPlus, localFeature, "test setup: +feature and feature must differ")
+
+	// Push the "+feature" stack branch via the force path.
+	gitExec(t, cloneDir, "checkout", "+feature")
+	require.NoError(t, d.FetchBranches("origin", []string{"+feature"}))
+	require.NoError(t, d.Push("origin", []string{"+feature"}, true, false))
+
+	// Remote "+feature" must point at local "+feature" (B), and remote
+	// "feature" must be untouched (still A).
+	assert.Equal(t, localPlus, remoteBranchSHA(t, bareDir, "+feature"),
+		"remote +feature should hold the +feature commit, not feature's")
+	assert.Equal(t, remoteFeatureBefore, remoteBranchSHA(t, bareDir, "feature"),
+		"remote feature must not be force-updated")
+}
+
+// Same as above for the non-force, atomic path (used by link and by sync when
+// no rebase happened). A bare "+feature" operand would force-update remote
+// "feature"; a fully-qualified refspec creates remote "+feature" instead.
+func TestIntegration_Push_PlusPrefixedBranch_NonForce(t *testing.T) {
+	bareDir, cloneDir := setupBareAndClone(t)
+	restore := withGitDir(t, cloneDir)
+	defer restore()
+
+	d := &defaultOps{}
+
+	// Create and push a normal "feature" branch (content A).
+	gitExec(t, cloneDir, "checkout", "-b", "feature")
+	writeFile(t, cloneDir, "feature.txt", "A")
+	gitExec(t, cloneDir, "add", ".")
+	gitExec(t, cloneDir, "commit", "-m", "feature A")
+	gitExec(t, cloneDir, "push", "origin", "feature")
+	remoteFeatureBefore := remoteBranchSHA(t, bareDir, "feature")
+
+	// Create a local "+feature" branch off main with different content (B).
+	gitExec(t, cloneDir, "checkout", "main")
+	gitExec(t, cloneDir, "checkout", "-b", "+feature")
+	writeFile(t, cloneDir, "plus.txt", "B")
+	gitExec(t, cloneDir, "add", ".")
+	gitExec(t, cloneDir, "commit", "-m", "plus B")
+	localPlus := gitExec(t, cloneDir, "rev-parse", "refs/heads/+feature")
+
+	// Advance local "feature" (content C) but do NOT push it.
+	gitExec(t, cloneDir, "checkout", "feature")
+	writeFile(t, cloneDir, "feature.txt", "C")
+	gitExec(t, cloneDir, "add", ".")
+	gitExec(t, cloneDir, "commit", "-m", "feature C")
+
+	// Push "+feature" via the non-force, atomic path.
+	gitExec(t, cloneDir, "checkout", "+feature")
+	require.NoError(t, d.Push("origin", []string{"+feature"}, false, true))
+
+	// Remote "+feature" must be created from local "+feature" (B), and remote
+	// "feature" must be untouched (still A).
+	assert.Equal(t, localPlus, remoteBranchSHA(t, bareDir, "+feature"),
+		"remote +feature should be created from the +feature commit")
+	assert.Equal(t, remoteFeatureBefore, remoteBranchSHA(t, bareDir, "feature"),
+		"remote feature must not be force-updated")
+}
+
 func TestSplitCommitMessage(t *testing.T) {
 	tests := []struct {
 		name        string

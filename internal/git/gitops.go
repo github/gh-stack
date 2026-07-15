@@ -187,13 +187,14 @@ func (d *defaultOps) Push(remote string, branches []string, force, atomic bool) 
 	if atomic {
 		args = append(args, "--atomic")
 	}
-	if force {
-		// Explicit refspecs: <local-branch>:refs/heads/<remote-branch>.
-		for _, b := range branches {
-			args = append(args, fmt.Sprintf("%s:refs/heads/%s", b, b))
-		}
-	} else {
-		args = append(args, branches...)
+	// Fully-qualified refspecs: refs/heads/<local>:refs/heads/<remote>.
+	// Qualifying the source (not a bare branch name) ensures a branch name is
+	// never reinterpreted as refspec syntax — e.g. a leading "+" is part of the
+	// ref, not a force modifier. This form is identical whether or not the push
+	// is forced; force is supplied out-of-band by the --force-with-lease flags
+	// built above.
+	for _, b := range branches {
+		args = append(args, fmt.Sprintf("refs/heads/%s:refs/heads/%s", b, b))
 	}
 	return runSilent(args...)
 }
@@ -544,7 +545,9 @@ func (d *defaultOps) DeleteBranch(name string, force bool) error {
 }
 
 func (d *defaultOps) DeleteRemoteBranch(remote, branch string) error {
-	return runSilent("push", remote, "--delete", branch)
+	// Fully-qualify the ref so a branch name is never reinterpreted as
+	// refspec syntax.
+	return runSilent("push", remote, "--delete", "refs/heads/"+branch)
 }
 
 func (d *defaultOps) DeleteTrackingRef(remote, branch string) error {
