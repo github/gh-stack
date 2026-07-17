@@ -94,18 +94,6 @@ jobs:
       - name: Run a step only when the stack targets a release branch
         if: github.event.pull_request.stack != null && startsWith(github.event.pull_request.stack.base.ref, 'release/')
         run: echo "This stack targets a release branch"
-
-      - name: Run a step only on the bottom PR of the stack
-        if: github.event.pull_request.stack.position == 1
-        run: echo "This is the bottom PR"
-
-      - name: Run a step only on the lowest unmerged PR of the stack
-        if: github.event.pull_request.stack.base.ref == github.event.pull_request.base.ref
-        run: echo "This is the bottom PR"
-      
-      - name: Run a step only on the top PR of the stack
-        if: github.event.pull_request.stack.position == github.event.pull_request.stack.size
-        run: echo "This is the top PR"
 ```
 
 | Expression | Description |
@@ -117,6 +105,33 @@ jobs:
 | `github.event.pull_request.stack.base.sha` | The HEAD SHA of the stack's base branch. |
 
 See the [Webhooks reference](/gh-stack/reference/webhooks/) for the full details on the `stack` object in webhook payloads, or the [REST API reference](/gh-stack/reference/rest-api/) to read the same object on demand from a pull request.
+
+### How can I optimize CI usage for a stack?
+
+Because a workflow runs for every PR in a stack, a large stack can multiply your CI usage. You can use the `stack` fields to selectively run jobs based on the position of the current PR in the stack.
+
+Two conditions are especially useful for deciding where a job should run:
+
+- **Lowest unmerged PR** — the PR currently at the bottom of the remaining stack. Because it targets the stack base directly, `github.event.pull_request.stack.base.ref` equals `github.event.pull_request.base.ref`.
+- **Top PR** — the last PR in the stack, containing the full set of changes. It's the PR where `github.event.pull_request.stack.position` equals `github.event.pull_request.stack.size`.
+
+```yaml
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Run for the lowest unmerged PR in the stack
+        if: github.event.pull_request.stack.base.ref == github.event.pull_request.base.ref
+        run: echo "Lowest unmerged PR in the stack"
+
+      - name: Run for the top PR in the stack
+        if: github.event.pull_request.stack.position == github.event.pull_request.stack.size
+        run: echo "Top PR in the stack"
+```
+
+As PRs merge from the bottom up, the lowest unmerged PR changes: once the bottom PR lands, the next PR is rebased to target the stack base directly, so it becomes the new lowest unmerged PR on the following workflow run. You can also gate on the original bottom PR with `github.event.pull_request.stack.position == 1`, or on any specific layer using `position`.
 
 ### Do all previous PRs need to be passing checks before I can merge?
 

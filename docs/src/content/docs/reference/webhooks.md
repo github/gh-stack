@@ -106,3 +106,25 @@ The top-level `stack` object is unique to the `stacked` event; other `pull_reque
 GitHub Actions automatically evaluates workflow triggers using the stack's base branch. If a PR is part of a stack targeting `main`, any workflow configured to run on pull requests targeting `main` will run for every PR in the stack — no workflow changes are required.
 
 The `stack` object is also available in GitHub Actions workflow expressions via `github.event.pull_request.stack`. See [How do I access stack metadata in my GitHub Actions workflow?](/gh-stack/faq/#how-do-i-access-stack-metadata-in-my-github-actions-workflow) in the FAQ for examples.
+
+### Optimizing CI usage
+
+Because a workflow runs for every PR in a stack, you can use the `stack` fields to selectively run jobs. For example, if you only plan on merging one PR at a time, you can choose to only run CI for the lowest unmerged PR. Compare the stack's base ref to the PR's own base ref to detect the **lowest unmerged PR**, and compare `position` to `size` to detect the **top PR**:
+
+```yaml
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Run for the lowest unmerged PR in the stack
+        if: github.event.pull_request.stack.base.ref == github.event.pull_request.base.ref
+        run: echo "Lowest unmerged PR in the stack"
+
+      - name: Run for the top PR in the stack
+        if: github.event.pull_request.stack.position == github.event.pull_request.stack.size
+        run: echo "Top PR in the stack"
+```
+
+See [How can I optimize CI usage for a stack?](/gh-stack/faq/#how-can-i-optimize-ci-usage-for-a-stack) for more detail.
