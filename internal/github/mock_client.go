@@ -17,6 +17,9 @@ type MockClient struct {
 	CreateStackFn            func([]int) (*RemoteStack, error)
 	AddToStackFn             func(int, []int) (*RemoteStack, error)
 	UnstackFn                func(int) (*RemoteStack, bool, error)
+	RepoMergeConfigFn        func() (*RepoMergeConfig, error)
+	MergeStackAsyncFn        func(int, string) (*AsyncMergeResult, error)
+	GetAsyncMergeResultFn    func(int, string) (*AsyncMergeResult, error)
 }
 
 // Compile-time check that MockClient satisfies ClientOps.
@@ -111,4 +114,45 @@ func (m *MockClient) Unstack(stackNumber int) (*RemoteStack, bool, error) {
 		return m.UnstackFn(stackNumber)
 	}
 	return nil, false, nil
+}
+
+func (m *MockClient) RepoMergeConfig() (*RepoMergeConfig, error) {
+	if m.RepoMergeConfigFn != nil {
+		return m.RepoMergeConfigFn()
+	}
+	return &RepoMergeConfig{
+		MergeAllowed:  true,
+		SquashAllowed: true,
+		RebaseAllowed: true,
+		DefaultMethod: MergeMethodMerge,
+	}, nil
+}
+
+func (m *MockClient) MergeStackAsync(prNumber int, method string) (*AsyncMergeResult, error) {
+	if m.MergeStackAsyncFn != nil {
+		return m.MergeStackAsyncFn(prNumber, method)
+	}
+	return &AsyncMergeResult{
+		Queued: true,
+		Details: AsyncMergeDetails{
+			Message:     "Merge request enqueued.",
+			UUID:        "mock-uuid",
+			MergeMethod: method,
+		},
+		StatusCode: 202,
+	}, nil
+}
+
+func (m *MockClient) GetAsyncMergeResult(prNumber int, uuid string) (*AsyncMergeResult, error) {
+	if m.GetAsyncMergeResultFn != nil {
+		return m.GetAsyncMergeResultFn(prNumber, uuid)
+	}
+	return &AsyncMergeResult{
+		Merged: true,
+		Details: AsyncMergeDetails{
+			Message: "Pull request was merged.",
+			SHA:     "mockmergesha",
+		},
+		StatusCode: 200,
+	}, nil
 }
