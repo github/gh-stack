@@ -591,7 +591,7 @@ When the first argument is a stack number, the remaining arguments are appended 
 
 | Flag | Description |
 |------|---------|
-| `--base <branch>` | Base branch for the bottom of the stack (default: `main`) |
+| `--base <branch>` | Base branch for the bottom of the stack (defaults to the repository's default branch) |
 | `--open` | Mark new and existing PRs as ready for review |
 | `--remote <name>` | Remote to push to (use if multiple remotes exist) |
 

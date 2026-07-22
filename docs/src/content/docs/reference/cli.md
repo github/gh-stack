@@ -431,7 +431,7 @@ To grow an existing stack without re-listing its PRs, pass a stack number (the n
 
 | Flag | Description |
 |------|-------------|
-| `--base <branch>` | Base branch for the bottom of the stack (default: `main`); ignored when adding to an existing stack |
+| `--base <branch>` | Base branch for the bottom of the stack (defaults to the repository's default branch); ignored when adding to an existing stack |
 | `--open` | Mark new and existing PRs as ready for review |
 | `--remote <name>` | Remote to push to (defaults to auto-detected remote) |
 
