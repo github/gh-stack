@@ -20,6 +20,7 @@ type ClientOps interface {
 	RepoMergeConfig() (*RepoMergeConfig, error)
 	MergeStackAsync(prNumber int, method string) (*AsyncMergeResult, error)
 	GetAsyncMergeResult(prNumber int, uuid string) (*AsyncMergeResult, error)
+	PRTitles(numbers []int) (map[int]string, error)
 }
 
 // Compile-time check that Client satisfies ClientOps.

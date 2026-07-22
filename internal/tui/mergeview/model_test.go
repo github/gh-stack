@@ -2,6 +2,8 @@ package mergeview
 
 import (
 	"errors"
+	"fmt"
+	"strings"
 	"testing"
 
 	tea "github.com/charmbracelet/bubbletea"
@@ -11,7 +13,7 @@ import (
 
 func baseOptions() Options {
 	return Options{
-		PRs:               []PRItem{{Number: 1, Title: "a"}, {Number: 2, Title: "b"}, {Number: 3, Title: "c"}},
+		PRs:               []PRItem{{Number: 1, Title: "a", Branch: "feat-a"}, {Number: 2, Title: "b", Branch: "feat-b"}, {Number: 3, Title: "c", Branch: "feat-c"}},
 		BaseRef:           "main",
 		AllowedMethods:    []string{"merge", "squash", "rebase"},
 		DefaultMethod:     "squash",
@@ -79,6 +81,45 @@ func TestSelect_CascadeToggle(t *testing.T) {
 	m = step(m, space())
 	assert.Equal(t, []int{1}, m.selectedNumbers())
 	assert.Equal(t, 1, m.targetPR())
+}
+
+func TestSelect_Viewport(t *testing.T) {
+	opts := baseOptions()
+	opts.PRs = nil
+	for i := 1; i <= 30; i++ {
+		opts.PRs = append(opts.PRs, PRItem{Number: i, Title: fmt.Sprintf("Title %d", i), Branch: fmt.Sprintf("b%d", i)})
+	}
+	m := New(opts)
+
+	// No size yet: all items are shown.
+	assert.Equal(t, 30, m.visibleItems())
+
+	// A tall terminal caps the window at maxVisibleItems (10).
+	nm, _ := m.Update(tea.WindowSizeMsg{Width: 100, Height: 60})
+	m = nm.(Model)
+	assert.Equal(t, 10, m.visibleItems())
+	assert.Equal(t, 0, m.scrollOffset) // cursor starts at the top of the stack
+
+	// A short terminal shrinks the window further (each item is two lines).
+	nm, _ = m.Update(tea.WindowSizeMsg{Width: 100, Height: 30})
+	m = nm.(Model)
+	assert.LessOrEqual(t, m.visibleItems(), 10)
+	assert.Greater(t, m.visibleItems(), 0)
+
+	// Scrolling down keeps the cursor's display row within the window.
+	for i := 0; i < 20; i++ {
+		nm, _ := m.Update(tea.KeyMsg{Type: tea.KeyDown})
+		m = nm.(Model)
+		cursorRow := len(m.opts.PRs) - 1 - m.cursor
+		assert.GreaterOrEqual(t, cursorRow, m.scrollOffset)
+		assert.Less(t, cursorRow, m.scrollOffset+m.visibleItems())
+	}
+
+	// The rendered select view shows at most visibleItems PRs (line 2 of each
+	// item contains "#N • branch") and a scroll indicator.
+	view := m.viewSelect()
+	assert.LessOrEqual(t, strings.Count(view, "•"), m.visibleItems())
+	assert.Contains(t, view, "more")
 }
 
 func TestSelect_ArrowDirection(t *testing.T) {
@@ -218,6 +259,32 @@ func TestCancel_FromSelect(t *testing.T) {
 	assert.False(t, out.Merged)
 }
 
+func TestView_ClearsOnDone(t *testing.T) {
+	m := New(baseOptions())
+	m = step(m, keyType(tea.KeyEsc)) // cancel -> StepDone
+	require.Equal(t, StepDone, m.step)
+	assert.Equal(t, "", m.View(), "the done state renders nothing so the inline TUI clears itself")
+}
+
+func TestProgress_WatchStopped(t *testing.T) {
+	m := New(baseOptions())
+	m.step = StepProgress
+	m.submitted = true
+	m = step(m, submitDoneMsg{status: MergeStatus{Queued: true, UUID: "u"}}) // in-flight
+	m = step(m, keyType(tea.KeyCtrlC))
+	out := m.Outcome()
+	assert.True(t, out.WatchStopped)
+	assert.False(t, out.Cancelled)
+	assert.False(t, out.Merged)
+	assert.Equal(t, "", m.View())
+}
+
+func TestOutcome_SHA(t *testing.T) {
+	m := New(baseOptions())
+	m = step(m, submitDoneMsg{status: MergeStatus{Merged: true, SHA: "deadbeef"}})
+	assert.Equal(t, "deadbeef", m.Outcome().SHA)
+}
+
 func TestView_RendersBannerAndSteps(t *testing.T) {
 	m := New(baseOptions())
 	sel := m.View()
@@ -225,15 +292,64 @@ func TestView_RendersBannerAndSteps(t *testing.T) {
 	assert.Contains(t, sel, "Select PRs")
 	assert.Contains(t, sel, "Select Merge Method")
 	assert.Contains(t, sel, "Confirm")
-	assert.Contains(t, sel, "Select how far up the stack")
+	assert.Contains(t, sel, "Will merge 3 PRs into main")
+	assert.Contains(t, sel, "feat-a") // branch shown on the item's second line
 
 	m = step(m, keyType(tea.KeyTab))
-	assert.Contains(t, m.View(), "Choose a merge method")
+	assert.Contains(t, m.View(), "Squash and merge") // method labels, no subheading
 
 	m = step(m, keyType(tea.KeyTab))
 	confirm := m.View()
 	assert.Contains(t, confirm, "Merge 3 PRs")
 	assert.Contains(t, confirm, "#1, #2, #3")
+}
+
+func TestBanner_IncludesStackNumber(t *testing.T) {
+	opts := baseOptions()
+	opts.StackNumber = 42
+	m := New(opts)
+	assert.Contains(t, m.View(), "Merge stack #42")
+}
+
+func TestProgress_HidesHeader(t *testing.T) {
+	m := New(baseOptions())
+	m.step = StepProgress
+	v := m.View()
+	assert.NotContains(t, v, "Merge stack", "header/wizard hidden during progress")
+	assert.NotContains(t, v, "Select PRs")
+	assert.Contains(t, v, "Merging")
+	assert.NotContains(t, v, "…", "no trailing ellipsis on the Merging line")
+}
+
+func TestSelect_JumpTopBottom(t *testing.T) {
+	opts := baseOptions()
+	opts.PRs = nil
+	for i := 1; i <= 6; i++ {
+		opts.PRs = append(opts.PRs, PRItem{Number: i, Branch: fmt.Sprintf("b%d", i)})
+	}
+	m := New(opts) // cursor starts at the top of the stack (index 5)
+	require.Equal(t, 5, m.cursor)
+
+	m = step(m, keyType(tea.KeyShiftDown)) // jump to bottom
+	assert.Equal(t, 0, m.cursor)
+
+	m = step(m, keyType(tea.KeyShiftUp)) // jump to top
+	assert.Equal(t, 5, m.cursor)
+}
+
+func TestProgressStatus(t *testing.T) {
+	assert.Equal(t, "Submitting merge request...", progressStatus(""))
+	assert.Equal(t, "Submitting merge request...", progressStatus("   "))
+	assert.Equal(t, "Merge request is in progress...", progressStatus("Merge request is in progress."))
+	assert.Equal(t, "Merge request enqueued...", progressStatus("Merge request enqueued."))
+}
+
+func TestStepper_PowerlineFallback(t *testing.T) {
+	t.Setenv("GH_STACK_POWERLINE", "0")
+	assert.NotContains(t, New(baseOptions()).View(), "\ue0b0", "no Powerline glyph in fallback mode")
+
+	t.Setenv("GH_STACK_POWERLINE", "1")
+	assert.Contains(t, New(baseOptions()).View(), "\ue0b0", "Powerline glyph when enabled")
 }
 
 func TestPRCount(t *testing.T) {

@@ -4,18 +4,17 @@ import (
 	"encoding/json"
 	"io"
 	"net/http"
-	"net/http/httptest"
+	"strings"
 	"testing"
 
+	"github.com/cli/go-gh/v2/pkg/api"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
-// testAsyncClient builds a Client wired to a test server for the async merge
-// REST methods, which only use the raw HTTP client and base URL.
-func testAsyncClient(base string) *Client {
-	return &Client{http: http.DefaultClient, base: base + "/", owner: "o", repo: "r", slug: "o/r"}
-}
+type roundTripFunc func(*http.Request) (*http.Response, error)
+
+func (f roundTripFunc) RoundTrip(r *http.Request) (*http.Response, error) { return f(r) }
 
 type recordedRequest struct {
 	method string
@@ -23,29 +22,37 @@ type recordedRequest struct {
 	body   string
 }
 
-func serveOnce(t *testing.T, status int, respBody string, rec *recordedRequest) *httptest.Server {
+// testAsyncClient builds a Client whose REST client is backed by a stub
+// transport returning the given status and body. When rec is non-nil the
+// request's method, path and body are captured for assertions.
+func testAsyncClient(t *testing.T, status int, respBody string, rec *recordedRequest) *Client {
 	t.Helper()
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	rt := roundTripFunc(func(r *http.Request) (*http.Response, error) {
 		if rec != nil {
-			b, _ := io.ReadAll(r.Body)
 			rec.method = r.Method
 			rec.path = r.URL.Path
-			rec.body = string(b)
+			if r.Body != nil {
+				b, _ := io.ReadAll(r.Body)
+				rec.body = string(b)
+			}
 		}
-		w.Header().Set("Content-Type", "application/json")
-		w.WriteHeader(status)
-		_, _ = io.WriteString(w, respBody)
-	}))
-	t.Cleanup(srv.Close)
-	return srv
+		return &http.Response{
+			StatusCode: status,
+			Body:       io.NopCloser(strings.NewReader(respBody)),
+			Header:     http.Header{"Content-Type": []string{"application/json"}},
+			Request:    r,
+		}, nil
+	})
+	rest, err := api.NewRESTClient(api.ClientOptions{Host: "github.com", AuthToken: "x", Transport: rt})
+	require.NoError(t, err)
+	return &Client{rest: rest, owner: "o", repo: "r"}
 }
 
 func TestMergeStackAsync_Accepted(t *testing.T) {
 	var rec recordedRequest
 	body := `{"queued":true,"merged":false,"details":{"message":"Merge request enqueued.","uuid":"u-1","merge_method":"squash","expected_head_sha":"abc"}}`
-	srv := serveOnce(t, http.StatusAccepted, body, &rec)
+	c := testAsyncClient(t, http.StatusAccepted, body, &rec)
 
-	c := testAsyncClient(srv.URL)
 	res, err := c.MergeStackAsync(42, "squash")
 	require.NoError(t, err)
 
@@ -55,7 +62,6 @@ func TestMergeStackAsync_Accepted(t *testing.T) {
 
 	assert.True(t, res.Queued)
 	assert.False(t, res.Merged)
-	assert.Equal(t, http.StatusAccepted, res.StatusCode)
 	assert.Equal(t, "u-1", res.Details.UUID)
 	assert.Equal(t, "squash", res.Details.MergeMethod)
 	assert.True(t, res.InProgress())
@@ -63,46 +69,35 @@ func TestMergeStackAsync_Accepted(t *testing.T) {
 
 func TestMergeStackAsync_AlreadyMerged(t *testing.T) {
 	body := `{"queued":false,"merged":true,"details":{"message":"Pull request is already merged.","sha":"deadbeef"}}`
-	srv := serveOnce(t, http.StatusOK, body, nil)
-
-	res, err := testAsyncClient(srv.URL).MergeStackAsync(42, "merge")
+	res, err := testAsyncClient(t, http.StatusOK, body, nil).MergeStackAsync(42, "merge")
 	require.NoError(t, err)
 	assert.True(t, res.Merged)
 	assert.Equal(t, "deadbeef", res.Details.SHA)
-	assert.Equal(t, http.StatusOK, res.StatusCode)
 }
 
 func TestMergeStackAsync_ExistingRequestConflict(t *testing.T) {
-	body := `{"queued":true,"merged":false,"details":{"message":"A merge request already exists for this pull request.","uuid":"u-2","merge_method":"merge","expected_head_sha":"abc"}}`
-	srv := serveOnce(t, http.StatusConflict, body, nil)
-
-	res, err := testAsyncClient(srv.URL).MergeStackAsync(42, "merge")
-	require.NoError(t, err)
-	assert.Equal(t, http.StatusConflict, res.StatusCode)
-	assert.Equal(t, "u-2", res.Details.UUID)
-	assert.True(t, res.InProgress())
+	// The go-gh REST client discards the 409 body, so we can't recover the
+	// existing UUID; the request surfaces as a clear "already exists" error.
+	_, err := testAsyncClient(t, http.StatusConflict, `{"queued":true,"merged":false,"details":{"uuid":"u-2"}}`, nil).MergeStackAsync(42, "merge")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "already exists")
 }
 
 func TestMergeStackAsync_NotMergeable(t *testing.T) {
-	body := `{"queued":false,"merged":false,"details":{"message":"Pull request is closed."}}`
-	srv := serveOnce(t, http.StatusBadRequest, body, nil)
-
-	res, err := testAsyncClient(srv.URL).MergeStackAsync(42, "merge")
-	require.NoError(t, err)
-	assert.False(t, res.Queued)
-	assert.False(t, res.Merged)
-	assert.Equal(t, "Pull request is closed.", res.Details.Message)
+	// A 400 preflight failure is reported as a clear error (the specific
+	// details.message isn't recoverable through the REST client).
+	_, err := testAsyncClient(t, http.StatusBadRequest, `{"queued":false,"merged":false,"details":{"message":"Pull request is closed."}}`, nil).MergeStackAsync(42, "merge")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "can no longer be merged")
 }
 
 func TestMergeStackAsync_NotAvailable(t *testing.T) {
-	srv := serveOnce(t, http.StatusNotFound, `{"message":"Not Found"}`, nil)
-	_, err := testAsyncClient(srv.URL).MergeStackAsync(42, "merge")
+	_, err := testAsyncClient(t, http.StatusNotFound, `{"message":"Not Found"}`, nil).MergeStackAsync(42, "merge")
 	assert.ErrorIs(t, err, ErrAsyncMergeUnavailable)
 }
 
 func TestMergeStackAsync_ValidationFailed(t *testing.T) {
-	srv := serveOnce(t, http.StatusUnprocessableEntity, `{"message":"Validation Failed"}`, nil)
-	_, err := testAsyncClient(srv.URL).MergeStackAsync(42, "merge")
+	_, err := testAsyncClient(t, http.StatusUnprocessableEntity, `{"message":"Validation Failed"}`, nil).MergeStackAsync(42, "merge")
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "Validation Failed")
 }
@@ -121,8 +116,7 @@ func TestGetAsyncMergeResult_States(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			var rec recordedRequest
-			srv := serveOnce(t, http.StatusOK, tt.body, &rec)
-			res, err := testAsyncClient(srv.URL).GetAsyncMergeResult(42, "u")
+			res, err := testAsyncClient(t, http.StatusOK, tt.body, &rec).GetAsyncMergeResult(42, "u")
 			require.NoError(t, err)
 			assert.Equal(t, http.MethodGet, rec.method)
 			assert.Equal(t, "/repos/o/r/pulls/42/merge-async/u", rec.path)
@@ -133,23 +127,8 @@ func TestGetAsyncMergeResult_States(t *testing.T) {
 }
 
 func TestGetAsyncMergeResult_NotFound(t *testing.T) {
-	srv := serveOnce(t, http.StatusNotFound, `{"message":"Not Found"}`, nil)
-	_, err := testAsyncClient(srv.URL).GetAsyncMergeResult(42, "missing")
+	_, err := testAsyncClient(t, http.StatusNotFound, `{"message":"Not Found"}`, nil).GetAsyncMergeResult(42, "missing")
 	require.Error(t, err)
-}
-
-func TestRestBaseURL(t *testing.T) {
-	tests := []struct {
-		host string
-		want string
-	}{
-		{"", "https://api.github.com/"},
-		{"github.com", "https://api.github.com/"},
-		{"github.example.com", "https://github.example.com/api/v3/"},
-	}
-	for _, tt := range tests {
-		assert.Equal(t, tt.want, restBaseURL(tt.host), "host %q", tt.host)
-	}
 }
 
 func TestMergeMethodFromEnum(t *testing.T) {
@@ -182,8 +161,7 @@ func TestAsyncMergeResult_InProgress(t *testing.T) {
 // sanity check that the submit body omits merge_method when empty.
 func TestMergeStackAsync_OmitsEmptyMethod(t *testing.T) {
 	var rec recordedRequest
-	srv := serveOnce(t, http.StatusAccepted, `{"queued":true,"merged":false,"details":{"message":"m","uuid":"u","merge_method":"merge","expected_head_sha":"x"}}`, &rec)
-	_, err := testAsyncClient(srv.URL).MergeStackAsync(1, "")
+	_, err := testAsyncClient(t, http.StatusAccepted, `{"queued":true,"merged":false,"details":{"message":"m","uuid":"u","merge_method":"merge","expected_head_sha":"x"}}`, &rec).MergeStackAsync(1, "")
 	require.NoError(t, err)
 
 	var parsed map[string]any

@@ -8,6 +8,7 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 	"github.com/github/gh-stack/internal/theme"
+	"github.com/github/gh-stack/internal/tui/shared"
 )
 
 // Model is the Bubble Tea model backing the merge wizard.
@@ -27,16 +28,20 @@ type Model struct {
 	spinner spinner.Model
 	status  MergeStatus
 
-	submitted bool
-	merged    bool
-	failed    bool
-	cancelled bool
-	message   string
-	err       error
+	submitted    bool
+	merged       bool
+	failed       bool
+	cancelled    bool
+	watchStopped bool
+	message      string
+	err          error
 
 	pollInterval time.Duration
 
-	width int
+	width        int
+	height       int
+	scrollOffset int
+	usePowerline bool
 }
 
 // New builds a merge wizard model from the given options.
@@ -57,6 +62,7 @@ func New(opts Options) Model {
 		method:       normalizeDefaultMethod(opts),
 		pollInterval: interval,
 		spinner:      sp,
+		usePowerline: powerlineEnabled(),
 	}
 	m.methodCursor = indexOf(opts.AllowedMethods, m.method)
 
@@ -78,6 +84,8 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
 	case tea.WindowSizeMsg:
 		m.width = msg.Width
+		m.height = msg.Height
+		m.scrollOffset = m.clampScroll()
 		return m, nil
 
 	case spinner.TickMsg:
@@ -110,7 +118,7 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	if key == "ctrl+c" {
 		if m.step == StepProgress && m.submitted && !m.done() {
 			// The merge is running server-side; stop watching without cancelling it.
-			m.message = "Stopped watching. The merge continues on GitHub."
+			m.watchStopped = true
 			return m.finish()
 		}
 		m.cancelled = true
@@ -140,6 +148,12 @@ func (m Model) handleSelectKey(key string) (tea.Model, tea.Cmd) {
 		if m.cursor > 0 {
 			m.cursor--
 		}
+	case "shift+up":
+		// Jump to the top of the stack.
+		m.cursor = len(m.opts.PRs) - 1
+	case "shift+down":
+		// Jump to the bottom of the stack.
+		m.cursor = 0
 	case " ", "x":
 		if m.cursor <= m.topIndex {
 			// Uncheck the cursor and everything above it.
@@ -156,7 +170,44 @@ func (m Model) handleSelectKey(key string) (tea.Model, tea.Cmd) {
 		m.cancelled = true
 		return m.finish()
 	}
+	m.scrollOffset = m.clampScroll()
 	return m, nil
+}
+
+// maxVisibleItems caps how many pull requests the select step shows at once; the
+// rest are reached by scrolling so the picker never takes over the screen.
+const maxVisibleItems = 10
+
+// visibleItems is the number of pull requests shown in the select window at
+// once — capped at maxVisibleItems and shrunk to fit a short terminal (each
+// item renders on two lines). When the terminal size is unknown, all are shown.
+func (m Model) visibleItems() int {
+	n := len(m.opts.PRs)
+	if m.height <= 0 {
+		return n
+	}
+	// Reserve lines for the header, scroll indicators, summary, and footer.
+	const chrome = 11
+	avail := (m.height - chrome) / 2
+	limit := maxVisibleItems
+	if avail < limit {
+		limit = avail
+	}
+	if limit < 1 {
+		limit = 1
+	}
+	if n < limit {
+		limit = n
+	}
+	return limit
+}
+
+// clampScroll returns a scroll offset (in display rows, where row 0 is the top
+// of the stack) that keeps the cursor's row visible within the select window.
+func (m Model) clampScroll() int {
+	n := len(m.opts.PRs)
+	cursorRow := n - 1 - m.cursor
+	return shared.EnsureVisible(cursorRow, cursorRow+1, m.scrollOffset, m.visibleItems())
 }
 
 func (m Model) handleMethodKey(key string) (tea.Model, tea.Cmd) {
@@ -258,14 +309,16 @@ func (m Model) done() bool { return m.merged || m.failed || m.step == StepDone }
 // Outcome reports the final result of the wizard for the command layer.
 func (m Model) Outcome() Outcome {
 	o := Outcome{
-		Cancelled: m.cancelled,
-		Submitted: m.submitted,
-		Merged:    m.merged,
-		Failed:    m.failed,
-		Message:   m.message,
-		TargetPR:  m.targetPR(),
-		Method:    m.method,
-		Err:       m.err,
+		Cancelled:    m.cancelled,
+		Submitted:    m.submitted,
+		Merged:       m.merged,
+		Failed:       m.failed,
+		WatchStopped: m.watchStopped,
+		Message:      m.message,
+		TargetPR:     m.targetPR(),
+		Method:       m.method,
+		SHA:          m.status.SHA,
+		Err:          m.err,
 	}
 	if m.merged {
 		o.MergedPRs = m.selectedNumbers()

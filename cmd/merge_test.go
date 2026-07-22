@@ -1,6 +1,7 @@
 package cmd
 
 import (
+	"errors"
 	"net/http"
 	"testing"
 	"time"
@@ -92,10 +93,10 @@ func TestRunMerge_NoArg_MergesWholeStack(t *testing.T) {
 		},
 		MergeStackAsyncFn: func(pr int, method string) (*github.AsyncMergeResult, error) {
 			gotPR, gotMethod = pr, method
-			return &github.AsyncMergeResult{Queued: true, Details: github.AsyncMergeDetails{UUID: "u"}, StatusCode: 202}, nil
+			return &github.AsyncMergeResult{Queued: true, Details: github.AsyncMergeDetails{UUID: "u"}}, nil
 		},
 		GetAsyncMergeResultFn: func(pr int, uuid string) (*github.AsyncMergeResult, error) {
-			return &github.AsyncMergeResult{Merged: true, Details: github.AsyncMergeDetails{SHA: "abc1234"}, StatusCode: 200}, nil
+			return &github.AsyncMergeResult{Merged: true, Details: github.AsyncMergeDetails{SHA: "abc1234"}}, nil
 		},
 	}
 
@@ -294,7 +295,7 @@ func TestRunMerge_SubmitNotMergeable(t *testing.T) {
 			return remoteStack(7, "main", openStackPR(1, "b1"), openStackPR(2, "b2")), nil
 		},
 		MergeStackAsyncFn: func(pr int, method string) (*github.AsyncMergeResult, error) {
-			return &github.AsyncMergeResult{Queued: false, Merged: false, Details: github.AsyncMergeDetails{Message: "Pull request is closed."}, StatusCode: 400}, nil
+			return nil, errors.New("the stack can no longer be merged as requested; refresh and try again")
 		},
 	}
 
@@ -302,7 +303,8 @@ func TestRunMerge_SubmitNotMergeable(t *testing.T) {
 	output := collectOutput(cfg, outR, errR)
 
 	assert.ErrorIs(t, err, ErrAPIFailure)
-	assert.Contains(t, output, "cannot merge: Pull request is closed.")
+	assert.Contains(t, output, "failed to start merge")
+	assert.Contains(t, output, "can no longer be merged")
 }
 
 func TestRunMerge_PollFailedConflict(t *testing.T) {
@@ -312,7 +314,7 @@ func TestRunMerge_PollFailedConflict(t *testing.T) {
 			return remoteStack(7, "main", openStackPR(1, "b1"), openStackPR(2, "b2")), nil
 		},
 		MergeStackAsyncFn: func(pr int, method string) (*github.AsyncMergeResult, error) {
-			return &github.AsyncMergeResult{Queued: true, Details: github.AsyncMergeDetails{UUID: "u"}, StatusCode: 202}, nil
+			return &github.AsyncMergeResult{Queued: true, Details: github.AsyncMergeDetails{UUID: "u"}}, nil
 		},
 		GetAsyncMergeResultFn: func(pr int, uuid string) (*github.AsyncMergeResult, error) {
 			return &github.AsyncMergeResult{Queued: false, Merged: false, Details: github.AsyncMergeDetails{Message: "Merge conflict: could not merge."}}, nil
@@ -334,7 +336,7 @@ func TestRunMerge_AlreadyMergedOnSubmit(t *testing.T) {
 			return remoteStack(7, "main", openStackPR(1, "b1"), openStackPR(2, "b2")), nil
 		},
 		MergeStackAsyncFn: func(pr int, method string) (*github.AsyncMergeResult, error) {
-			return &github.AsyncMergeResult{Merged: true, Details: github.AsyncMergeDetails{SHA: "abc"}, StatusCode: 200}, nil
+			return &github.AsyncMergeResult{Merged: true, Details: github.AsyncMergeDetails{SHA: "abc"}}, nil
 		},
 	}
 
@@ -453,13 +455,13 @@ func TestMergeCandidates(t *testing.T) {
 	t.Run("leading merged skipped", func(t *testing.T) {
 		items, blocker := mergeCandidates(remoteStack(1, "main", mergedStackPR(1, "a"), openStackPR(2, "b"), openStackPR(3, "c")))
 		assert.Nil(t, blocker)
-		assert.Equal(t, []mergeview.PRItem{{Number: 2, Title: "b"}, {Number: 3, Title: "c"}}, items)
+		assert.Equal(t, []mergeview.PRItem{{Number: 2, Branch: "b"}, {Number: 3, Branch: "c"}}, items)
 	})
 	t.Run("draft blocks above", func(t *testing.T) {
 		items, blocker := mergeCandidates(remoteStack(1, "main", openStackPR(1, "a"), draftStackPR(2, "b"), openStackPR(3, "c")))
 		require.NotNil(t, blocker)
 		assert.Equal(t, 2, blocker.Number)
-		assert.Equal(t, []mergeview.PRItem{{Number: 1, Title: "a"}}, items)
+		assert.Equal(t, []mergeview.PRItem{{Number: 1, Branch: "a"}}, items)
 	})
 	t.Run("closed blocks", func(t *testing.T) {
 		items, blocker := mergeCandidates(remoteStack(1, "main", closedStackPR(1, "a"), openStackPR(2, "b")))

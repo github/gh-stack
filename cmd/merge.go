@@ -141,7 +141,7 @@ func runMerge(cfg *config.Config, opts *mergeOptions, args []string) error {
 	base := remoteStack.Base.Ref
 
 	if cfg.IsInteractive() && !opts.yes {
-		return runMergeInteractive(cfg, client, base, candidates, allowed, mergeCfg.DefaultMethod, method, preselectIndex, opts)
+		return runMergeInteractive(cfg, client, remoteStack.Number, base, candidates, allowed, mergeCfg.DefaultMethod, method, preselectIndex, opts)
 	}
 
 	// Non-interactive (or --yes): merge the whole stack (or up to the given PR)
@@ -260,16 +260,30 @@ func resolveActiveRemoteStack(cfg *config.Config, client github.ClientOps) (*git
 	return rs, nil
 }
 
-func runMergeInteractive(cfg *config.Config, client github.ClientOps, base string, candidates []mergeview.PRItem, allowed []string, viewerDefault, methodFlag string, preselectIndex int, opts *mergeOptions) error {
+func runMergeInteractive(cfg *config.Config, client github.ClientOps, stackNumber int, base string, candidates []mergeview.PRItem, allowed []string, viewerDefault, methodFlag string, preselectIndex int, opts *mergeOptions) error {
 	defaultMethod := viewerDefault
 	if methodFlag != "" {
 		defaultMethod = methodFlag
+	}
+
+	// Enrich the picker with PR titles (best-effort; the branch is shown either way).
+	nums := make([]int, len(candidates))
+	for i, c := range candidates {
+		nums[i] = c.Number
+	}
+	if titles, err := client.PRTitles(nums); err == nil {
+		for i := range candidates {
+			if t := titles[candidates[i].Number]; t != "" {
+				candidates[i].Title = t
+			}
+		}
 	}
 
 	submit, poll := mergeFuncs(client)
 
 	model := mergeview.New(mergeview.Options{
 		PRs:               candidates,
+		StackNumber:       stackNumber,
 		BaseRef:           base,
 		AllowedMethods:    allowed,
 		DefaultMethod:     defaultMethod,
@@ -292,13 +306,21 @@ func runMergeInteractive(cfg *config.Config, client github.ClientOps, base strin
 			warnAsyncMergeUnavailable(cfg)
 			return ErrStacksUnavailable
 		}
+		cfg.Errorf("merge failed: %s", out.Err)
 		return ErrAPIFailure
 	case out.Merged:
+		mergedSuccess(cfg, prNumberList(out.MergedPRs), base, out.SHA)
 		return nil
 	case out.Failed:
+		cfg.Errorf("merge failed: %s", out.Message)
+		cfg.Printf("The stack is atomic, so nothing was merged.")
 		return mergeFailureExit(out.Message)
+	case out.WatchStopped:
+		cfg.Infof("Stopped watching. Merge is still in progress. Check the pull requests on GitHub.")
+		return ErrSilent
 	default:
-		// Cancelled, or watching was stopped while the merge continued.
+		// Cancelled via esc/ctrl+c before submitting.
+		cfg.Infof("Cancelled operation, nothing merged")
 		return ErrSilent
 	}
 }
@@ -320,18 +342,15 @@ func runMergeHeadless(cfg *config.Config, client github.ClientOps, base string, 
 	}
 
 	if res.Merged {
-		cfg.Successf("Merged %s into %s", list, base)
+		mergedSuccess(cfg, list, base, res.Details.SHA)
 		return nil
-	}
-	if !res.Queued {
-		cfg.Errorf("cannot merge: %s", res.Details.Message)
-		return ErrAPIFailure
-	}
-	if res.StatusCode == http.StatusConflict {
-		cfg.Infof("A merge request already exists for this stack; tracking it.")
 	}
 
 	uuid := res.Details.UUID
+	if uuid == "" {
+		cfg.Errorf("merge did not start as expected")
+		return ErrAPIFailure
+	}
 	interval := opts.pollInterval
 	if interval <= 0 {
 		interval = time.Second
@@ -350,10 +369,7 @@ func runMergeHeadless(cfg *config.Config, client github.ClientOps, base string, 
 			return ErrAPIFailure
 		}
 		if status.Merged {
-			cfg.Successf("Merged %s into %s", list, base)
-			if sha := status.Details.SHA; sha != "" {
-				cfg.Printf("  Merge commit %s", shortMergeSHA(sha))
-			}
+			mergedSuccess(cfg, list, base, status.Details.SHA)
 			return nil
 		}
 		if !status.Queued {
@@ -414,7 +430,7 @@ func mergeCandidates(rs *github.RemoteStack) (items []mergeview.PRItem, blocker 
 			b := pr
 			return items, &b
 		}
-		items = append(items, mergeview.PRItem{Number: pr.Number, Title: pr.Head.Ref})
+		items = append(items, mergeview.PRItem{Number: pr.Number, Branch: pr.Head.Ref})
 	}
 	return items, nil
 }
@@ -570,6 +586,16 @@ func shortMergeSHA(sha string) string {
 		return sha[:7]
 	}
 	return sha
+}
+
+// mergedSuccess prints the merge success line, appending the merge commit SHA in
+// parentheses when known: "Merged #1, #2 into main (abc1234)".
+func mergedSuccess(cfg *config.Config, list, base, sha string) {
+	if sha != "" {
+		cfg.Successf("Merged %s into %s (%s)", list, base, shortMergeSHA(sha))
+		return
+	}
+	cfg.Successf("Merged %s into %s", list, base)
 }
 
 func isNotFound(err error) bool {

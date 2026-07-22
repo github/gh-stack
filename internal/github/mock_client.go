@@ -20,6 +20,7 @@ type MockClient struct {
 	RepoMergeConfigFn        func() (*RepoMergeConfig, error)
 	MergeStackAsyncFn        func(int, string) (*AsyncMergeResult, error)
 	GetAsyncMergeResultFn    func(int, string) (*AsyncMergeResult, error)
+	PRTitlesFn               func([]int) (map[int]string, error)
 }
 
 // Compile-time check that MockClient satisfies ClientOps.
@@ -139,7 +140,6 @@ func (m *MockClient) MergeStackAsync(prNumber int, method string) (*AsyncMergeRe
 			UUID:        "mock-uuid",
 			MergeMethod: method,
 		},
-		StatusCode: 202,
 	}, nil
 }
 
@@ -153,6 +153,12 @@ func (m *MockClient) GetAsyncMergeResult(prNumber int, uuid string) (*AsyncMerge
 			Message: "Pull request was merged.",
 			SHA:     "mockmergesha",
 		},
-		StatusCode: 200,
 	}, nil
+}
+
+func (m *MockClient) PRTitles(numbers []int) (map[int]string, error) {
+	if m.PRTitlesFn != nil {
+		return m.PRTitlesFn(numbers)
+	}
+	return map[int]string{}, nil
 }

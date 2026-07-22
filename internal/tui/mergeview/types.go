@@ -35,6 +35,7 @@ const (
 type PRItem struct {
 	Number int
 	Title  string
+	Branch string
 }
 
 // MergeStatus is the minimal async-merge status the progress view consumes,
@@ -65,6 +66,8 @@ type Options struct {
 	// PRs are the selectable (open, mergeable) pull requests ordered bottom to
 	// top of the stack.
 	PRs []PRItem
+	// StackNumber is the repo-scoped stack number, shown in the header.
+	StackNumber int
 	// BaseRef is the branch the stack merges into (for display).
 	BaseRef string
 	// RepoSlug is owner/repo, for display.
@@ -96,6 +99,9 @@ type Outcome struct {
 	// Failed reports the merge was attempted but did not complete (conflict,
 	// rule failure, or not mergeable).
 	Failed bool
+	// WatchStopped reports the user stopped watching an in-flight merge (ctrl+c
+	// during progress); the merge continues on GitHub.
+	WatchStopped bool
 	// Message is the final status or failure message.
 	Message string
 	// TargetPR is the topmost selected PR (the merge high-water mark).
@@ -104,6 +110,8 @@ type Outcome struct {
 	Method string
 	// MergedPRs are the PR numbers included in the merge.
 	MergedPRs []int
+	// SHA is the resulting merge commit on success.
+	SHA string
 	// Err is a transport/API error encountered during submit or polling.
 	Err error
 }

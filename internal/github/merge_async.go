@@ -5,11 +5,10 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
 	"net/http"
 	"strings"
 
-	"github.com/cli/go-gh/v2/pkg/auth"
+	"github.com/cli/go-gh/v2/pkg/api"
 	graphql "github.com/cli/shurcooL-graphql"
 )
 
@@ -78,14 +77,12 @@ type AsyncMergeDetails struct {
 }
 
 // AsyncMergeResult is the response body returned by both the submit and poll
-// async merge endpoints. StatusCode carries the HTTP status of the submit
-// response so callers can distinguish enqueued (202) from an existing request
-// (409) and an already-merged PR (200).
+// async merge endpoints. The Queued/Merged flags distinguish an enqueued merge
+// (202) from an already-merged pull request (200).
 type AsyncMergeResult struct {
-	Queued     bool              `json:"queued"`
-	Merged     bool              `json:"merged"`
-	Details    AsyncMergeDetails `json:"details"`
-	StatusCode int               `json:"-"`
+	Queued  bool              `json:"queued"`
+	Merged  bool              `json:"merged"`
+	Details AsyncMergeDetails `json:"details"`
 }
 
 // InProgress reports whether the merge is still queued (running in the
@@ -128,9 +125,10 @@ func (c *Client) RepoMergeConfig() (*RepoMergeConfig, error) {
 // a stacked PR this merges all members of the stack up to and including
 // prNumber. A blank method lets the server apply its default.
 //
-// The returned result is populated for the 200 (already merged), 202 (enqueued)
-// 409 (a request already exists) and 400 (not mergeable) responses; the HTTP
-// status is recorded on StatusCode. A 404 returns ErrAsyncMergeUnavailable.
+// On success the returned result is populated for the 200 (already merged) and
+// 202 (enqueued) responses. A 404 returns ErrAsyncMergeUnavailable, a 409
+// (a request already exists) returns a clear "already exists" error, and any
+// other non-2xx status is returned as-is.
 func (c *Client) MergeStackAsync(prNumber int, method string) (*AsyncMergeResult, error) {
 	type reqBody struct {
 		MergeMethod string `json:"merge_method,omitempty"`
@@ -142,77 +140,92 @@ func (c *Client) MergeStackAsync(prNumber int, method string) (*AsyncMergeResult
 	}
 
 	path := fmt.Sprintf("repos/%s/%s/pulls/%d/merge-async", c.owner, c.repo, prNumber)
-	resp, err := c.doAsyncRequest(http.MethodPut, path, bytes.NewReader(body))
-	if err != nil {
-		return nil, err
+	var result AsyncMergeResult
+	if err := c.rest.Put(path, bytes.NewReader(body), &result); err != nil {
+		return nil, classifyAsyncMergeError(err)
 	}
-	defer func() { _ = resp.Body.Close() }()
-
-	switch resp.StatusCode {
-	case http.StatusOK, http.StatusAccepted, http.StatusConflict, http.StatusBadRequest:
-		return decodeAsyncMergeResult(resp)
-	case http.StatusNotFound:
-		return nil, ErrAsyncMergeUnavailable
-	default:
-		return nil, asyncMergeError(resp)
-	}
+	return &result, nil
 }
 
 // GetAsyncMergeResult fetches the current result of a previously submitted async
-// merge, identified by the UUID returned from MergeStackAsync.
+// merge, identified by the UUID returned from MergeStackAsync. A valid lookup
+// always returns 200, so the wrapped Queued/Merged/Details state reflects the
+// merge's progress (queued, merged, or failed).
 func (c *Client) GetAsyncMergeResult(prNumber int, uuid string) (*AsyncMergeResult, error) {
 	path := fmt.Sprintf("repos/%s/%s/pulls/%d/merge-async/%s", c.owner, c.repo, prNumber, uuid)
-	resp, err := c.doAsyncRequest(http.MethodGet, path, nil)
-	if err != nil {
+	var result AsyncMergeResult
+	if err := c.rest.Get(path, &result); err != nil {
 		return nil, err
 	}
-	defer func() { _ = resp.Body.Close() }()
-
-	if resp.StatusCode == http.StatusOK {
-		return decodeAsyncMergeResult(resp)
-	}
-	return nil, asyncMergeError(resp)
+	return &result, nil
 }
 
-// doAsyncRequest issues an authenticated request to the REST API and returns the
-// raw response without treating non-2xx statuses as errors, so the caller can
-// read the merge result body for 4xx responses (which carry the UUID/message).
-func (c *Client) doAsyncRequest(method, path string, body io.Reader) (*http.Response, error) {
-	req, err := http.NewRequest(method, c.base+path, body)
-	if err != nil {
-		return nil, err
+// PRTitles fetches the titles for a set of pull request numbers in a single
+// GraphQL query. Missing PRs are simply absent from the result. Best-effort:
+// callers may ignore the error and proceed without titles.
+func (c *Client) PRTitles(numbers []int) (map[int]string, error) {
+	titles := make(map[int]string, len(numbers))
+	if len(numbers) == 0 {
+		return titles, nil
 	}
-	req.Header.Set("Accept", "application/vnd.github+json")
-	if body != nil {
-		req.Header.Set("Content-Type", "application/json")
+
+	// Batch to keep individual queries small for very large stacks.
+	const batchSize = 50
+	for start := 0; start < len(numbers); start += batchSize {
+		end := start + batchSize
+		if end > len(numbers) {
+			end = len(numbers)
+		}
+
+		var q strings.Builder
+		q.WriteString("query($owner:String!,$name:String!){repository(owner:$owner,name:$name){")
+		for i, n := range numbers[start:end] {
+			fmt.Fprintf(&q, "pr%d:pullRequest(number:%d){number title} ", i, n)
+		}
+		q.WriteString("}}")
+
+		var resp struct {
+			Repository map[string]struct {
+				Number int    `json:"number"`
+				Title  string `json:"title"`
+			} `json:"repository"`
+		}
+		vars := map[string]interface{}{"owner": c.owner, "name": c.repo}
+		if err := c.gql.Do(q.String(), vars, &resp); err != nil {
+			return titles, fmt.Errorf("querying pull request titles: %w", err)
+		}
+		for _, pr := range resp.Repository {
+			if pr.Number != 0 {
+				titles[pr.Number] = pr.Title
+			}
+		}
 	}
-	return c.http.Do(req)
+	return titles, nil
 }
 
-func decodeAsyncMergeResult(resp *http.Response) (*AsyncMergeResult, error) {
-	var r AsyncMergeResult
-	if err := json.NewDecoder(resp.Body).Decode(&r); err != nil {
-		return nil, fmt.Errorf("decoding merge response: %w", err)
+// classifyAsyncMergeError maps a go-gh REST error into a domain error. A 404
+// means async merge isn't available for the repository or token; a 409 means a
+// merge request already exists for this stack. Other errors pass through.
+//
+// Note: the go-gh REST client discards non-2xx response bodies, so the specific
+// "details.message" from a 400 (not mergeable) and the existing UUID from a 409
+// aren't recovered here. Those are rare — the in-range PRs are validated open,
+// non-draft and non-merged before submitting, and real merge failures (e.g.
+// conflicts) surface through the 200 poll body — so status-based handling is
+// sufficient.
+func classifyAsyncMergeError(err error) error {
+	var httpErr *api.HTTPError
+	if errors.As(err, &httpErr) {
+		switch httpErr.StatusCode {
+		case http.StatusNotFound:
+			return ErrAsyncMergeUnavailable
+		case http.StatusConflict:
+			return errors.New("a merge request already exists for this stack")
+		case http.StatusBadRequest:
+			return errors.New("the stack can no longer be merged as requested; refresh and try again")
+		}
 	}
-	r.StatusCode = resp.StatusCode
-	return &r, nil
-}
-
-// asyncMergeError builds an error from an unexpected (403/422/5xx) response,
-// extracting the API message when present.
-func asyncMergeError(resp *http.Response) error {
-	b, _ := io.ReadAll(resp.Body)
-	var parsed struct {
-		Message string `json:"message"`
-	}
-	_ = json.Unmarshal(b, &parsed)
-	if parsed.Message != "" {
-		return fmt.Errorf("HTTP %d: %s", resp.StatusCode, parsed.Message)
-	}
-	if trimmed := strings.TrimSpace(string(b)); trimmed != "" {
-		return fmt.Errorf("HTTP %d: %s", resp.StatusCode, trimmed)
-	}
-	return fmt.Errorf("HTTP %d", resp.StatusCode)
+	return err
 }
 
 // mergeMethodFromEnum maps a GraphQL PullRequestMergeMethod enum value
@@ -227,21 +240,4 @@ func mergeMethodFromEnum(enum string) string {
 	default:
 		return MergeMethodMerge
 	}
-}
-
-// restBaseURL derives the REST API base URL for a host, mirroring go-gh's
-// internal restPrefix so raw requests target the same endpoint as the REST
-// client.
-func restBaseURL(host string) string {
-	if host == "" {
-		host = "github.com"
-	}
-	normalized := auth.NormalizeHostname(host)
-	if auth.IsEnterprise(normalized) {
-		return fmt.Sprintf("https://%s/api/v3/", normalized)
-	}
-	if strings.EqualFold(normalized, "github.localhost") {
-		return fmt.Sprintf("http://api.%s/", normalized)
-	}
-	return fmt.Sprintf("https://api.%s/", normalized)
 }

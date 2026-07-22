@@ -2,6 +2,7 @@ package mergeview
 
 import (
 	"fmt"
+	"os"
 	"strings"
 
 	"github.com/charmbracelet/lipgloss"
@@ -16,57 +17,128 @@ var (
 	numberStyle  = lipgloss.NewStyle().Foreground(theme.ColorAccent).Bold(true)
 	checkedStyle = lipgloss.NewStyle().Foreground(theme.ColorGreen)
 	textStyle    = lipgloss.NewStyle().Foreground(theme.ColorText)
-	successStyle = lipgloss.NewStyle().Foreground(theme.ColorGreen).Bold(true)
-	failureStyle = lipgloss.NewStyle().Foreground(theme.ColorRed).Bold(true)
-
-	// Wizard stepper.
-	stepActiveStyle   = lipgloss.NewStyle().Foreground(theme.ColorText).Background(theme.ColorRowShade).Bold(true).Padding(0, 1)
-	stepDoneStyle     = lipgloss.NewStyle().Foreground(theme.ColorAccent).Padding(0, 1)
-	stepUpcomingStyle = lipgloss.NewStyle().Foreground(theme.ColorTextFaint).Padding(0, 1)
-	stepArrowStyle    = lipgloss.NewStyle().Foreground(theme.ColorBorder)
+	// selectedTitleStyle makes the selected PR's title stand out a touch more
+	// than the others while staying white/black.
+	selectedTitleStyle = lipgloss.NewStyle().Foreground(theme.ColorText).Bold(true)
 
 	shortcutKey   = lipgloss.NewStyle().Foreground(theme.ColorText)
 	shortcutLabel = lipgloss.NewStyle().Foreground(theme.ColorTextMuted)
 )
 
+// stepArrow is the Powerline right-triangle separator, rendered in the current
+// segment's background color over the next segment's background so the arrow
+// blends seamlessly into the shading.
+const stepArrow = "\ue0b0"
+
 var wizardSteps = []string{"Select PRs", "Select Merge Method", "Confirm"}
 
 // View implements tea.Model.
 func (m Model) View() string {
+	var s string
 	switch m.step {
 	case StepSelectPRs:
-		return m.banner() + m.viewSelect()
+		s = m.banner() + m.viewSelect()
 	case StepMethod:
-		return m.banner() + m.viewMethod()
+		s = m.banner() + m.viewMethod()
 	case StepConfirm:
-		return m.banner() + m.viewConfirm()
+		s = m.banner() + m.viewConfirm()
 	case StepProgress:
-		return m.banner() + m.viewProgress()
+		// Once the merge is submitted, hide the header/wizard and just show
+		// live progress.
+		s = m.viewProgress()
 	default:
-		return m.banner() + m.viewDone()
+		// StepDone: render nothing so the inline TUI clears itself on exit; the
+		// command prints the final outcome.
+		return ""
 	}
+	// Ensure no rendered line exceeds the terminal width; otherwise a line wraps,
+	// the inline renderer miscounts its height, and repainting (e.g. on resize)
+	// leaves duplicated header lines behind.
+	return clampToWidth(s, m.width)
 }
 
 // banner renders the persistent title and wizard stepper shown at the top of
-// every step.
+// every step, followed by a single blank line of spacing.
 func (m Model) banner() string {
-	return titleStyle.Render("Merge stack") + "\n" + m.stepper() + "\n\n"
+	title := "Merge stack"
+	if m.opts.StackNumber > 0 {
+		title = fmt.Sprintf("Merge stack #%d", m.opts.StackNumber)
+	}
+	return titleStyle.Render(title) + "\n" + m.stepper() + "\n\n"
+}
+
+// stepBg returns the background color for the step at index i given the current
+// active step: completed steps are green, the active step is the brightest
+// (near-white on dark, near-black on light), and upcoming steps are a dim gray.
+func stepBg(i, cur int) lipgloss.TerminalColor {
+	switch {
+	case i < cur:
+		return theme.ColorGreen
+	case i == cur:
+		return theme.ColorText
+	default:
+		return theme.ColorBorder
+	}
+}
+
+// stepFg returns the foreground color for the step at index i: dark text on the
+// bright/green segments, and a dim muted text on the upcoming gray segments.
+func stepFg(i, cur int) lipgloss.TerminalColor {
+	if i > cur {
+		return theme.ColorTextMuted
+	}
+	return theme.ColorOnFill
 }
 
 func (m Model) stepper() string {
 	cur := m.wizardIndex()
-	parts := make([]string, len(wizardSteps))
+	var b strings.Builder
+	n := len(wizardSteps)
 	for i, label := range wizardSteps {
-		switch {
-		case i < cur:
-			parts[i] = stepDoneStyle.Render("✓ " + label)
-		case i == cur:
-			parts[i] = stepActiveStyle.Render(label)
-		default:
-			parts[i] = stepUpcomingStyle.Render(label)
+		bg := stepBg(i, cur)
+		icon := "•"
+		if i < cur {
+			icon = "✓"
 		}
+		seg := lipgloss.NewStyle().Background(bg).Foreground(stepFg(i, cur)).Bold(i == cur).Padding(0, 1)
+		b.WriteString(seg.Render(icon + " " + label))
+
+		if m.usePowerline {
+			// Powerline separator: the current background color, over the next
+			// segment's background (or the terminal default after the last step).
+			arrow := lipgloss.NewStyle().Foreground(bg)
+			if i < n-1 {
+				arrow = arrow.Background(stepBg(i+1, cur))
+			}
+			b.WriteString(arrow.Render(stepArrow))
+		}
+		// Fallback: segments abut directly, so their background colors form a
+		// seamless segmented bar without any Powerline glyph.
 	}
-	return strings.Join(parts, stepArrowStyle.Render("▸"))
+	return b.String()
+}
+
+// powerlineEnabled reports whether the terminal is known to render Powerline
+// glyphs (U+E0Bx). Most terminals need a patched/Nerd font, so this defaults to
+// off and only opts in for terminals with built-in Powerline glyph support,
+// avoiding the missing-glyph box seen in e.g. Apple Terminal. Set
+// GH_STACK_POWERLINE=1/0 to override.
+func powerlineEnabled() bool {
+	switch strings.ToLower(os.Getenv("GH_STACK_POWERLINE")) {
+	case "1", "true", "yes", "on":
+		return true
+	case "0", "false", "no", "off":
+		return false
+	}
+	switch os.Getenv("TERM_PROGRAM") {
+	case "ghostty", "WezTerm":
+		return true
+	}
+	switch os.Getenv("TERM") {
+	case "xterm-ghostty", "xterm-kitty":
+		return true
+	}
+	return os.Getenv("KITTY_WINDOW_ID") != ""
 }
 
 // wizardIndex maps the current step to its position in the stepper. Progress and
@@ -86,31 +158,66 @@ func (m Model) wizardIndex() int {
 
 func (m Model) viewSelect() string {
 	var b strings.Builder
-	b.WriteString(mutedStyle.Render("Select how far up the stack to merge (everything up to your choice merges).") + "\n\n")
 
+	n := len(m.opts.PRs)
+	h := m.visibleItems()
+	start := m.scrollOffset
+	if start > n-h {
+		start = n - h
+	}
+	if start < 0 {
+		start = 0
+	}
+	end := start + h
+	if end > n {
+		end = n
+	}
+
+	// Reserve the indicator lines at all times (blank when nothing is hidden) so
+	// the list doesn't shift as the ↑/↓ hints appear and disappear while scrolling.
+	if start > 0 {
+		b.WriteString(faintStyle.Render(fmt.Sprintf("  ↑ %d more", start)) + "\n")
+	} else {
+		b.WriteString("\n")
+	}
 	// Render top of stack first so the layout matches the CLI.
-	for i := len(m.opts.PRs) - 1; i >= 0; i-- {
+	for r := start; r < end; r++ {
+		i := n - 1 - r
 		pr := m.opts.PRs[i]
-		cursor := "  "
+		selected := i <= m.topIndex
+
+		cursorMark := "  "
 		if i == m.cursor {
-			cursor = accentStyle.Render("❯ ")
+			cursorMark = accentStyle.Render("❯ ")
 		}
-		box := "[ ]"
-		if i <= m.topIndex {
+		box := mutedStyle.Render("[ ]")
+		if selected {
 			box = checkedStyle.Render("[x]")
 		}
-		num := numberStyle.Render(fmt.Sprintf("#%d", pr.Number))
-		title := truncate(pr.Title, 60)
-		titleStyled := mutedStyle.Render(title)
-		if i <= m.topIndex {
-			titleStyled = textStyle.Render(title)
+		// Title: white/black for all, a touch bolder when selected.
+		titleField := textStyle
+		// Number + branch: gray for all, fainter when deselected.
+		metaField := faintStyle
+		if selected {
+			titleField = selectedTitleStyle
+			metaField = mutedStyle
 		}
-		b.WriteString(fmt.Sprintf("%s%s %s  %s\n", cursor, box, num, titleStyled))
+		title := pr.Title
+		if title == "" {
+			title = pr.Branch
+		}
+		b.WriteString(fmt.Sprintf("%s%s %s\n", cursorMark, box, titleField.Render(title)))
+		b.WriteString("      " + metaField.Render(fmt.Sprintf("#%d • %s", pr.Number, pr.Branch)) + "\n")
+	}
+	if end < n {
+		b.WriteString(faintStyle.Render(fmt.Sprintf("  ↓ %d more", n-end)) + "\n")
+	} else {
+		b.WriteString("\n")
 	}
 
 	b.WriteString("\n")
 	if m.topIndex >= 0 {
-		b.WriteString(mutedStyle.Render(fmt.Sprintf("Merging %s into %s.", prCount(m.topIndex+1), m.opts.BaseRef)))
+		b.WriteString(mutedStyle.Render(fmt.Sprintf("Will merge %s into %s.", prCount(m.topIndex+1), m.opts.BaseRef)))
 	} else {
 		b.WriteString(faintStyle.Render("Select at least one pull request."))
 	}
@@ -126,7 +233,6 @@ func (m Model) viewSelect() string {
 
 func (m Model) viewMethod() string {
 	var b strings.Builder
-	b.WriteString(mutedStyle.Render("Choose a merge method.") + "\n\n")
 
 	for i, method := range m.opts.AllowedMethods {
 		cursor := "  "
@@ -156,12 +262,17 @@ func (m Model) viewConfirm() string {
 	var b strings.Builder
 	nums := m.selectedNumbers()
 
-	b.WriteString(fmt.Sprintf("%s into %s via %s.\n",
+	b.WriteString(fmt.Sprintf("%s into %s with %s.\n",
 		titleStyle.Render("Merge "+prCount(len(nums))),
 		accentStyle.Render(m.opts.BaseRef),
 		accentStyle.Render(methodLabel(m.method)),
 	))
-	b.WriteString(numberStyle.Render(prNumberList(nums)) + "\n\n")
+	// Wrap the PR list so a long stack isn't cut off at the screen edge.
+	listStyle := numberStyle
+	if m.width > 0 {
+		listStyle = listStyle.Width(m.width)
+	}
+	b.WriteString(listStyle.Render(prNumberList(nums)) + "\n\n")
 	b.WriteString(shortcuts(
 		[2]string{"enter", "merge"},
 		[2]string{"shift+tab", "back"},
@@ -174,45 +285,28 @@ func (m Model) viewProgress() string {
 	var b strings.Builder
 	nums := m.selectedNumbers()
 
-	b.WriteString(fmt.Sprintf("%s Merging %s into %s via %s…\n",
+	b.WriteString(fmt.Sprintf("%s Merging %s into %s via %s\n",
 		m.spinner.View(),
 		numberStyle.Render(prNumberList(nums)),
 		accentStyle.Render(m.opts.BaseRef),
 		accentStyle.Render(methodLabel(m.method)),
 	))
-	if m.message != "" {
-		b.WriteString(faintStyle.Render(m.message) + "\n")
-	}
+	// Always render a status line so it doesn't pop in later and shift the view.
+	b.WriteString(faintStyle.Render(progressStatus(m.message)) + "\n")
 	b.WriteString("\n")
 	b.WriteString(faintStyle.Render("ctrl+c: stop watching (the merge keeps running on GitHub)"))
 	return b.String()
 }
 
-func (m Model) viewDone() string {
-	var b strings.Builder
-	nums := m.selectedNumbers()
-
-	switch {
-	case m.merged:
-		b.WriteString(successStyle.Render("✓ Merged") + " ")
-		b.WriteString(fmt.Sprintf("%s into %s.\n", numberStyle.Render(prNumberList(nums)), m.opts.BaseRef))
-		if m.status.SHA != "" {
-			b.WriteString(faintStyle.Render("Merge commit "+shortSHA(m.status.SHA)) + "\n")
-		}
-	case m.failed:
-		b.WriteString(failureStyle.Render("✗ Merge failed") + "\n")
-		if m.message != "" {
-			b.WriteString(mutedStyle.Render(m.message) + "\n")
-		}
-		b.WriteString(faintStyle.Render("The stack is atomic, so nothing was merged.") + "\n")
-	case m.cancelled:
-		b.WriteString(mutedStyle.Render("Merge cancelled.") + "\n")
-	default:
-		if m.message != "" {
-			b.WriteString(mutedStyle.Render(m.message) + "\n")
-		}
+// progressStatus normalizes an async-merge status message for display: a blank
+// message shows an initial "Submitting…" line, and messages end in an ellipsis
+// rather than a period.
+func progressStatus(msg string) string {
+	msg = strings.TrimSpace(msg)
+	if msg == "" {
+		return "Submitting merge request..."
 	}
-	return b.String()
+	return strings.TrimRight(msg, ". ") + "..."
 }
 
 func shortcuts(entries ...[2]string) string {
@@ -253,19 +347,51 @@ func prNumberList(nums []int) string {
 	return strings.Join(parts, ", ")
 }
 
-func shortSHA(sha string) string {
-	if len(sha) > 7 {
-		return sha[:7]
-	}
-	return sha
-}
-
-func truncate(s string, max int) string {
-	if len(s) <= max {
+// clampToWidth truncates every line of s to at most width cells so nothing
+// wraps.
+func clampToWidth(s string, width int) string {
+	if width <= 0 {
 		return s
 	}
-	if max <= 1 {
-		return s[:max]
+	lines := strings.Split(s, "\n")
+	for i, ln := range lines {
+		if lipgloss.Width(ln) > width {
+			lines[i] = truncate(ln, width)
+		}
 	}
-	return s[:max-1] + "…"
+	return strings.Join(lines, "\n")
+}
+
+// truncate shortens s to at most width display cells, appending an ellipsis and
+// resetting styling. It skips ANSI escape sequences when counting width.
+func truncate(s string, width int) string {
+	if width <= 0 {
+		return ""
+	}
+	if lipgloss.Width(s) <= width {
+		return s
+	}
+	var b strings.Builder
+	w := 0
+	inEscape := false
+	for _, r := range s {
+		if r == '\x1b' {
+			inEscape = true
+		}
+		if inEscape {
+			b.WriteRune(r)
+			if r == 'm' {
+				inEscape = false
+			}
+			continue
+		}
+		if w >= width-1 {
+			b.WriteString("…")
+			b.WriteString("\x1b[0m")
+			break
+		}
+		b.WriteRune(r)
+		w++
+	}
+	return b.String()
 }
