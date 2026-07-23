@@ -65,9 +65,9 @@ func (c RepoMergeConfig) Allows(method string) bool {
 }
 
 // AsyncMergeDetails is the polymorphic "details" object shared by the submit and
-// poll responses. Fields are populated based on the current state: a queued
-// request carries UUID/MergeMethod/ExpectedHeadSHA, an already-merged result
-// carries SHA, and a failed/not-mergeable result carries only Message.
+// poll responses. Fields are populated based on the current state: a pending
+// request carries UUID/MergeMethod/ExpectedHeadSHA, a merged result carries SHA,
+// and a failed/not-mergeable result carries only Message.
 type AsyncMergeDetails struct {
 	Message         string `json:"message"`
 	UUID            string `json:"uuid"`
@@ -77,18 +77,33 @@ type AsyncMergeDetails struct {
 }
 
 // AsyncMergeResult is the response body returned by both the submit and poll
-// async merge endpoints. The Queued/Merged flags distinguish an enqueued merge
-// (202) from an already-merged pull request (200).
+// async merge endpoints. Status is one of the AsyncMergeStatus* values:
+// "pending" (running in the background), "merged" (completed), or "failed".
 type AsyncMergeResult struct {
-	Queued  bool              `json:"queued"`
-	Merged  bool              `json:"merged"`
+	Status  string            `json:"status"`
 	Details AsyncMergeDetails `json:"details"`
 }
 
-// InProgress reports whether the merge is still queued (running in the
-// background).
-func (r *AsyncMergeResult) InProgress() bool {
-	return r != nil && r.Queued && !r.Merged
+// Async merge status values returned in the response's "status" field.
+const (
+	AsyncMergeStatusPending = "pending"
+	AsyncMergeStatusMerged  = "merged"
+	AsyncMergeStatusFailed  = "failed"
+)
+
+// IsMerged reports whether the merge completed successfully.
+func (r *AsyncMergeResult) IsMerged() bool {
+	return r != nil && r.Status == AsyncMergeStatusMerged
+}
+
+// IsFailed reports whether the merge was attempted but did not complete.
+func (r *AsyncMergeResult) IsFailed() bool {
+	return r != nil && r.Status == AsyncMergeStatusFailed
+}
+
+// IsPending reports whether the merge is still running in the background.
+func (r *AsyncMergeResult) IsPending() bool {
+	return r != nil && r.Status == AsyncMergeStatusPending
 }
 
 // RepoMergeConfig fetches the repository's allowed merge methods and the

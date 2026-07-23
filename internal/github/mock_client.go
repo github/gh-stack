@@ -135,7 +135,7 @@ func (m *MockClient) MergeStackAsync(prNumber int, method string) (*AsyncMergeRe
 		return m.MergeStackAsyncFn(prNumber, method)
 	}
 	return &AsyncMergeResult{
-		Queued: true,
+		Status: AsyncMergeStatusPending,
 		Details: AsyncMergeDetails{
 			Message:     "Merge request enqueued.",
 			UUID:        "mock-uuid",
@@ -149,7 +149,7 @@ func (m *MockClient) GetAsyncMergeResult(prNumber int, uuid string) (*AsyncMerge
 		return m.GetAsyncMergeResultFn(prNumber, uuid)
 	}
 	return &AsyncMergeResult{
-		Merged: true,
+		Status: AsyncMergeStatusMerged,
 		Details: AsyncMergeDetails{
 			Message: "Pull request was merged.",
 			SHA:     "mockmergesha",

@@ -262,15 +262,19 @@ func (m Model) handleSubmitDone(msg submitDoneMsg) (tea.Model, tea.Cmd) {
 	m.status = msg.status
 	m.message = msg.status.Message
 
-	switch {
-	case msg.status.Merged:
+	switch msg.status.Status {
+	case StatusMerged:
 		m.merged = true
 		return m.finish()
-	case msg.status.Queued && msg.status.UUID != "":
-		// Enqueued (or an existing request adopted): start polling.
-		return m, m.pollTickCmd()
+	case StatusFailed:
+		m.failed = true
+		return m.finish()
 	default:
-		// Not queued and not merged: the PR could not be merged (e.g. 400).
+		// Pending (enqueued, or an existing request adopted): poll if we have a
+		// UUID; otherwise this is unexpected, so treat it as a failure.
+		if msg.status.UUID != "" {
+			return m, m.pollTickCmd()
+		}
 		m.failed = true
 		return m.finish()
 	}
@@ -287,15 +291,16 @@ func (m Model) handlePollDone(msg pollDoneMsg) (tea.Model, tea.Cmd) {
 	m.status = msg.status
 	m.message = msg.status.Message
 
-	switch {
-	case msg.status.Merged:
+	switch msg.status.Status {
+	case StatusMerged:
 		m.merged = true
 		return m.finish()
-	case msg.status.Queued:
-		return m, m.pollTickCmd()
-	default:
+	case StatusFailed:
 		m.failed = true
 		return m.finish()
+	default:
+		// Still pending: keep polling.
+		return m, m.pollTickCmd()
 	}
 }
 

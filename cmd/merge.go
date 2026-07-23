@@ -325,7 +325,7 @@ func runMergeInteractive(cfg *config.Config, client github.ClientOps, stackNumbe
 		return nil
 	case out.Failed:
 		cfg.Errorf("merge failed: %s", out.Message)
-		cfg.Printf("The stack is atomic, so nothing was merged.")
+		cfg.Printf("Stack merges are atomic, so nothing was merged.")
 		return mergeFailureExit(out.Message)
 	case out.WatchStopped:
 		cfg.Infof("Stopped watching. Merge is still in progress. Check the pull requests on GitHub.")
@@ -353,9 +353,14 @@ func runMergeHeadless(cfg *config.Config, client github.ClientOps, base string, 
 		return ErrAPIFailure
 	}
 
-	if res.Merged {
+	if res.IsMerged() {
 		mergedSuccess(cfg, list, base, res.Details.SHA)
 		return nil
+	}
+	if res.IsFailed() {
+		cfg.Errorf("merge failed: %s", res.Details.Message)
+		cfg.Printf("Stack merges are atomic, so nothing was merged.")
+		return mergeFailureExit(res.Details.Message)
 	}
 
 	uuid := res.Details.UUID
@@ -380,13 +385,13 @@ func runMergeHeadless(cfg *config.Config, client github.ClientOps, base string, 
 			cfg.Errorf("failed to check merge status: %s", err)
 			return ErrAPIFailure
 		}
-		if status.Merged {
+		if status.IsMerged() {
 			mergedSuccess(cfg, list, base, status.Details.SHA)
 			return nil
 		}
-		if !status.Queued {
+		if status.IsFailed() {
 			cfg.Errorf("merge failed: %s", status.Details.Message)
-			cfg.Printf("The stack is atomic, so nothing was merged.")
+			cfg.Printf("Stack merges are atomic, so nothing was merged.")
 			return mergeFailureExit(status.Details.Message)
 		}
 	}
@@ -416,9 +421,15 @@ func mergeFuncs(client github.ClientOps) (mergeview.SubmitFunc, mergeview.PollFu
 }
 
 func toMergeStatus(res *github.AsyncMergeResult) mergeview.MergeStatus {
+	status := mergeview.StatusPending
+	switch {
+	case res.IsMerged():
+		status = mergeview.StatusMerged
+	case res.IsFailed():
+		status = mergeview.StatusFailed
+	}
 	return mergeview.MergeStatus{
-		Queued:  res.Queued,
-		Merged:  res.Merged,
+		Status:  status,
 		Message: res.Details.Message,
 		UUID:    res.Details.UUID,
 		SHA:     res.Details.SHA,

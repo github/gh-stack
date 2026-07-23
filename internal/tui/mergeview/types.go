@@ -38,13 +38,23 @@ type PRItem struct {
 	Branch string
 }
 
-// MergeStatus is the minimal async-merge status the progress view consumes,
+// Status is the async-merge state, mirroring the API's `status` field.
+type Status string
+
+const (
+	// StatusPending means the merge is still running in the background.
+	StatusPending Status = "pending"
+	// StatusMerged means the merge completed successfully.
+	StatusMerged Status = "merged"
+	// StatusFailed means the merge was attempted but did not complete.
+	StatusFailed Status = "failed"
+)
+
+// MergeStatus is the minimal async-merge result the progress view consumes,
 // mapped by the caller from the API response.
 type MergeStatus struct {
-	// Queued reports the merge is still running in the background.
-	Queued bool
-	// Merged reports the merge completed successfully.
-	Merged bool
+	// Status is the current merge state.
+	Status Status
 	// Message is the human-readable status or failure reason.
 	Message string
 	// UUID identifies an in-flight merge request, used for polling.

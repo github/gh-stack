@@ -93,10 +93,10 @@ func TestRunMerge_NoArg_MergesWholeStack(t *testing.T) {
 		},
 		MergeStackAsyncFn: func(pr int, method string) (*github.AsyncMergeResult, error) {
 			gotPR, gotMethod = pr, method
-			return &github.AsyncMergeResult{Queued: true, Details: github.AsyncMergeDetails{UUID: "u"}}, nil
+			return &github.AsyncMergeResult{Status: github.AsyncMergeStatusPending, Details: github.AsyncMergeDetails{UUID: "u"}}, nil
 		},
 		GetAsyncMergeResultFn: func(pr int, uuid string) (*github.AsyncMergeResult, error) {
-			return &github.AsyncMergeResult{Merged: true, Details: github.AsyncMergeDetails{SHA: "abc1234"}}, nil
+			return &github.AsyncMergeResult{Status: github.AsyncMergeStatusMerged, Details: github.AsyncMergeDetails{SHA: "abc1234"}}, nil
 		},
 	}
 
@@ -119,7 +119,7 @@ func TestRunMerge_StackNumberArg(t *testing.T) {
 		},
 		MergeStackAsyncFn: func(pr int, method string) (*github.AsyncMergeResult, error) {
 			gotPR = pr
-			return &github.AsyncMergeResult{Queued: true, Details: github.AsyncMergeDetails{UUID: "u"}}, nil
+			return &github.AsyncMergeResult{Status: github.AsyncMergeStatusPending, Details: github.AsyncMergeDetails{UUID: "u"}}, nil
 		},
 	}
 
@@ -144,7 +144,7 @@ func TestRunMerge_PRNumberArg(t *testing.T) {
 		},
 		MergeStackAsyncFn: func(pr int, method string) (*github.AsyncMergeResult, error) {
 			gotPR = pr
-			return &github.AsyncMergeResult{Queued: true, Details: github.AsyncMergeDetails{UUID: "u"}}, nil
+			return &github.AsyncMergeResult{Status: github.AsyncMergeStatusPending, Details: github.AsyncMergeDetails{UUID: "u"}}, nil
 		},
 	}
 
@@ -166,7 +166,7 @@ func TestRunMerge_SquashFlag(t *testing.T) {
 		},
 		MergeStackAsyncFn: func(pr int, method string) (*github.AsyncMergeResult, error) {
 			gotMethod = method
-			return &github.AsyncMergeResult{Queued: true, Details: github.AsyncMergeDetails{UUID: "u"}}, nil
+			return &github.AsyncMergeResult{Status: github.AsyncMergeStatusPending, Details: github.AsyncMergeDetails{UUID: "u"}}, nil
 		},
 	}
 
@@ -314,10 +314,10 @@ func TestRunMerge_PollFailedConflict(t *testing.T) {
 			return remoteStack(7, "main", openStackPR(1, "b1"), openStackPR(2, "b2")), nil
 		},
 		MergeStackAsyncFn: func(pr int, method string) (*github.AsyncMergeResult, error) {
-			return &github.AsyncMergeResult{Queued: true, Details: github.AsyncMergeDetails{UUID: "u"}}, nil
+			return &github.AsyncMergeResult{Status: github.AsyncMergeStatusPending, Details: github.AsyncMergeDetails{UUID: "u"}}, nil
 		},
 		GetAsyncMergeResultFn: func(pr int, uuid string) (*github.AsyncMergeResult, error) {
-			return &github.AsyncMergeResult{Queued: false, Merged: false, Details: github.AsyncMergeDetails{Message: "Merge conflict: could not merge."}}, nil
+			return &github.AsyncMergeResult{Status: github.AsyncMergeStatusFailed, Details: github.AsyncMergeDetails{Message: "Merge conflict: could not merge."}}, nil
 		},
 	}
 
@@ -336,7 +336,7 @@ func TestRunMerge_AlreadyMergedOnSubmit(t *testing.T) {
 			return remoteStack(7, "main", openStackPR(1, "b1"), openStackPR(2, "b2")), nil
 		},
 		MergeStackAsyncFn: func(pr int, method string) (*github.AsyncMergeResult, error) {
-			return &github.AsyncMergeResult{Merged: true, Details: github.AsyncMergeDetails{SHA: "abc"}}, nil
+			return &github.AsyncMergeResult{Status: github.AsyncMergeStatusMerged, Details: github.AsyncMergeDetails{SHA: "abc"}}, nil
 		},
 	}
 
@@ -428,7 +428,7 @@ func TestRunMerge_DefaultMethodFallsBackToAllowed(t *testing.T) {
 		},
 		MergeStackAsyncFn: func(pr int, method string) (*github.AsyncMergeResult, error) {
 			gotMethod = method
-			return &github.AsyncMergeResult{Queued: true, Details: github.AsyncMergeDetails{UUID: "u"}}, nil
+			return &github.AsyncMergeResult{Status: github.AsyncMergeStatusPending, Details: github.AsyncMergeDetails{UUID: "u"}}, nil
 		},
 	}
 

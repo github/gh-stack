@@ -50,7 +50,7 @@ func testAsyncClient(t *testing.T, status int, respBody string, rec *recordedReq
 
 func TestMergeStackAsync_Accepted(t *testing.T) {
 	var rec recordedRequest
-	body := `{"queued":true,"merged":false,"details":{"message":"Merge request enqueued.","uuid":"u-1","merge_method":"squash","expected_head_sha":"abc"}}`
+	body := `{"status":"pending","details":{"message":"Merge request enqueued.","uuid":"u-1","merge_method":"squash","expected_head_sha":"abc"}}`
 	c := testAsyncClient(t, http.StatusAccepted, body, &rec)
 
 	res, err := c.MergeStackAsync(42, "squash")
@@ -60,25 +60,24 @@ func TestMergeStackAsync_Accepted(t *testing.T) {
 	assert.Equal(t, "/repos/o/r/pulls/42/merge-async", rec.path)
 	assert.JSONEq(t, `{"merge_method":"squash"}`, rec.body)
 
-	assert.True(t, res.Queued)
-	assert.False(t, res.Merged)
+	assert.True(t, res.IsPending())
+	assert.False(t, res.IsMerged())
 	assert.Equal(t, "u-1", res.Details.UUID)
 	assert.Equal(t, "squash", res.Details.MergeMethod)
-	assert.True(t, res.InProgress())
 }
 
 func TestMergeStackAsync_AlreadyMerged(t *testing.T) {
-	body := `{"queued":false,"merged":true,"details":{"message":"Pull request is already merged.","sha":"deadbeef"}}`
+	body := `{"status":"merged","details":{"message":"Pull request is already merged.","sha":"deadbeef"}}`
 	res, err := testAsyncClient(t, http.StatusOK, body, nil).MergeStackAsync(42, "merge")
 	require.NoError(t, err)
-	assert.True(t, res.Merged)
+	assert.True(t, res.IsMerged())
 	assert.Equal(t, "deadbeef", res.Details.SHA)
 }
 
 func TestMergeStackAsync_ExistingRequestConflict(t *testing.T) {
 	// The go-gh REST client discards the 409 body, so we can't recover the
 	// existing UUID; the request surfaces as a clear "already exists" error.
-	_, err := testAsyncClient(t, http.StatusConflict, `{"queued":true,"merged":false,"details":{"uuid":"u-2"}}`, nil).MergeStackAsync(42, "merge")
+	_, err := testAsyncClient(t, http.StatusConflict, `{"status":"pending","details":{"uuid":"u-2"}}`, nil).MergeStackAsync(42, "merge")
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "already exists")
 }
@@ -86,7 +85,7 @@ func TestMergeStackAsync_ExistingRequestConflict(t *testing.T) {
 func TestMergeStackAsync_NotMergeable(t *testing.T) {
 	// A 400 preflight failure is reported as a clear error (the specific
 	// details.message isn't recoverable through the REST client).
-	_, err := testAsyncClient(t, http.StatusBadRequest, `{"queued":false,"merged":false,"details":{"message":"Pull request is closed."}}`, nil).MergeStackAsync(42, "merge")
+	_, err := testAsyncClient(t, http.StatusBadRequest, `{"status":"failed","details":{"message":"Pull request is closed."}}`, nil).MergeStackAsync(42, "merge")
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "can no longer be merged")
 }
@@ -106,12 +105,11 @@ func TestGetAsyncMergeResult_States(t *testing.T) {
 	tests := []struct {
 		name       string
 		body       string
-		wantQueued bool
-		wantMerged bool
+		wantStatus string
 	}{
-		{"pending", `{"queued":true,"merged":false,"details":{"message":"Merge request is in progress.","uuid":"u","merge_method":"merge","expected_head_sha":"abc"}}`, true, false},
-		{"merged", `{"queued":false,"merged":true,"details":{"message":"Pull request was merged.","sha":"abc"}}`, false, true},
-		{"failed", `{"queued":false,"merged":false,"details":{"message":"Merge conflict."}}`, false, false},
+		{"pending", `{"status":"pending","details":{"message":"Merge request is in progress.","uuid":"u","merge_method":"merge","expected_head_sha":"abc"}}`, AsyncMergeStatusPending},
+		{"merged", `{"status":"merged","details":{"message":"Pull request was merged.","sha":"abc"}}`, AsyncMergeStatusMerged},
+		{"failed", `{"status":"failed","details":{"message":"Merge conflict."}}`, AsyncMergeStatusFailed},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -120,8 +118,7 @@ func TestGetAsyncMergeResult_States(t *testing.T) {
 			require.NoError(t, err)
 			assert.Equal(t, http.MethodGet, rec.method)
 			assert.Equal(t, "/repos/o/r/pulls/42/merge-async/u", rec.path)
-			assert.Equal(t, tt.wantQueued, res.Queued)
-			assert.Equal(t, tt.wantMerged, res.Merged)
+			assert.Equal(t, tt.wantStatus, res.Status)
 		})
 	}
 }
@@ -150,12 +147,24 @@ func TestRepoMergeConfig_AllowedMethods(t *testing.T) {
 	assert.Empty(t, empty.AllowedMethods())
 }
 
-func TestAsyncMergeResult_InProgress(t *testing.T) {
-	assert.True(t, (&AsyncMergeResult{Queued: true}).InProgress())
-	assert.False(t, (&AsyncMergeResult{Queued: true, Merged: true}).InProgress())
-	assert.False(t, (&AsyncMergeResult{}).InProgress())
+func TestAsyncMergeResult_Status(t *testing.T) {
+	pending := &AsyncMergeResult{Status: AsyncMergeStatusPending}
+	assert.True(t, pending.IsPending())
+	assert.False(t, pending.IsMerged())
+	assert.False(t, pending.IsFailed())
+
+	merged := &AsyncMergeResult{Status: AsyncMergeStatusMerged}
+	assert.True(t, merged.IsMerged())
+	assert.False(t, merged.IsPending())
+
+	failed := &AsyncMergeResult{Status: AsyncMergeStatusFailed}
+	assert.True(t, failed.IsFailed())
+	assert.False(t, failed.IsMerged())
+
 	var nilRes *AsyncMergeResult
-	assert.False(t, nilRes.InProgress())
+	assert.False(t, nilRes.IsPending())
+	assert.False(t, nilRes.IsMerged())
+	assert.False(t, nilRes.IsFailed())
 }
 
 // sanity check that the submit body omits merge_method when empty.

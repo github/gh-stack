@@ -198,35 +198,35 @@ func TestConfirm_SubmitAlreadyMerged(t *testing.T) {
 	m := New(baseOptions())
 	// submitDoneMsg is handled regardless of step; simulate an already-merged
 	// response.
-	m = step(m, submitDoneMsg{status: MergeStatus{Merged: true, Message: "Pull request is already merged.", SHA: "abc1234"}})
+	m = step(m, submitDoneMsg{status: MergeStatus{Status: StatusMerged, Message: "Pull request is already merged.", SHA: "abc1234"}})
 	out := m.Outcome()
 	assert.True(t, out.Merged)
 	assert.False(t, out.Failed)
 	assert.Equal(t, []int{1, 2, 3}, out.MergedPRs)
 }
 
-func TestProgress_QueuedThenFailed(t *testing.T) {
+func TestProgress_PendingThenFailed(t *testing.T) {
 	m := New(baseOptions())
 	m.step = StepProgress
 	m.submitted = true
 
-	m = step(m, submitDoneMsg{status: MergeStatus{Queued: true, UUID: "u1", Message: "enqueued"}})
+	m = step(m, submitDoneMsg{status: MergeStatus{Status: StatusPending, UUID: "u1", Message: "enqueued"}})
 	assert.False(t, m.done(), "still in progress after queued submit")
 
-	m = step(m, pollDoneMsg{status: MergeStatus{Queued: false, Merged: false, Message: "Merge conflict."}})
+	m = step(m, pollDoneMsg{status: MergeStatus{Status: StatusFailed, Message: "Merge conflict."}})
 	out := m.Outcome()
 	assert.True(t, out.Failed)
 	assert.False(t, out.Merged)
 	assert.Equal(t, "Merge conflict.", out.Message)
 }
 
-func TestProgress_QueuedThenMerged(t *testing.T) {
+func TestProgress_PendingThenMerged(t *testing.T) {
 	m := New(baseOptions())
 	m.step = StepProgress
 	m.submitted = true
 
-	m = step(m, submitDoneMsg{status: MergeStatus{Queued: true, UUID: "u1"}})
-	m = step(m, pollDoneMsg{status: MergeStatus{Merged: true, SHA: "deadbee"}})
+	m = step(m, submitDoneMsg{status: MergeStatus{Status: StatusPending, UUID: "u1"}})
+	m = step(m, pollDoneMsg{status: MergeStatus{Status: StatusMerged, SHA: "deadbee"}})
 	out := m.Outcome()
 	assert.True(t, out.Merged)
 	assert.Equal(t, []int{1, 2, 3}, out.MergedPRs)
@@ -236,7 +236,7 @@ func TestSubmit_NotMergeable(t *testing.T) {
 	m := New(baseOptions())
 	m.step = StepProgress
 	m.submitted = true
-	m = step(m, submitDoneMsg{status: MergeStatus{Queued: false, Merged: false, Message: "Pull request is closed."}})
+	m = step(m, submitDoneMsg{status: MergeStatus{Status: StatusFailed, Message: "Pull request is closed."}})
 	out := m.Outcome()
 	assert.True(t, out.Failed)
 	assert.Equal(t, "Pull request is closed.", out.Message)
@@ -270,7 +270,7 @@ func TestProgress_WatchStopped(t *testing.T) {
 	m := New(baseOptions())
 	m.step = StepProgress
 	m.submitted = true
-	m = step(m, submitDoneMsg{status: MergeStatus{Queued: true, UUID: "u"}}) // in-flight
+	m = step(m, submitDoneMsg{status: MergeStatus{Status: StatusPending, UUID: "u"}}) // in-flight
 	m = step(m, keyType(tea.KeyCtrlC))
 	out := m.Outcome()
 	assert.True(t, out.WatchStopped)
@@ -281,7 +281,7 @@ func TestProgress_WatchStopped(t *testing.T) {
 
 func TestOutcome_SHA(t *testing.T) {
 	m := New(baseOptions())
-	m = step(m, submitDoneMsg{status: MergeStatus{Merged: true, SHA: "deadbeef"}})
+	m = step(m, submitDoneMsg{status: MergeStatus{Status: StatusMerged, SHA: "deadbeef"}})
 	assert.Equal(t, "deadbeef", m.Outcome().SHA)
 }
 
