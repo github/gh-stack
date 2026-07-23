@@ -140,6 +140,18 @@ func runMerge(cfg *config.Config, opts *mergeOptions, args []string) error {
 
 	base := remoteStack.Base.Ref
 
+	// Merge-queue and admin-bypass policy for the stack's base branch. The async
+	// stack merge cannot use a merge queue, so bail out early (before any
+	// prompting) when the base requires one.
+	policy, err := client.BaseBranchPolicy(base)
+	if err != nil {
+		cfg.Errorf("failed to check base branch merge settings: %s", err)
+		return ErrAPIFailure
+	}
+	if policy.RequiresMergeQueue {
+		return explainMergeQueueUnsupported(cfg, base)
+	}
+
 	if cfg.IsInteractive() && !opts.yes {
 		return runMergeInteractive(cfg, client, remoteStack.Number, base, candidates, allowed, mergeCfg.DefaultMethod, method, preselectIndex, opts)
 	}
@@ -474,6 +486,15 @@ func explainNonMergeableTarget(cfg *config.Config, rs *github.RemoteStack, prNum
 
 func warnAsyncMergeUnavailable(cfg *config.Config) {
 	cfg.Warningf("Async stack merge is not available for this repository")
+}
+
+// explainMergeQueueUnsupported reports that the stack's base branch merges
+// through a merge queue, which the async stack merge cannot use, and points the
+// user to the web UI.
+func explainMergeQueueUnsupported(cfg *config.Config, base string) error {
+	cfg.Errorf("the base branch %q requires a merge queue, which \"gh stack merge\" does not support", base)
+	cfg.Printf("Merge this stack using `%q` or from the GitHub web UI instead.", "gh pr merge")
+	return ErrSilent
 }
 
 // mergeFailureExit maps a merge failure message to an exit code: rebase/merge

@@ -169,3 +169,58 @@ func TestMergeStackAsync_OmitsEmptyMethod(t *testing.T) {
 	_, hasMethod := parsed["merge_method"]
 	assert.False(t, hasMethod, "merge_method should be omitted when empty")
 }
+
+// testPolicyClient builds a Client whose GraphQL client is backed by a stub
+// transport returning the given response body.
+func testPolicyClient(t *testing.T, graphqlResp string) *Client {
+	t.Helper()
+	rt := roundTripFunc(func(r *http.Request) (*http.Response, error) {
+		return &http.Response{
+			StatusCode: http.StatusOK,
+			Body:       io.NopCloser(strings.NewReader(graphqlResp)),
+			Header:     http.Header{"Content-Type": []string{"application/json"}},
+			Request:    r,
+		}, nil
+	})
+	gql, err := api.NewGraphQLClient(api.ClientOptions{Host: "github.com", AuthToken: "x", Transport: rt})
+	require.NoError(t, err)
+	return &Client{gql: gql, owner: "o", repo: "r"}
+}
+
+func TestBaseBranchPolicy(t *testing.T) {
+	tests := []struct {
+		name      string
+		body      string
+		wantQueue bool
+	}{
+		{
+			name: "no merge queue",
+			body: `{"data":{"repository":{"mergeQueue":null,"ref":{"rules":{"nodes":[]}}}}}`,
+		},
+		{
+			name:      "merge queue via mergeQueue field",
+			body:      `{"data":{"repository":{"mergeQueue":{"id":"MQ"},"ref":{"rules":{"nodes":[]}}}}}`,
+			wantQueue: true,
+		},
+		{
+			name:      "merge queue via ruleset type",
+			body:      `{"data":{"repository":{"mergeQueue":null,"ref":{"rules":{"nodes":[{"type":"MERGE_QUEUE"}]}}}}}`,
+			wantQueue: true,
+		},
+		{
+			name: "other rules, no merge queue",
+			body: `{"data":{"repository":{"mergeQueue":null,"ref":{"rules":{"nodes":[{"type":"PULL_REQUEST"}]}}}}}`,
+		},
+		{
+			name: "null ref",
+			body: `{"data":{"repository":{"mergeQueue":null,"ref":null}}}`,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			policy, err := testPolicyClient(t, tt.body).BaseBranchPolicy("main")
+			require.NoError(t, err)
+			assert.Equal(t, tt.wantQueue, policy.RequiresMergeQueue, "RequiresMergeQueue")
+		})
+	}
+}

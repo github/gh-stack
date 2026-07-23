@@ -21,6 +21,7 @@ type MockClient struct {
 	MergeStackAsyncFn        func(int, string) (*AsyncMergeResult, error)
 	GetAsyncMergeResultFn    func(int, string) (*AsyncMergeResult, error)
 	PRTitlesFn               func([]int) (map[int]string, error)
+	BaseBranchPolicyFn       func(string) (*BaseBranchPolicy, error)
 }
 
 // Compile-time check that MockClient satisfies ClientOps.
@@ -161,4 +162,11 @@ func (m *MockClient) PRTitles(numbers []int) (map[int]string, error) {
 		return m.PRTitlesFn(numbers)
 	}
 	return map[int]string{}, nil
+}
+
+func (m *MockClient) BaseBranchPolicy(baseRef string) (*BaseBranchPolicy, error) {
+	if m.BaseBranchPolicyFn != nil {
+		return m.BaseBranchPolicyFn(baseRef)
+	}
+	return &BaseBranchPolicy{}, nil
 }

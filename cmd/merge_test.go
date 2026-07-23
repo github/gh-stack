@@ -347,6 +347,30 @@ func TestRunMerge_AlreadyMergedOnSubmit(t *testing.T) {
 	assert.Contains(t, output, "Merged #1, #2 into main")
 }
 
+func TestRunMerge_MergeQueueRequired(t *testing.T) {
+	cfg, outR, errR := config.NewTestConfig()
+	cfg.GitHubClientOverride = &github.MockClient{
+		GetStackFn: func(n int) (*github.RemoteStack, error) {
+			return remoteStack(7, "main", openStackPR(1, "b1"), openStackPR(2, "b2")), nil
+		},
+		BaseBranchPolicyFn: func(base string) (*github.BaseBranchPolicy, error) {
+			assert.Equal(t, "main", base)
+			return &github.BaseBranchPolicy{RequiresMergeQueue: true}, nil
+		},
+		MergeStackAsyncFn: func(pr int, method string) (*github.AsyncMergeResult, error) {
+			t.Fatal("merge must not be attempted when the base requires a merge queue")
+			return nil, nil
+		},
+	}
+
+	err := runMerge(cfg, fastOptions(), []string{"7"})
+	output := collectOutput(cfg, outR, errR)
+
+	assert.ErrorIs(t, err, ErrSilent)
+	assert.Contains(t, output, "merge queue")
+	assert.Contains(t, output, "web UI")
+}
+
 func TestRunMerge_AsyncMergeUnavailable(t *testing.T) {
 	cfg, outR, errR := config.NewTestConfig()
 	cfg.GitHubClientOverride = &github.MockClient{

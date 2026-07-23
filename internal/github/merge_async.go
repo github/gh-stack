@@ -121,6 +121,54 @@ func (c *Client) RepoMergeConfig() (*RepoMergeConfig, error) {
 	}, nil
 }
 
+// BaseBranchPolicy describes merge-relevant policy on a stack's base branch.
+type BaseBranchPolicy struct {
+	// RequiresMergeQueue reports that the base branch merges through a merge
+	// queue, so a direct async stack merge is not possible.
+	RequiresMergeQueue bool
+}
+
+// BaseBranchPolicy reports whether the given base branch requires a merge queue,
+// which the async stack merge cannot use.
+func (c *Client) BaseBranchPolicy(baseRef string) (*BaseBranchPolicy, error) {
+	var query struct {
+		Repository struct {
+			MergeQueue *struct {
+				ID string `graphql:"id"`
+			} `graphql:"mergeQueue(branch: $branch)"`
+			Ref *struct {
+				Rules struct {
+					Nodes []struct {
+						Type string `graphql:"type"`
+					} `graphql:"nodes"`
+				} `graphql:"rules(first: 50)"`
+			} `graphql:"ref(qualifiedName: $qualified)"`
+		} `graphql:"repository(owner: $owner, name: $name)"`
+	}
+
+	variables := map[string]interface{}{
+		"owner":     graphql.String(c.owner),
+		"name":      graphql.String(c.repo),
+		"branch":    graphql.String(baseRef),
+		"qualified": graphql.String("refs/heads/" + baseRef),
+	}
+
+	if err := c.gql.Query("BaseBranchPolicy", &query, variables); err != nil {
+		return nil, fmt.Errorf("querying base branch policy: %w", err)
+	}
+
+	r := query.Repository
+	policy := &BaseBranchPolicy{RequiresMergeQueue: r.MergeQueue != nil}
+	if r.Ref != nil {
+		for _, node := range r.Ref.Rules.Nodes {
+			if node.Type == "MERGE_QUEUE" {
+				policy.RequiresMergeQueue = true
+			}
+		}
+	}
+	return policy, nil
+}
+
 // MergeStackAsync requests an asynchronous merge of the given pull request. For
 // a stacked PR this merges all members of the stack up to and including
 // prNumber. A blank method lets the server apply its default.
