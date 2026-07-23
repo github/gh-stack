@@ -73,6 +73,7 @@ export default defineConfig({
 					items: [
 						{ label: 'CLI Commands', slug: 'reference/cli' },
 						{ label: 'REST API', slug: 'reference/rest-api' },
+						{ label: 'GraphQL API', slug: 'reference/graphql-api' },
 						{ label: 'Webhooks', slug: 'reference/webhooks' },
 					],
 				},
