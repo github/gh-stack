@@ -7,7 +7,7 @@ description: >
   branch chains, or incremental code review workflows.
 metadata:
   author: github
-  version: "0.0.8"
+  version: "0.0.9"
 ---
 
 # gh-stack
@@ -61,6 +61,7 @@ git config remote.pushDefault origin     # if multiple remotes exist (skips remo
 7. **Use standard `git add` and `git commit` for staging and committing.** This gives you full control over which changes go into each branch. The `-Am` shortcut is available but should not be the default approach—stacked PRs are most effective when each branch contains a deliberate, logical set of changes.
 8. **Navigate down the stack when you need to change a lower layer.** If you're working on a frontend branch and realize you need API changes, don't hack around it at the current layer. Navigate to the appropriate branch (`gh stack down`, `gh stack checkout`, or `gh stack bottom`), make and commit the changes there, run `gh stack rebase --upstack`, then navigate back up to continue.
 9. **Use `gh stack link` for external tool workflows.** When branches are managed by an external tool (jj, Sapling, etc.), use `gh stack link branch-a branch-b`. `link` does not rely on local tracking state and is intended for API-driven PR and stack management. Provide at least two branches/PRs to create or update a stack, or a stack number followed by the new branches/PRs to append them to the top of an existing stack (e.g. `gh stack link 7 branch-c`).
+10. **Use `gh stack merge --yes` to merge stacked PRs.** `gh pr merge` does not work with stacked PRs. In a non-interactive terminal `gh stack merge` runs without prompting and merges the entire stack (bottom to top) atomically; pass `--yes` to be explicit. Scope the merge by passing a pull request number (`gh stack merge 42 --yes` merges everything up to and including PR #42) or a stack number (`gh stack merge 7 --yes`, which needs no local checkout). Choose the method with `--squash`, `--rebase`, `--merge`, or `--merge-method <method>`; without one, the last-used method is used. The merge is all-or-nothing — if any PR can't be merged, none are, and the failure reason is reported. Only basic pull request state is checked before merging (open and not a draft); admin bypass is not supported for stacked PR merges. This command does not work with merge queues — if the base branch uses a merge queue, the command exits with an error, so use `gh pr merge` instead.
 
 **Never do any of the following — each triggers an interactive prompt or TUI that will hang:**
 - ❌ `gh stack view` or `gh stack view --short` — always use `gh stack view --json`
@@ -164,6 +165,10 @@ Small, incidental fixes (e.g., fixing a typo you noticed) can go in the current 
 | Check out by branch (local only) | `gh stack checkout feature-auth` |
 | Tear down the current stack to restructure it | `gh stack unstack` |
 | Tear down a specific stack by number | `gh stack unstack 7` |
+| Merge the whole current stack | `gh stack merge --yes` |
+| Merge a stack by number | `gh stack merge 7 --yes` |
+| Merge up to a specific PR | `gh stack merge 42 --yes` |
+| Merge with a specific method | `gh stack merge --yes --squash` |
 
 ---
 

@@ -63,7 +63,10 @@ prompting, using your last-used merge method unless one is specified.
 
 Only basic pull request state is checked before merging (open and not a draft);
 GitHub evaluates branch protection and repository rules when the merge runs, so
-any such failure is reported back to you.`,
+any such failure is reported back to you.
+
+If the base branch uses a merge queue, this command isn't supported (it merges
+directly, not through the queue); use "gh pr merge" or the web UI instead.`,
 		Example: `  # Merge the current stack (interactive picker)
   $ gh stack merge
 
@@ -501,7 +504,7 @@ func warnAsyncMergeUnavailable(cfg *config.Config) {
 
 // explainMergeQueueUnsupported reports that the stack's base branch merges
 // through a merge queue, which the async stack merge cannot use, and points the
-// user to the web UI.
+// user to the merge queue (via `gh pr merge` or the web UI) instead.
 func explainMergeQueueUnsupported(cfg *config.Config, base string) error {
 	cfg.Errorf("the base branch %q requires a merge queue, which \"gh stack merge\" does not support", base)
 	cfg.Printf("Merge this stack using `%q` or from the GitHub web UI instead.", "gh pr merge")

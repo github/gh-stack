@@ -439,6 +439,46 @@ gh stack link 42 43 feature-auth feature-ui
 gh stack link --base develop --open feat-a feat-b feat-c
 ```
 
+### `gh stack merge`
+
+Merge one or multiple stacked PRs at once.
+
+```
+gh stack merge [<stack-number> | <pr-number>]
+```
+
+All members of the stack up to and including your chosen pull request are merged into the base branch in a single, all-or-nothing operation: if any PR can't be merged, none are.
+
+With no argument, the current active local stack is used. Pass a stack number to merge a stack you don't have checked out (a purely remote operation), or a pull request number to merge directly up to that PR.
+
+In an interactive terminal, a short wizard walks you through three steps — choose which PRs to merge, pick the merge method, and confirm. In a non-interactive terminal, or with `--yes`, the whole stack (or everything up to the given PR) is merged without prompting, using your last-used merge method unless one is specified.
+
+Only basic pull request state is checked before merging (open and not a draft); GitHub evaluates branch protection and repository rules when the merge runs, so any such failure is reported back to you. **Admin bypass is not supported** for stacked PR merges at this time.
+
+Note that this command does not work with merge queues. If the stack's base branch uses a merge queue, use `gh pr merge` instead.
+
+| Flag | Description |
+|------|-------------|
+| `--merge-method <method>` | Merge method to use: `merge`, `squash`, or `rebase` |
+| `--merge` / `--squash` / `--rebase` | Shorthands for the corresponding merge method |
+| `-y, --yes` | Merge without prompting for confirmation |
+
+**Examples:**
+
+```sh
+# Merge the current stack (interactive picker)
+gh stack merge
+
+# Merge a stack you don't have checked out, by stack number
+gh stack merge 7
+
+# Merge everything up to and including PR #42
+gh stack merge 42
+
+# Merge the whole current stack without prompting, squashing
+gh stack merge --yes --squash
+```
+
 ### `gh stack view`
 
 View the current stack.

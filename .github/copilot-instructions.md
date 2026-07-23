@@ -17,7 +17,7 @@ No Makefile, no code generation, no external linter config. Standard Go toolchai
 
 - `cmd/`: One Cobra command per file. Each exports `<Name>Cmd(cfg *config.Config)` with logic in `run<Name>()`.
 - `internal/git/`: `Ops` interface (52 methods) wrapping git CLI. `MockOps` for tests. Package-level functions delegate to swappable `ops` variable.
-- `internal/github/`: `ClientOps` interface (13 methods) for GitHub API. `MockClient` for tests. Stack operations use the public Stacks REST API (`/repos/{owner}/{repo}/stacks`).
+- `internal/github/`: `ClientOps` interface (18 methods) for GitHub API. `MockClient` for tests. Stack operations use the public Stacks REST API (`/repos/{owner}/{repo}/stacks`); merges use the async merge API (`/repos/{owner}/{repo}/pulls/{n}/merge-async`), with `BaseBranchPolicy` (GraphQL) gating merge-queue branches.
 - `internal/config/`: `Config` struct passed to all commands. Holds I/O, colors, and test hooks (`SelectFn`, `ConfirmFn`, `InputFn`, `GitHubClientOverride`).
 - `internal/stack/`: Stack file (`.git/gh-stack`, JSON) management with file locking.
 - `internal/tui/`: bubbletea views (`stackview`, `modifyview`).

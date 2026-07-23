@@ -33,7 +33,10 @@ gh stack rebase
 # 7. Push the updated branches
 gh stack push
 
-# 8. Sync upstream changes as PRs get merged
+# 8. Land the stack once it's approved (merges bottom to top, atomically)
+gh stack merge
+
+# 9. Sync upstream changes as PRs get merged
 gh stack sync
 ```
 
@@ -119,6 +122,32 @@ gh stack push
 ```
 
 The rebase ensures all branches above the changed one pick up the fixes. `gh stack push` uses `--force-with-lease` to safely update the rebased branches.
+
+## Merging Your Stack
+
+When your stack is approved, land it with `gh stack merge`. Regular `gh pr merge` doesn't work with stacked PRs — `gh stack merge` uses GitHub's atomic stack merge, which merges every PR up to and including your chosen one in a single, all-or-nothing operation. If any PR can't be merged, none are.
+
+```sh
+# Merge the current stack (interactive picker for how far up to merge)
+gh stack merge
+
+# Merge everything up to and including a specific PR
+gh stack merge 42
+
+# Merge a stack you don't have checked out, by its stack number
+gh stack merge 7
+
+# Merge without prompting for confirmation, specifying the merge method
+gh stack merge --yes --squash
+```
+
+In an interactive terminal, a short wizard lets you choose how far up the stack to merge, pick the merge method (only the ones your repository allows, defaulting to your last-used method), and confirm — then shows live progress. In a non-interactive terminal, or with `--yes`, the whole stack (or everything up to the given PR) is merged without prompting. After merging, run `gh stack sync` to update your local branches.
+
+The exception is a trunk that uses a merge queue: `gh stack merge` merges directly rather than through the queue, so it isn't supported there. Use `gh pr merge` or the GitHub web UI to merge through the queue instead.
+
+:::note[Admin bypass not supported]
+Stack merges currently do not support admin bypass merging.
+:::
 
 ## Syncing After Merges
 
