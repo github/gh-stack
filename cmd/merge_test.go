@@ -413,6 +413,8 @@ func TestRunMerge_NoArg_NotInStack(t *testing.T) {
 
 	assert.ErrorIs(t, err, ErrNotInStack)
 	assert.Contains(t, output, "not part of a stack")
+	assert.Contains(t, output, "Checkout a stack first, or specify which stack or pull request to merge with")
+	assert.Contains(t, output, "gh stack merge [number]")
 }
 
 func TestRunMerge_DefaultMethodFallsBackToAllowed(t *testing.T) {

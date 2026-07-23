@@ -237,10 +237,12 @@ func resolveActiveRemoteStack(cfg *config.Config, client github.ClientOps) (*git
 	stacks := sf.FindAllStacksForBranch(currentBranch)
 	if len(stacks) == 0 {
 		cfg.Errorf("current branch %q is not part of a stack", currentBranch)
+		cfg.Printf("Checkout a stack first, or specify which stack or pull request to merge with `%s`", cfg.ColorCyan("gh stack merge [number]"))
 		return nil, ErrNotInStack
 	}
 	if len(stacks) > 1 {
-		cfg.Errorf("branch %q belongs to multiple stacks; check out a non-trunk branch first", currentBranch)
+		cfg.Errorf("branch %q belongs to multiple stacks", currentBranch)
+		cfg.Printf("Checkout a stack first, or specify which stack or pull request to merge with `%s`", cfg.ColorCyan("gh stack merge [number]"))
 		return nil, ErrDisambiguate
 	}
 	s := stacks[0]
