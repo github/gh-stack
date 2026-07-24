@@ -416,7 +416,7 @@ If the PRs are not yet in a stack, a new stack is created. If some of the PRs ar
 
 | Flag | Description |
 |------|-------------|
-| `--base <branch>` | Base branch for the bottom of the stack (default: `main`) |
+| `--base <branch>` | Base branch for the bottom of the stack (defaults to the repository's default branch) |
 | `--open` | Mark new and existing PRs as ready for review |
 | `--remote <name>` | Remote to push to (defaults to auto-detected remote) |
 

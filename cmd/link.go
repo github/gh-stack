@@ -77,7 +77,7 @@ only when it matches an existing stack.`,
 		},
 	}
 
-	cmd.Flags().StringVar(&opts.base, "base", "main", "Base branch for the bottom of the stack")
+	cmd.Flags().StringVar(&opts.base, "base", "", "Base branch for the bottom of the stack (defaults to the repository default branch)")
 	cmd.Flags().BoolVar(&opts.open, "open", false, "Mark new and existing PRs as ready for review")
 	cmd.Flags().StringVar(&opts.remote, "remote", "", "Remote to push to (defaults to auto-detected remote)")
 
@@ -209,6 +209,18 @@ func runLinkCreateOrUpdate(cfg *config.Config, client github.ClientOps, opts *li
 		}
 	}
 
+	// Resolve the base branch for the bottom of the stack. When --base isn't
+	// given, default to the repository's default branch (like `gh stack init`).
+	bottomBase := opts.base
+	if bottomBase == "" {
+		base, err := git.DefaultBranch()
+		if err != nil {
+			cfg.Errorf("unable to determine default branch\nUse --base to specify the base branch")
+			return ErrSilent
+		}
+		bottomBase = base
+	}
+
 	// Create PRs for branches that don't have one yet.
 	needsCreation := 0
 	for _, r := range found {
@@ -219,13 +231,13 @@ func runLinkCreateOrUpdate(cfg *config.Config, client github.ClientOps, opts *li
 	if needsCreation > 0 {
 		cfg.Printf("Creating %d %s...", needsCreation, plural(needsCreation, "PR", "PRs"))
 	}
-	resolved, err := createMissingPRs(cfg, client, opts, prArgs, found, templateContent, opts.base)
+	resolved, err := createMissingPRs(cfg, client, opts, prArgs, found, templateContent, bottomBase)
 	if err != nil {
 		return err
 	}
 
 	// Fix base branches for existing PRs with wrong bases.
-	fixBaseBranches(cfg, client, opts, resolved, opts.base)
+	fixBaseBranches(cfg, client, opts, resolved, bottomBase)
 
 	// Upsert the stack (reuse the stacks fetched above).
 	prNumbers := make([]int, len(resolved))

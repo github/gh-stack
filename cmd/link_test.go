@@ -33,6 +33,9 @@ func newLinkGitMock(branches ...string) *git.MockOps {
 // --- PR-number tests ---
 
 func TestLink_PRNumbers_CreateNewStack(t *testing.T) {
+	restore := git.SetOps(newLinkGitMock())
+	defer restore()
+
 	var createdPRs []int
 	cfg, _, errR := config.NewTestConfig()
 	cfg.GitHubClientOverride = &github.MockClient{
@@ -69,6 +72,9 @@ func TestLink_PRNumbers_CreateNewStack(t *testing.T) {
 }
 
 func TestLink_PRNumbers_UpdateExistingStack(t *testing.T) {
+	restore := git.SetOps(newLinkGitMock())
+	defer restore()
+
 	var updatedNumber int
 	var updatedPRs []int
 	cfg, _, errR := config.NewTestConfig()
@@ -110,6 +116,9 @@ func TestLink_PRNumbers_UpdateExistingStack(t *testing.T) {
 }
 
 func TestLink_PRNumbers_ExactMatch_NoOp(t *testing.T) {
+	restore := git.SetOps(newLinkGitMock())
+	defer restore()
+
 	cfg, _, errR := config.NewTestConfig()
 	cfg.GitHubClientOverride = &github.MockClient{
 		FindPRByNumberFn: func(n int) (*github.PullRequest, error) {
@@ -269,6 +278,9 @@ func TestLink_StacksUnavailable(t *testing.T) {
 }
 
 func TestLink_Create422(t *testing.T) {
+	restore := git.SetOps(newLinkGitMock())
+	defer restore()
+
 	cfg, _, errR := config.NewTestConfig()
 	cfg.GitHubClientOverride = &github.MockClient{
 		FindPRByNumberFn: func(n int) (*github.PullRequest, error) {
@@ -561,6 +573,9 @@ func TestLink_ReportsMultipleIneligiblePRs(t *testing.T) {
 // Regression test to ensure a queued PR that is already a member of
 // the target stack does not block adding new PRs to that same stack.
 func TestLink_AllowsQueuedPRAlreadyInStack(t *testing.T) {
+	restore := git.SetOps(newLinkGitMock())
+	defer restore()
+
 	var updatedNumber int
 	var updatedPRs []int
 	cfg, _, errR := config.NewTestConfig()
@@ -614,6 +629,9 @@ func TestLink_AllowsQueuedPRAlreadyInStack(t *testing.T) {
 // TestLink_AllowsMergedPRAlreadyInStack verifies the exemption also covers
 // state-based ineligibility (merged/closed) for PRs already in the stack.
 func TestLink_AllowsMergedPRAlreadyInStack(t *testing.T) {
+	restore := git.SetOps(newLinkGitMock())
+	defer restore()
+
 	var updatedPRs []int
 	cfg, _, errR := config.NewTestConfig()
 	cfg.GitHubClientOverride = &github.MockClient{
@@ -660,6 +678,9 @@ func TestLink_AllowsMergedPRAlreadyInStack(t *testing.T) {
 // TestLink_AllowsAutoMergePRAlreadyInStack verifies the exemption also covers
 // auto-merge-enabled PRs already in the stack.
 func TestLink_AllowsAutoMergePRAlreadyInStack(t *testing.T) {
+	restore := git.SetOps(newLinkGitMock())
+	defer restore()
+
 	var updatedPRs []int
 	cfg, _, errR := config.NewTestConfig()
 	cfg.GitHubClientOverride = &github.MockClient{
@@ -1293,6 +1314,216 @@ func TestLink_FixesBaseBranches(t *testing.T) {
 	assert.Contains(t, output, "Updated base branch")
 }
 
+// TestLink_DefaultBase_RetargetsBottomPRToDefaultBranch is a regression test
+// for #260: when --base is omitted, the bottom of the stack must be based on
+// the repository's default branch (resolved via git.DefaultBranch), not a
+// hardcoded "main". Here the default branch is "develop", so the bottom PR —
+// which currently targets "main" — should be retargeted to "develop".
+func TestLink_DefaultBase_RetargetsBottomPRToDefaultBranch(t *testing.T) {
+	defaultBranchCalled := false
+	restore := git.SetOps(&git.MockOps{
+		BranchExistsFn: func(string) bool { return false },
+		DefaultBranchFn: func() (string, error) {
+			defaultBranchCalled = true
+			return "develop", nil
+		},
+	})
+	defer restore()
+
+	var baseUpdates []struct {
+		number int
+		base   string
+	}
+
+	cfg, _, errR := config.NewTestConfig()
+	cfg.GitHubClientOverride = &github.MockClient{
+		FindPRByNumberFn: func(n int) (*github.PullRequest, error) {
+			switch n {
+			case 10:
+				// Bottom PR currently targets "main"; it should be retargeted
+				// to the repository default branch ("develop").
+				return &github.PullRequest{
+					Number: 10, HeadRefName: "feat-a", BaseRefName: "main",
+					URL: "https://github.com/o/r/pull/10",
+				}, nil
+			case 20:
+				return &github.PullRequest{
+					Number: 20, HeadRefName: "feat-b", BaseRefName: "feat-a",
+					URL: "https://github.com/o/r/pull/20",
+				}, nil
+			}
+			return nil, nil
+		},
+		UpdatePRBaseFn: func(number int, base string) error {
+			baseUpdates = append(baseUpdates, struct {
+				number int
+				base   string
+			}{number, base})
+			return nil
+		},
+		ListStacksFn:  func() ([]github.RemoteStack, error) { return []github.RemoteStack{}, nil },
+		CreateStackFn: func([]int) (*github.RemoteStack, error) { return &github.RemoteStack{ID: 1, Number: 1}, nil },
+	}
+
+	cmd := LinkCmd(cfg)
+	cmd.SetArgs([]string{"10", "20"})
+	cmd.SetOut(io.Discard)
+	cmd.SetErr(io.Discard)
+	err := cmd.Execute()
+
+	cfg.Err.Close()
+	_, _ = io.ReadAll(errR)
+
+	assert.NoError(t, err)
+	assert.True(t, defaultBranchCalled, "git.DefaultBranch should be consulted when --base is omitted")
+	// The bottom PR (#10) should be retargeted to the default branch, not "main".
+	require.Len(t, baseUpdates, 1)
+	assert.Equal(t, 10, baseUpdates[0].number)
+	assert.Equal(t, "develop", baseUpdates[0].base)
+}
+
+// TestLink_DefaultBase_CreatesBottomPROnDefaultBranch verifies that a newly
+// created bottom PR is based on the repository default branch when --base is
+// omitted, rather than a hardcoded "main".
+func TestLink_DefaultBase_CreatesBottomPROnDefaultBranch(t *testing.T) {
+	restore := git.SetOps(&git.MockOps{
+		BranchExistsFn:  func(name string) bool { return name == "feat-a" || name == "feat-b" },
+		PushFn:          func(string, []string, bool, bool) error { return nil },
+		ResolveRemoteFn: func(string) (string, error) { return "origin", nil },
+		DefaultBranchFn: func() (string, error) { return "develop", nil },
+	})
+	defer restore()
+
+	var createdPRs []struct{ base, head string }
+	cfg, _, errR := config.NewTestConfig()
+	cfg.GitHubClientOverride = &github.MockClient{
+		FindPRForBranchFn: func(string) (*github.PullRequest, error) { return nil, nil },
+		CreatePRFn: func(base, head, title, body string, draft bool) (*github.PullRequest, error) {
+			createdPRs = append(createdPRs, struct{ base, head string }{base, head})
+			n := len(createdPRs)
+			return &github.PullRequest{
+				Number: n, HeadRefName: head, BaseRefName: base,
+				URL: fmt.Sprintf("https://github.com/o/r/pull/%d", n),
+			}, nil
+		},
+		ListStacksFn:  func() ([]github.RemoteStack, error) { return []github.RemoteStack{}, nil },
+		CreateStackFn: func([]int) (*github.RemoteStack, error) { return &github.RemoteStack{ID: 1, Number: 1}, nil },
+	}
+
+	cmd := LinkCmd(cfg)
+	cmd.SetArgs([]string{"feat-a", "feat-b"})
+	cmd.SetOut(io.Discard)
+	cmd.SetErr(io.Discard)
+	err := cmd.Execute()
+
+	cfg.Err.Close()
+	_, _ = io.ReadAll(errR)
+
+	assert.NoError(t, err)
+	require.Len(t, createdPRs, 2)
+	// Bottom PR based on the repository default branch, not "main".
+	assert.Equal(t, "develop", createdPRs[0].base)
+	// Second PR chains off the previous branch.
+	assert.Equal(t, "feat-a", createdPRs[1].base)
+}
+
+// TestLink_DefaultBase_ErrorWhenUnresolvable verifies that link fails with a
+// helpful message when --base is omitted and the default branch cannot be
+// determined.
+func TestLink_DefaultBase_ErrorWhenUnresolvable(t *testing.T) {
+	restore := git.SetOps(&git.MockOps{
+		BranchExistsFn:  func(string) bool { return false },
+		DefaultBranchFn: func() (string, error) { return "", fmt.Errorf("no default branch") },
+	})
+	defer restore()
+
+	cfg, _, errR := config.NewTestConfig()
+	cfg.GitHubClientOverride = &github.MockClient{
+		FindPRByNumberFn: func(n int) (*github.PullRequest, error) {
+			return &github.PullRequest{
+				Number: n, HeadRefName: fmt.Sprintf("b%d", n), BaseRefName: "main",
+			}, nil
+		},
+		ListStacksFn: func() ([]github.RemoteStack, error) { return []github.RemoteStack{}, nil },
+	}
+
+	cmd := LinkCmd(cfg)
+	cmd.SetArgs([]string{"10", "20"})
+	cmd.SetOut(io.Discard)
+	cmd.SetErr(io.Discard)
+	err := cmd.Execute()
+
+	cfg.Err.Close()
+	errOut, _ := io.ReadAll(errR)
+	output := string(errOut)
+
+	assert.ErrorIs(t, err, ErrSilent)
+	assert.Contains(t, output, "unable to determine default branch")
+}
+
+// TestLink_ExplicitBase_SkipsDefaultBranchResolution verifies that passing
+// --base bypasses default branch resolution and is used as the bottom base.
+func TestLink_ExplicitBase_SkipsDefaultBranchResolution(t *testing.T) {
+	defaultBranchCalled := false
+	restore := git.SetOps(&git.MockOps{
+		BranchExistsFn: func(string) bool { return false },
+		DefaultBranchFn: func() (string, error) {
+			defaultBranchCalled = true
+			return "develop", nil
+		},
+	})
+	defer restore()
+
+	var baseUpdates []struct {
+		number int
+		base   string
+	}
+
+	cfg, _, errR := config.NewTestConfig()
+	cfg.GitHubClientOverride = &github.MockClient{
+		FindPRByNumberFn: func(n int) (*github.PullRequest, error) {
+			switch n {
+			case 10:
+				return &github.PullRequest{
+					Number: 10, HeadRefName: "feat-a", BaseRefName: "main",
+					URL: "https://github.com/o/r/pull/10",
+				}, nil
+			case 20:
+				return &github.PullRequest{
+					Number: 20, HeadRefName: "feat-b", BaseRefName: "feat-a",
+					URL: "https://github.com/o/r/pull/20",
+				}, nil
+			}
+			return nil, nil
+		},
+		UpdatePRBaseFn: func(number int, base string) error {
+			baseUpdates = append(baseUpdates, struct {
+				number int
+				base   string
+			}{number, base})
+			return nil
+		},
+		ListStacksFn:  func() ([]github.RemoteStack, error) { return []github.RemoteStack{}, nil },
+		CreateStackFn: func([]int) (*github.RemoteStack, error) { return &github.RemoteStack{ID: 1, Number: 1}, nil },
+	}
+
+	cmd := LinkCmd(cfg)
+	cmd.SetArgs([]string{"--base", "release", "10", "20"})
+	cmd.SetOut(io.Discard)
+	cmd.SetErr(io.Discard)
+	err := cmd.Execute()
+
+	cfg.Err.Close()
+	_, _ = io.ReadAll(errR)
+
+	assert.NoError(t, err)
+	assert.False(t, defaultBranchCalled, "git.DefaultBranch must not be consulted when --base is given")
+	// The bottom PR (#10) should be retargeted to the explicit base, not "main".
+	require.Len(t, baseUpdates, 1)
+	assert.Equal(t, 10, baseUpdates[0].number)
+	assert.Equal(t, "release", baseUpdates[0].base)
+}
+
 func TestLink_DuplicateBranchResolvesToSamePR(t *testing.T) {
 	cfg, _, errR := config.NewTestConfig()
 	cfg.GitHubClientOverride = &github.MockClient{
@@ -1319,6 +1550,9 @@ func TestLink_DuplicateBranchResolvesToSamePR(t *testing.T) {
 }
 
 func TestLink_UpdateDeletedStack_FallsBackToCreate(t *testing.T) {
+	restore := git.SetOps(newLinkGitMock())
+	defer restore()
+
 	var created bool
 	cfg, _, errR := config.NewTestConfig()
 	cfg.GitHubClientOverride = &github.MockClient{
@@ -1859,6 +2093,9 @@ func TestLink_PRNumbers_NoTemplateUsesFooter(t *testing.T) {
 // --- PR URL tests ---
 
 func TestLink_PRURLs_CreateNewStack(t *testing.T) {
+	restore := git.SetOps(newLinkGitMock())
+	defer restore()
+
 	var createdPRs []int
 	cfg, _, errR := config.NewTestConfig()
 	cfg.GitHubClientOverride = &github.MockClient{
@@ -1924,6 +2161,9 @@ func TestLink_PRURLs_NotFound(t *testing.T) {
 }
 
 func TestLink_MixedURLsAndNumbers(t *testing.T) {
+	restore := git.SetOps(newLinkGitMock())
+	defer restore()
+
 	var createdPRs []int
 	cfg, _, errR := config.NewTestConfig()
 	cfg.GitHubClientOverride = &github.MockClient{
@@ -2270,6 +2510,9 @@ func TestLink_AddMode_ExemptsIneligibleExistingMember(t *testing.T) {
 }
 
 func TestLink_NumericFirstArgNotAStack_UsesCreateMode(t *testing.T) {
+	restore := git.SetOps(newLinkGitMock())
+	defer restore()
+
 	var createdPRs []int
 	cfg, _, errR := config.NewTestConfig()
 	cfg.GitHubClientOverride = &github.MockClient{
