@@ -23,7 +23,7 @@ locally, then push to GitHub to create your stack of PRs.`,
   $ gh stack init
 
   # Or turn an existing set of branches into a stack
-  $ gh stack init --adopt branch1 branch2 branch3
+  $ gh stack init branch1 branch2 branch3
 
   # Make changes and commit, then add a branch to the stack
   $ gh stack add branch4

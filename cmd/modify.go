@@ -231,7 +231,7 @@ func runModifyAbort(cfg *config.Config) error {
 			cfg.Printf("The stack may be in an inconsistent state.")
 			cfg.Printf("Try `%s` to fix, or `%s` + `%s` to recreate.",
 				cfg.ColorCyan("gh stack rebase"), cfg.ColorCyan("gh stack unstack --local"),
-				cfg.ColorCyan("gh stack init --adopt"))
+				cfg.ColorCyan("gh stack init"))
 			return ErrSilent
 		}
 		cfg.Successf("Stack restored successfully")
