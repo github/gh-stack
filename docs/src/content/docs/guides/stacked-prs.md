@@ -23,7 +23,7 @@ Each PR in a stack shows only the diff for its layer — the changes between its
 
 ## Merging a Stack
 
-Merging is driven by a single action: **click Merge on the highest PR you want to land, and that PR plus every unmerged PR below it merges in one atomic operation.** You do not need to merge PRs one at a time, unless you choose to.
+Merging is driven by a single action: **click Merge on the highest PR you want to land, and that PR plus every unmerged PR below it are merged together, from the bottom up.** You do not need to merge PRs one at a time, unless you choose to.
 
 - **To land the whole stack**, merge the **top** PR — every PR below it lands with it in a single step.
 - **To land part of the stack**, merge a lower PR — the PRs below it come along, and the PRs above stay open.

@@ -109,7 +109,7 @@ The `stack` object is also available in GitHub Actions workflow expressions via 
 
 ### Optimizing CI usage
 
-Because a workflow runs for every PR in a stack, you can use the `stack` fields to selectively run jobs. For example, if you only plan on merging one PR at a time, you can choose to only run CI for the lowest unmerged PR. Compare the stack's base ref to the PR's own base ref to detect the **lowest unmerged PR**, and compare `position` to `size` to detect the **top PR**:
+Because a workflow runs for every PR in a stack, you can use the `stack` fields to selectively run jobs. For example, if you only plan on merging one PR at a time, you can choose to only run CI for the lowest unmerged PR. Compare the stack's base ref to the PR's own base ref to detect the **lowest unmerged PR**, and compare `position` to `size` to detect the **top PR**. Note that on a standalone PR the `stack` object is `null`, so you can check that to ensure this logic only applies to stacks.
 
 ```yaml
 jobs:
@@ -119,11 +119,11 @@ jobs:
       - uses: actions/checkout@v4
 
       - name: Run for the lowest unmerged PR in the stack
-        if: github.event.pull_request.stack.base.ref == github.event.pull_request.base.ref
+        if: github.event.pull_request.stack != null && github.event.pull_request.stack.base.ref == github.event.pull_request.base.ref
         run: echo "Lowest unmerged PR in the stack"
 
       - name: Run for the top PR in the stack
-        if: github.event.pull_request.stack.position == github.event.pull_request.stack.size
+        if: github.event.pull_request.stack != null && github.event.pull_request.stack.position == github.event.pull_request.stack.size
         run: echo "Top PR in the stack"
 ```
 

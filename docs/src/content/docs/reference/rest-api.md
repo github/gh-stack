@@ -178,7 +178,7 @@ gh api --method POST repos/OWNER/REPO/stacks/42/unstack
 
 ### The stack resource
 
-The list, get, create, add, and unstack endpoints all return the stack resource:
+Each stack is represented by the following resource. The get, create, and add endpoints return a single stack; the list endpoint returns an array of them; and unstack returns the remaining merged stack, or `204 No Content` when the stack is dissolved.
 
 | Field | Type | Description |
 |-------|------|-------------|

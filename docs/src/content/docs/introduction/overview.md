@@ -55,7 +55,7 @@ This ensures that every layer of the stack meets the same quality bar before it 
 
 ### Merging Stacks
 
-You can merge your entire stack, a single PR, or a portion of the stack spanning multiple PRs. When you click **Merge** on any PR, that PR **and every unmerged PR below it land together in a single atomic operation**. So you can:
+You can merge your entire stack, a single PR, or a portion of the stack spanning multiple PRs. When you click **Merge** on any PR, that PR and every unmerged PR below it are merged together, from the bottom up. So you can:
 
 - **Land the entire stack in one click** by merging the top PR — every PR below it comes with it.
 - **Land part of the stack** by merging a mid-stack PR — the PRs below it come along, and the PRs above stay open.
@@ -64,10 +64,10 @@ You can't merge a PR while leaving an unmerged PR below it behind. Merging a sta
 
 GitHub supports two merge methods:
 
-- **Direct merge** — Merges the selected PR and all unmerged PRs below it in a single operation, as long as all conditions are met.
-- **Merge queue** — Works as usual but is stack-aware. For example, if the bottom PR is removed from the queue, all other PRs in the stack are also removed.
+- **Direct merge** — The selected PR and all unmerged PRs below it land in a single **atomic** operation. Either the whole group merges, or if any part fails, nothing is merged and the operation is rolled back.
+- **Merge queue** — The PRs enter the queue together and each PR is evaluated **individually**, from the bottom up. If a PR fails while in the queue, that PR and all its descendants are ejected from the queue, while prior PRs are unaffected. The queue makes a best-effort attempt to keep the whole stack in a single merge group; if the stack is too large to fit, it lands across consecutive groups. If PRs are split across merge groups, the stack order is preserved so downstack PRs are merged before upstack PRs.
 
-The resulting commit history is the same as if each PR had been merged individually, starting from the bottom.
+In both methods, the resulting commit history is the same as if each PR had been merged individually, starting from the bottom.
 
 ### Merge Methods
 

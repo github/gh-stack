@@ -13,7 +13,7 @@ export default defineConfig({
 	integrations: [
 		starlight({
 			title: 'GitHub Stacked PRs',
-			description: 'Break large changes into small, reviewable pull requests that build on each other — with native GitHub support and the gh stack CLI.',
+			description: 'Break large changes into small, reviewable pull requests. Manage your stacks on GitHub, with the gh stack CLI, or via our APIs.',
 			favicon: '/favicon.svg',
 			logo: {
 				src: './src/assets/github-invertocat.svg',

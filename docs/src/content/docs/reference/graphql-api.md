@@ -59,7 +59,7 @@ An edge in a `PullRequestStackEntryConnection`.
 
 ## Example
 
-Read a pull request's stack, its position, and every pull request in the stack:
+Read a pull request's stack, its position, and the first 5 pull requests in the stack:
 
 ```graphql
 {
@@ -74,7 +74,7 @@ Read a pull request's stack, its position, and every pull request in the stack:
         number
         size
         baseRefName
-        entries(first: 20) {
+        entries(first: 5) {
           totalCount
           nodes {
             position
@@ -92,3 +92,5 @@ Read a pull request's stack, its position, and every pull request in the stack:
 ```
 
 The pull request's own `baseRefName` is the branch it directly targets (the PR below it in the stack), while `stack.baseRefName` is the branch the entire stack ultimately targets. These differ for every PR in the stack except the bottom one.
+
+`entries` is a paginated connection (ex: `first: 5` returns up to the first 5 entries). Check the `totalCount` for the full size and if a stack has more entries, page through the rest with the connection's `pageInfo`.

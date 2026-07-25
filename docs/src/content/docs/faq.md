@@ -123,11 +123,11 @@ jobs:
       - uses: actions/checkout@v4
 
       - name: Run for the lowest unmerged PR in the stack
-        if: github.event.pull_request.stack.base.ref == github.event.pull_request.base.ref
+        if: github.event.pull_request.stack != null && github.event.pull_request.stack.base.ref == github.event.pull_request.base.ref
         run: echo "Lowest unmerged PR in the stack"
 
       - name: Run for the top PR in the stack
-        if: github.event.pull_request.stack.position == github.event.pull_request.stack.size
+        if: github.event.pull_request.stack != null && github.event.pull_request.stack.position == github.event.pull_request.stack.size
         run: echo "Top PR in the stack"
 ```
 
@@ -154,11 +154,11 @@ Every PR in a stack must meet the same merge requirements as a PR targeting the 
 
 ### How does merging a stack of PRs differ from merging a regular PR?
 
-Stacks merge from the bottom up as a single atomic operation. When you click merge on a PR in a stack, that PR and all unmerged PRs below it land on the base branch together. PRs above remain open, and the remaining stack is automatically rebased so the next PR targets `main` directly.
+Stacks merge from the bottom up. When you click merge on a PR in a stack, that PR and all unmerged PRs below it land on the base branch together; PRs above remain open, and the remaining stack is automatically rebased so the next PR targets your base branch directly. With a direct merge the group lands as a single atomic operation; through a merge queue the PRs enter the queue together and are evaluated individually, from the bottom up.
 
 ### What happens when you merge a PR in the middle of the stack?
 
-When you click merge on a PR in the middle of the stack, that PR and all unmerged PRs below it land on the base branch together as a single atomic operation, ordered from the bottom up in the resulting history. PRs above the selected one remain open. After the merge, the lowest unmerged PR is updated to target the stack base directly, and a cascading rebase runs across the remaining branches.
+When you click merge on a PR in the middle of the stack, that PR and all unmerged PRs below it land on the base branch together, ordered from the bottom up in the resulting history. PRs above the selected one remain open. After the merge, the lowest unmerged PR is updated to target the stack base directly, and a cascading rebase runs across the remaining branches.
 
 It is not possible to merge a middle PR in isolation: the PRs below it always merge with it.
 
@@ -206,13 +206,14 @@ When you merge a stack using the merge commit strategy, it creates **one merge c
 
 ### How does rebase merge work?
 
-With rebase merge, the commits from each PR in the stack are replayed onto the base branch, creating a linear history without merge commits. The full set of commits lands as a single atomic operation.
+With rebase merge, the commits from each PR in the stack are replayed onto the base branch, creating a linear history without merge commits. The full set of commits lands on the base branch.
 
 ### Do all PRs get merged at once or one at a time?
 
-All PRs in the stack land in a single atomic operation. When you click merge on a PR, that PR and all unmerged PRs below it are merged together onto the base branch at the same time, ordered from the bottom up in the resulting history. PRs above the selected one remain open.
+It depends on the merge method:
 
-This applies whether or not a merge queue is enabled. With a merge queue, the same atomic landing happens once the stack's merge group reaches the front of the queue.
+- **Direct merge** — All the included PRs land in a single atomic operation. The selected PR and every unmerged PR below it are merged together onto the base branch at once, ordered from the bottom up. Either the whole group lands, or if any part fails, none of it does.
+- **Merge queue** — The PRs enter the queue together and are evaluated individually, from the bottom up. If a PR fails while in the queue, it and all its descendants are ejected, while the PRs below it are unaffected.
 
 ### Can I merge only part of a stack? What happens to the remaining unmerged PRs?
 
@@ -228,15 +229,18 @@ Closing a PR in the middle of the stack will block all PRs above it from being m
 
 ### What happens when there is an error merging a PR in the middle of a stack?
 
-Pre-merge checks run before any merge attempt, but a merge can still fail (e.g., due to an unexpected merge conflict or intermittent failure). If a failure occurs partway through, merging stops at that PR. PRs below it that successfully merged remain landed on the base branch; the failed PR and PRs above it stay open. Resolve the issue on the failed PR and retry to land the rest of the stack.
+Pre-merge checks run before any merge attempt, but a merge can still fail (e.g., due to a merge conflict or intermittent failure). The behavior depends on the merge method:
+
+- **Direct merge** — The merge is atomic. If any part fails, the entire operation is rolled back and nothing is merged.
+- **Merge queue** — Because each PR is evaluated individually, a failure ejects that PR and all its descendants (the PRs stacked above it) from the queue, while the PRs below it are unaffected. You can fix the issue on the failed PR and requeue the ejected PRs.
 
 ### Do Stacked PRs support merge queue?
 
-Yes, Stacked PRs fully support merging via merge queue. When you merge a stack through the merge queue:
+Yes, Stacked PRs fully support merging via GitHub merge queue. When you merge a stack through the merge queue:
 
-- **All PRs in the stack are added to the queue** in the correct order, ensuring a linear sequence.
-- **If a PR is removed or ejected from the merge queue**, all PRs above it in the stack are also ejected and removed from the queue.
-- **Stacks are kept in the same merge group on a best-effort basis.** To keep a stack together, the merge queue allows the merge group to exceed its configured max size by up to 50%. If the stack is too large to fit within that buffer, it splits across consecutive merge groups: as much of the stack as fits goes into the current group, and the remaining PRs continue in subsequent groups until the full stack has landed.
+- **All PRs in the stack enter the queue together** in the correct order and are evaluated individually, from the bottom up.
+- **If a PR is ejected from the merge queue** (for example, because it fails), that PR and all its descendants are ejected too, while the PRs below it are unaffected.
+- **The queue makes a best-effort attempt to keep the stack together** in a single merge group. If the stack is too large to fit, it lands across consecutive merge groups: as much of the stack as fits goes into the current group, and the remaining PRs continue in subsequent groups until the full stack has landed. The stack order is preserved, so downstack PRs are merged before upstack PRs.
 
 ## Local Development
 
