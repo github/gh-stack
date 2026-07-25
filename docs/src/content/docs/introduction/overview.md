@@ -1,6 +1,6 @@
 ---
 title: Overview
-description: What stacked pull requests are, why they matter, and how GitHub supports them natively.
+description: What stacked pull requests are and how they work in GitHub.
 ---
 
 ## Why Stacks?
@@ -34,7 +34,7 @@ Each pull request in a stack:
 
 ## GitHub Stacked PRs
 
-GitHub supports Stacked PRs natively, combining a rich pull request UI with the `gh stack` CLI to give both authors and reviewers a seamless experience.
+Stacked pull requests build on the existing pull request experience in GitHub, allowing authors to group a chain of individual PRs together as a stack. Together with the `gh stack` CLI, authors and reviewers can easily create, modify, navigate, and merge stacks.
 
 ### Stack Map in the PR UI
 
