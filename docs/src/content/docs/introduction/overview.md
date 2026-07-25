@@ -69,6 +69,10 @@ GitHub supports two merge methods:
 
 In both methods, the resulting commit history is the same as if each PR had been merged individually, starting from the bottom.
 
+:::note[Admin bypass & auto-merge currently unsupported]
+Admin bypass and auto-merge functionality are coming soon, but currently unavailable for stacked PR merges. A stack merge can only be triggered once all selected PRs meet their requirements. See the [FAQ](/gh-stack/faq/#can-an-admin-bypass-merge-requirements-on-a-stacked-pr) for details.
+:::
+
 ### Merge Methods
 
 Stacks support all three merge methods:

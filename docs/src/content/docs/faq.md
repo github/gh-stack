@@ -152,6 +152,14 @@ If the stack is not linear (e.g., after changes were pushed to a lower branch), 
 
 Every PR in a stack must meet the same merge requirements as a PR targeting the stack base (e.g., `main`): required reviews, passing CI checks, CODEOWNER approvals, and a linear history. All PRs below it must also meet these requirements. See the [Checks, Rules & Requirements](#checks-rules--requirements) section above for details.
 
+### Can an admin bypass merge requirements on a Stacked PR?
+
+Not yet — admin bypass is coming soon, but currently unavailable for stacked PRs. Admins can't merge a stack before its requirements are met, so every PR in the stack must satisfy its branch protection rules and required checks before the stack can land.
+
+### Can I enable auto-merge on a Stacked PR?
+
+Not yet — auto-merge is coming soon, but currently unavailable for stacked PRs, for both direct merges and the merge queue. You can't set a PR in a stack to land automatically once its requirements are met. Until then, merge the stack (or the part you want to land) yourself once its PRs are ready.
+
 ### How does merging a stack of PRs differ from merging a regular PR?
 
 Stacks merge from the bottom up. When you click merge on a PR in a stack, that PR and all unmerged PRs below it land on the base branch together; PRs above remain open, and the remaining stack is automatically rebased so the next PR targets your base branch directly. With a direct merge the group lands as a single atomic operation; through a merge queue the PRs enter the queue together and are evaluated individually, from the bottom up.

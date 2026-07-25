@@ -77,6 +77,10 @@ Before a PR in the stack can be merged, the following conditions must be met:
 
 ![Merge box for a stacked pull request](../../../assets/screenshots/stack-merge-box.png)
 
+:::note[Admin bypass & auto-merge currently unsupported]
+**Admin bypass** and **auto-merge** are coming soon, but currently unavailable for stacked PRs. You can't enable auto-merge on a PR in a stack, and admins can't bypass the merge requirements to merge before they're met. This applies to both direct merges and the merge queue.
+:::
+
 ### Rebasing from the UI
 
 When the stack is not linear (e.g., after changes were pushed to a lower branch, or after `main` has moved ahead), a **Rebase Stack** button appears in the merge box. Clicking it triggers a server-side cascading rebase that:
