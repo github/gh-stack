@@ -478,6 +478,8 @@ Only basic pull request state is checked before merging (open and not a draft); 
 
 If the base branch uses a merge queue, the stack is added to the queue instead of merging directly. The queue chooses the merge method, so the wizard skips the method step and any `--merge-method` (or `--squash`/`--rebase`/`--merge`) flag is ignored with a warning. The selected pull requests are added to the queue together but merge as the queue processes them — they may land in separate groups rather than all at once.
 
+Under the hood, this command uses the asynchronous [Merge API](/gh-stack/reference/merge-api/).
+
 | Flag | Description |
 |------|-------------|
 | `--merge-method <method>` | Merge method to use: `merge`, `squash`, or `rebase` |

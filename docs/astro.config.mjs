@@ -72,9 +72,10 @@ export default defineConfig({
 					label: 'Reference',
 					items: [
 						{ label: 'CLI Commands', slug: 'reference/cli' },
-						{ label: 'REST API', slug: 'reference/rest-api' },
-						{ label: 'GraphQL API', slug: 'reference/graphql-api' },
 						{ label: 'Webhooks', slug: 'reference/webhooks' },
+						{ label: 'GraphQL API', slug: 'reference/graphql-api' },
+						{ label: 'REST API', slug: 'reference/rest-api' },
+						{ label: 'Merge API', slug: 'reference/merge-api' },
 					],
 				},
 				{

@@ -273,6 +273,10 @@ Yes, Stacked PRs fully support merging via GitHub merge queue. When you merge a 
 - **If a PR is ejected from the merge queue** (for example, because it fails), that PR and all its descendants are ejected too, while the PRs below it are unaffected.
 - **The queue makes a best-effort attempt to keep the stack together** in a single merge group. If the stack is too large to fit, it lands across consecutive merge groups: as much of the stack as fits goes into the current group, and the remaining PRs continue in subsequent groups until the full stack has landed. The stack order is preserved, so downstack PRs are merged before upstack PRs.
 
+### How do I merge a stack programmatically?
+
+Stacks are merged through GitHub's asynchronous [Merge API](/gh-stack/reference/merge-api/). The legacy synchronous merge APIs (REST and GraphQL) do not support stack merges. You submit a merge request for a PR and poll for the result; every PR in the stack up to and including the one you request is merged into the base branch. The [`gh stack merge`](/gh-stack/reference/cli/#gh-stack-merge) CLI command is built on this API and is the easiest way to merge from the command line.
+
 ## Local Development
 
 ### Do you have a CLI to help manage stacks?
