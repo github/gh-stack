@@ -27,15 +27,15 @@ Initialize a new stack in the current repository.
 gh stack init [flags] [branches...]
 ```
 
+| Flag | Description |
+|------|-------------|
+| `-b, --base <branch>` | Trunk branch for the stack (defaults to the repository's default branch) |
+
 Initializes a new stack locally. In interactive mode (no arguments), prompts for a branch name and offers to use the current branch as the first layer.
 
 When explicit branch names are given, existing branches are adopted automatically and any missing branches are created. The trunk defaults to the repository's default branch unless overridden with `--base`.
 
 Enables `git rerere` automatically so that conflict resolutions are remembered across rebases.
-
-| Flag | Description |
-|------|-------------|
-| `-b, --base <branch>` | Trunk branch for the stack (defaults to the repository's default branch) |
 
 **Examples:**
 
@@ -61,10 +61,6 @@ Add a new branch on top of the current stack.
 gh stack add [flags] [branch]
 ```
 
-Creates a new branch at the current HEAD, adds it to the top of the stack, and checks it out. Must be run while on the topmost branch of a stack. If no branch name is given, prompts for one.
-
-You can optionally stage changes and create a commit as part of the `add` flow. When `-m` is provided without an explicit branch name, the branch name is auto-generated in date+slug format (e.g., `03-24-add_login`).
-
 | Flag | Description |
 |------|-------------|
 | `-A, --all` | Stage all changes (including untracked files); requires `-m` |
@@ -72,6 +68,10 @@ You can optionally stage changes and create a commit as part of the `add` flow. 
 | `-m, --message <string>` | Create a commit with this message before creating the branch |
 
 > **Note:** `-A` and `-u` are mutually exclusive.
+
+Creates a new branch at the current HEAD, adds it to the top of the stack, and checks it out. Must be run while on the topmost branch of a stack. If no branch name is given, prompts for one.
+
+You can optionally stage changes and create a commit as part of the `add` flow. When `-m` is provided without an explicit branch name, the branch name is auto-generated in date+slug format (e.g., `03-24-add_login`).
 
 **Examples:**
 
@@ -106,12 +106,12 @@ View the current stack.
 gh stack view [flags]
 ```
 
-Shows all branches in the stack, their ordering, PR links, and the most recent commit with a relative timestamp. Output is piped through a pager (respects `GIT_PAGER`, `PAGER`, or defaults to `less -R`).
-
 | Flag | Description |
 |------|-------------|
 | `-s, --short` | Compact output (branch names only) |
 | `--json` | Output stack data as JSON |
+
+Shows all branches in the stack, their ordering, PR links, and the most recent commit with a relative timestamp. Output is piped through a pager (respects `GIT_PAGER`, `PAGER`, or defaults to `less -R`).
 
 **Examples:**
 
@@ -164,12 +164,12 @@ Interactively restructure the current stack.
 gh stack modify [flags]
 ```
 
-Opens an interactive terminal UI for restructuring a stack. All changes are staged in the TUI and applied together when you press `Ctrl+S`. Branches from merged PRs cannot be modified.
-
 | Flag | Description |
 |------|-------------|
 | `--continue` | Continue after resolving conflicts |
 | `--abort` | Abort the modify session and restore the stack to its pre-modify state |
+
+Opens an interactive terminal UI for restructuring a stack. All changes are staged in the TUI and applied together when you press `Ctrl+S`. Branches from merged PRs cannot be modified.
 
 **Preconditions:**
 
@@ -228,6 +228,10 @@ Remove a stack from local tracking and unstack it on GitHub. Also available as `
 gh stack unstack [<stack-number>] [flags]
 ```
 
+| Flag | Description |
+|------|-------------|
+| `--local` | Only remove the stack locally (keep it on GitHub) |
+
 With no argument, the command targets the active stack — the one that contains the currently checked out branch — unstacking it on GitHub and removing local tracking.
 
 Provide a stack number (the identifier shown in the github.com stack UI) to unstack a specific stack on GitHub. This works from anywhere in the repository, whether or not the stack is checked out locally — the stack is unstacked directly through the GitHub API. When the stack is also available locally, its local tracking is removed as well.
@@ -235,10 +239,6 @@ Provide a stack number (the identifier shown in the github.com stack UI) to unst
 PRs that are merged, merging, or queued for merge cannot be removed from a stack on GitHub and are left part of the stack. When every pull request is removed, the stack is dissolved and any local tracking is removed; when some pull requests remain stacked, the stack is kept and local tracking, if any, is unchanged. Use `--local` to skip the remote operation and only remove local tracking.
 
 This is useful when you need to restructure a stack — remove a branch, insert a branch, reorder branches, rename branches, or make other large changes. After unstacking, use `gh stack init` to re-create the stack with the desired structure — existing branches are adopted automatically.
-
-| Flag | Description |
-|------|-------------|
-| `--local` | Only remove the stack locally (keep it on GitHub) |
 
 **Examples:**
 
@@ -265,6 +265,12 @@ Push all branches and create/update PRs and the stack on GitHub.
 gh stack submit [flags]
 ```
 
+| Flag | Description |
+|------|-------------|
+| `--auto` | Skip the editor and use auto-generated PR titles |
+| `--open` | Create new PRs as ready for review instead of drafts, and mark existing PRs as ready for review |
+| `--remote <name>` | Remote to push to (defaults to auto-detected remote) |
+
 Creates a Stacked PR for every branch in the stack, pushing branches to the remote. After creating PRs, `submit` automatically creates a **Stack** on GitHub to link the PRs together. If the stack already exists on GitHub (e.g., from a previous submit), new PRs are added to the existing stack.
 
 If every PR in the stack has already been merged, that stack is complete and can't be extended. In that case `submit` automatically starts a **new** stack rooted at the trunk for your unmerged branches and creates it on GitHub, leaving the merged stack untouched.
@@ -279,12 +285,6 @@ Press <kbd>Ctrl</kbd>+<kbd>S</kbd> to submit all included PRs at once. The edito
 If the branches already have open PRs but no stack exists on GitHub, you will have the option to link the PRs into a stack with <kbd>Ctrl</kbd>+<kbd>B</kbd>.
 
 In the editor, new PRs default to **ready for review**; flip any PR to **draft** with the ready ↔ draft toggle. With `--auto`, new PRs are created as **drafts** unless you pass `--open`.
-
-| Flag | Description |
-|------|-------------|
-| `--auto` | Skip the editor and use auto-generated PR titles |
-| `--open` | Create new PRs as ready for review instead of drafts, and mark existing PRs as ready for review |
-| `--remote <name>` | Remote to push to (defaults to auto-detected remote) |
 
 **Examples:**
 
@@ -301,6 +301,11 @@ Fetch, rebase, push, and sync PR state in a single command.
 ```sh
 gh stack sync [flags]
 ```
+
+| Flag | Description |
+|------|-------------|
+| `--remote <name>` | Remote to fetch from and push to (defaults to auto-detected remote) |
+| `--prune` | Delete local branches for merged PRs |
 
 Performs a synchronization of the entire stack:
 
@@ -325,11 +330,6 @@ When neither stack is a clean prefix of the other — for example, you added a b
 
 In a non-interactive terminal, a divergence aborts the sync (exit success) without pushing branches or updating PRs; resolve it by unstacking and recreating the stack.
 
-| Flag | Description |
-|------|-------------|
-| `--remote <name>` | Remote to fetch from and push to (defaults to auto-detected remote) |
-| `--prune` | Delete local branches for merged PRs |
-
 **Examples:**
 
 ```sh
@@ -347,12 +347,6 @@ Pull from remote and do a cascading rebase across the stack.
 gh stack rebase [flags] [branch]
 ```
 
-Fetches the latest changes from `origin`, then ensures each branch in the stack has the tip of the previous layer in its commit history. Rebases branches in order from trunk upward.
-
-If a branch's PR has been merged, the rebase automatically switches to `--onto` mode to correctly replay commits on top of the merge target.
-
-If a rebase conflict occurs, the operation pauses and prints the conflicted files with line numbers. Resolve the conflicts, stage with `git add`, and continue with `--continue`. To undo the entire rebase, use `--abort` to restore all branches to their pre-rebase state.
-
 | Flag | Description |
 |------|-------------|
 | `--downstack` | Only rebase branches from trunk to the current branch |
@@ -366,6 +360,12 @@ If a rebase conflict occurs, the operation pauses and prints the conflicted file
 | Argument | Description |
 |----------|-------------|
 | `[branch]` | Target branch (defaults to the current branch) |
+
+Fetches the latest changes from `origin`, then ensures each branch in the stack has the tip of the previous layer in its commit history. Rebases branches in order from trunk upward.
+
+If a branch's PR has been merged, the rebase automatically switches to `--onto` mode to correctly replay commits on top of the merge target.
+
+If a rebase conflict occurs, the operation pauses and prints the conflicted files with line numbers. Resolve the conflicts, stage with `git add`, and continue with `--continue`. To undo the entire rebase, use `--abort` to restore all branches to their pre-rebase state.
 
 **Examples:**
 
@@ -400,11 +400,11 @@ Push all branches in the current stack to the remote.
 gh stack push [flags]
 ```
 
-Pushes every branch to the remote using `--force-with-lease --atomic`. This is a lightweight wrapper around `git push` that knows about all branches in the stack. It does not create or update pull requests — use `gh stack submit` for that.
-
 | Flag | Description |
 |------|-------------|
 | `--remote <name>` | Remote to push to (defaults to auto-detected remote) |
+
+Pushes every branch to the remote using `--force-with-lease --atomic`. This is a lightweight wrapper around `git push` that knows about all branches in the stack. It does not create or update pull requests — use `gh stack submit` for that.
 
 **Examples:**
 
@@ -421,6 +421,12 @@ Link PRs into a stack on GitHub without local tracking.
 gh stack link [flags] <stack-number | branch-or-pr> <branch-or-pr> [...]
 ```
 
+| Flag | Description |
+|------|-------------|
+| `--base <branch>` | Base branch for the bottom of the stack (defaults to the repository's default branch); ignored when adding to an existing stack |
+| `--open` | Mark new and existing PRs as ready for review |
+| `--remote <name>` | Remote to push to (defaults to auto-detected remote) |
+
 Creates or updates a stack on GitHub from branch names or PR numbers/URLs. This command does not create or modify any `gh-stack` local tracking state. It is designed for users who manage branches with other tools locally (e.g., jj, Sapling, git-town) and want to simply open a stack of PRs.
 
 Arguments are provided in stack order (bottom to top). Branch arguments are automatically pushed to the remote before creating or looking up PRs. For branches that already have open PRs, those PRs are used. For branches without PRs, new PRs are created automatically with the correct base branch chaining. Existing PRs whose base branch doesn't match the expected chain are corrected automatically.
@@ -428,12 +434,6 @@ Arguments are provided in stack order (bottom to top). Branch arguments are auto
 If the PRs are not yet in a stack, a new stack is created. If some of the PRs are already in a stack, the existing stack is updated to include the new PRs. Existing PRs are never removed from a stack — the update is additive only.
 
 To grow an existing stack without re-listing its PRs, pass a stack number (the number shown in the GitHub stack UI) as the first argument. The remaining arguments are appended to the top of that stack. Arguments already in the stack are skipped, and arguments that belong to a different stack are rejected. Because stack and PR numbers never overlap, a numeric first argument is treated as a stack only when it matches an existing stack — otherwise it is treated as a PR or branch.
-
-| Flag | Description |
-|------|-------------|
-| `--base <branch>` | Base branch for the bottom of the stack (defaults to the repository's default branch); ignored when adding to an existing stack |
-| `--open` | Mark new and existing PRs as ready for review |
-| `--remote <name>` | Remote to push to (defaults to auto-detected remote) |
 
 **Examples:**
 
@@ -566,13 +566,13 @@ Create a short command alias so you can type less.
 gh stack alias [flags] [name]
 ```
 
-Installs a small wrapper script into `~/.local/bin/` that forwards all arguments to `gh stack`. The default alias name is `gs`, but you can choose any name by passing it as an argument. After setup, you can run `gs push` instead of `gh stack push`.
-
-On Windows, automatic alias creation is not supported — the command prints manual instructions for creating a batch file or PowerShell function.
-
 | Flag | Description |
 |------|-------------|
 | `--remove` | Remove a previously created alias |
+
+Installs a small wrapper script into `~/.local/bin/` that forwards all arguments to `gh stack`. The default alias name is `gs`, but you can choose any name by passing it as an argument. After setup, you can run `gs push` instead of `gh stack push`.
+
+On Windows, automatic alias creation is not supported — the command prints manual instructions for creating a batch file or PowerShell function.
 
 **Examples:**
 
