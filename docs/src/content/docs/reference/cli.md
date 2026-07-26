@@ -305,7 +305,7 @@ gh stack sync [flags]
 Performs a synchronization of the entire stack:
 
 1. **Fetch** — fetches the latest changes from `origin`.
-2. **Reconcile the remote stack** — mirrors the GitHub stack locally. When PRs have been added to the stack on GitHub (the remote is ahead of your local stack), their branches are pulled down and appended to your local stack automatically. When the local and remote stacks have genuinely diverged (for example, you added a branch locally while different PRs were added to the stack on GitHub), you are prompted to resolve (see [Diverged stacks](#diverged-stacks) below). In a non-interactive terminal a divergence aborts the sync (nothing is pushed or updated).
+2. **Reconcile the remote stack** — mirrors the GitHub stack locally. When PRs have been added to the stack on GitHub (the remote is ahead of your local stack), their branches are pulled down and appended to your local stack automatically. When the local and remote stacks have genuinely diverged (for example, you added a branch locally while different PRs were added to the stack on GitHub), you are prompted to resolve (see **Diverged stacks** below). In a non-interactive terminal a divergence aborts the sync (nothing is pushed or updated).
 3. **Fast-forward trunk** — fast-forwards the trunk branch to match the remote (skips if diverged).
 4. **Cascade rebase** — rebases all stack branches onto their updated parents (only if trunk moved). If a conflict is detected, all branches are restored to their original state, and you are advised to run `gh stack rebase` to resolve conflicts interactively.
 5. **Push** — pushes all branches (uses `--force-with-lease` if a rebase occurred).
