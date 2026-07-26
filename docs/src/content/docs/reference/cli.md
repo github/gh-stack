@@ -635,3 +635,4 @@ GH_STACK_THEME=light gh stack view
 | 7 | Rebase already in progress |
 | 8 | Stack is locked by another process |
 | 9 | Stacked PRs not enabled for this repository |
+| 10 | Modify session interrupted (recovery required) |
