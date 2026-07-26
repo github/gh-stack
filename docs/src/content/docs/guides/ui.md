@@ -99,10 +99,12 @@ Commits created by a server-side rebase are **not signed**. If your repository r
 
 If you want to reorder or reorganize the PRs in a stack from the UI, you must first dissolve the stack and then re-create it. For CLI users, `gh stack modify` provides an interactive way to [restructure a stack](/gh-stack/guides/modify/) — including reordering, inserting, dropping, and renaming branches — without needing to dissolve it.
 
-### Dissolving the Entire Stack
+### Dissolving the Stack
 
-To dissolve the stack entirely (turning all Stacked PRs back into independent PRs), use the unstack option on the stack itself.
+To dissolve the stack, use the Unstack option on the stack.
 
 ![Dissolving an entire stack](../../../assets/screenshots/unstack-entire-stack.png)
 
-After unstacking, each PR retains its current base branch but is no longer linked to the other PRs. The stack map and stack-related merge requirements disappear from all affected PRs.
+Unstacking removes the **open, draft, and closed** PRs from the stack. Each of those PRs keeps its current base branch but is no longer linked to the others, and the stack map and stack-related merge requirements disappear from them.
+
+**Merged and queued PRs stay in the stack.** Once a PR has merged — or is queued for merge — as part of a stack, it remains part of that stack and can't be unstacked. So if every PR in the stack is open, draft, or closed, unstacking removes them all and the stack is dissolved entirely; if any PR has already merged or is queued for merge, the stack persists with those PRs still in it.

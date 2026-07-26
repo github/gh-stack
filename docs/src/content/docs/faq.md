@@ -52,7 +52,9 @@ gh stack init db-migrations api-routes frontend
 
 **From the CLI** — Run `gh stack unstack` (or `gh stack delete`) to delete the stack on GitHub and remove local tracking. You can also unstack any stack by its number from anywhere in the repository — `gh stack unstack 7` — whether or not it's checked out locally. Use `--local` to only remove local tracking.
 
-**From the UI** — You can unstack PRs from the GitHub UI — see [Unstacking](/gh-stack/guides/ui/#unstacking) for a walkthrough. This dissolves the association between PRs, turning them back into standard independent PRs.
+**From the UI** — You can unstack PRs from the GitHub UI — see [Unstacking](/gh-stack/guides/ui/#unstacking) for a walkthrough. This dissolves the association between the PRs, turning them back into standard independent PRs.
+
+Unstacking only removes **open, draft, and closed** PRs from the stack. **Merged and queued PRs remain part of the stack** — once a PR has merged (or is queued for merge) as part of a stack, it can't be unstacked. A stack is fully dissolved only when none of its PRs have merged or are queued for merge; otherwise it persists with those PRs still in it.
 
 ### Can stacks be created across forks?
 
