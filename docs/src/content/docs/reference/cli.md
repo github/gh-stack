@@ -306,13 +306,16 @@ gh stack sync [flags]
 |------|-------------|
 | `--remote <name>` | Remote to fetch from and push to (defaults to auto-detected remote) |
 | `--prune` | Delete local branches for merged PRs |
+| `--autostash` | Stash uncommitted changes before rebasing and restore them afterwards |
+
+Sync requires a clean working tree and no rebase in progress, because git refuses to rebase otherwise. Commit or stash your changes first, or pass `--autostash` to let git stash and restore them around the rebase.
 
 Performs a synchronization of the entire stack:
 
 1. **Fetch** — fetches the latest changes from `origin`.
 2. **Reconcile the remote stack** — mirrors the GitHub stack locally. When PRs have been added to the stack on GitHub (the remote is ahead of your local stack), their branches are pulled down and appended to your local stack automatically. When the local and remote stacks have genuinely diverged (for example, you added a branch locally while different PRs were added to the stack on GitHub), you are prompted to resolve (see **Diverged stacks** below). In a non-interactive terminal a divergence aborts the sync (nothing is pushed or updated).
-3. **Fast-forward trunk** — fast-forwards the trunk branch to match the remote (skips if diverged).
-4. **Cascade rebase** — rebases all stack branches onto their updated parents (only if trunk moved). If a conflict is detected, all branches are restored to their original state, and you are advised to run `gh stack rebase` to resolve conflicts interactively.
+3. **Fast-forward trunk** — creates the local trunk branch if it is missing, then fast-forwards it to match the remote (skips if diverged, or if the trunk branch no longer exists on the remote).
+4. **Cascade rebase** — rebases all stack branches onto their updated parents (only if trunk moved). If a conflict is detected, all branches are restored to their original state, and you are advised to run `gh stack rebase` to resolve conflicts interactively. Afterwards sync verifies that every branch really does sit on top of its parent, and stops without pushing if any does not.
 5. **Push** — pushes all branches (uses `--force-with-lease` if a rebase occurred).
 6. **Sync PRs** — syncs PR state from GitHub and reports the status of each PR.
 7. **Sync the stack** — links the stack's open PRs into a stack on GitHub, creating the remote stack object if it doesn't exist yet or updating it if it's partially formed. This only happens when two or more PRs exist; sync never opens PRs (use `gh stack submit` for that).
@@ -337,6 +340,9 @@ gh stack sync
 
 # Sync and automatically prune merged branches
 gh stack sync --prune
+
+# Sync with uncommitted changes in the working tree
+gh stack sync --autostash
 ```
 
 ### `gh stack rebase`
@@ -356,6 +362,7 @@ gh stack rebase [flags] [branch]
 | `--abort` | Abort the rebase and restore all branches to their pre-rebase state |
 | `--remote <name>` | Remote to fetch from (defaults to auto-detected remote) |
 | `--committer-date-is-author-date` | Set the committer date to the author date during rebase. Alias: `--preserve-dates` |
+| `--autostash` | Stash uncommitted changes before rebasing and restore them afterwards |
 
 | Argument | Description |
 |----------|-------------|
@@ -363,9 +370,13 @@ gh stack rebase [flags] [branch]
 
 Fetches the latest changes from `origin`, then ensures each branch in the stack has the tip of the previous layer in its commit history. Rebases branches in order from trunk upward.
 
+Rebase requires a clean working tree and no rebase in progress, because git refuses to rebase otherwise. Commit or stash your changes first, or pass `--autostash` to let git stash and restore them around the rebase.
+
 If a branch's PR has been merged, the rebase automatically switches to `--onto` mode to correctly replay commits on top of the merge target.
 
 If a rebase conflict occurs, the operation pauses and prints the conflicted files with line numbers. Resolve the conflicts, stage with `git add`, and continue with `--continue`. To undo the entire rebase, use `--abort` to restore all branches to their pre-rebase state.
+
+If git refuses to start a rebase — for example because a branch is checked out in another worktree — the command stops and reports git's message instead of continuing. When the cascade finishes, it verifies that every rebased branch really does sit on top of its parent and reports a failure if any does not.
 
 **Examples:**
 
@@ -390,6 +401,9 @@ gh stack rebase --abort
 
 # Rebase and preserve committer date as author date
 gh stack rebase --committer-date-is-author-date
+
+# Rebase with uncommitted changes in the working tree
+gh stack rebase --autostash
 ```
 
 ### `gh stack push`

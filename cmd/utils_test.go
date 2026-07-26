@@ -851,3 +851,183 @@ func TestEnrichPRContent(t *testing.T) {
 	assert.Equal(t, "Fetched body", details["merged"].Body)
 	assert.Equal(t, "Has it", details["open"].Title, "PRs that already have a title are untouched")
 }
+
+// defaultStackBranches lists the branch names used by most cascade tests.
+var defaultStackBranches = []string{"main", "trunk", "b1", "b2", "b3", "b4"}
+
+// stackedAncestry wraps an IsAncestor mock so that ancestry questions about
+// plain branch names answer true, while questions about the fake SHAs used to
+// drive fast-forward detection fall through to fn.
+//
+// Mock rebases never move refs, so without this the post-rebase verification
+// (verifyStacked) would always see an unstacked stack.
+func stackedAncestry(branches []string, fn func(a, d string) (bool, error)) func(string, string) (bool, error) {
+	known := make(map[string]bool, len(branches))
+	for _, b := range branches {
+		known[b] = true
+	}
+	return func(a, d string) (bool, error) {
+		if known[a] && known[d] {
+			return true, nil
+		}
+		if fn == nil {
+			return false, nil
+		}
+		return fn(a, d)
+	}
+}
+
+// TestResolveOntoOldBase covers the `git rebase --onto <newBase> <upstream>`
+// upstream selection. Passing a commit the branch does not contain makes git
+// replay commits that are already in the new base, which is how a cascade
+// rebase ends up duplicating a parent's commits.
+func TestResolveOntoOldBase(t *testing.T) {
+	// History used throughout: fork <- p1 <- p2 (parent), and the child was
+	// built on p1 before the parent moved on to p2.
+	ancestorsOfChild := map[string]bool{"fork": true, "p1": true}
+
+	tests := []struct {
+		name            string
+		recordedOldBase string
+		metadataBase    string
+		newBase         string
+		mergeBases      map[string]string // "a|b" -> merge-base
+		want            string
+		wantReason      string
+	}{
+		{
+			name:            "recorded old base is used when the branch contains it",
+			recordedOldBase: "p1",
+			metadataBase:    "fork",
+			newBase:         "parent",
+			want:            "p1",
+			wantReason:      "the common case must not pay for extra lookups",
+		},
+		{
+			name:            "falls back to the recorded metadata base when the parent moved",
+			recordedOldBase: "p2",
+			metadataBase:    "p1",
+			newBase:         "parent",
+			mergeBases:      map[string]string{"p2|child": "fork", "parent|child": "fork"},
+			want:            "p1",
+			wantReason:      "p1 is the latest commit the child actually contains",
+		},
+		{
+			name:            "uses the latest merge-base when no metadata base is recorded",
+			recordedOldBase: "p2",
+			metadataBase:    "",
+			newBase:         "parent",
+			mergeBases:      map[string]string{"p2|child": "p1", "parent|child": "fork"},
+			want:            "p1",
+			wantReason:      "replaying from fork would duplicate the parent's commits",
+		},
+		{
+			name:            "prefers the new base merge-base when it is later",
+			recordedOldBase: "p2",
+			metadataBase:    "fork",
+			newBase:         "parent",
+			mergeBases:      map[string]string{"p2|child": "fork", "parent|child": "p1"},
+			want:            "p1",
+			wantReason:      "the child is already on top of part of the new base",
+		},
+		{
+			name:            "keeps the recorded old base when nothing better is an ancestor",
+			recordedOldBase: "p2",
+			metadataBase:    "unrelated",
+			newBase:         "parent",
+			mergeBases:      map[string]string{"p2|child": "unrelated", "parent|child": "unrelated"},
+			want:            "p2",
+			wantReason:      "never invent an upstream out of thin air",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			restore := git.SetOps(&git.MockOps{
+				IsAncestorFn: func(a, d string) (bool, error) {
+					if d == "child" {
+						return ancestorsOfChild[a], nil
+					}
+					// Ordering between two ancestors of the child.
+					return a == "fork" && d == "p1", nil
+				},
+				MergeBaseFn: func(a, b string) (string, error) {
+					mb, ok := tt.mergeBases[a+"|"+b]
+					if !ok {
+						return "", fmt.Errorf("no merge base for %s and %s", a, b)
+					}
+					return mb, nil
+				},
+			})
+			defer restore()
+
+			got := resolveOntoOldBase(tt.recordedOldBase, tt.metadataBase, tt.newBase, "child")
+			assert.Equal(t, tt.want, got, tt.wantReason)
+		})
+	}
+}
+
+func TestVerifyStacked(t *testing.T) {
+	s := &stack.Stack{
+		Trunk: stack.BranchRef{Branch: "main"},
+		Branches: []stack.BranchRef{
+			{Branch: "b1"},
+			{Branch: "b2"},
+			{Branch: "b3"},
+		},
+	}
+	// b1 is not on main and b3 is not on b2.
+	broken := map[string]bool{"main|b1": true, "b2|b3": true}
+	restore := git.SetOps(&git.MockOps{
+		IsAncestorFn: func(a, d string) (bool, error) { return !broken[a+"|"+d], nil },
+	})
+	defer restore()
+
+	tests := []struct {
+		name    string
+		start   int
+		end     int
+		want    []string
+		wantWhy string
+	}{
+		{name: "whole stack", start: 0, end: 3, want: []string{"b1", "b3"}},
+		{name: "no-trunk range skips the bottom branch", start: 1, end: 3, want: []string{"b3"},
+			wantWhy: "b1 is deliberately left off trunk by --no-trunk"},
+		{name: "downstack range", start: 0, end: 2, want: []string{"b1"}},
+		{name: "upstack range", start: 2, end: 3, want: []string{"b3"}},
+		{name: "out of range end is clamped", start: 0, end: 99, want: []string{"b1", "b3"}},
+		{name: "negative start is clamped", start: -5, end: 1, want: []string{"b1"}},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			assert.Equal(t, tt.want, verifyStacked(s, tt.start, tt.end), tt.wantWhy)
+		})
+	}
+}
+
+// TestVerifyStacked_SkipsMergedAndQueued verifies that merged and queued
+// branches are excluded and that their children are checked against the
+// nearest active ancestor instead.
+func TestVerifyStacked_SkipsMergedAndQueued(t *testing.T) {
+	s := &stack.Stack{
+		Trunk: stack.BranchRef{Branch: "main"},
+		Branches: []stack.BranchRef{
+			{Branch: "b1", PullRequest: &stack.PullRequestRef{Number: 1, Merged: true}},
+			{Branch: "b2", Queued: true},
+			{Branch: "b3"},
+		},
+	}
+	var checked []string
+	restore := git.SetOps(&git.MockOps{
+		IsAncestorFn: func(a, d string) (bool, error) {
+			checked = append(checked, a+"->"+d)
+			return true, nil
+		},
+	})
+	defer restore()
+
+	assert.Empty(t, verifyStacked(s, 0, 3))
+	assert.Equal(t, []string{"main->b3"}, checked,
+		"b3's nearest active ancestor is trunk, since b1 is merged and b2 is queued")
+}

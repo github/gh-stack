@@ -909,6 +909,53 @@ func ensureLocalTrunk(cfg *config.Config, trunk, remote string) error {
 	return nil
 }
 
+// requireNoRebaseInProgress fails when a rebase is already in progress. git
+// refuses to start another one, so continuing would leave the caller reporting
+// work it never did.
+func requireNoRebaseInProgress(cfg *config.Config) error {
+	if !git.IsRebaseInProgress() {
+		return nil
+	}
+	cfg.Errorf("a rebase is currently in progress")
+	cfg.Printf("Complete the rebase with `%s` or abort with `%s`",
+		cfg.ColorCyan("gh stack rebase --continue"),
+		cfg.ColorCyan("gh stack rebase --abort"))
+	return ErrRebaseActive
+}
+
+// requireCleanWorkingTree fails when the working tree has uncommitted changes.
+// git refuses to rebase a dirty tree, so this turns a confusing mid-cascade
+// failure into an actionable message up front. An inability to inspect the
+// tree is treated as a reason to stop — a failed status must not read as
+// "clean".
+func requireCleanWorkingTree(cfg *config.Config, command string) error {
+	dirty, err := git.HasUncommittedChanges()
+	if err != nil {
+		cfg.Errorf("failed to check working tree status: %s", err)
+		return ErrSilent
+	}
+	if !dirty {
+		return nil
+	}
+	cfg.Errorf("uncommitted changes in working tree")
+	cfg.Printf("Commit or stash your changes before running %s, or re-run with `%s`",
+		command, cfg.ColorCyan("--autostash"))
+	return ErrSilent
+}
+
+// preflightRebase runs the checks that must pass before any cascade rebase.
+// With autostash, git stashes and restores local changes itself, so the
+// clean-tree requirement is lifted.
+func preflightRebase(cfg *config.Config, command string, autostash bool) error {
+	if err := requireNoRebaseInProgress(cfg); err != nil {
+		return err
+	}
+	if autostash {
+		return nil
+	}
+	return requireCleanWorkingTree(cfg, command)
+}
+
 // fastForwardTrunk fast-forwards the trunk branch to match its remote tracking
 // branch. Returns true if trunk was updated.
 func fastForwardTrunk(cfg *config.Config, trunk, remote, currentBranch string) bool {
@@ -926,7 +973,15 @@ func fastForwardTrunk(cfg *config.Config, trunk, remote, currentBranch string) b
 	}
 
 	if trunkErr != nil {
-		cfg.Warningf("Could not compare trunk %s with remote — skipping trunk update", trunk)
+		// The most common cause is that the trunk branch no longer exists on
+		// the remote — for example a stack whose trunk was itself a feature
+		// branch that has since been merged and deleted. Without a resolvable
+		// remote ref the cascade silently rebases onto a stale local trunk, so
+		// say so explicitly.
+		cfg.Warningf("Could not resolve %s/%s — skipping trunk update", remote, trunk)
+		cfg.Printf("  The stack will be rebased onto the local %s, which may be out of date.", trunk)
+		cfg.Printf("  If %s was merged and deleted on %s, re-point the stack with `%s`.",
+			trunk, remote, cfg.ColorCyan("gh stack init"))
 		return false
 	}
 
@@ -973,6 +1028,7 @@ type cascadeRebaseOpts struct {
 	NeedsOnto                 bool
 	OntoOldBase               string
 	CommitterDateIsAuthorDate bool
+	AutoStash                 bool
 }
 
 // cascadeRebaseResult describes the outcome of a cascade rebase.
@@ -988,6 +1044,68 @@ type cascadeRebaseResult struct {
 	OntoOldBase    string   // ontoOldBase at the conflict point (for --continue)
 }
 
+// resolveOntoOldBase picks the commit to pass as the <upstream> argument of
+// `git rebase --onto <newBase> <upstream> <branch>`.
+//
+// The upstream marks the boundary of the commits to replay: everything after
+// it, up to the branch tip, is re-applied on top of newBase. Passing a commit
+// that the branch does not actually contain makes git replay commits that are
+// already represented in newBase — the cause of duplicate commits after a
+// parent branch was amended, reordered, or squash-merged.
+//
+// Candidates are considered in order of preference and the *latest* one that
+// is genuinely an ancestor of the branch wins, since that replays the fewest
+// commits and therefore cannot duplicate anything:
+//
+//  1. recordedOldBase — the parent's tip at the start of this run.
+//  2. metadataBase — the parent tip the branch was last stacked on, from the
+//     stack file. Correct when the parent moved out of band.
+//  3. merge-base(recordedOldBase, branch) / merge-base(newBase, branch).
+//
+// Returns recordedOldBase unchanged when nothing better can be determined.
+func resolveOntoOldBase(recordedOldBase, metadataBase, newBase, branch string) string {
+	isAncestorOfBranch := func(sha string) bool {
+		if sha == "" {
+			return false
+		}
+		ok, err := git.IsAncestor(sha, branch)
+		return err == nil && ok
+	}
+
+	if isAncestorOfBranch(recordedOldBase) {
+		return recordedOldBase
+	}
+
+	candidates := []string{metadataBase}
+	if mb, err := git.MergeBase(recordedOldBase, branch); err == nil {
+		candidates = append(candidates, mb)
+	}
+	if mb, err := git.MergeBase(newBase, branch); err == nil {
+		candidates = append(candidates, mb)
+	}
+
+	best := ""
+	for _, c := range candidates {
+		if !isAncestorOfBranch(c) {
+			continue
+		}
+		if best == "" {
+			best = c
+			continue
+		}
+		// Both are ancestors of branch, so they are ordered along its
+		// history. Keep the later one.
+		if isAnc, err := git.IsAncestor(best, c); err == nil && isAnc {
+			best = c
+		}
+	}
+
+	if best == "" {
+		return recordedOldBase
+	}
+	return best
+}
+
 // cascadeRebase performs a cascade rebase across the given branch range. It
 // stops at the first conflict and returns a result describing what happened.
 // The caller is responsible for conflict recovery (abort+restore or save state).
@@ -998,7 +1116,19 @@ func cascadeRebase(opts cascadeRebaseOpts) cascadeRebaseResult {
 	ontoOldBase := opts.OntoOldBase
 	originalRefs := opts.OriginalRefs
 	result := cascadeRebaseResult{}
-	rebaseOpts := git.RebaseOpts{CommitterDateIsAuthorDate: opts.CommitterDateIsAuthorDate}
+	rebaseOpts := git.RebaseOpts{
+		CommitterDateIsAuthorDate: opts.CommitterDateIsAuthorDate,
+		AutoStash:                 opts.AutoStash,
+	}
+
+	// remainingAfter lists the branch names after position i in the range.
+	remainingAfter := func(i int) []string {
+		remaining := make([]string, 0, len(opts.Branches)-i-1)
+		for j := i + 1; j < len(opts.Branches); j++ {
+			remaining = append(remaining, opts.Branches[j].Branch)
+		}
+		return remaining
+	}
 
 	for i, br := range opts.Branches {
 		absIdx := opts.StartAbsIdx + i
@@ -1042,21 +1172,14 @@ func cascadeRebase(opts cascadeRebaseOpts) cascadeRebaseResult {
 				}
 			}
 
-			// If ontoOldBase is stale (not an ancestor of the branch), the
-			// branch was already rebased past it. Fall back to
-			// merge-base(newBase, branch) to avoid replaying already-applied
-			// commits.
-			actualOldBase := ontoOldBase
-			if isAnc, err := git.IsAncestor(ontoOldBase, br.Branch); err == nil && !isAnc {
-				if mb, err := git.MergeBase(newBase, br.Branch); err == nil {
-					actualOldBase = mb
-				}
-			}
+			actualOldBase := resolveOntoOldBase(ontoOldBase, br.Base, newBase, br.Branch)
 
 			if err := git.RebaseOnto(newBase, actualOldBase, br.Branch, rebaseOpts); err != nil {
-				remaining := make([]string, 0, len(opts.Branches)-i-1)
-				for j := i + 1; j < len(opts.Branches); j++ {
-					remaining = append(remaining, opts.Branches[j].Branch)
+				if git.IsRebaseStartError(err) {
+					return cascadeRebaseResult{
+						Rebased: result.Rebased,
+						Err:     rebaseStartFailure(br.Branch, newBase, err),
+					}
 				}
 				return cascadeRebaseResult{
 					Rebased:        result.Rebased,
@@ -1064,7 +1187,7 @@ func cascadeRebase(opts cascadeRebaseOpts) cascadeRebaseResult {
 					ConflictIdx:    absIdx,
 					ConflictBranch: br.Branch,
 					ConflictBase:   newBase,
-					Remaining:      remaining,
+					Remaining:      remainingAfter(i),
 					NeedsOnto:      true,
 					OntoOldBase:    originalRefs[br.Branch],
 				}
@@ -1076,7 +1199,8 @@ func cascadeRebase(opts cascadeRebaseOpts) cascadeRebaseResult {
 		} else {
 			var rebaseErr error
 			if absIdx > 0 {
-				rebaseErr = git.RebaseOnto(base, originalRefs[base], br.Branch, rebaseOpts)
+				oldBase := resolveOntoOldBase(originalRefs[base], br.Base, base, br.Branch)
+				rebaseErr = git.RebaseOnto(base, oldBase, br.Branch, rebaseOpts)
 			} else {
 				if err := git.CheckoutBranch(br.Branch); err != nil {
 					return cascadeRebaseResult{
@@ -1088,9 +1212,11 @@ func cascadeRebase(opts cascadeRebaseOpts) cascadeRebaseResult {
 			}
 
 			if rebaseErr != nil {
-				remaining := make([]string, 0, len(opts.Branches)-i-1)
-				for j := i + 1; j < len(opts.Branches); j++ {
-					remaining = append(remaining, opts.Branches[j].Branch)
+				if git.IsRebaseStartError(rebaseErr) {
+					return cascadeRebaseResult{
+						Rebased: result.Rebased,
+						Err:     rebaseStartFailure(br.Branch, base, rebaseErr),
+					}
 				}
 				return cascadeRebaseResult{
 					Rebased:        result.Rebased,
@@ -1098,7 +1224,7 @@ func cascadeRebase(opts cascadeRebaseOpts) cascadeRebaseResult {
 					ConflictIdx:    absIdx,
 					ConflictBranch: br.Branch,
 					ConflictBase:   base,
-					Remaining:      remaining,
+					Remaining:      remainingAfter(i),
 					NeedsOnto:      false,
 					OntoOldBase:    originalRefs[br.Branch],
 				}
@@ -1112,12 +1238,39 @@ func cascadeRebase(opts cascadeRebaseOpts) cascadeRebaseResult {
 	return result
 }
 
+// rebaseStartFailure describes a rebase that never started. git's own message
+// (dirty working tree, branch checked out elsewhere, unresolvable upstream,
+// rebase already in progress) is the useful part, so it is preserved verbatim.
+func rebaseStartFailure(branch, base string, err error) error {
+	return fmt.Errorf("could not start rebase of %s onto %s: %w", branch, base, err)
+}
+
 // stackNeedsRebase returns true if any active branch in the stack is not based
 // on its parent's current tip. This detects when the stack needs rebasing even
 // if trunk was not updated in the current run.
 func stackNeedsRebase(s *stack.Stack) bool {
+	return len(verifyStacked(s, 0, len(s.Branches))) > 0
+}
+
+// verifyStacked returns the names of branches in s.Branches[startIdx:endIdx]
+// that do not have their effective parent (the nearest non-skipped ancestor,
+// or trunk) in their commit history.
+//
+// It doubles as the post-condition for a cascade rebase: if any branch in the
+// rebased range still fails this check, the rebase did not actually happen and
+// reporting success would be a lie.
+func verifyStacked(s *stack.Stack, startIdx, endIdx int) []string {
 	trunk := s.Trunk.Branch
-	for i, br := range s.Branches {
+	if startIdx < 0 {
+		startIdx = 0
+	}
+	if endIdx > len(s.Branches) {
+		endIdx = len(s.Branches)
+	}
+
+	var unstacked []string
+	for i := startIdx; i < endIdx; i++ {
+		br := s.Branches[i]
 		if br.IsSkipped() {
 			continue
 		}
@@ -1131,10 +1284,24 @@ func stackNeedsRebase(s *stack.Stack) bool {
 		}
 		isAnc, err := git.IsAncestor(parent, br.Branch)
 		if err != nil || !isAnc {
-			return true
+			unstacked = append(unstacked, br.Branch)
 		}
 	}
-	return false
+	return unstacked
+}
+
+// reportUnstacked prints a diagnostic for branches that are still not stacked
+// on their parent after a cascade rebase reported success.
+func reportUnstacked(cfg *config.Config, s *stack.Stack, unstacked []string) {
+	cfg.Errorf("Rebase reported success but %s still not based on %s: %s",
+		plural(len(unstacked), "this branch is", "these branches are"),
+		plural(len(unstacked), "its parent", "their parents"),
+		strings.Join(unstacked, ", "))
+	cfg.Printf("  Trunk: %s", s.Trunk.Branch)
+	cfg.Printf("  This usually means git refused the rebase. Check for uncommitted")
+	cfg.Printf("  changes, a branch checked out in another worktree, or a rebase")
+	cfg.Printf("  already in progress, then run `%s` again.",
+		cfg.ColorCyan("gh stack rebase"))
 }
 
 // resolvePR resolves a user-provided target to a stack and branch using

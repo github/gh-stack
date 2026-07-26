@@ -6,6 +6,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 
@@ -44,9 +45,9 @@ func newRebaseMock(tmpDir string, currentBranch string) *git.MockOps {
 			}
 			return "sha-" + ref, nil
 		},
-		IsAncestorFn:    func(a, d string) (bool, error) { return true, nil },
-		FetchFn:         func(string) error { return nil },
-		EnableRerereFn:  func() error { return nil },
+		IsAncestorFn:         func(a, d string) (bool, error) { return true, nil },
+		FetchFn:              func(string) error { return nil },
+		EnableRerereFn:       func() error { return nil },
 		IsRebaseInProgressFn: func() bool { return false },
 	}
 }
@@ -1292,13 +1293,10 @@ func TestRebase_FastForwardsBranchFromRemote(t *testing.T) {
 		}
 		return "sha-" + ref, nil
 	}
-	mock.IsAncestorFn = func(a, d string) (bool, error) {
+	mock.IsAncestorFn = stackedAncestry(defaultStackBranches, func(a, d string) (bool, error) {
 		// b1-local is ancestor of b1-remote → can fast-forward
-		if a == "b1-local-sha" && d == "b1-remote-sha" {
-			return true, nil
-		}
-		return false, nil
-	}
+		return a == "b1-local-sha" && d == "b1-remote-sha", nil
+	})
 	mock.UpdateBranchRefFn = func(branch, sha string) error {
 		updateBranchRefCalls = append(updateBranchRefCalls, struct{ branch, sha string }{branch, sha})
 		return nil
@@ -1413,10 +1411,8 @@ func TestRebase_BranchDiverged_NoFF(t *testing.T) {
 		}
 		return "sha-" + ref, nil
 	}
-	// Neither is ancestor of the other — diverged
-	mock.IsAncestorFn = func(a, d string) (bool, error) {
-		return false, nil
-	}
+	// Neither SHA is an ancestor of the other — diverged
+	mock.IsAncestorFn = stackedAncestry(defaultStackBranches, nil)
 	mock.UpdateBranchRefFn = func(string, string) error {
 		updateBranchRefCalls++
 		return nil
@@ -1962,4 +1958,218 @@ func TestRebase_NoTrunk_ConflictSavesState(t *testing.T) {
 	require.NoError(t, err)
 	assert.True(t, loaded.NoTrunk,
 		"saved rebase state should preserve NoTrunk flag")
+}
+
+// ---------------------------------------------------------------------------
+// Rebase failure classification, preflight checks, and post-rebase verification
+// ---------------------------------------------------------------------------
+
+// threeBranchStack is the stack used by the failure-handling tests.
+func threeBranchStack() stack.Stack {
+	return stack.Stack{
+		Trunk: stack.BranchRef{Branch: "main"},
+		Branches: []stack.BranchRef{
+			{Branch: "b1"},
+			{Branch: "b2"},
+			{Branch: "b3"},
+		},
+	}
+}
+
+// runRebaseArgs runs the rebase command with the given arguments and returns
+// its stderr output and error.
+func runRebaseArgs(t *testing.T, gitMock *git.MockOps, args []string) (string, error) {
+	t.Helper()
+	restore := git.SetOps(gitMock)
+	defer restore()
+
+	cfg, _, errR := config.NewTestConfig()
+	cmd := RebaseCmd(cfg)
+	cmd.SetArgs(args)
+	cmd.SetOut(io.Discard)
+	cmd.SetErr(io.Discard)
+	err := cmd.Execute()
+
+	cfg.Err.Close()
+	errOut, _ := io.ReadAll(errR)
+	return string(errOut), err
+}
+
+// TestRebase_StartFailure_IsFatal verifies that a rebase git refused to start
+// (dirty tree, branch checked out elsewhere, bad upstream) aborts the cascade
+// with git's own message instead of being reported as a successful rebase.
+func TestRebase_StartFailure_IsFatal(t *testing.T) {
+	tmpDir := t.TempDir()
+	writeStackFile(t, tmpDir, threeBranchStack())
+
+	var rebaseCalls []string
+	mock := newRebaseMock(tmpDir, "b1")
+	mock.CheckoutBranchFn = func(string) error { return nil }
+	mock.RebaseFn = func(base string, _ git.RebaseOpts) error {
+		rebaseCalls = append(rebaseCalls, base)
+		return &git.RebaseStartError{Err: fmt.Errorf("cannot rebase: You have unstaged changes")}
+	}
+	mock.RebaseOntoFn = func(newBase, _, _ string, _ git.RebaseOpts) error {
+		rebaseCalls = append(rebaseCalls, newBase)
+		return nil
+	}
+
+	output, err := runRebaseArgs(t, mock, nil)
+
+	assert.ErrorIs(t, err, ErrSilent)
+	assert.Contains(t, output, "could not start rebase of b1 onto main")
+	assert.Contains(t, output, "cannot rebase: You have unstaged changes")
+	assert.NotContains(t, output, "rebased locally", "must not claim the stack was rebased")
+	assert.Equal(t, []string{"main"}, rebaseCalls, "cascade must stop at the first hard failure")
+
+	_, statErr := os.Stat(filepath.Join(tmpDir, rebaseStateFile))
+	assert.True(t, os.IsNotExist(statErr), "a rebase that never started leaves nothing to --continue")
+}
+
+// TestRebase_Conflict_StillRecoverable verifies that a genuine conflict keeps
+// its existing behavior: rebase state is saved for --continue.
+func TestRebase_Conflict_StillRecoverable(t *testing.T) {
+	tmpDir := t.TempDir()
+	writeStackFile(t, tmpDir, threeBranchStack())
+
+	mock := newRebaseMock(tmpDir, "b1")
+	mock.CheckoutBranchFn = func(string) error { return nil }
+	mock.RebaseFn = func(string, git.RebaseOpts) error { return fmt.Errorf("conflict") }
+
+	output, err := runRebaseArgs(t, mock, nil)
+
+	assert.ErrorIs(t, err, ErrConflict)
+	assert.Contains(t, output, "conflict")
+
+	_, statErr := os.Stat(filepath.Join(tmpDir, rebaseStateFile))
+	assert.NoError(t, statErr, "a conflict must leave state for --continue")
+}
+
+// TestRebase_Preflight verifies the checks that run before any refs are
+// touched, and that --autostash lifts the clean-tree requirement.
+func TestRebase_Preflight(t *testing.T) {
+	tests := []struct {
+		name          string
+		dirty         bool
+		rebaseActive  bool
+		args          []string
+		wantErr       error
+		wantOutput    string
+		wantRebaseRun bool
+	}{
+		{
+			name:       "dirty working tree is rejected",
+			dirty:      true,
+			wantErr:    ErrSilent,
+			wantOutput: "uncommitted changes in working tree",
+		},
+		{
+			name:         "rebase already in progress is rejected",
+			rebaseActive: true,
+			wantErr:      ErrRebaseActive,
+			wantOutput:   "a rebase is currently in progress",
+		},
+		{
+			name:          "autostash allows a dirty working tree",
+			dirty:         true,
+			args:          []string{"--autostash"},
+			wantRebaseRun: true,
+		},
+		{
+			name:         "autostash does not bypass an in-progress rebase",
+			rebaseActive: true,
+			args:         []string{"--autostash"},
+			wantErr:      ErrRebaseActive,
+			wantOutput:   "a rebase is currently in progress",
+		},
+		{
+			name:          "clean tree proceeds",
+			wantRebaseRun: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			tmpDir := t.TempDir()
+			writeStackFile(t, tmpDir, threeBranchStack())
+
+			var autostash []bool
+			mock := newRebaseMock(tmpDir, "b1")
+			mock.HasUncommittedChangesFn = func() (bool, error) { return tt.dirty, nil }
+			mock.IsRebaseInProgressFn = func() bool { return tt.rebaseActive }
+			mock.CheckoutBranchFn = func(string) error { return nil }
+			mock.RebaseFn = func(_ string, opts git.RebaseOpts) error {
+				autostash = append(autostash, opts.AutoStash)
+				return nil
+			}
+			mock.RebaseOntoFn = func(_, _, _ string, opts git.RebaseOpts) error {
+				autostash = append(autostash, opts.AutoStash)
+				return nil
+			}
+
+			output, err := runRebaseArgs(t, mock, tt.args)
+
+			if tt.wantErr != nil {
+				assert.ErrorIs(t, err, tt.wantErr)
+				assert.Contains(t, output, tt.wantOutput)
+			} else {
+				assert.NoError(t, err)
+			}
+
+			if !tt.wantRebaseRun {
+				assert.Empty(t, autostash, "no branch should be rebased when the preflight fails")
+				return
+			}
+
+			require.Len(t, autostash, 3)
+			wantAutostash := slices.Contains(tt.args, "--autostash")
+			for _, got := range autostash {
+				assert.Equal(t, wantAutostash, got, "--autostash must be passed through to git")
+			}
+		})
+	}
+}
+
+// TestRebase_VerifiesStackAfterCascade verifies that a cascade which reports
+// success but leaves a branch off its parent is treated as a failure rather
+// than printing the success summary.
+func TestRebase_VerifiesStackAfterCascade(t *testing.T) {
+	tmpDir := t.TempDir()
+	writeStackFile(t, tmpDir, threeBranchStack())
+
+	mock := newRebaseMock(tmpDir, "b1")
+	mock.CheckoutBranchFn = func(string) error { return nil }
+	mock.RebaseFn = func(string, git.RebaseOpts) error { return nil }
+	mock.RebaseOntoFn = func(string, string, string, git.RebaseOpts) error { return nil }
+	// b2 never ends up on top of b1, even though every rebase "succeeded".
+	mock.IsAncestorFn = func(a, d string) (bool, error) {
+		return !(a == "b1" && d == "b2"), nil
+	}
+
+	output, err := runRebaseArgs(t, mock, nil)
+
+	assert.ErrorIs(t, err, ErrSilent)
+	assert.Contains(t, output, "Rebase reported success but this branch is still not based on its parent: b2")
+	assert.NotContains(t, output, "rebased locally")
+}
+
+// TestRebase_NoTrunk_SkipsVerificationOfBottomBranch verifies that --no-trunk
+// does not fail verification for the bottom branch, which is deliberately left
+// off trunk.
+func TestRebase_NoTrunk_SkipsVerificationOfBottomBranch(t *testing.T) {
+	tmpDir := t.TempDir()
+	writeStackFile(t, tmpDir, threeBranchStack())
+
+	mock := newRebaseMock(tmpDir, "b1")
+	mock.CheckoutBranchFn = func(string) error { return nil }
+	mock.RebaseOntoFn = func(string, string, string, git.RebaseOpts) error { return nil }
+	mock.IsAncestorFn = func(a, d string) (bool, error) {
+		// b1 is intentionally not on trunk.
+		return !(a == "main" && d == "b1"), nil
+	}
+
+	output, err := runRebaseArgs(t, mock, []string{"--no-trunk"})
+
+	assert.NoError(t, err)
+	assert.Contains(t, output, "rebased locally (without trunk)")
 }

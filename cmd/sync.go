@@ -14,8 +14,9 @@ import (
 )
 
 type syncOptions struct {
-	remote string
-	prune  bool
+	remote    string
+	prune     bool
+	autostash bool
 }
 
 func SyncCmd(cfg *config.Config) *cobra.Command {
@@ -38,6 +39,13 @@ This command performs a safe synchronization:
   6. Syncs PR state from GitHub
   7. Links the stack's open PRs into a stack on GitHub (creating or updating
      the remote stack object) when two or more PRs exist
+
+Requires a clean working tree and no rebase in progress, since git refuses
+to rebase otherwise. Use --autostash to let git stash your local changes
+and restore them after the rebase.
+
+Branches are only pushed once sync has verified that each one really does
+sit on top of its parent.
 
 If PRs have been added to the stack on GitHub, their branches are pulled
 down and appended to your local stack so it mirrors the remote. A clean
@@ -70,6 +78,7 @@ the first active branch in the stack, or the trunk if all are merged.`,
 
 	cmd.Flags().StringVar(&opts.remote, "remote", "", "Remote to fetch from and push to (defaults to auto-detected remote)")
 	cmd.Flags().BoolVar(&opts.prune, "prune", false, "Delete local branches for merged PRs")
+	cmd.Flags().BoolVar(&opts.autostash, "autostash", false, "Stash uncommitted changes before rebasing and restore them afterwards")
 
 	return cmd
 }
@@ -84,6 +93,13 @@ func runSync(cfg *config.Config, opts *syncOptions) error {
 	if err := modify.CheckStateGuard(gitDir); err != nil {
 		cfg.Errorf("%s", err)
 		return ErrModifyRecovery
+	}
+
+	// git refuses to rebase when another rebase is in progress or the working
+	// tree is dirty, and sync has no interactive conflict recovery, so check
+	// before touching any refs.
+	if err := preflightRebase(cfg, "sync", opts.autostash); err != nil {
+		return err
 	}
 
 	sf := result.StackFile
@@ -108,8 +124,12 @@ func runSync(cfg *config.Config, opts *syncOptions) error {
 	// Fetch trunk + active branches so tracking refs are current for
 	// fast-forward detection (Step 2) and --force-with-lease (Step 4).
 	fetchTargets := append([]string{s.Trunk.Branch}, activeBranchNames(s)...)
-	_ = git.FetchBranches(remote, fetchTargets)
-	cfg.Successf("Fetched latest changes from %s", remote)
+	if err := git.FetchBranches(remote, fetchTargets); err != nil {
+		cfg.Warningf("Failed to fetch from %s: %v", remote, err)
+		cfg.Printf("  Continuing with the refs already available locally, which may be out of date.")
+	} else {
+		cfg.Successf("Fetched latest changes from %s", remote)
+	}
 
 	// --- Step 1b: Reconcile remote-ahead stack changes ---
 	// Pull in branches for PRs that were added to the stack on GitHub, or
@@ -141,6 +161,15 @@ func runSync(cfg *config.Config, opts *syncOptions) error {
 
 	// --- Step 2: Fast-forward trunk ---
 	trunk := s.Trunk.Branch
+
+	// The cascade rebases the bottom branch onto the local trunk ref, so the
+	// trunk has to exist locally. Without this, git rejects the rebase with
+	// "invalid upstream".
+	if err := ensureLocalTrunk(cfg, trunk, remote); err != nil {
+		cfg.Errorf("%s", err)
+		return ErrSilent
+	}
+
 	trunkUpdated := fastForwardTrunk(cfg, trunk, remote, currentBranch)
 
 	// --- Step 2b: Fast-forward stack branches behind their remote tracking branch ---
@@ -169,6 +198,7 @@ func runSync(cfg *config.Config, opts *syncOptions) error {
 				Branches:     s.Branches,
 				StartAbsIdx:  0,
 				OriginalRefs: originalRefs,
+				AutoStash:    opts.autostash,
 			})
 
 			if result.Err != nil {
@@ -195,6 +225,16 @@ func runSync(cfg *config.Config, opts *syncOptions) error {
 				// before pushing or reporting success.
 				stack.SaveNonBlocking(gitDir, sf)
 				return ErrConflict
+			}
+
+			// Never push branches that are not actually stacked. A rebase that
+			// reported success but left the stack unchanged must not be
+			// force-pushed over the remote.
+			if unstacked := verifyStacked(s, 0, len(s.Branches)); len(unstacked) > 0 {
+				_ = git.CheckoutBranch(currentBranch)
+				reportUnstacked(cfg, s, unstacked)
+				stack.SaveNonBlocking(gitDir, sf)
+				return ErrSilent
 			}
 
 			if result.Rebased {

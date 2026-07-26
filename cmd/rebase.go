@@ -24,6 +24,7 @@ type rebaseOptions struct {
 	noTrunk                   bool
 	remote                    string
 	committerDateIsAuthorDate bool
+	autostash                 bool
 }
 
 type rebaseState struct {
@@ -36,6 +37,9 @@ type rebaseState struct {
 	OntoOldBase               string            `json:"ontoOldBase,omitempty"`
 	CommitterDateIsAuthorDate bool              `json:"committerDateIsAuthorDate,omitempty"`
 	NoTrunk                   bool              `json:"noTrunk,omitempty"`
+	AutoStash                 bool              `json:"autoStash,omitempty"`
+	StartIndex                int               `json:"startIndex,omitempty"`
+	EndIndex                  int               `json:"endIndex,omitempty"`
 }
 
 const rebaseStateFile = "gh-stack-rebase-state"
@@ -51,6 +55,10 @@ func RebaseCmd(cfg *config.Config) *cobra.Command {
 Ensures that each branch in the stack has the tip of the previous
 layer in its commit history, rebasing if necessary.
 
+Requires a clean working tree and no rebase in progress, since git
+refuses to rebase otherwise. Use --autostash to let git stash your
+local changes and restore them after the rebase.
+
 Use --no-trunk to skip fetching and rebasing with the trunk branch.
 Only the inter-branch rebases are performed (branch 2 onto branch 1,
 branch 3 onto branch 2, etc.).`,
@@ -65,6 +73,9 @@ branch 3 onto branch 2, etc.).`,
 
   # Rebase stack branches without pulling from or rebasing with trunk
   $ gh stack rebase --no-trunk
+
+  # Rebase with uncommitted changes in the working tree
+  $ gh stack rebase --autostash
 
   # Continue after resolving conflicts
   $ gh stack rebase --continue
@@ -88,6 +99,7 @@ branch 3 onto branch 2, etc.).`,
 	cmd.Flags().StringVar(&opts.remote, "remote", "", "Remote to fetch from (defaults to auto-detected remote)")
 	cmd.Flags().BoolVar(&opts.committerDateIsAuthorDate, "committer-date-is-author-date", false, "Set the committer date to the author date during rebase")
 	cmd.Flags().BoolVar(&opts.committerDateIsAuthorDate, "preserve-dates", false, "Alias for --committer-date-is-author-date")
+	cmd.Flags().BoolVar(&opts.autostash, "autostash", false, "Stash uncommitted changes before rebasing and restore them afterwards")
 
 	return cmd
 }
@@ -119,6 +131,13 @@ func runRebase(cfg *config.Config, opts *rebaseOptions) error {
 	sf := result.StackFile
 	s := result.Stack
 	currentBranch := result.CurrentBranch
+
+	// git refuses to rebase when another rebase is in progress or the working
+	// tree is dirty. Fail up front with an actionable message instead of
+	// letting every branch in the cascade fail for the same reason.
+	if err := preflightRebase(cfg, "rebase", opts.autostash); err != nil {
+		return err
+	}
 
 	// Enable git rerere so conflict resolutions are remembered.
 	if err := ensureRerere(cfg); errors.Is(err, errInterrupt) {
@@ -222,6 +241,7 @@ func runRebase(cfg *config.Config, opts *rebaseOptions) error {
 		NeedsOnto:                 needsOnto,
 		OntoOldBase:               ontoOldBase,
 		CommitterDateIsAuthorDate: opts.committerDateIsAuthorDate,
+		AutoStash:                 opts.autostash,
 	})
 
 	if rebaseResult.Err != nil {
@@ -242,6 +262,9 @@ func runRebase(cfg *config.Config, opts *rebaseOptions) error {
 			OntoOldBase:               rebaseResult.OntoOldBase,
 			CommitterDateIsAuthorDate: opts.committerDateIsAuthorDate,
 			NoTrunk:                   opts.noTrunk,
+			AutoStash:                 opts.autostash,
+			StartIndex:                startIdx,
+			EndIndex:                  endIdx,
 		}
 		if err := saveRebaseState(gitDir, state); err != nil {
 			cfg.Warningf("failed to save rebase state: %s", err)
@@ -258,6 +281,13 @@ func runRebase(cfg *config.Config, opts *rebaseOptions) error {
 	}
 
 	_ = git.CheckoutBranch(currentBranch)
+
+	// The cascade reported success — verify the stack actually ended up
+	// stacked before saying so.
+	if unstacked := verifyStacked(s, startIdx, endIdx); len(unstacked) > 0 {
+		reportUnstacked(cfg, s, unstacked)
+		return ErrSilent
+	}
 
 	updateBaseSHAs(s)
 
@@ -385,6 +415,7 @@ func continueRebase(cfg *config.Config, gitDir string) error {
 			NeedsOnto:                 state.UseOnto,
 			OntoOldBase:               state.OntoOldBase,
 			CommitterDateIsAuthorDate: state.CommitterDateIsAuthorDate,
+			AutoStash:                 state.AutoStash,
 		})
 
 		if result.Err != nil {
@@ -416,6 +447,21 @@ func continueRebase(cfg *config.Config, gitDir string) error {
 
 	clearRebaseState(gitDir)
 	_ = git.CheckoutBranch(state.OriginalBranch)
+
+	// Verify the rebased range actually ended up stacked. Older state files
+	// have no recorded range, in which case fall back to the whole stack —
+	// minus the first branch when trunk was deliberately skipped.
+	verifyStart, verifyEnd := state.StartIndex, state.EndIndex
+	if verifyEnd <= verifyStart {
+		verifyStart, verifyEnd = 0, len(s.Branches)
+		if state.NoTrunk && verifyStart < 1 {
+			verifyStart = 1
+		}
+	}
+	if unstacked := verifyStacked(s, verifyStart, verifyEnd); len(unstacked) > 0 {
+		reportUnstacked(cfg, s, unstacked)
+		return ErrSilent
+	}
 
 	updateBaseSHAs(s)
 

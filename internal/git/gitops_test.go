@@ -667,3 +667,180 @@ func TestIntegration_CherryPickQuitLeavesIndexUnmerged(t *testing.T) {
 	_, coErr := gitExecMayFail(t, cloneDir, "checkout", "feature")
 	require.Error(t, coErr, "checkout should still fail after --quit because the index is unmerged")
 }
+
+// ---------------------------------------------------------------------------
+// Integration tests for rebase failure classification
+//
+// A rebase that git refuses to start (dirty working tree, branch checked out
+// in another worktree, unresolvable upstream, rebase already in progress)
+// leaves no rebase state behind. These used to be reported as success, which
+// made `gh stack rebase` print "Rebased X onto Y" without touching anything.
+// ---------------------------------------------------------------------------
+
+// setupStackedRepo creates main <- A <- B in a fresh clone and leaves main
+// one commit ahead of where A branched off, so a rebase has work to do.
+// Returns the clone directory.
+func setupStackedRepo(t *testing.T) string {
+	t.Helper()
+	_, cloneDir := setupBareAndClone(t)
+	gitExec(t, cloneDir, "config", "user.name", "Test")
+	gitExec(t, cloneDir, "config", "user.email", "test@test.com")
+
+	gitExec(t, cloneDir, "checkout", "-b", "A")
+	writeFile(t, cloneDir, "a.txt", "a")
+	gitExec(t, cloneDir, "add", ".")
+	gitExec(t, cloneDir, "commit", "-m", "a1")
+
+	gitExec(t, cloneDir, "checkout", "-b", "B")
+	writeFile(t, cloneDir, "b.txt", "b")
+	gitExec(t, cloneDir, "add", ".")
+	gitExec(t, cloneDir, "commit", "-m", "b1")
+
+	gitExec(t, cloneDir, "checkout", "main")
+	writeFile(t, cloneDir, "m.txt", "m")
+	gitExec(t, cloneDir, "add", ".")
+	gitExec(t, cloneDir, "commit", "-m", "m1")
+
+	return cloneDir
+}
+
+func TestIntegration_Rebase_Succeeds(t *testing.T) {
+	cloneDir := setupStackedRepo(t)
+	defer withGitDir(t, cloneDir)()
+
+	gitExec(t, cloneDir, "checkout", "A")
+	require.NoError(t, Rebase("main", RebaseOpts{}))
+
+	isAnc, err := IsAncestor("main", "A")
+	require.NoError(t, err)
+	assert.True(t, isAnc, "main must be an ancestor of A after a successful rebase")
+}
+
+func TestIntegration_Rebase_DirtyWorkingTree(t *testing.T) {
+	cloneDir := setupStackedRepo(t)
+	defer withGitDir(t, cloneDir)()
+
+	gitExec(t, cloneDir, "checkout", "A")
+	// Modify a tracked file so git refuses to rebase.
+	writeFile(t, cloneDir, "init.txt", "dirty")
+
+	err := Rebase("main", RebaseOpts{})
+
+	require.Error(t, err, "a rebase git refused to start must not report success")
+	assert.True(t, IsRebaseStartError(err), "expected a RebaseStartError, got %v", err)
+	assert.False(t, IsRebaseInProgress(), "no rebase state should be left behind")
+
+	isAnc, ancErr := IsAncestor("main", "A")
+	require.NoError(t, ancErr)
+	assert.False(t, isAnc, "A must be untouched")
+}
+
+func TestIntegration_Rebase_AutoStashSucceedsWithDirtyTree(t *testing.T) {
+	cloneDir := setupStackedRepo(t)
+	defer withGitDir(t, cloneDir)()
+
+	gitExec(t, cloneDir, "checkout", "A")
+	writeFile(t, cloneDir, "init.txt", "dirty")
+
+	require.NoError(t, Rebase("main", RebaseOpts{AutoStash: true}))
+
+	isAnc, err := IsAncestor("main", "A")
+	require.NoError(t, err)
+	assert.True(t, isAnc, "main must be an ancestor of A")
+
+	dirty, err := HasUncommittedChanges()
+	require.NoError(t, err)
+	assert.True(t, dirty, "autostash must restore the local changes")
+}
+
+func TestIntegration_Rebase_InvalidUpstream(t *testing.T) {
+	cloneDir := setupStackedRepo(t)
+	defer withGitDir(t, cloneDir)()
+
+	gitExec(t, cloneDir, "checkout", "A")
+
+	err := Rebase("no-such-branch", RebaseOpts{})
+
+	require.Error(t, err, "an unresolvable upstream must not report success")
+	assert.True(t, IsRebaseStartError(err), "expected a RebaseStartError, got %v", err)
+}
+
+func TestIntegration_Rebase_AlreadyInProgress(t *testing.T) {
+	_, cloneDir := setupBareAndClone(t)
+	defer withGitDir(t, cloneDir)()
+	gitExec(t, cloneDir, "config", "user.name", "Test")
+	gitExec(t, cloneDir, "config", "user.email", "test@test.com")
+
+	// Build a guaranteed conflict between main and A.
+	gitExec(t, cloneDir, "checkout", "-b", "A")
+	writeFile(t, cloneDir, "init.txt", "from A")
+	gitExec(t, cloneDir, "add", ".")
+	gitExec(t, cloneDir, "commit", "-m", "a1")
+	gitExec(t, cloneDir, "checkout", "main")
+	writeFile(t, cloneDir, "init.txt", "from main")
+	gitExec(t, cloneDir, "add", ".")
+	gitExec(t, cloneDir, "commit", "-m", "m1")
+	gitExec(t, cloneDir, "checkout", "A")
+
+	// First rebase conflicts and leaves rebase state behind.
+	require.Error(t, Rebase("main", RebaseOpts{}))
+	require.True(t, IsRebaseInProgress())
+
+	// A second rebase cannot start while the first is unresolved.
+	err := Rebase("main", RebaseOpts{})
+	require.Error(t, err)
+	assert.True(t, IsRebaseStartError(err), "expected a RebaseStartError, got %v", err)
+}
+
+func TestIntegration_RebaseOnto_BranchCheckedOutInAnotherWorktree(t *testing.T) {
+	cloneDir := setupStackedRepo(t)
+	defer withGitDir(t, cloneDir)()
+
+	aSHA := gitExec(t, cloneDir, "rev-parse", "A")
+
+	// Check B out in a separate worktree so git refuses to rebase it here.
+	wtDir := filepath.Join(t.TempDir(), "wt")
+	gitExec(t, cloneDir, "worktree", "add", wtDir, "B")
+
+	gitExec(t, cloneDir, "checkout", "A")
+	require.NoError(t, Rebase("main", RebaseOpts{}))
+
+	err := RebaseOnto("A", aSHA, "B", RebaseOpts{})
+
+	require.Error(t, err, "rebasing a branch checked out elsewhere must not report success")
+	assert.True(t, IsRebaseStartError(err), "expected a RebaseStartError, got %v", err)
+
+	isAnc, ancErr := IsAncestor("A", "B")
+	require.NoError(t, ancErr)
+	assert.False(t, isAnc, "B must be untouched")
+}
+
+func TestIntegration_RebaseOnto_ConflictIsNotAStartError(t *testing.T) {
+	_, cloneDir := setupBareAndClone(t)
+	defer withGitDir(t, cloneDir)()
+	gitExec(t, cloneDir, "config", "user.name", "Test")
+	gitExec(t, cloneDir, "config", "user.email", "test@test.com")
+
+	gitExec(t, cloneDir, "checkout", "-b", "A")
+	writeFile(t, cloneDir, "shared.txt", "from A")
+	gitExec(t, cloneDir, "add", ".")
+	gitExec(t, cloneDir, "commit", "-m", "a1")
+	aSHA := gitExec(t, cloneDir, "rev-parse", "A")
+
+	gitExec(t, cloneDir, "checkout", "-b", "B")
+	writeFile(t, cloneDir, "shared.txt", "from B")
+	gitExec(t, cloneDir, "add", ".")
+	gitExec(t, cloneDir, "commit", "-m", "b1")
+
+	gitExec(t, cloneDir, "checkout", "main")
+	writeFile(t, cloneDir, "shared.txt", "from main")
+	gitExec(t, cloneDir, "add", ".")
+	gitExec(t, cloneDir, "commit", "-m", "m1")
+
+	err := RebaseOnto("main", aSHA, "B", RebaseOpts{})
+
+	require.Error(t, err)
+	assert.False(t, IsRebaseStartError(err), "a real conflict must stay recoverable")
+	assert.True(t, IsRebaseInProgress(), "a conflicted rebase leaves state to continue or abort")
+	_ = RebaseAbort()
+}

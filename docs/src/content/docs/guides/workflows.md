@@ -174,6 +174,14 @@ gh stack rebase --upstack
 gh stack rebase --no-trunk
 ```
 
+Rebasing needs a clean working tree, because git refuses to rebase over uncommitted changes. Commit or stash your work first, or let git do it for you:
+
+```sh
+gh stack rebase --autostash
+```
+
+The same applies to `gh stack sync`, which runs the cascading rebase as one of its steps.
+
 After rebasing, push the updated branches:
 
 ```sh

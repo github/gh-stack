@@ -584,6 +584,16 @@ func ApplyPlan(
 		}
 
 		if err := git.RebaseOnto(newBase, oldBase, b.Branch, git.RebaseOpts{}); err != nil {
+			// A rebase that never started is not a conflict: there is nothing
+			// to resolve or continue, so fail without entering conflict
+			// recovery.
+			if git.IsRebaseStartError(err) {
+				if saveErr := stack.SaveWithLock(gitDir, sf, lock); saveErr != nil {
+					cfg.Warningf("failed to save stack metadata: %v", saveErr)
+				}
+				return nil, nil, fmt.Errorf("could not start rebase of %s onto %s: %w", b.Branch, newBase, err)
+			}
+
 			conflict := &modifyview.ConflictInfo{
 				Branch: b.Branch,
 			}
@@ -878,6 +888,12 @@ func ContinueApply(
 		}
 
 		if err := git.RebaseOnto(newBase, oldBase, b.Branch, git.RebaseOpts{}); err != nil {
+			// A rebase that never started is not a conflict — there is nothing
+			// to resolve — so surface it instead of recording conflict state.
+			if git.IsRebaseStartError(err) {
+				return fmt.Errorf("could not start rebase of %s onto %s: %w", b.Branch, newBase, err)
+			}
+
 			// Another conflict — update state and bail
 			remaining := make([]string, 0)
 			foundCurrent := false

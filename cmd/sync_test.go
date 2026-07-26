@@ -3,6 +3,7 @@ package cmd
 import (
 	"fmt"
 	"io"
+	"slices"
 	"strings"
 	"testing"
 
@@ -140,16 +141,18 @@ func TestSync_TrunkUpToDate_StackStale(t *testing.T) {
 		return "sha-" + ref, nil
 	}
 	// Stack branches are NOT rebased onto trunk — parent is not an ancestor.
+	// main is NOT an ancestor of b1 until the cascade runs → stack is stale.
+	rebased := false
 	mock.IsAncestorFn = func(a, d string) (bool, error) {
-		// main is NOT an ancestor of b1 → stack is stale
 		if a == "main" && d == "b1" {
-			return false, nil
+			return rebased, nil
 		}
 		return true, nil
 	}
 	mock.CheckoutBranchFn = func(string) error { return nil }
 	mock.RebaseFn = func(base string, opts git.RebaseOpts) error {
 		rebaseCalls = append(rebaseCalls, rebaseCall{branch: "(rebase)" + base})
+		rebased = true
 		return nil
 	}
 	mock.RebaseOntoFn = func(newBase, oldBase, branch string, opts git.RebaseOpts) error {
@@ -300,9 +303,9 @@ func TestSync_TrunkFastForward_WhenOnTrunk(t *testing.T) {
 		}
 		return "sha-" + ref, nil
 	}
-	mock.IsAncestorFn = func(a, d string) (bool, error) {
+	mock.IsAncestorFn = stackedAncestry(defaultStackBranches, func(a, d string) (bool, error) {
 		return a == "local-sha" && d == "remote-sha", nil
-	}
+	})
 	mock.MergeFFFn = func(target string) error {
 		mergeFFCalls = append(mergeFFCalls, target)
 		return nil
@@ -481,9 +484,9 @@ func TestSync_RebaseConflict_RestoresAll(t *testing.T) {
 		}
 		return "sha-" + ref, nil
 	}
-	mock.IsAncestorFn = func(a, d string) (bool, error) {
+	mock.IsAncestorFn = stackedAncestry(defaultStackBranches, func(a, d string) (bool, error) {
 		return a == "local-sha" && d == "remote-sha", nil
-	}
+	})
 	mock.UpdateBranchRefFn = func(string, string) error { return nil }
 	mock.CheckoutBranchFn = func(name string) error {
 		checkouts = append(checkouts, name)
@@ -624,9 +627,9 @@ func TestSync_PushForceFlagDependsOnRebase(t *testing.T) {
 					}
 					return "sha-" + ref, nil
 				}
-				mock.IsAncestorFn = func(a, d string) (bool, error) {
+				mock.IsAncestorFn = stackedAncestry(defaultStackBranches, func(a, d string) (bool, error) {
 					return a == "local-sha" && d == "remote-sha", nil
-				}
+				})
 				mock.UpdateBranchRefFn = func(string, string) error { return nil }
 			} else {
 				mock.RevParseFn = func(ref string) (string, error) {
@@ -937,9 +940,9 @@ func TestSync_PushFailureAfterRebase(t *testing.T) {
 		}
 		return "sha-" + ref, nil
 	}
-	mock.IsAncestorFn = func(a, d string) (bool, error) {
+	mock.IsAncestorFn = stackedAncestry(defaultStackBranches, func(a, d string) (bool, error) {
 		return a == "local-sha" && d == "remote-sha", nil
-	}
+	})
 	mock.UpdateBranchRefFn = func(string, string) error { return nil }
 	mock.CheckoutBranchFn = func(string) error { return nil }
 	mock.RebaseFn = func(string, git.RebaseOpts) error { return nil }
@@ -1005,12 +1008,9 @@ func TestSync_BranchFastForward_TriggersRebase(t *testing.T) {
 		}
 		return "sha-" + ref, nil
 	}
-	mock.IsAncestorFn = func(a, d string) (bool, error) {
-		if a == "b1-local-sha" && d == "b1-remote-sha" {
-			return true, nil
-		}
-		return false, nil
-	}
+	mock.IsAncestorFn = stackedAncestry(defaultStackBranches, func(a, d string) (bool, error) {
+		return a == "b1-local-sha" && d == "b1-remote-sha", nil
+	})
 	mock.MergeFFFn = func(target string) error {
 		mergeFFCalls = append(mergeFFCalls, target)
 		return nil
@@ -1095,15 +1095,12 @@ func TestSync_BranchFastForward_WithTrunkUpdate(t *testing.T) {
 		}
 		return "sha-" + ref, nil
 	}
-	mock.IsAncestorFn = func(a, d string) (bool, error) {
+	mock.IsAncestorFn = stackedAncestry(defaultStackBranches, func(a, d string) (bool, error) {
 		if a == "trunk-local" && d == "trunk-remote" {
 			return true, nil
 		}
-		if a == "b2-local" && d == "b2-remote" {
-			return true, nil
-		}
-		return false, nil
-	}
+		return a == "b2-local" && d == "b2-remote", nil
+	})
 	mock.UpdateBranchRefFn = func(branch, sha string) error {
 		updateBranchRefCalls = append(updateBranchRefCalls, struct{ branch, sha string }{branch, sha})
 		return nil
@@ -1961,6 +1958,12 @@ func TestSync_PRsSpanMultipleStacks_BranchesSynced(t *testing.T) {
 // It returns the captured stderr output and the command's error.
 func runSyncCfg(t *testing.T, gitMock *git.MockOps, configure func(*config.Config)) (string, error) {
 	t.Helper()
+	return runSyncArgs(t, gitMock, nil, configure)
+}
+
+// runSyncArgs runs the sync command with the given CLI arguments.
+func runSyncArgs(t *testing.T, gitMock *git.MockOps, args []string, configure func(*config.Config)) (string, error) {
+	t.Helper()
 	restore := git.SetOps(gitMock)
 	defer restore()
 
@@ -1969,6 +1972,7 @@ func runSyncCfg(t *testing.T, gitMock *git.MockOps, configure func(*config.Confi
 		configure(cfg)
 	}
 	cmd := SyncCmd(cfg)
+	cmd.SetArgs(args)
 	cmd.SetOut(io.Discard)
 	cmd.SetErr(io.Discard)
 	err := cmd.Execute()
@@ -2172,8 +2176,8 @@ func TestSync_RemoteAhead_DuplicateBranchAborts(t *testing.T) {
 }
 
 // TestSync_Divergent_UseRemote_DirtyCheckErrorAborts verifies that when the
-// working-tree status cannot be determined, "use remote" aborts instead of
-// treating the tree as clean and running the destructive replace.
+// working-tree status cannot be determined, sync aborts instead of treating
+// the tree as clean and running the destructive replace.
 func TestSync_Divergent_UseRemote_DirtyCheckErrorAborts(t *testing.T) {
 	tmpDir := t.TempDir()
 	divergentStack(t, tmpDir)
@@ -2185,6 +2189,34 @@ func TestSync_Divergent_UseRemote_DirtyCheckErrorAborts(t *testing.T) {
 	mock.HasUncommittedChangesFn = func() (bool, error) { return false, fmt.Errorf("git status failed") }
 
 	output, err := runSyncCfg(t, mock, func(cfg *config.Config) {
+		cfg.GitHubClientOverride = ghMock
+		cfg.ForceInteractive = true
+		cfg.SelectFn = func(_, _ string, _ []string) (int, error) { return 0, nil }
+	})
+
+	assert.Error(t, err)
+	assert.Contains(t, output, "failed to check working tree status")
+	assert.Empty(t, created, "must not replace the local stack when the working-tree check fails")
+
+	sf, loadErr := stack.Load(tmpDir)
+	require.NoError(t, loadErr)
+	assert.Equal(t, []string{"b1", "b2", "b3"}, sf.Stacks[0].BranchNames(), "local stack untouched")
+}
+
+// TestSync_Divergent_UseRemote_DirtyCheckErrorAborts_Autostash verifies the
+// same protection for --autostash, which skips the up-front clean-tree
+// preflight and so relies on the divergence path's own check.
+func TestSync_Divergent_UseRemote_DirtyCheckErrorAborts_Autostash(t *testing.T) {
+	tmpDir := t.TempDir()
+	divergentStack(t, tmpDir)
+
+	ghMock := divergentRemoteMock()
+	var created []string
+	mock := newSyncMockNoRebase(tmpDir, "b1")
+	mock.CreateBranchFn = func(name, base string) error { created = append(created, name); return nil }
+	mock.HasUncommittedChangesFn = func() (bool, error) { return false, fmt.Errorf("git status failed") }
+
+	output, err := runSyncArgs(t, mock, []string{"--autostash"}, func(cfg *config.Config) {
 		cfg.GitHubClientOverride = ghMock
 		cfg.ForceInteractive = true
 		cfg.SelectFn = func(_, _ string, _ []string) (int, error) { return 0, nil }
@@ -2570,4 +2602,211 @@ func TestSync_MergedBranchPruned_NoFalseDivergence(t *testing.T) {
 
 	assert.Empty(t, created)
 	assert.NotContains(t, output, "diverged")
+}
+
+// ---------------------------------------------------------------------------
+// Sync failure classification, preflight checks, and post-rebase verification
+// ---------------------------------------------------------------------------
+
+// staleSyncMock returns a sync mock whose stack is stale (b1 is not on trunk),
+// so sync always runs the cascade rebase.
+func staleSyncMock(tmpDir, currentBranch string) *git.MockOps {
+	mock := newSyncMockNoRebase(tmpDir, currentBranch)
+	mock.IsAncestorFn = func(a, d string) (bool, error) {
+		return !(a == "main" && d == "b1"), nil
+	}
+	mock.CheckoutBranchFn = func(string) error { return nil }
+	return mock
+}
+
+// TestSync_StartFailure_IsFatalAndDoesNotPush verifies that a rebase git
+// refused to start aborts sync before pushing, instead of being reported as a
+// successful rebase and force-pushed over the remote.
+func TestSync_StartFailure_IsFatalAndDoesNotPush(t *testing.T) {
+	tmpDir := t.TempDir()
+	writeStackFile(t, tmpDir, stack.Stack{
+		Trunk:    stack.BranchRef{Branch: "main"},
+		Branches: []stack.BranchRef{{Branch: "b1"}, {Branch: "b2"}},
+	})
+
+	var pushCalls []pushCall
+	mock := staleSyncMock(tmpDir, "b1")
+	mock.RebaseFn = func(string, git.RebaseOpts) error {
+		return &git.RebaseStartError{Err: fmt.Errorf("cannot rebase: You have unstaged changes")}
+	}
+	mock.PushFn = func(remote string, branches []string, force, atomic bool) error {
+		pushCalls = append(pushCalls, pushCall{remote, branches, force, atomic})
+		return nil
+	}
+
+	output, err := runSyncCfg(t, mock, nil)
+
+	assert.ErrorIs(t, err, ErrSilent)
+	assert.Contains(t, output, "could not start rebase of b1 onto main")
+	assert.Empty(t, pushCalls, "nothing may be pushed when the rebase never happened")
+	assert.NotContains(t, output, "Stack synced")
+	assert.NotContains(t, output, "Branches synced")
+}
+
+// TestSync_VerifiesStackBeforePushing verifies that a cascade which reports
+// success but leaves a branch off its parent stops sync before the push.
+func TestSync_VerifiesStackBeforePushing(t *testing.T) {
+	tmpDir := t.TempDir()
+	writeStackFile(t, tmpDir, stack.Stack{
+		Trunk:    stack.BranchRef{Branch: "main"},
+		Branches: []stack.BranchRef{{Branch: "b1"}, {Branch: "b2"}},
+	})
+
+	var pushCalls []pushCall
+	mock := staleSyncMock(tmpDir, "b1")
+	// Every rebase "succeeds" but never moves a ref.
+	mock.RebaseFn = func(string, git.RebaseOpts) error { return nil }
+	mock.RebaseOntoFn = func(string, string, string, git.RebaseOpts) error { return nil }
+	mock.PushFn = func(remote string, branches []string, force, atomic bool) error {
+		pushCalls = append(pushCalls, pushCall{remote, branches, force, atomic})
+		return nil
+	}
+
+	output, err := runSyncCfg(t, mock, nil)
+
+	assert.ErrorIs(t, err, ErrSilent)
+	assert.Contains(t, output, "Rebase reported success but this branch is still not based on its parent: b1")
+	assert.Empty(t, pushCalls, "an unrebased stack must not be force-pushed")
+}
+
+// TestSync_Preflight verifies the checks that run before sync touches any refs.
+func TestSync_Preflight(t *testing.T) {
+	tests := []struct {
+		name         string
+		dirty        bool
+		rebaseActive bool
+		args         []string
+		wantErr      error
+		wantOutput   string
+		wantSync     bool
+	}{
+		{
+			name:       "dirty working tree is rejected",
+			dirty:      true,
+			wantErr:    ErrSilent,
+			wantOutput: "uncommitted changes in working tree",
+		},
+		{
+			name:         "rebase already in progress is rejected",
+			rebaseActive: true,
+			wantErr:      ErrRebaseActive,
+			wantOutput:   "a rebase is currently in progress",
+		},
+		{
+			name:     "autostash allows a dirty working tree",
+			dirty:    true,
+			args:     []string{"--autostash"},
+			wantSync: true,
+		},
+		{
+			name:     "clean tree proceeds",
+			wantSync: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			tmpDir := t.TempDir()
+			writeStackFile(t, tmpDir, stack.Stack{
+				Trunk:    stack.BranchRef{Branch: "main"},
+				Branches: []stack.BranchRef{{Branch: "b1"}, {Branch: "b2"}},
+			})
+
+			var autostash []bool
+			// b1 is off trunk until the cascade runs, so sync rebases.
+			rebased := false
+			mock := newSyncMockNoRebase(tmpDir, "b1")
+			mock.HasUncommittedChangesFn = func() (bool, error) { return tt.dirty, nil }
+			mock.IsRebaseInProgressFn = func() bool { return tt.rebaseActive }
+			mock.IsAncestorFn = func(a, d string) (bool, error) {
+				if a == "main" && d == "b1" {
+					return rebased, nil
+				}
+				return true, nil
+			}
+			mock.CheckoutBranchFn = func(string) error { return nil }
+			mock.RebaseFn = func(_ string, opts git.RebaseOpts) error {
+				autostash = append(autostash, opts.AutoStash)
+				rebased = true
+				return nil
+			}
+			mock.RebaseOntoFn = func(_, _, _ string, opts git.RebaseOpts) error {
+				autostash = append(autostash, opts.AutoStash)
+				return nil
+			}
+
+			output, err := runSyncArgs(t, mock, tt.args, nil)
+
+			if tt.wantErr != nil {
+				assert.ErrorIs(t, err, tt.wantErr)
+				assert.Contains(t, output, tt.wantOutput)
+				assert.Empty(t, autostash, "nothing should be rebased when the preflight fails")
+				return
+			}
+
+			assert.NoError(t, err)
+			require.Len(t, autostash, 2)
+			wantAutostash := slices.Contains(tt.args, "--autostash")
+			for _, got := range autostash {
+				assert.Equal(t, wantAutostash, got, "--autostash must be passed through to git")
+			}
+		})
+	}
+}
+
+// TestSync_CreatesMissingLocalTrunk verifies that sync creates the local trunk
+// branch when it is absent. Without it the cascade's `git rebase <trunk>`
+// fails with "invalid upstream".
+func TestSync_CreatesMissingLocalTrunk(t *testing.T) {
+	tmpDir := t.TempDir()
+	writeStackFile(t, tmpDir, stack.Stack{
+		Trunk:    stack.BranchRef{Branch: "main"},
+		Branches: []stack.BranchRef{{Branch: "b1"}, {Branch: "b2"}},
+	})
+
+	var created []struct{ name, base string }
+	mock := newSyncMockNoRebase(tmpDir, "b1")
+	mock.BranchExistsFn = func(name string) bool { return name != "main" }
+	mock.CreateBranchFn = func(name, base string) error {
+		created = append(created, struct{ name, base string }{name, base})
+		return nil
+	}
+	mock.CheckoutBranchFn = func(string) error { return nil }
+	mock.RebaseFn = func(string, git.RebaseOpts) error { return nil }
+	mock.RebaseOntoFn = func(string, string, string, git.RebaseOpts) error { return nil }
+
+	output, err := runSyncCfg(t, mock, nil)
+
+	assert.NoError(t, err)
+	require.Len(t, created, 1)
+	assert.Equal(t, "main", created[0].name)
+	assert.Equal(t, "origin/main", created[0].base)
+	assert.Contains(t, output, "Created local trunk branch main")
+}
+
+// TestSync_ReportsFetchFailure verifies that sync says so when the fetch fails
+// instead of unconditionally reporting that it fetched.
+func TestSync_ReportsFetchFailure(t *testing.T) {
+	tmpDir := t.TempDir()
+	writeStackFile(t, tmpDir, stack.Stack{
+		Trunk:    stack.BranchRef{Branch: "main"},
+		Branches: []stack.BranchRef{{Branch: "b1"}, {Branch: "b2"}},
+	})
+
+	mock := newSyncMockNoRebase(tmpDir, "b1")
+	mock.FetchBranchesFn = func(string, []string) error {
+		return fmt.Errorf("could not read from remote repository")
+	}
+	mock.CheckoutBranchFn = func(string) error { return nil }
+
+	output, err := runSyncCfg(t, mock, nil)
+
+	assert.NoError(t, err, "a failed fetch is a warning, not a hard stop")
+	assert.Contains(t, output, "Failed to fetch from origin")
+	assert.NotContains(t, output, "Fetched latest changes")
 }
