@@ -7,9 +7,9 @@ This guide walks through the key UI components and workflows for working with St
 
 ## Navigating Stacked PRs
 
-When a pull request is part of a stack, a **stack navigator** appears in the PR header. This component gives you an at-a-glance view of the entire stack and lets you jump between PRs.
+When a pull request is part of a stack, a **stack map** appears in the PR header. This component gives you an at-a-glance view of the entire stack and lets you jump between PRs.
 
-The stack navigator shows:
+The stack map shows:
 
 - All PRs in the stack, listed in order from top to bottom
 - Which PR you're currently viewing (highlighted)
@@ -17,7 +17,7 @@ The stack navigator shows:
 - Link to Add to Stack, where you can create a new PR that targets the head of the topmost PR
 - Unstack option to dissolve the association between PRs, turning them back into standard PRs
 
-![The stack navigator in a PR header](../../../assets/screenshots/stack-navigator.png)
+![The stack map in a PR header](../../../assets/screenshots/stack-navigator.png)
 
 ## Creating a Stack from the UI
 
@@ -37,15 +37,37 @@ When you create the next PR, set its base branch to the first PR's branch. You'l
 
 ### Step 3: Confirm the stack
 
-After creating the PR, you'll see the stack navigator appear in the header, showing both PRs linked together.
+After creating the PR, you'll see the stack map appear in the header, showing both PRs linked together.
 
-![The stack navigator showing the newly created stack](../../../assets/screenshots/newly-created-stack.png)
+![The stack map showing the newly created stack](../../../assets/screenshots/newly-created-stack.png)
 
 Repeat this process for each additional PR in the stack — each one targets the branch of the PR before it.
 
+## Turning Existing PRs into a Stack
+
+If you already have open PRs whose branches line up (each PR's base branch is the head branch of the PR below it), GitHub recognizes the chain and shows a **recommendation banner** offering to turn them into a stack.
+
+![Banner recommending that eligible PRs be turned into a stack](../../../assets/screenshots/stack-recommendation-banner.png)
+
+Click the banner to open a dialog that previews the stack, listing each PR in order from top to bottom. Review it and confirm to link the PRs together into a stack.
+
+![Dialog previewing the stack before it's created](../../../assets/screenshots/stack-recommendation-dialog-create.png)
+
+Once you confirm, the PRs are stacked and the stack map appears in each PR's header.
+
 ## Adding to an Existing Stack
 
-If a stack already exists and you want to add a new PR to it:
+You can add a PR to the top of an existing stack either when you create the PR or after it already exists.
+
+### Add an existing PR
+
+If you already have an open PR whose base branch is the head branch of the stack's topmost PR, GitHub shows a **recommendation banner** on that PR, giving you an option to add it to the stack. Click it to preview and confirm, and the PR is added to the top of the existing stack.
+
+![Recommendation dialog for adding an existing PR to a stack](../../../assets/screenshots/stack-recommendation-dialog-add.png)
+
+### Create a new PR on the stack
+
+To create a brand-new PR directly on top of the stack:
 
 1. Open a PR in the stack, click the stack icon in the header, and click **Add**.
 
@@ -77,9 +99,13 @@ Before a PR in the stack can be merged, the following conditions must be met:
 
 ![Merge box for a stacked pull request](../../../assets/screenshots/stack-merge-box.png)
 
+:::note[Rule bypass & auto-merge currently unsupported]
+**Rule bypass** and **auto-merge** are coming soon, but currently unavailable for stacked PRs. You can't enable auto-merge on a PR in a stack, and you can't bypass a stack's rules to merge before its requirements are met.
+:::
+
 ### Rebasing from the UI
 
-When the stack is not linear (e.g., after changes were pushed to a lower branch, or after `main` has moved ahead), a **Rebase Stack** button appears in the merge box. Clicking it triggers a server-side cascading rebase that:
+When the stack is not linear (e.g., after changes were pushed to a lower branch, or after the trunk has moved ahead), a **Rebase Stack** button appears in the merge box. Clicking it triggers a server-side cascading rebase that:
 
 1. Rebases the entire stack on top of the latest trunk (e.g., `main`) HEAD.
 2. Rebases every unmerged branch on top of the latest changes from its base branch, working from the bottom of the stack upward.
@@ -95,10 +121,12 @@ Commits created by a server-side rebase are **not signed**. If your repository r
 
 If you want to reorder or reorganize the PRs in a stack from the UI, you must first dissolve the stack and then re-create it. For CLI users, `gh stack modify` provides an interactive way to [restructure a stack](/gh-stack/guides/modify/) — including reordering, inserting, dropping, and renaming branches — without needing to dissolve it.
 
-### Dissolving the Entire Stack
+### Dissolving the Stack
 
-To dissolve the stack entirely (turning all Stacked PRs back into independent PRs), use the unstack option on the stack itself.
+To dissolve the stack, use the Unstack option on the stack.
 
 ![Dissolving an entire stack](../../../assets/screenshots/unstack-entire-stack.png)
 
-After unstacking, each PR retains its current base branch but is no longer linked to the other PRs. The stack navigator and stack-related merge requirements disappear from all affected PRs.
+Unstacking removes the **open, draft, and closed** PRs from the stack. Each of those PRs keeps its current base branch but is no longer linked to the others, and the stack map and stack-related merge requirements disappear from them.
+
+**Merged and queued PRs stay in the stack.** Once a PR has merged — or is queued for merge — as part of a stack, it remains part of that stack and can't be unstacked. So if every PR in the stack is open, draft, or closed, unstacking removes them all and the stack is dissolved entirely; if any PR has already merged or is queued for merge, the stack persists with those PRs still in it.

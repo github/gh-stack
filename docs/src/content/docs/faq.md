@@ -7,7 +7,7 @@ description: Frequently asked questions about GitHub Stacked PRs.
 
 ### What is a Stacked PR? How is it different from a regular PR?
 
-A Stacked PR is a pull request that is part of an ordered chain of PRs, where each PR targets the branch of the PR below it instead of targeting `main` directly. Each PR in the stack represents one focused layer of a larger change. Individually, each PR is still a regular pull request — it just has a different base branch, and GitHub understands the relationship between the PRs in the stack.
+A Stacked PR is a pull request that is part of an ordered chain of PRs, where each PR targets the branch of the PR below it instead of targeting the merge target directly. Each PR in the stack represents one focused layer of a larger change. Individually, each PR is still a regular pull request — it just has a different base branch, and GitHub understands the relationship between the PRs in the stack.
 
 ### How do I create a Stacked PR?
 
@@ -25,11 +25,13 @@ gh stack submit
 
 You can also create stacks entirely from the GitHub UI — create the first PR normally, then when creating subsequent PRs, select the option to add them to a stack. See [Creating a Stack from the UI](/gh-stack/guides/ui/#creating-a-stack-from-the-ui) for a walkthrough.
 
+If you already have open PRs whose branches line up, GitHub will detect and suggest turning them into a stack. See [Turning Existing PRs into a Stack](/gh-stack/guides/ui/#turning-existing-prs-into-a-stack).
+
 ### How do I add PRs to my stack?
 
 Use `gh stack add <branch-name>` to add a new branch on top of the current stack. When you run `gh stack submit`, a PR is created for each branch, and they are linked together as a Stack on GitHub.
 
-You can also add PRs to an existing stack from the GitHub UI. See [Adding to an Existing Stack](/gh-stack/guides/ui/#adding-to-an-existing-stack) for details.
+You can also add PRs to an existing stack from the GitHub UI — either a brand-new PR or an already-open PR (via the recommendation banner), added to the top of the stack. See [Adding to an Existing Stack](/gh-stack/guides/ui/#adding-to-an-existing-stack) for details.
 
 ### How can I modify my stack?
 
@@ -52,11 +54,22 @@ gh stack init db-migrations api-routes frontend
 
 **From the CLI** — Run `gh stack unstack` (or `gh stack delete`) to delete the stack on GitHub and remove local tracking. You can also unstack any stack by its number from anywhere in the repository — `gh stack unstack 7` — whether or not it's checked out locally. Use `--local` to only remove local tracking.
 
-**From the UI** — You can unstack PRs from the GitHub UI — see [Unstacking](/gh-stack/guides/ui/#unstacking) for a walkthrough. This dissolves the association between PRs, turning them back into standard independent PRs.
+**From the UI** — You can unstack PRs from the GitHub UI — see [Unstacking](/gh-stack/guides/ui/#unstacking) for a walkthrough. This dissolves the association between the PRs, turning them back into standard independent PRs.
+
+Unstacking only removes **open, draft, and closed** PRs from the stack. **Merged and queued PRs remain part of the stack** — once a PR has merged (or is queued for merge) as part of a stack, it can't be unstacked. A stack is fully dissolved only when none of its PRs have merged or are queued for merge; otherwise it persists with those PRs still in it.
 
 ### Can stacks be created across forks?
 
 No, Stacked PRs currently require all branches to be in the same repository. Cross-fork stacks are not supported.
+
+### Can a stack target a branch other than my default branch?
+
+Yes. A stack's **trunk** (the base branch of the bottom PR) can be any branch in the repository, such as a release branch or a long-lived feature branch. It defaults to your repository's default branch (e.g., `main`), but you can pick a different one:
+
+- **CLI** — pass `--base <branch>` to `gh stack init` or `gh stack link` (for example, `gh stack init --base release`).
+- **Web** — create the bottom PR against whatever branch you want as the trunk; the rest of the stack chains on top of it.
+
+The same behavior applies to whatever trunk your stack targets — branch protection rules, required checks, and CI are all evaluated against your stack's base branch.
 
 ## Checks, Rules & Requirements
 
@@ -75,7 +88,7 @@ GitHub Actions workflows trigger as if each PR in the stack is targeting the bas
 
 ### How do I access stack metadata in my GitHub Actions workflow?
 
-For advanced use cases, you can access the stack's base ref and base SHA in workflow expressions via `github.event.pull_request.stack`. This property is only present when the PR belongs to a stack.
+For advanced use cases, you can access the stack's metadata in workflow expressions via `github.event.pull_request.stack`. This property is only present when the PR belongs to a stack.
 
 ```yaml
 jobs:
@@ -89,6 +102,7 @@ jobs:
         run: |
           echo "Stack base ref: ${{ github.event.pull_request.stack.base.ref }}"
           echo "Stack base SHA: ${{ github.event.pull_request.stack.base.sha }}"
+          echo "PR ${{ github.event.pull_request.stack.position }} of ${{ github.event.pull_request.stack.size }} in the stack"
 
       - name: Run a step only when the stack targets a release branch
         if: github.event.pull_request.stack != null && startsWith(github.event.pull_request.stack.base.ref, 'release/')
@@ -97,10 +111,40 @@ jobs:
 
 | Expression | Description |
 |------------|-------------|
+| `github.event.pull_request.stack.number` | The stack's number, scoped to the repository. |
+| `github.event.pull_request.stack.size` | Total number of pull requests in the stack. |
+| `github.event.pull_request.stack.position` | 1-based position of this PR within the stack (`1` is the bottom). |
 | `github.event.pull_request.stack.base.ref` | The branch the entire stack ultimately targets (e.g., `main`). |
-| `github.event.pull_request.stack.base.sha` | The HEAD SHA of that target branch at the time of the event. |
+| `github.event.pull_request.stack.base.sha` | The HEAD SHA of the stack's base branch. |
 
-See the [Webhooks reference](/gh-stack/reference/webhooks/) for the full details on the `stack` object in webhook payloads.
+See the [Webhooks reference](/gh-stack/reference/webhooks/) for the full details on the `stack` object in webhook payloads, or the [REST API reference](/gh-stack/reference/rest-api/) to read the same object on demand from a pull request.
+
+### How can I optimize CI usage for a stack?
+
+Because a workflow runs for every PR in a stack, a large stack can multiply your CI usage. You can use the `stack` fields to selectively run jobs based on the position of the current PR in the stack.
+
+Two conditions are especially useful for deciding where a job should run:
+
+- **Lowest unmerged PR** — the PR currently at the bottom of the remaining stack. Because it targets the stack base directly, `github.event.pull_request.stack.base.ref` equals `github.event.pull_request.base.ref`.
+- **Top PR** — the last PR in the stack, containing the full set of changes. It's the PR where `github.event.pull_request.stack.position` equals `github.event.pull_request.stack.size`.
+
+```yaml
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Run for the lowest unmerged PR in the stack
+        if: github.event.pull_request.stack != null && github.event.pull_request.stack.base.ref == github.event.pull_request.base.ref
+        run: echo "Lowest unmerged PR in the stack"
+
+      - name: Run for the top PR in the stack
+        if: github.event.pull_request.stack != null && github.event.pull_request.stack.position == github.event.pull_request.stack.size
+        run: echo "Top PR in the stack"
+```
+
+As PRs merge from the bottom up, the lowest unmerged PR changes: once the bottom PR lands, the next PR is rebased to target the stack base directly, so it becomes the new lowest unmerged PR on the following workflow run. You can also gate on the original bottom PR with `github.event.pull_request.stack.position == 1`, or on any specific layer using `position`.
 
 ### Do all previous PRs need to be passing checks before I can merge?
 
@@ -121,13 +165,21 @@ If the stack is not linear (e.g., after changes were pushed to a lower branch), 
 
 Every PR in a stack must meet the same merge requirements as a PR targeting the stack base (e.g., `main`): required reviews, passing CI checks, CODEOWNER approvals, and a linear history. All PRs below it must also meet these requirements. See the [Checks, Rules & Requirements](#checks-rules--requirements) section above for details.
 
+### Can I bypass the rules to merge a Stacked PR?
+
+Not yet — bypassing rules is coming soon, but currently unavailable for stacked PRs. You can't bypass a stack's branch protection rules or rulesets to merge it before its requirements are met, so every PR in the stack must satisfy its rules and required checks before the stack can land.
+
+### Can I enable auto-merge on a Stacked PR?
+
+Not yet — auto-merge is coming soon, but currently unavailable for stacked PRs, for both direct merges and the merge queue. You can't set a PR in a stack to land automatically once its requirements are met. Until then, merge the stack (or the part you want to land) yourself once its PRs are ready.
+
 ### How does merging a stack of PRs differ from merging a regular PR?
 
-Stacks merge from the bottom up as a single atomic operation. When you click merge on a PR in a stack, that PR and all unmerged PRs below it land on the base branch together. PRs above remain open, and the remaining stack is automatically rebased so the next PR targets `main` directly.
+Stacks merge from the bottom up. When you click merge on a PR in a stack, that PR and all unmerged PRs below it land on the base branch together; PRs above remain open, and the remaining stack is automatically rebased so the next PR targets your base branch directly. With a direct merge the group lands as a single atomic operation; through a merge queue the PRs enter the queue together and are evaluated individually, from the bottom up.
 
 ### What happens when you merge a PR in the middle of the stack?
 
-When you click merge on a PR in the middle of the stack, that PR and all unmerged PRs below it land on the base branch together as a single atomic operation, ordered from the bottom up in the resulting history. PRs above the selected one remain open. After the merge, the lowest unmerged PR is updated to target the stack base directly, and a cascading rebase runs across the remaining branches.
+When you click merge on a PR in the middle of the stack, that PR and all unmerged PRs below it land on the base branch together, ordered from the bottom up in the resulting history. PRs above the selected one remain open. After the merge, the lowest unmerged PR is updated to target the stack base directly, and a cascading rebase runs across the remaining branches.
 
 It is not possible to merge a middle PR in isolation: the PRs below it always merge with it.
 
@@ -175,13 +227,14 @@ When you merge a stack using the merge commit strategy, it creates **one merge c
 
 ### How does rebase merge work?
 
-With rebase merge, the commits from each PR in the stack are replayed onto the base branch, creating a linear history without merge commits. The full set of commits lands as a single atomic operation.
+With rebase merge, the commits from each PR in the stack are replayed onto the base branch, creating a linear history without merge commits. The full set of commits lands on the base branch.
 
 ### Do all PRs get merged at once or one at a time?
 
-All PRs in the stack land in a single atomic operation. When you click merge on a PR, that PR and all unmerged PRs below it are merged together onto the base branch at the same time, ordered from the bottom up in the resulting history. PRs above the selected one remain open.
+It depends on the merge method:
 
-This applies whether or not a merge queue is enabled. With a merge queue, the same atomic landing happens once the stack's merge group reaches the front of the queue.
+- **Direct merge** — All the included PRs land in a single atomic operation. The selected PR and every unmerged PR below it are merged together onto the base branch at once, ordered from the bottom up. Either the whole group lands, or if any part fails, none of it does.
+- **Merge queue** — The PRs enter the queue together and are evaluated individually, from the bottom up. If a PR fails while in the queue, it and all its descendants are ejected, while the PRs below it are unaffected.
 
 ### Can I merge only part of a stack? What happens to the remaining unmerged PRs?
 
@@ -197,15 +250,18 @@ Closing a PR in the middle of the stack will block all PRs above it from being m
 
 ### What happens when there is an error merging a PR in the middle of a stack?
 
-Pre-merge checks run before any merge attempt, but a merge can still fail (e.g., due to an unexpected merge conflict or intermittent failure). If a failure occurs partway through, merging stops at that PR. PRs below it that successfully merged remain landed on the base branch; the failed PR and PRs above it stay open. Resolve the issue on the failed PR and retry to land the rest of the stack.
+Pre-merge checks run before any merge attempt, but a merge can still fail (e.g., due to a merge conflict or intermittent failure). The behavior depends on the merge method:
+
+- **Direct merge** — The merge is atomic. If any part fails, the entire operation is rolled back and nothing is merged.
+- **Merge queue** — Because each PR is evaluated individually, a failure ejects that PR and all its descendants (the PRs stacked above it) from the queue, while the PRs below it are unaffected. You can fix the issue on the failed PR and requeue the ejected PRs.
 
 ### Do Stacked PRs support merge queue?
 
-Yes, Stacked PRs fully support merging via merge queue. When you merge a stack through the merge queue:
+Yes, Stacked PRs fully support merging via GitHub merge queue. When you merge a stack through the merge queue:
 
-- **All PRs in the stack are added to the queue** in the correct order, ensuring a linear sequence.
-- **If a PR is removed or ejected from the merge queue**, all PRs above it in the stack are also ejected and removed from the queue.
-- **Stacks are kept in the same merge group on a best-effort basis.** To keep a stack together, the merge queue allows the merge group to exceed its configured max size by up to 50%. If the stack is too large to fit within that buffer, it splits across consecutive merge groups: as much of the stack as fits goes into the current group, and the remaining PRs continue in subsequent groups until the full stack has landed.
+- **All PRs in the stack enter the queue together** in the correct order and are evaluated individually, from the bottom up.
+- **If a PR is ejected from the merge queue** (for example, because it fails), that PR and all its descendants are ejected too, while the PRs below it are unaffected.
+- **The queue makes a best-effort attempt to keep the stack together** in a single merge group. If the stack is too large to fit, it lands across consecutive merge groups: as much of the stack as fits goes into the current group, and the remaining PRs continue in subsequent groups until the full stack has landed. The stack order is preserved, so downstack PRs are merged before upstack PRs.
 
 ## Local Development
 

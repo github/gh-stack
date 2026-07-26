@@ -1,6 +1,6 @@
 ---
 title: Overview
-description: What stacked pull requests are, why they matter, and how GitHub supports them natively.
+description: What stacked pull requests are and how they work in GitHub.
 ---
 
 ## Why Stacks?
@@ -15,7 +15,7 @@ For developers who want to break large changes into smaller, dependent parts, th
 
 A **pull request stack** consists of two or more pull requests in the same repository where:
 
-- The **first (bottom) pull request** targets the main branch (e.g., `main`).
+- The **first (bottom) pull request** targets the stack's **trunk** — this can be any branch, and defaults to your repository's default branch (e.g., `main`).
 - Each subsequent pull request targets the branch of the PR below it.
 
 ```
@@ -34,20 +34,20 @@ Each pull request in a stack:
 
 ## GitHub Stacked PRs
 
-GitHub supports Stacked PRs natively, combining a rich pull request UI with the `gh stack` CLI to give both authors and reviewers a seamless experience.
+Stacked pull requests build on the existing pull request experience in GitHub, allowing authors to group a chain of individual PRs together as a stack. Together with the `gh stack` CLI, authors and reviewers can easily create, modify, navigate, and merge stacks.
 
 ### Stack Map in the PR UI
 
 When a pull request is part of a stack, a **stack map** appears at the top of the PR page. It shows every PR in the stack, their status, and lets you navigate to any layer with one click. This gives reviewers immediate context about where a PR fits in the bigger picture.
 
-![The stack navigator in a pull request header](../../../assets/screenshots/stack-navigator.png)
+![The stack map in a pull request header](../../../assets/screenshots/stack-navigator.png)
 
 ### Rules and CI Enforcement
 
 The merge requirements for any PR in the stack are determined by the **bottom PR's base** — typically `main`. This means:
 
-- **Branch protection rules** like CODEOWNER approvals are enforced on every PR in the stack, even mid-stack PRs that don't directly target `main`.
-- **CI checks** triggered by pull requests on `main` run for all PRs in the stack, not just the bottom one.
+- **Branch protection rules** like CODEOWNER approvals are enforced on every PR in the stack, even mid-stack PRs that don't directly target the trunk.
+- **CI checks** triggered by pull requests targeting the trunk (e.g., `main`) run for all PRs in the stack, not just the bottom one.
 
 This ensures that every layer of the stack meets the same quality bar before it can be merged.
 
@@ -55,12 +55,23 @@ This ensures that every layer of the stack meets the same quality bar before it 
 
 ### Merging Stacks
 
-The entire stack does not need to be merged at once, but PRs must be merged **from the bottom up**. GitHub supports two merge methods:
+You can merge your entire stack, a single PR, or a portion of the stack spanning multiple PRs. When you click **Merge** on any PR, that PR and every unmerged PR below it are merged together, from the bottom up. So you can:
 
-- **Direct merge** — Merges a PR (and all non-merged PRs below it) in a single operation, as long as all conditions are met.
-- **Merge queue** — Works as usual but is stack-aware. For example, if the bottom PR is removed from the queue, all other PRs in the stack are also removed.
+- **Land the entire stack in one click** by merging the top PR — every PR below it comes with it.
+- **Land part of the stack** by merging a mid-stack PR — the PRs below it come along, and the PRs above stay open.
 
-The resulting commit history is the same as merging each PR individually, starting from the bottom.
+You can't merge a PR while leaving an unmerged PR below it behind. Merging a stacked PR always merges all the unmerged PRs below it as well.
+
+GitHub supports two merge methods:
+
+- **Direct merge** — The selected PR and all unmerged PRs below it land in a single **atomic** operation. Either the whole group merges, or if any part fails, nothing is merged and the operation is rolled back.
+- **Merge queue** — The PRs enter the queue together and each PR is evaluated **individually**, from the bottom up. If a PR fails while in the queue, that PR and all its descendants are ejected from the queue, while prior PRs are unaffected. The queue makes a best-effort attempt to keep the whole stack in a single merge group; if the stack is too large to fit, it lands across consecutive groups. If PRs are split across merge groups, the stack order is preserved so downstack PRs are merged before upstack PRs.
+
+In both methods, the resulting commit history is the same as if each PR had been merged individually, starting from the bottom.
+
+:::note[Rule bypass & auto-merge currently unsupported]
+Rule bypass and auto-merge functionality are coming soon, but currently unavailable for stacked PR merges. A stack merge can only be triggered once all selected PRs meet their requirements. See the [FAQ](/gh-stack/faq/#can-i-bypass-the-rules-to-merge-a-stacked-pr) for details.
+:::
 
 ### Merge Methods
 
@@ -76,7 +87,7 @@ Rebasing is the trickiest part of working with Stacked PRs, and GitHub handles i
 
 - **In the PR UI** — A **Rebase Stack** button lets you trigger a server-side cascading rebase. It rebases the entire stack on top of the latest trunk, updates every unmerged branch, and force-pushes the results. See [Rebasing from the UI](/gh-stack/guides/ui/#rebasing-from-the-ui) for details.
 - **From the CLI** — `gh stack rebase` performs the same cascading rebase locally.
-- **After partial merges** — When you merge a PR at the bottom of the stack, the remaining branches are automatically rebased so the next PR targets `main` and is ready for review and merge.
+- **After partial merges** — When you merge a PR at the bottom of the stack, the remaining branches are automatically rebased so the next PR targets the trunk and is ready for review and merge.
 - **Safe squash-merge handling** — Squash merges are fully supported. The rebase engine safely replays your unique commits on top of the squashed base, avoiding artificial merge conflicts. See the [FAQ](/gh-stack/faq/#how-does-squash-merge-work) for a detailed description of how this works.
 
 ## The CLI: `gh stack`

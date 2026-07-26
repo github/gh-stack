@@ -5,7 +5,7 @@ description: Practical guide for reviewing, merging, and managing stacked pull r
 
 This guide covers the practical day-to-day experience of working with Stacked PRs — how to review them, how merging works step by step, and how to keep things in sync from the CLI.
 
-For an introduction to what stacks are and how GitHub supports them natively, see the [Overview](/gh-stack/introduction/overview/). For a visual walkthrough of the UI, see [Stacked PRs in the GitHub UI](/gh-stack/guides/ui/).
+For an introduction to what stacks are and how it works in GitHub, see the [Overview](/gh-stack/introduction/overview/). For a visual walkthrough of the UI, see [Stacked PRs in the GitHub UI](/gh-stack/guides/ui/).
 
 ## Reviewing Stacked PRs
 
@@ -21,14 +21,17 @@ Each PR in a stack shows only the diff for its layer — the changes between its
 - **Review individual PRs** when you're focusing on a specific concern (e.g., reviewing only the API layer).
 - **Use the stack map** to navigate between PRs without going back to the PR list.
 
-## Merging from the Bottom Up
+## Merging a Stack
 
-Stacks are merged **from the bottom up** — you can merge any number of PRs at once, as long as they form a contiguous group starting from the lowest unmerged PR. For example, in a stack of four PRs, you can merge just the bottom one, or the bottom three together, but you cannot merge only the second and third PRs while leaving the first unmerged. Mid-stack merges are not allowed.
+Merging is driven by a single action: **click Merge on the highest PR you want to land, and that PR plus every unmerged PR below it are merged together, from the bottom up.** You do not need to merge PRs one at a time, unless you choose to.
 
-1. When the lowest unmerged PR (and any PRs above it that you want to include) meet all merge requirements, merge them.
-2. After the merge, the remaining stack is **automatically rebased** — the next unmerged PR's base is updated to target `main` directly.
-3. The next unmerged PR is now at the bottom and can be reviewed, approved, and merged.
-4. Repeat until the entire stack is landed.
+- **To land the whole stack**, merge the **top** PR — every PR below it lands with it in a single step.
+- **To land part of the stack**, merge a lower PR — the PRs below it come along, and the PRs above stay open.
+- **To land a single PR**, merge the **bottom** PR - only that PR will be merged, and the rest of the PRs stay open.
+
+You can merge any contiguous group, as long as it starts from the lowest unmerged PR. In a stack of four PRs you can land just the bottom one, or the bottom three together, but you can't merge only the second and third while leaving the first unmerged — a PR always brings the unmerged PRs below it along. Merging a stacked PR always merges all the unmerged PRs below it as well.
+
+When you land only part of a stack, the remaining PRs are **automatically rebased** and retargeted so the next unmerged PR targets your base branch directly and is immediately ready to review and merge.
 
 Once the entire stack has landed, it is complete and can't be extended. If you add new branches on top and run `gh stack submit`, the CLI automatically starts a **new** stack rooted at the trunk for those branches (a new PR on a fully merged stack would target the trunk directly rather than chaining onto the merged PRs).
 
