@@ -25,11 +25,13 @@ gh stack submit
 
 You can also create stacks entirely from the GitHub UI — create the first PR normally, then when creating subsequent PRs, select the option to add them to a stack. See [Creating a Stack from the UI](/gh-stack/guides/ui/#creating-a-stack-from-the-ui) for a walkthrough.
 
+If you already have open PRs whose branches line up, GitHub will detect and suggest turning them into a stack. See [Turning Existing PRs into a Stack](/gh-stack/guides/ui/#turning-existing-prs-into-a-stack).
+
 ### How do I add PRs to my stack?
 
 Use `gh stack add <branch-name>` to add a new branch on top of the current stack. When you run `gh stack submit`, a PR is created for each branch, and they are linked together as a Stack on GitHub.
 
-You can also add PRs to an existing stack from the GitHub UI. See [Adding to an Existing Stack](/gh-stack/guides/ui/#adding-to-an-existing-stack) for details.
+You can also add PRs to an existing stack from the GitHub UI — either a brand-new PR or an already-open PR (via the recommendation banner), added to the top of the stack. See [Adding to an Existing Stack](/gh-stack/guides/ui/#adding-to-an-existing-stack) for details.
 
 ### How can I modify my stack?
 

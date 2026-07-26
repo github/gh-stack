@@ -43,9 +43,31 @@ After creating the PR, you'll see the stack map appear in the header, showing bo
 
 Repeat this process for each additional PR in the stack — each one targets the branch of the PR before it.
 
+## Turning Existing PRs into a Stack
+
+If you already have open PRs whose branches line up (each PR's base branch is the head branch of the PR below it), GitHub recognizes the chain and shows a **recommendation banner** offering to turn them into a stack.
+
+![Banner recommending that eligible PRs be turned into a stack](../../../assets/screenshots/stack-recommendation-banner.png)
+
+Click the banner to open a dialog that previews the stack, listing each PR in order from top to bottom. Review it and confirm to link the PRs together into a stack.
+
+![Dialog previewing the stack before it's created](../../../assets/screenshots/stack-recommendation-dialog-create.png)
+
+Once you confirm, the PRs are stacked and the stack map appears in each PR's header.
+
 ## Adding to an Existing Stack
 
-If a stack already exists and you want to add a new PR to it:
+You can add a PR to the top of an existing stack either when you create the PR or after it already exists.
+
+### Add an existing PR
+
+If you already have an open PR whose base branch is the head branch of the stack's topmost PR, GitHub shows a **recommendation banner** on that PR, giving you an option to add it to the stack. Click it to preview and confirm, and the PR is added to the top of the existing stack.
+
+![Recommendation dialog for adding an existing PR to a stack](../../../assets/screenshots/stack-recommendation-dialog-add.png)
+
+### Create a new PR on the stack
+
+To create a brand-new PR directly on top of the stack:
 
 1. Open a PR in the stack, click the stack icon in the header, and click **Add**.
 
