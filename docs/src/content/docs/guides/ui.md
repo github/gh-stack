@@ -99,8 +99,8 @@ Before a PR in the stack can be merged, the following conditions must be met:
 
 ![Merge box for a stacked pull request](../../../assets/screenshots/stack-merge-box.png)
 
-:::note[Admin bypass & auto-merge currently unsupported]
-**Admin bypass** and **auto-merge** are coming soon, but currently unavailable for stacked PRs. You can't enable auto-merge on a PR in a stack, and admins can't bypass the merge requirements to merge before they're met. This applies to both direct merges and the merge queue.
+:::note[Rule bypass & auto-merge currently unsupported]
+**Rule bypass** and **auto-merge** are coming soon, but currently unavailable for stacked PRs. You can't enable auto-merge on a PR in a stack, and you can't bypass a stack's rules to merge before its requirements are met.
 :::
 
 ### Rebasing from the UI
