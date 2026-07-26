@@ -105,7 +105,7 @@ Before a PR in the stack can be merged, the following conditions must be met:
 
 ### Rebasing from the UI
 
-When the stack is not linear (e.g., after changes were pushed to a lower branch, or after `main` has moved ahead), a **Rebase Stack** button appears in the merge box. Clicking it triggers a server-side cascading rebase that:
+When the stack is not linear (e.g., after changes were pushed to a lower branch, or after the trunk has moved ahead), a **Rebase Stack** button appears in the merge box. Clicking it triggers a server-side cascading rebase that:
 
 1. Rebases the entire stack on top of the latest trunk (e.g., `main`) HEAD.
 2. Rebases every unmerged branch on top of the latest changes from its base branch, working from the bottom of the stack upward.

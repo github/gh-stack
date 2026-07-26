@@ -7,7 +7,7 @@ description: Frequently asked questions about GitHub Stacked PRs.
 
 ### What is a Stacked PR? How is it different from a regular PR?
 
-A Stacked PR is a pull request that is part of an ordered chain of PRs, where each PR targets the branch of the PR below it instead of targeting `main` directly. Each PR in the stack represents one focused layer of a larger change. Individually, each PR is still a regular pull request — it just has a different base branch, and GitHub understands the relationship between the PRs in the stack.
+A Stacked PR is a pull request that is part of an ordered chain of PRs, where each PR targets the branch of the PR below it instead of targeting the merge target directly. Each PR in the stack represents one focused layer of a larger change. Individually, each PR is still a regular pull request — it just has a different base branch, and GitHub understands the relationship between the PRs in the stack.
 
 ### How do I create a Stacked PR?
 
@@ -61,6 +61,15 @@ Unstacking only removes **open, draft, and closed** PRs from the stack. **Merged
 ### Can stacks be created across forks?
 
 No, Stacked PRs currently require all branches to be in the same repository. Cross-fork stacks are not supported.
+
+### Can a stack target a branch other than my default branch?
+
+Yes. A stack's **trunk** (the base branch of the bottom PR) can be any branch in the repository, such as a release branch or a long-lived feature branch. It defaults to your repository's default branch (e.g., `main`), but you can pick a different one:
+
+- **CLI** — pass `--base <branch>` to `gh stack init` or `gh stack link` (for example, `gh stack init --base release`).
+- **Web** — create the bottom PR against whatever branch you want as the trunk; the rest of the stack chains on top of it.
+
+The same behavior applies to whatever trunk your stack targets — branch protection rules, required checks, and CI are all evaluated against your stack's base branch.
 
 ## Checks, Rules & Requirements
 

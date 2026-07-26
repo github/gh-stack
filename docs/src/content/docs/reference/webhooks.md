@@ -103,7 +103,7 @@ The top-level `stack` object is unique to the `stacked` event; other `pull_reque
 
 ## GitHub Actions
 
-GitHub Actions automatically evaluates workflow triggers using the stack's base branch. If a PR is part of a stack targeting `main`, any workflow configured to run on pull requests targeting `main` will run for every PR in the stack — no workflow changes are required.
+GitHub Actions automatically evaluates workflow triggers using the stack's base branch. For example, if a PR is part of a stack targeting `main`, any workflow configured to run on pull requests targeting `main` will run for every PR in the stack — no workflow changes are required.
 
 The `stack` object is also available in GitHub Actions workflow expressions via `github.event.pull_request.stack`. See [How do I access stack metadata in my GitHub Actions workflow?](/gh-stack/faq/#how-do-i-access-stack-metadata-in-my-github-actions-workflow) in the FAQ for examples.
 

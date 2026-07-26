@@ -15,7 +15,7 @@ For developers who want to break large changes into smaller, dependent parts, th
 
 A **pull request stack** consists of two or more pull requests in the same repository where:
 
-- The **first (bottom) pull request** targets the main branch (e.g., `main`).
+- The **first (bottom) pull request** targets the stack's **trunk** — this can be any branch, and defaults to your repository's default branch (e.g., `main`).
 - Each subsequent pull request targets the branch of the PR below it.
 
 ```
@@ -46,8 +46,8 @@ When a pull request is part of a stack, a **stack map** appears at the top of th
 
 The merge requirements for any PR in the stack are determined by the **bottom PR's base** — typically `main`. This means:
 
-- **Branch protection rules** like CODEOWNER approvals are enforced on every PR in the stack, even mid-stack PRs that don't directly target `main`.
-- **CI checks** triggered by pull requests on `main` run for all PRs in the stack, not just the bottom one.
+- **Branch protection rules** like CODEOWNER approvals are enforced on every PR in the stack, even mid-stack PRs that don't directly target the trunk.
+- **CI checks** triggered by pull requests targeting the trunk (e.g., `main`) run for all PRs in the stack, not just the bottom one.
 
 This ensures that every layer of the stack meets the same quality bar before it can be merged.
 
@@ -87,7 +87,7 @@ Rebasing is the trickiest part of working with Stacked PRs, and GitHub handles i
 
 - **In the PR UI** — A **Rebase Stack** button lets you trigger a server-side cascading rebase. It rebases the entire stack on top of the latest trunk, updates every unmerged branch, and force-pushes the results. See [Rebasing from the UI](/gh-stack/guides/ui/#rebasing-from-the-ui) for details.
 - **From the CLI** — `gh stack rebase` performs the same cascading rebase locally.
-- **After partial merges** — When you merge a PR at the bottom of the stack, the remaining branches are automatically rebased so the next PR targets `main` and is ready for review and merge.
+- **After partial merges** — When you merge a PR at the bottom of the stack, the remaining branches are automatically rebased so the next PR targets the trunk and is ready for review and merge.
 - **Safe squash-merge handling** — Squash merges are fully supported. The rebase engine safely replays your unique commits on top of the squashed base, avoiding artificial merge conflicts. See the [FAQ](/gh-stack/faq/#how-does-squash-merge-work) for a detailed description of how this works.
 
 ## The CLI: `gh stack`
