@@ -232,6 +232,30 @@ func TestProgress_PendingThenMerged(t *testing.T) {
 	assert.Equal(t, []int{1, 2, 3}, out.MergedPRs)
 }
 
+func TestProgress_PendingThenEnqueued(t *testing.T) {
+	m := New(baseOptions())
+	m.step = StepProgress
+	m.submitted = true
+
+	m = step(m, submitDoneMsg{status: MergeStatus{Status: StatusPending, UUID: "u1"}})
+	m = step(m, pollDoneMsg{status: MergeStatus{Status: StatusEnqueued, Message: "Pull request was added to the merge queue."}})
+	out := m.Outcome()
+	assert.True(t, out.Enqueued)
+	assert.False(t, out.Merged)
+	assert.False(t, out.Failed)
+	assert.Equal(t, []int{1, 2, 3}, out.MergedPRs)
+}
+
+func TestSubmit_Enqueued(t *testing.T) {
+	m := New(baseOptions())
+	m.step = StepProgress
+	m.submitted = true
+	m = step(m, submitDoneMsg{status: MergeStatus{Status: StatusEnqueued, Message: "Pull request was added to the merge queue."}})
+	out := m.Outcome()
+	assert.True(t, out.Enqueued)
+	assert.False(t, out.Merged)
+}
+
 func TestSubmit_NotMergeable(t *testing.T) {
 	m := New(baseOptions())
 	m.step = StepProgress

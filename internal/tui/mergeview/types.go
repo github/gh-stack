@@ -46,6 +46,8 @@ const (
 	StatusPending Status = "pending"
 	// StatusMerged means the merge completed successfully.
 	StatusMerged Status = "merged"
+	// StatusEnqueued means the stack was added to the base branch's merge queue.
+	StatusEnqueued Status = "enqueued"
 	// StatusFailed means the merge was attempted but did not complete.
 	StatusFailed Status = "failed"
 )
@@ -106,6 +108,9 @@ type Outcome struct {
 	Submitted bool
 	// Merged reports the merge completed successfully.
 	Merged bool
+	// Enqueued reports the stack was added to the base branch's merge queue
+	// (it will merge once the queue processes it).
+	Enqueued bool
 	// Failed reports the merge was attempted but did not complete (conflict,
 	// rule failure, or not mergeable).
 	Failed bool

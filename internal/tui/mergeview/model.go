@@ -30,6 +30,7 @@ type Model struct {
 
 	submitted    bool
 	merged       bool
+	enqueued     bool
 	failed       bool
 	cancelled    bool
 	watchStopped bool
@@ -266,12 +267,15 @@ func (m Model) handleSubmitDone(msg submitDoneMsg) (tea.Model, tea.Cmd) {
 	case StatusMerged:
 		m.merged = true
 		return m.finish()
+	case StatusEnqueued:
+		m.enqueued = true
+		return m.finish()
 	case StatusFailed:
 		m.failed = true
 		return m.finish()
 	default:
-		// Pending (enqueued, or an existing request adopted): poll if we have a
-		// UUID; otherwise this is unexpected, so treat it as a failure.
+		// Pending (or an existing request adopted): poll if we have a UUID;
+		// otherwise this is unexpected, so treat it as a failure.
 		if msg.status.UUID != "" {
 			return m, m.pollTickCmd()
 		}
@@ -295,6 +299,9 @@ func (m Model) handlePollDone(msg pollDoneMsg) (tea.Model, tea.Cmd) {
 	case StatusMerged:
 		m.merged = true
 		return m.finish()
+	case StatusEnqueued:
+		m.enqueued = true
+		return m.finish()
 	case StatusFailed:
 		m.failed = true
 		return m.finish()
@@ -309,7 +316,7 @@ func (m Model) finish() (tea.Model, tea.Cmd) {
 	return m, tea.Quit
 }
 
-func (m Model) done() bool { return m.merged || m.failed || m.step == StepDone }
+func (m Model) done() bool { return m.merged || m.enqueued || m.failed || m.step == StepDone }
 
 // Outcome reports the final result of the wizard for the command layer.
 func (m Model) Outcome() Outcome {
@@ -317,6 +324,7 @@ func (m Model) Outcome() Outcome {
 		Cancelled:    m.cancelled,
 		Submitted:    m.submitted,
 		Merged:       m.merged,
+		Enqueued:     m.enqueued,
 		Failed:       m.failed,
 		WatchStopped: m.watchStopped,
 		Message:      m.message,
@@ -325,7 +333,7 @@ func (m Model) Outcome() Outcome {
 		SHA:          m.status.SHA,
 		Err:          m.err,
 	}
-	if m.merged {
+	if m.merged || m.enqueued {
 		o.MergedPRs = m.selectedNumbers()
 	}
 	return o

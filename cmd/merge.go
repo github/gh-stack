@@ -63,10 +63,11 @@ prompting, using your last-used merge method unless one is specified.
 
 Only basic pull request state is checked before merging (open and not a draft);
 GitHub evaluates branch protection and repository rules when the merge runs, so
-any such failure is reported back to you.
+any such failure is reported back to you. Bypassing merge requirements with admin
+privileges is not supported for stacks.
 
-If the base branch uses a merge queue, this command isn't supported (it merges
-directly, not through the queue); use "gh pr merge" or the web UI instead.`,
+If the base branch uses a merge queue, the stack is added to the queue and merges
+once the queue processes it; otherwise it is merged directly.`,
 		Example: `  # Merge the current stack (interactive picker)
   $ gh stack merge
 
@@ -142,18 +143,6 @@ func runMerge(cfg *config.Config, opts *mergeOptions, args []string) error {
 	}
 
 	base := remoteStack.Base.Ref
-
-	// Merge-queue and admin-bypass policy for the stack's base branch. The async
-	// stack merge cannot use a merge queue, so bail out early (before any
-	// prompting) when the base requires one.
-	policy, err := client.BaseBranchPolicy(base)
-	if err != nil {
-		cfg.Errorf("failed to check base branch merge settings: %s", err)
-		return ErrAPIFailure
-	}
-	if policy.RequiresMergeQueue {
-		return explainMergeQueueUnsupported(cfg, base)
-	}
 
 	if cfg.IsInteractive() && !opts.yes {
 		return runMergeInteractive(cfg, client, remoteStack.Number, base, candidates, allowed, mergeCfg.DefaultMethod, method, preselectIndex, opts)
@@ -328,6 +317,9 @@ func runMergeInteractive(cfg *config.Config, client github.ClientOps, stackNumbe
 	case out.Merged:
 		mergedSuccess(cfg, prNumberList(out.MergedPRs), base, out.SHA)
 		return nil
+	case out.Enqueued:
+		enqueuedSuccess(cfg, prNumberList(out.MergedPRs), base)
+		return nil
 	case out.Failed:
 		cfg.Errorf("merge failed: %s", out.Message)
 		cfg.Printf("Stack merges are atomic, so nothing was merged.")
@@ -362,6 +354,10 @@ func runMergeHeadless(cfg *config.Config, client github.ClientOps, base string, 
 		mergedSuccess(cfg, list, base, res.Details.SHA)
 		return nil
 	}
+	if res.IsEnqueued() {
+		enqueuedSuccess(cfg, list, base)
+		return nil
+	}
 	if res.IsFailed() {
 		cfg.Errorf("merge failed: %s", res.Details.Message)
 		cfg.Printf("Stack merges are atomic, so nothing was merged.")
@@ -392,6 +388,10 @@ func runMergeHeadless(cfg *config.Config, client github.ClientOps, base string, 
 		}
 		if status.IsMerged() {
 			mergedSuccess(cfg, list, base, status.Details.SHA)
+			return nil
+		}
+		if status.IsEnqueued() {
+			enqueuedSuccess(cfg, list, base)
 			return nil
 		}
 		if status.IsFailed() {
@@ -430,6 +430,8 @@ func toMergeStatus(res *github.AsyncMergeResult) mergeview.MergeStatus {
 	switch {
 	case res.IsMerged():
 		status = mergeview.StatusMerged
+	case res.IsEnqueued():
+		status = mergeview.StatusEnqueued
 	case res.IsFailed():
 		status = mergeview.StatusFailed
 	}
@@ -502,15 +504,6 @@ func explainNonMergeableTarget(cfg *config.Config, rs *github.RemoteStack, prNum
 
 func warnAsyncMergeUnavailable(cfg *config.Config) {
 	cfg.Warningf("Async stack merge is not available for this repository")
-}
-
-// explainMergeQueueUnsupported reports that the stack's base branch merges
-// through a merge queue, which the async stack merge cannot use, and points the
-// user to the merge queue (via `gh pr merge` or the web UI) instead.
-func explainMergeQueueUnsupported(cfg *config.Config, base string) error {
-	cfg.Errorf("the base branch %q requires a merge queue, which \"gh stack merge\" does not support", base)
-	cfg.Printf("Merge this stack using `%q` or from the GitHub web UI instead.", "gh pr merge")
-	return ErrSilent
 }
 
 // mergeFailureExit maps a merge failure message to an exit code: rebase/merge
@@ -633,6 +626,13 @@ func mergedSuccess(cfg *config.Config, list, base, sha string) {
 		return
 	}
 	cfg.Successf("Merged %s into %s", list, base)
+}
+
+// enqueuedSuccess prints the success line when the base branch uses a merge
+// queue: the stack was added to the queue and will merge once it's processed.
+func enqueuedSuccess(cfg *config.Config, list, base string) {
+	cfg.Successf("Added %s to the merge queue for %s", list, base)
+	cfg.Printf("They will merge once the queue processes them.")
 }
 
 func isNotFound(err error) bool {

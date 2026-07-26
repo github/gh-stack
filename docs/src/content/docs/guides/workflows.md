@@ -143,7 +143,7 @@ gh stack merge --yes --squash
 
 In an interactive terminal, a short wizard lets you choose how far up the stack to merge, pick the merge method (only the ones your repository allows, defaulting to your last-used method), and confirm — then shows live progress. In a non-interactive terminal, or with `--yes`, the whole stack (or everything up to the given PR) is merged without prompting. After merging, run `gh stack sync` to update your local branches.
 
-The exception is a trunk that uses a merge queue: `gh stack merge` merges directly rather than through the queue, so it isn't supported there. Use `gh pr merge` or the GitHub web UI to merge through the queue instead.
+If the base branch uses a merge queue, `gh stack merge` adds the stack to the queue instead of merging directly — it merges once the queue processes it.
 
 :::note[Admin bypass not supported]
 Stack merges currently do not support admin bypass merging.

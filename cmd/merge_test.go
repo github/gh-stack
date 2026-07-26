@@ -347,28 +347,43 @@ func TestRunMerge_AlreadyMergedOnSubmit(t *testing.T) {
 	assert.Contains(t, output, "Merged #1, #2 into main")
 }
 
-func TestRunMerge_MergeQueueRequired(t *testing.T) {
+func TestRunMerge_Enqueued(t *testing.T) {
 	cfg, outR, errR := config.NewTestConfig()
 	cfg.GitHubClientOverride = &github.MockClient{
 		GetStackFn: func(n int) (*github.RemoteStack, error) {
 			return remoteStack(7, "main", openStackPR(1, "b1"), openStackPR(2, "b2")), nil
 		},
-		BaseBranchPolicyFn: func(base string) (*github.BaseBranchPolicy, error) {
-			assert.Equal(t, "main", base)
-			return &github.BaseBranchPolicy{RequiresMergeQueue: true}, nil
-		},
 		MergeStackAsyncFn: func(pr int, method string) (*github.AsyncMergeResult, error) {
-			t.Fatal("merge must not be attempted when the base requires a merge queue")
-			return nil, nil
+			return &github.AsyncMergeResult{Status: github.AsyncMergeStatusPending, Details: github.AsyncMergeDetails{UUID: "u"}}, nil
+		},
+		GetAsyncMergeResultFn: func(pr int, uuid string) (*github.AsyncMergeResult, error) {
+			return &github.AsyncMergeResult{Status: github.AsyncMergeStatusEnqueued, Details: github.AsyncMergeDetails{Message: "Pull request was added to the merge queue."}}, nil
 		},
 	}
 
 	err := runMerge(cfg, fastOptions(), []string{"7"})
 	output := collectOutput(cfg, outR, errR)
 
-	assert.ErrorIs(t, err, ErrSilent)
-	assert.Contains(t, output, "merge queue")
-	assert.Contains(t, output, "web UI")
+	require.NoError(t, err)
+	assert.Contains(t, output, "Added #1, #2 to the merge queue for main")
+}
+
+func TestRunMerge_EnqueuedOnSubmit(t *testing.T) {
+	cfg, outR, errR := config.NewTestConfig()
+	cfg.GitHubClientOverride = &github.MockClient{
+		GetStackFn: func(n int) (*github.RemoteStack, error) {
+			return remoteStack(7, "main", openStackPR(1, "b1"), openStackPR(2, "b2")), nil
+		},
+		MergeStackAsyncFn: func(pr int, method string) (*github.AsyncMergeResult, error) {
+			return &github.AsyncMergeResult{Status: github.AsyncMergeStatusEnqueued, Details: github.AsyncMergeDetails{Message: "Pull request was added to the merge queue."}}, nil
+		},
+	}
+
+	err := runMerge(cfg, fastOptions(), []string{"7"})
+	output := collectOutput(cfg, outR, errR)
+
+	require.NoError(t, err)
+	assert.Contains(t, output, "Added #1, #2 to the merge queue for main")
 }
 
 func TestRunMerge_AsyncMergeUnavailable(t *testing.T) {

@@ -58,7 +58,7 @@ func TestMergeStackAsync_Accepted(t *testing.T) {
 
 	assert.Equal(t, http.MethodPut, rec.method)
 	assert.Equal(t, "/repos/o/r/pulls/42/merge-async", rec.path)
-	assert.JSONEq(t, `{"merge_method":"squash"}`, rec.body)
+	assert.JSONEq(t, `{"merge_method":"squash","merge_action":"default"}`, rec.body)
 
 	assert.True(t, res.IsPending())
 	assert.False(t, res.IsMerged())
@@ -107,8 +107,9 @@ func TestGetAsyncMergeResult_States(t *testing.T) {
 		body       string
 		wantStatus string
 	}{
-		{"pending", `{"status":"pending","details":{"message":"Merge request is in progress.","uuid":"u","merge_method":"merge","expected_head_sha":"abc"}}`, AsyncMergeStatusPending},
+		{"pending", `{"status":"pending","details":{"message":"Merge request is in progress.","uuid":"u","merge_method":"merge","merge_action":"default","expected_head_sha":"abc"}}`, AsyncMergeStatusPending},
 		{"merged", `{"status":"merged","details":{"message":"Pull request was merged.","sha":"abc"}}`, AsyncMergeStatusMerged},
+		{"enqueued", `{"status":"enqueued","details":{"message":"Pull request was added to the merge queue."}}`, AsyncMergeStatusEnqueued},
 		{"failed", `{"status":"failed","details":{"message":"Merge conflict."}}`, AsyncMergeStatusFailed},
 	}
 	for _, tt := range tests {
@@ -161,75 +162,28 @@ func TestAsyncMergeResult_Status(t *testing.T) {
 	assert.True(t, failed.IsFailed())
 	assert.False(t, failed.IsMerged())
 
+	enqueued := &AsyncMergeResult{Status: AsyncMergeStatusEnqueued}
+	assert.True(t, enqueued.IsEnqueued())
+	assert.False(t, enqueued.IsMerged())
+	assert.False(t, enqueued.IsPending())
+
 	var nilRes *AsyncMergeResult
 	assert.False(t, nilRes.IsPending())
 	assert.False(t, nilRes.IsMerged())
+	assert.False(t, nilRes.IsEnqueued())
 	assert.False(t, nilRes.IsFailed())
 }
 
-// sanity check that the submit body omits merge_method when empty.
+// sanity check that the submit body omits merge_method when empty but always
+// sends merge_action.
 func TestMergeStackAsync_OmitsEmptyMethod(t *testing.T) {
 	var rec recordedRequest
-	_, err := testAsyncClient(t, http.StatusAccepted, `{"queued":true,"merged":false,"details":{"message":"m","uuid":"u","merge_method":"merge","expected_head_sha":"x"}}`, &rec).MergeStackAsync(1, "")
+	_, err := testAsyncClient(t, http.StatusAccepted, `{"status":"pending","details":{"message":"m","uuid":"u","merge_method":"merge","merge_action":"default","expected_head_sha":"x"}}`, &rec).MergeStackAsync(1, "")
 	require.NoError(t, err)
 
 	var parsed map[string]any
 	require.NoError(t, json.Unmarshal([]byte(rec.body), &parsed))
 	_, hasMethod := parsed["merge_method"]
 	assert.False(t, hasMethod, "merge_method should be omitted when empty")
-}
-
-// testPolicyClient builds a Client whose GraphQL client is backed by a stub
-// transport returning the given response body.
-func testPolicyClient(t *testing.T, graphqlResp string) *Client {
-	t.Helper()
-	rt := roundTripFunc(func(r *http.Request) (*http.Response, error) {
-		return &http.Response{
-			StatusCode: http.StatusOK,
-			Body:       io.NopCloser(strings.NewReader(graphqlResp)),
-			Header:     http.Header{"Content-Type": []string{"application/json"}},
-			Request:    r,
-		}, nil
-	})
-	gql, err := api.NewGraphQLClient(api.ClientOptions{Host: "github.com", AuthToken: "x", Transport: rt})
-	require.NoError(t, err)
-	return &Client{gql: gql, owner: "o", repo: "r"}
-}
-
-func TestBaseBranchPolicy(t *testing.T) {
-	tests := []struct {
-		name      string
-		body      string
-		wantQueue bool
-	}{
-		{
-			name: "no merge queue",
-			body: `{"data":{"repository":{"mergeQueue":null,"ref":{"rules":{"nodes":[]}}}}}`,
-		},
-		{
-			name:      "merge queue via mergeQueue field",
-			body:      `{"data":{"repository":{"mergeQueue":{"id":"MQ"},"ref":{"rules":{"nodes":[]}}}}}`,
-			wantQueue: true,
-		},
-		{
-			name:      "merge queue via ruleset type",
-			body:      `{"data":{"repository":{"mergeQueue":null,"ref":{"rules":{"nodes":[{"type":"MERGE_QUEUE"}]}}}}}`,
-			wantQueue: true,
-		},
-		{
-			name: "other rules, no merge queue",
-			body: `{"data":{"repository":{"mergeQueue":null,"ref":{"rules":{"nodes":[{"type":"PULL_REQUEST"}]}}}}}`,
-		},
-		{
-			name: "null ref",
-			body: `{"data":{"repository":{"mergeQueue":null,"ref":null}}}`,
-		},
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			policy, err := testPolicyClient(t, tt.body).BaseBranchPolicy("main")
-			require.NoError(t, err)
-			assert.Equal(t, tt.wantQueue, policy.RequiresMergeQueue, "RequiresMergeQueue")
-		})
-	}
+	assert.Equal(t, "default", parsed["merge_action"], "merge_action should always be sent")
 }

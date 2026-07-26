@@ -21,7 +21,6 @@ type ClientOps interface {
 	MergeStackAsync(prNumber int, method string) (*AsyncMergeResult, error)
 	GetAsyncMergeResult(prNumber int, uuid string) (*AsyncMergeResult, error)
 	PRTitles(numbers []int) (map[int]string, error)
-	BaseBranchPolicy(baseRef string) (*BaseBranchPolicy, error)
 }
 
 // Compile-time check that Client satisfies ClientOps.

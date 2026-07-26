@@ -66,19 +66,21 @@ func (c RepoMergeConfig) Allows(method string) bool {
 
 // AsyncMergeDetails is the polymorphic "details" object shared by the submit and
 // poll responses. Fields are populated based on the current state: a pending
-// request carries UUID/MergeMethod/ExpectedHeadSHA, a merged result carries SHA,
-// and a failed/not-mergeable result carries only Message.
+// request carries UUID/MergeMethod/MergeAction/ExpectedHeadSHA, a merged result
+// carries SHA, and a failed/not-mergeable result carries only Message.
 type AsyncMergeDetails struct {
 	Message         string `json:"message"`
 	UUID            string `json:"uuid"`
 	MergeMethod     string `json:"merge_method"`
+	MergeAction     string `json:"merge_action"`
 	ExpectedHeadSHA string `json:"expected_head_sha"`
 	SHA             string `json:"sha"`
 }
 
 // AsyncMergeResult is the response body returned by both the submit and poll
 // async merge endpoints. Status is one of the AsyncMergeStatus* values:
-// "pending" (running in the background), "merged" (completed), or "failed".
+// "pending" (running in the background), "merged" (merged directly), "enqueued"
+// (added to the base branch's merge queue), or "failed".
 type AsyncMergeResult struct {
 	Status  string            `json:"status"`
 	Details AsyncMergeDetails `json:"details"`
@@ -86,14 +88,21 @@ type AsyncMergeResult struct {
 
 // Async merge status values returned in the response's "status" field.
 const (
-	AsyncMergeStatusPending = "pending"
-	AsyncMergeStatusMerged  = "merged"
-	AsyncMergeStatusFailed  = "failed"
+	AsyncMergeStatusPending  = "pending"
+	AsyncMergeStatusMerged   = "merged"
+	AsyncMergeStatusEnqueued = "enqueued"
+	AsyncMergeStatusFailed   = "failed"
 )
 
 // IsMerged reports whether the merge completed successfully.
 func (r *AsyncMergeResult) IsMerged() bool {
 	return r != nil && r.Status == AsyncMergeStatusMerged
+}
+
+// IsEnqueued reports whether the stack was added to the base branch's merge
+// queue (it will merge once the queue processes it).
+func (r *AsyncMergeResult) IsEnqueued() bool {
+	return r != nil && r.Status == AsyncMergeStatusEnqueued
 }
 
 // IsFailed reports whether the merge was attempted but did not complete.
@@ -136,68 +145,25 @@ func (c *Client) RepoMergeConfig() (*RepoMergeConfig, error) {
 	}, nil
 }
 
-// BaseBranchPolicy describes merge-relevant policy on a stack's base branch.
-type BaseBranchPolicy struct {
-	// RequiresMergeQueue reports that the base branch merges through a merge
-	// queue, so a direct async stack merge is not possible.
-	RequiresMergeQueue bool
-}
-
-// BaseBranchPolicy reports whether the given base branch requires a merge queue,
-// which the async stack merge cannot use.
-func (c *Client) BaseBranchPolicy(baseRef string) (*BaseBranchPolicy, error) {
-	var query struct {
-		Repository struct {
-			MergeQueue *struct {
-				ID string `graphql:"id"`
-			} `graphql:"mergeQueue(branch: $branch)"`
-			Ref *struct {
-				Rules struct {
-					Nodes []struct {
-						Type string `graphql:"type"`
-					} `graphql:"nodes"`
-				} `graphql:"rules(first: 50)"`
-			} `graphql:"ref(qualifiedName: $qualified)"`
-		} `graphql:"repository(owner: $owner, name: $name)"`
-	}
-
-	variables := map[string]interface{}{
-		"owner":     graphql.String(c.owner),
-		"name":      graphql.String(c.repo),
-		"branch":    graphql.String(baseRef),
-		"qualified": graphql.String("refs/heads/" + baseRef),
-	}
-
-	if err := c.gql.Query("BaseBranchPolicy", &query, variables); err != nil {
-		return nil, fmt.Errorf("querying base branch policy: %w", err)
-	}
-
-	r := query.Repository
-	policy := &BaseBranchPolicy{RequiresMergeQueue: r.MergeQueue != nil}
-	if r.Ref != nil {
-		for _, node := range r.Ref.Rules.Nodes {
-			if node.Type == "MERGE_QUEUE" {
-				policy.RequiresMergeQueue = true
-			}
-		}
-	}
-	return policy, nil
-}
-
 // MergeStackAsync requests an asynchronous merge of the given pull request. For
 // a stacked PR this merges all members of the stack up to and including
 // prNumber. A blank method lets the server apply its default.
 //
+// The merge_action is always "default", which lets the server route the stack
+// to a direct merge or the base branch's merge queue automatically, based on
+// the repository's rules and configuration.
+//
 // On success the returned result is populated for the 200 (already merged) and
-// 202 (enqueued) responses. A 404 returns ErrAsyncMergeUnavailable, a 409
-// (a request already exists) returns a clear "already exists" error, and any
-// other non-2xx status is returned as-is.
+// 202 (enqueued for background processing) responses. A 404 returns
+// ErrAsyncMergeUnavailable, a 409 (a request already exists) returns a clear
+// "already exists" error, and any other non-2xx status is returned as-is.
 func (c *Client) MergeStackAsync(prNumber int, method string) (*AsyncMergeResult, error) {
 	type reqBody struct {
 		MergeMethod string `json:"merge_method,omitempty"`
+		MergeAction string `json:"merge_action"`
 	}
 
-	body, err := json.Marshal(reqBody{MergeMethod: method})
+	body, err := json.Marshal(reqBody{MergeMethod: method, MergeAction: "default"})
 	if err != nil {
 		return nil, fmt.Errorf("marshaling request: %w", err)
 	}
@@ -212,8 +178,8 @@ func (c *Client) MergeStackAsync(prNumber int, method string) (*AsyncMergeResult
 
 // GetAsyncMergeResult fetches the current result of a previously submitted async
 // merge, identified by the UUID returned from MergeStackAsync. A valid lookup
-// always returns 200, so the wrapped Queued/Merged/Details state reflects the
-// merge's progress (queued, merged, or failed).
+// always returns 200, so the wrapped status/details reflect the merge's progress
+// (pending, merged, enqueued, or failed).
 func (c *Client) GetAsyncMergeResult(prNumber int, uuid string) (*AsyncMergeResult, error) {
 	path := fmt.Sprintf("repos/%s/%s/pulls/%d/merge-async/%s", c.owner, c.repo, prNumber, uuid)
 	var result AsyncMergeResult
