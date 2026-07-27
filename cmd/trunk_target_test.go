@@ -30,7 +30,49 @@ func trunkTargetMock(localSHA, remoteSHA string) *git.MockOps {
 	}
 }
 
+func TestNormalizeTrunkBranch(t *testing.T) {
+	t.Run("strips the selected remote prefix", func(t *testing.T) {
+		restore := git.SetOps(&git.MockOps{
+			BranchExistsFn: func(string) bool { return false },
+		})
+		defer restore()
+
+		assert.Equal(t, "main", normalizeTrunkBranch("origin/main", "origin"))
+	})
+
+	t.Run("preserves a real local branch with the remote prefix", func(t *testing.T) {
+		restore := git.SetOps(&git.MockOps{
+			BranchExistsFn: func(name string) bool { return name == "origin/main" },
+		})
+		defer restore()
+
+		assert.Equal(t, "origin/main", normalizeTrunkBranch("origin/main", "origin"))
+	})
+}
+
 func TestResolveTrunkTarget(t *testing.T) {
+	t.Run("normalizes a remote-qualified trunk before fetching", func(t *testing.T) {
+		mock := trunkTargetMock("same", "same")
+		mock.BranchExistsFn = func(name string) bool { return name == "main" }
+		var fetchedBranch string
+		mock.FetchBranchFn = func(remote, branch string) error {
+			assert.Equal(t, "origin", remote)
+			fetchedBranch = branch
+			return nil
+		}
+		restore := git.SetOps(mock)
+		defer restore()
+
+		cfg, _, _ := config.NewTestConfig()
+		s := &stack.Stack{Trunk: stack.BranchRef{Branch: "origin/main"}}
+		target, err := resolveTrunkTarget(cfg, s, "origin", "b1")
+
+		require.NoError(t, err)
+		assert.Equal(t, "main", fetchedBranch)
+		assert.Equal(t, "main", s.Trunk.Branch)
+		assert.Equal(t, "main", target.Ref)
+	})
+
 	t.Run("falls back to fetched remote ref when local trunk cannot move", func(t *testing.T) {
 		mock := trunkTargetMock("local", "remote")
 		mock.IsAncestorFn = func(a, d string) (bool, error) {
@@ -214,6 +256,217 @@ func TestRebase_StartErrorDoesNotWriteRecoveryState(t *testing.T) {
 	assert.ErrorIs(t, err, ErrSilent)
 	_, statErr := os.Stat(filepath.Join(tmpDir, rebaseStateFile))
 	assert.True(t, os.IsNotExist(statErr))
+}
+
+func TestRebase_LaterStartErrorRestoresEarlierBranches(t *testing.T) {
+	tmpDir := t.TempDir()
+	writeStackFile(t, tmpDir, stack.Stack{
+		Trunk: stack.BranchRef{Branch: "main"},
+		Branches: []stack.BranchRef{
+			{Branch: "b1"},
+			{Branch: "b2"},
+		},
+	})
+
+	branchSHAs := map[string]string{"b1": "old-b1", "b2": "old-b2"}
+	currentBranch := "b1"
+	var resets []resetCall
+
+	mock := newRebaseMock(tmpDir, currentBranch)
+	mock.BranchExistsFn = func(string) bool { return true }
+	mock.RevParseFn = func(ref string) (string, error) {
+		if ref == "main" || ref == "origin/main" {
+			return "trunk", nil
+		}
+		if sha, ok := branchSHAs[ref]; ok {
+			return sha, nil
+		}
+		if len(ref) > len("origin/") && ref[:len("origin/")] == "origin/" {
+			return branchSHAs[ref[len("origin/"):]], nil
+		}
+		return "sha-" + ref, nil
+	}
+	mock.CheckoutBranchFn = func(branch string) error {
+		currentBranch = branch
+		return nil
+	}
+	mock.RebaseFn = func(string, git.RebaseOpts) error {
+		branchSHAs["b1"] = "rebased-b1"
+		return nil
+	}
+	mock.RebaseOntoFn = func(string, string, string, git.RebaseOpts) error {
+		return &git.RebaseStartError{Err: errors.New("branch is checked out elsewhere")}
+	}
+	mock.ResetHardFn = func(ref string) error {
+		resets = append(resets, resetCall{currentBranch, ref})
+		branchSHAs[currentBranch] = ref
+		return nil
+	}
+	restore := git.SetOps(mock)
+	defer restore()
+
+	cfg, _, _ := config.NewTestConfig()
+	cmd := RebaseCmd(cfg)
+	cmd.SetOut(io.Discard)
+	cmd.SetErr(io.Discard)
+	err := cmd.Execute()
+
+	assert.ErrorIs(t, err, ErrSilent)
+	assert.Equal(t, "old-b1", branchSHAs["b1"])
+	assert.Equal(t, "old-b2", branchSHAs["b2"])
+	assert.Equal(t, []resetCall{{branch: "b1", sha: "old-b1"}}, resets)
+}
+
+func TestSync_LaterStartErrorRestoresEarlierBranches(t *testing.T) {
+	tmpDir := t.TempDir()
+	writeStackFile(t, tmpDir, stack.Stack{
+		Trunk: stack.BranchRef{Branch: "main"},
+		Branches: []stack.BranchRef{
+			{Branch: "b1"},
+			{Branch: "b2"},
+		},
+	})
+
+	branchSHAs := map[string]string{"b1": "old-b1", "b2": "old-b2"}
+	currentBranch := "b1"
+	pushes := 0
+
+	mock := newSyncMock(tmpDir, currentBranch)
+	mock.RevParseFn = func(ref string) (string, error) {
+		if ref == "main" || ref == "origin/main" {
+			return "trunk", nil
+		}
+		if sha, ok := branchSHAs[ref]; ok {
+			return sha, nil
+		}
+		if len(ref) > len("origin/") && ref[:len("origin/")] == "origin/" {
+			return branchSHAs[ref[len("origin/"):]], nil
+		}
+		return "sha-" + ref, nil
+	}
+	stacked := false
+	mock.IsAncestorFn = func(a, d string) (bool, error) {
+		if a == "main" && d == "b1" {
+			return stacked, nil
+		}
+		return true, nil
+	}
+	mock.CheckoutBranchFn = func(branch string) error {
+		currentBranch = branch
+		return nil
+	}
+	mock.RebaseFn = func(string, git.RebaseOpts) error {
+		branchSHAs["b1"] = "rebased-b1"
+		stacked = true
+		return nil
+	}
+	mock.RebaseOntoFn = func(string, string, string, git.RebaseOpts) error {
+		return &git.RebaseStartError{Err: errors.New("branch is checked out elsewhere")}
+	}
+	mock.ResetHardFn = func(ref string) error {
+		branchSHAs[currentBranch] = ref
+		return nil
+	}
+	mock.PushFn = func(string, []string, bool, bool) error {
+		pushes++
+		return nil
+	}
+	restore := git.SetOps(mock)
+	defer restore()
+
+	cfg, _, _ := config.NewTestConfig()
+	cmd := SyncCmd(cfg)
+	cmd.SetOut(io.Discard)
+	cmd.SetErr(io.Discard)
+	err := cmd.Execute()
+
+	assert.ErrorIs(t, err, ErrSilent)
+	assert.Equal(t, "old-b1", branchSHAs["b1"])
+	assert.Equal(t, "old-b2", branchSHAs["b2"])
+	assert.Zero(t, pushes)
+}
+
+func TestRebase_ContinueVerificationFailureRestoresAndClearsState(t *testing.T) {
+	tmpDir := t.TempDir()
+	writeStackFile(t, tmpDir, stack.Stack{
+		Trunk: stack.BranchRef{Branch: "main"},
+		Branches: []stack.BranchRef{
+			{Branch: "b1"},
+			{Branch: "b2"},
+			{Branch: "b3"},
+		},
+	})
+
+	state := &rebaseState{
+		CurrentBranchIndex: 1,
+		ConflictBranch:     "b2",
+		RemainingBranches:  []string{"b3"},
+		OriginalBranch:     "b1",
+		OriginalRefs: map[string]string{
+			"b1": "old-b1",
+			"b2": "old-b2",
+			"b3": "old-b3",
+		},
+		TrunkRef:   "main",
+		TrunkSHA:   "trunk",
+		StartIndex: 0,
+		EndIndex:   3,
+	}
+	require.NoError(t, saveRebaseState(tmpDir, state))
+
+	branchSHAs := map[string]string{"b1": "old-b1", "b2": "old-b2", "b3": "old-b3"}
+	currentBranch := "b2"
+	rebaseInProgress := true
+	cascadeDone := false
+
+	mock := newRebaseMock(tmpDir, currentBranch)
+	mock.BranchExistsFn = func(string) bool { return true }
+	mock.RevParseFn = func(ref string) (string, error) {
+		if sha, ok := branchSHAs[ref]; ok {
+			return sha, nil
+		}
+		return "sha-" + ref, nil
+	}
+	mock.IsRebaseInProgressFn = func() bool { return rebaseInProgress }
+	mock.RebaseContinueFn = func(git.RebaseOpts) error {
+		rebaseInProgress = false
+		branchSHAs["b2"] = "rebased-b2"
+		return nil
+	}
+	mock.IsAncestorFn = func(a, d string) (bool, error) {
+		if a == "b2" && d == "b3" {
+			return !cascadeDone, nil
+		}
+		return true, nil
+	}
+	mock.RebaseOntoFn = func(string, string, string, git.RebaseOpts) error {
+		cascadeDone = true
+		branchSHAs["b3"] = "rebased-b3"
+		return nil
+	}
+	mock.CheckoutBranchFn = func(branch string) error {
+		currentBranch = branch
+		return nil
+	}
+	mock.ResetHardFn = func(ref string) error {
+		branchSHAs[currentBranch] = ref
+		return nil
+	}
+	restore := git.SetOps(mock)
+	defer restore()
+
+	cfg, _, _ := config.NewTestConfig()
+	cmd := RebaseCmd(cfg)
+	cmd.SetArgs([]string{"--continue"})
+	cmd.SetOut(io.Discard)
+	cmd.SetErr(io.Discard)
+	err := cmd.Execute()
+
+	assert.ErrorIs(t, err, ErrSilent)
+	assert.Equal(t, "old-b2", branchSHAs["b2"])
+	assert.Equal(t, "old-b3", branchSHAs["b3"])
+	_, statErr := os.Stat(filepath.Join(tmpDir, rebaseStateFile))
+	assert.True(t, os.IsNotExist(statErr), "terminal verification failure must clear stale continuation state")
 }
 
 func TestSync_UnstackedCascadeDoesNotPush(t *testing.T) {

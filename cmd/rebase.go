@@ -226,7 +226,11 @@ func runRebase(cfg *config.Config, opts *rebaseOptions) error {
 
 	if rebaseResult.Err != nil {
 		cfg.Errorf("%v", rebaseResult.Err)
-		_ = git.CheckoutBranch(currentBranch)
+		if rebaseResult.Rebased {
+			restoreRebaseRefs(cfg, currentBranch, originalRefs)
+		} else {
+			_ = git.CheckoutBranch(currentBranch)
+		}
 		return ErrSilent
 	}
 
@@ -266,6 +270,9 @@ func runRebase(cfg *config.Config, opts *rebaseOptions) error {
 
 	if unstacked := verifyStacked(s, trunk.Ref, startIdx, endIdx); len(unstacked) > 0 {
 		reportUnstacked(cfg, trunk.Ref, unstacked)
+		if rebaseResult.Rebased {
+			restoreRebaseRefs(cfg, currentBranch, originalRefs)
+		}
 		return ErrSilent
 	}
 
@@ -408,6 +415,8 @@ func continueRebase(cfg *config.Config, gitDir string) error {
 
 		if result.Err != nil {
 			cfg.Errorf("%v", result.Err)
+			restoreRebaseRefs(cfg, state.OriginalBranch, state.OriginalRefs)
+			clearRebaseState(gitDir)
 			return ErrSilent
 		}
 
@@ -444,6 +453,8 @@ func continueRebase(cfg *config.Config, gitDir string) error {
 	}
 	if unstacked := verifyStacked(s, trunkBase, verifyStart, verifyEnd); len(unstacked) > 0 {
 		reportUnstacked(cfg, trunkRef, unstacked)
+		restoreRebaseRefs(cfg, state.OriginalBranch, state.OriginalRefs)
+		clearRebaseState(gitDir)
 		return ErrSilent
 	}
 

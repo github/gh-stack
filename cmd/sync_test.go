@@ -475,6 +475,11 @@ func TestSync_RebaseConflict_RestoresAll(t *testing.T) {
 	var checkouts []string
 	currentBranch := "b1"
 	abortCalled := false
+	branchSHAs := map[string]string{
+		"b1": "sha-b1",
+		"b2": "sha-b2",
+		"b3": "sha-b3",
+	}
 
 	mock := newSyncMock(tmpDir, "b1")
 	mock.RevParseFn = func(ref string) (string, error) {
@@ -483,6 +488,9 @@ func TestSync_RebaseConflict_RestoresAll(t *testing.T) {
 		}
 		if ref == "origin/main" {
 			return "remote-sha", nil
+		}
+		if sha, ok := branchSHAs[ref]; ok {
+			return sha, nil
 		}
 		return "sha-" + ref, nil
 	}
@@ -495,7 +503,10 @@ func TestSync_RebaseConflict_RestoresAll(t *testing.T) {
 		currentBranch = name
 		return nil
 	}
-	mock.RebaseFn = func(string, git.RebaseOpts) error { return nil } // b1 succeeds
+	mock.RebaseFn = func(string, git.RebaseOpts) error {
+		branchSHAs["b1"] = "rebased-b1"
+		return nil
+	}
 	mock.RebaseOntoFn = func(newBase, oldBase, branch string, opts git.RebaseOpts) error {
 		if branch == "b2" {
 			return fmt.Errorf("conflict")
@@ -508,6 +519,7 @@ func TestSync_RebaseConflict_RestoresAll(t *testing.T) {
 	}
 	mock.ResetHardFn = func(ref string) error {
 		resets = append(resets, resetCall{currentBranch, ref})
+		branchSHAs[currentBranch] = ref
 		return nil
 	}
 
@@ -528,14 +540,15 @@ func TestSync_RebaseConflict_RestoresAll(t *testing.T) {
 	assert.Contains(t, output, "Conflict detected")
 	assert.Contains(t, output, "gh stack rebase")
 
-	// All branches should be restored
+	// The branch rewritten before the conflict should be restored. Unchanged
+	// branches are left alone.
 	resetMap := make(map[string]string)
 	for _, r := range resets {
 		resetMap[r.branch] = r.sha
 	}
 	assert.Equal(t, "sha-b1", resetMap["b1"])
-	assert.Equal(t, "sha-b2", resetMap["b2"])
-	assert.Equal(t, "sha-b3", resetMap["b3"])
+	assert.NotContains(t, resetMap, "b2")
+	assert.NotContains(t, resetMap, "b3")
 
 	_ = abortCalled // RebaseAbort is called if IsRebaseInProgress returns true
 }

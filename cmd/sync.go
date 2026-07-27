@@ -153,6 +153,7 @@ func runSync(cfg *config.Config, opts *syncOptions) error {
 	// --- Step 3: Cascade rebase ---
 	needsRebase := trunk.Moved || len(updatedBranches) > 0 || stackNeedsRebase(s, trunk.Ref)
 	rebased := false
+	var originalRefs map[string]string
 	if needsRebase {
 		cfg.Printf("")
 		cfg.Printf("Rebasing stack ...")
@@ -160,7 +161,7 @@ func runSync(cfg *config.Config, opts *syncOptions) error {
 		// Sync PR state to detect merged PRs before rebasing.
 		_ = syncStackPRs(cfg, s)
 
-		originalRefs, err := resolveOriginalRefs(s)
+		originalRefs, err = resolveOriginalRefs(s)
 		if err != nil {
 			cfg.Warningf("Could not resolve branch SHAs — skipping rebase: %v", err)
 		} else {
@@ -175,7 +176,11 @@ func runSync(cfg *config.Config, opts *syncOptions) error {
 
 			if result.Err != nil {
 				cfg.Errorf("%v", result.Err)
-				_ = git.CheckoutBranch(currentBranch)
+				if result.Rebased {
+					restoreRebaseRefs(cfg, currentBranch, originalRefs)
+				} else {
+					_ = git.CheckoutBranch(currentBranch)
+				}
 				stack.SaveNonBlocking(gitDir, sf)
 				return ErrSilent
 			}
@@ -209,6 +214,9 @@ func runSync(cfg *config.Config, opts *syncOptions) error {
 	if unstacked := verifyStacked(s, trunk.Ref, 0, len(s.Branches)); len(unstacked) > 0 {
 		_ = git.CheckoutBranch(currentBranch)
 		reportUnstacked(cfg, trunk.Ref, unstacked)
+		if rebased && originalRefs != nil {
+			restoreRebaseRefs(cfg, currentBranch, originalRefs)
+		}
 		stack.SaveNonBlocking(gitDir, sf)
 		return ErrSilent
 	}
@@ -402,6 +410,12 @@ func runSync(cfg *config.Config, opts *syncOptions) error {
 func restoreBranches(originalRefs map[string]string) []string {
 	var errors []string
 	for branch, sha := range originalRefs {
+		if !git.BranchExists(branch) {
+			continue
+		}
+		if currentSHA, err := git.RevParse(branch); err == nil && currentSHA == sha {
+			continue
+		}
 		if err := git.CheckoutBranch(branch); err != nil {
 			errors = append(errors, fmt.Sprintf("checkout %s: %s", branch, err))
 			continue
@@ -411,6 +425,12 @@ func restoreBranches(originalRefs map[string]string) []string {
 		}
 	}
 	return errors
+}
+
+func restoreRebaseRefs(cfg *config.Config, originalBranch string, originalRefs map[string]string) {
+	restoreErrors := restoreBranches(originalRefs)
+	_ = git.CheckoutBranch(originalBranch)
+	reportRestoreStatus(cfg, restoreErrors)
 }
 
 // reportRestoreStatus prints whether branch restoration succeeded or partially failed.
