@@ -14,6 +14,13 @@ func stackedRepo(t *testing.T) string {
 	t.Helper()
 	_, clone := setupBareAndClone(t)
 
+	// These tests drive the production rebase helpers, which shell out to git
+	// without the identity env vars gitExec sets. Record it in the repo config
+	// so any git process started in this clone can create commits, including on
+	// machines with no global identity configured.
+	gitExec(t, clone, "config", "user.name", "Test")
+	gitExec(t, clone, "config", "user.email", "test@test.com")
+
 	writeFile(t, clone, "trunk.txt", "trunk v1")
 	gitExec(t, clone, "add", ".")
 	gitExec(t, clone, "commit", "-m", "trunk commit")
