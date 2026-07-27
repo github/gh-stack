@@ -24,6 +24,7 @@ type rebaseOptions struct {
 	noTrunk                   bool
 	remote                    string
 	committerDateIsAuthorDate bool
+	autostash                 bool
 }
 
 type rebaseState struct {
@@ -36,6 +37,11 @@ type rebaseState struct {
 	OntoOldBase               string            `json:"ontoOldBase,omitempty"`
 	CommitterDateIsAuthorDate bool              `json:"committerDateIsAuthorDate,omitempty"`
 	NoTrunk                   bool              `json:"noTrunk,omitempty"`
+	AutoStash                 bool              `json:"autoStash,omitempty"`
+	Stashed                   bool              `json:"stashed,omitempty"`
+	TrunkRef                  string            `json:"trunkRef,omitempty"`
+	StartIndex                int               `json:"startIndex,omitempty"`
+	EndIndex                  int               `json:"endIndex,omitempty"`
 }
 
 const rebaseStateFile = "gh-stack-rebase-state"
@@ -51,6 +57,16 @@ func RebaseCmd(cfg *config.Config) *cobra.Command {
 Ensures that each branch in the stack has the tip of the previous
 layer in its commit history, rebasing if necessary.
 
+Requires no rebase in progress and no uncommitted changes to tracked
+files, since git refuses to rebase otherwise. Untracked files are fine.
+Use --autostash to stash your changes for the duration of the cascade
+and restore them afterwards.
+
+If the local trunk branch cannot be brought up to date — because it is
+checked out in another worktree, or has diverged from the remote — the
+stack is rebased onto the remote-tracking branch instead, so it still
+ends up current.
+
 Use --no-trunk to skip fetching and rebasing with the trunk branch.
 Only the inter-branch rebases are performed (branch 2 onto branch 1,
 branch 3 onto branch 2, etc.).`,
@@ -65,6 +81,9 @@ branch 3 onto branch 2, etc.).`,
 
   # Rebase stack branches without pulling from or rebasing with trunk
   $ gh stack rebase --no-trunk
+
+  # Rebase with uncommitted changes in the working tree
+  $ gh stack rebase --autostash
 
   # Continue after resolving conflicts
   $ gh stack rebase --continue
@@ -88,11 +107,12 @@ branch 3 onto branch 2, etc.).`,
 	cmd.Flags().StringVar(&opts.remote, "remote", "", "Remote to fetch from (defaults to auto-detected remote)")
 	cmd.Flags().BoolVar(&opts.committerDateIsAuthorDate, "committer-date-is-author-date", false, "Set the committer date to the author date during rebase")
 	cmd.Flags().BoolVar(&opts.committerDateIsAuthorDate, "preserve-dates", false, "Alias for --committer-date-is-author-date")
+	cmd.Flags().BoolVar(&opts.autostash, "autostash", false, "Stash uncommitted changes before rebasing and restore them afterwards")
 
 	return cmd
 }
 
-func runRebase(cfg *config.Config, opts *rebaseOptions) error {
+func runRebase(cfg *config.Config, opts *rebaseOptions) (rerr error) {
 	gitDir, err := git.GitDir()
 	if err != nil {
 		cfg.Errorf("not a git repository")
@@ -120,11 +140,38 @@ func runRebase(cfg *config.Config, opts *rebaseOptions) error {
 	s := result.Stack
 	currentBranch := result.CurrentBranch
 
+	// git refuses to rebase when another rebase is in progress or tracked files
+	// are dirty. Fail up front with an actionable message instead of letting
+	// every branch in the cascade fail for the same reason.
+	if err := preflightRebase(cfg, "rebase", opts.autostash); err != nil {
+		return err
+	}
+
+	// Stash once around the whole cascade rather than per rebase, so local
+	// changes survive intact and are restored on the branch they came from.
+	stashed := false
+	if opts.autostash {
+		var stashErr error
+		stashed, stashErr = stashForRebase(cfg)
+		if stashErr != nil {
+			cfg.Errorf("%s", stashErr)
+			return ErrSilent
+		}
+	}
+	// A conflict hands control back to the user, so --continue or --abort
+	// restores the stash instead. Every other exit path restores it here.
+	defer func() {
+		if stashed && !errors.Is(rerr, ErrConflict) {
+			restoreStash(cfg)
+		}
+	}()
+
 	// Enable git rerere so conflict resolutions are remembered.
 	if err := ensureRerere(cfg); errors.Is(err, errInterrupt) {
 		return ErrSilent
 	}
 
+	var trunk trunkTarget
 	if !opts.noTrunk {
 		// Resolve remote for fetch and trunk comparison
 		remote, err := pickRemote(cfg, currentBranch, opts.remote)
@@ -141,14 +188,14 @@ func runRebase(cfg *config.Config, opts *rebaseOptions) error {
 			cfg.Successf("Fetched %s", remote)
 		}
 
-		// Ensure trunk exists locally before fast-forward or cascade rebase.
-		if err := ensureLocalTrunk(cfg, s.Trunk.Branch, remote); err != nil {
-			cfg.Errorf("%s", err)
-			return ErrSilent
+		// Resolve the ref the cascade rebases the bottom branch onto. This
+		// creates the local trunk if missing, fast-forwards it when possible,
+		// and falls back to the remote-tracking ref when the local ref cannot
+		// be moved.
+		trunk, err = resolveTrunkTarget(cfg, s, remote, currentBranch)
+		if err != nil {
+			return err
 		}
-
-		// Fast-forward trunk so the cascade rebase targets the latest upstream.
-		fastForwardTrunk(cfg, s.Trunk.Branch, remote, currentBranch)
 
 		// Fast-forward stack branches that are behind their remote tracking branch.
 		fastForwardBranches(cfg, s, remote, currentBranch)
@@ -222,6 +269,7 @@ func runRebase(cfg *config.Config, opts *rebaseOptions) error {
 		NeedsOnto:                 needsOnto,
 		OntoOldBase:               ontoOldBase,
 		CommitterDateIsAuthorDate: opts.committerDateIsAuthorDate,
+		TrunkRef:                  trunk.Ref,
 	})
 
 	if rebaseResult.Err != nil {
@@ -242,6 +290,10 @@ func runRebase(cfg *config.Config, opts *rebaseOptions) error {
 			OntoOldBase:               rebaseResult.OntoOldBase,
 			CommitterDateIsAuthorDate: opts.committerDateIsAuthorDate,
 			NoTrunk:                   opts.noTrunk,
+			Stashed:                   stashed,
+			TrunkRef:                  trunk.Ref,
+			StartIndex:                startIdx,
+			EndIndex:                  endIdx,
 		}
 		if err := saveRebaseState(gitDir, state); err != nil {
 			cfg.Warningf("failed to save rebase state: %s", err)
@@ -258,6 +310,13 @@ func runRebase(cfg *config.Config, opts *rebaseOptions) error {
 	}
 
 	_ = git.CheckoutBranch(currentBranch)
+
+	// The cascade reported success — verify the stack actually ended up
+	// stacked on the trunk target before saying so.
+	if unstacked := verifyStacked(s, trunk.Ref, startIdx, endIdx); len(unstacked) > 0 {
+		reportUnstacked(cfg, trunkRefOrStack(trunk.Ref, s), unstacked)
+		return ErrSilent
+	}
 
 	updateBaseSHAs(s)
 
@@ -284,7 +343,7 @@ func runRebase(cfg *config.Config, opts *rebaseOptions) error {
 	if opts.noTrunk {
 		cfg.Printf("%s rebased locally (without trunk)", rangeDesc)
 	} else {
-		cfg.Printf("%s rebased locally with %s", rangeDesc, s.Trunk.Branch)
+		cfg.Printf("%s rebased locally with %s", rangeDesc, trunk.Describe())
 	}
 	cfg.Printf("To push up your changes, run `%s`",
 		cfg.ColorCyan("gh stack push"))
@@ -292,12 +351,30 @@ func runRebase(cfg *config.Config, opts *rebaseOptions) error {
 	return nil
 }
 
-func continueRebase(cfg *config.Config, gitDir string) error {
+// trunkRefOrStack returns ref when set, falling back to the stack's local trunk
+// branch (used with --no-trunk, and for rebase state files written before the
+// trunk ref was recorded).
+func trunkRefOrStack(ref string, s *stack.Stack) string {
+	if ref != "" {
+		return ref
+	}
+	return s.Trunk.Branch
+}
+
+func continueRebase(cfg *config.Config, gitDir string) (rerr error) {
 	state, err := loadRebaseState(gitDir)
 	if err != nil {
 		cfg.Errorf("no rebase in progress")
 		return ErrSilent
 	}
+
+	// The interrupted rebase stashed the user's local changes; restore them
+	// once this run finishes without hitting another conflict.
+	defer func() {
+		if state.Stashed && !errors.Is(rerr, ErrConflict) {
+			restoreStash(cfg)
+		}
+	}()
 
 	sf, err := stack.Load(gitDir)
 	if err != nil {
@@ -343,7 +420,7 @@ func continueRebase(cfg *config.Config, gitDir string) error {
 	var baseBranch string
 	if state.UseOnto {
 		// The --onto path targets the first non-merged ancestor, or trunk.
-		baseBranch = s.Trunk.Branch
+		baseBranch = trunkRefOrStack(state.TrunkRef, s)
 		for j := state.CurrentBranchIndex - 1; j >= 0; j-- {
 			if !s.Branches[j].IsMerged() {
 				baseBranch = s.Branches[j].Branch
@@ -353,7 +430,7 @@ func continueRebase(cfg *config.Config, gitDir string) error {
 	} else if state.CurrentBranchIndex > 0 {
 		baseBranch = s.Branches[state.CurrentBranchIndex-1].Branch
 	} else {
-		baseBranch = s.Trunk.Branch
+		baseBranch = trunkRefOrStack(state.TrunkRef, s)
 	}
 	cfg.Successf("Rebased %s onto %s", conflictBranch, baseBranch)
 
@@ -385,6 +462,7 @@ func continueRebase(cfg *config.Config, gitDir string) error {
 			NeedsOnto:                 state.UseOnto,
 			OntoOldBase:               state.OntoOldBase,
 			CommitterDateIsAuthorDate: state.CommitterDateIsAuthorDate,
+			TrunkRef:                  state.TrunkRef,
 		})
 
 		if result.Err != nil {
@@ -417,6 +495,22 @@ func continueRebase(cfg *config.Config, gitDir string) error {
 	clearRebaseState(gitDir)
 	_ = git.CheckoutBranch(state.OriginalBranch)
 
+	// Verify the rebased range actually ended up stacked. Older state files
+	// have no recorded range, in which case fall back to the whole stack —
+	// minus the first branch when trunk was deliberately skipped.
+	verifyStart, verifyEnd := state.StartIndex, state.EndIndex
+	if verifyEnd <= verifyStart {
+		verifyStart, verifyEnd = 0, len(s.Branches)
+		if state.NoTrunk && verifyStart < 1 {
+			verifyStart = 1
+		}
+	}
+	trunkRef := trunkRefOrStack(state.TrunkRef, s)
+	if unstacked := verifyStacked(s, trunkRef, verifyStart, verifyEnd); len(unstacked) > 0 {
+		reportUnstacked(cfg, trunkRef, unstacked)
+		return ErrSilent
+	}
+
 	updateBaseSHAs(s)
 
 	_ = syncStackPRs(cfg, s)
@@ -426,7 +520,7 @@ func continueRebase(cfg *config.Config, gitDir string) error {
 	if state.NoTrunk {
 		cfg.Printf("All branches in stack rebased locally (without trunk)")
 	} else {
-		cfg.Printf("All branches in stack rebased locally with %s", s.Trunk.Branch)
+		cfg.Printf("All branches in stack rebased locally with %s", trunkRef)
 	}
 	cfg.Printf("To push up your changes and open/update the stack of PRs, run `%s`",
 		cfg.ColorCyan("gh stack submit"))
@@ -458,6 +552,10 @@ func abortRebase(cfg *config.Config, gitDir string) error {
 
 	_ = git.CheckoutBranch(state.OriginalBranch)
 	clearRebaseState(gitDir)
+
+	if state.Stashed {
+		restoreStash(cfg)
+	}
 
 	if len(restoreErrors) > 0 {
 		cfg.Warningf("Rebase aborted but some branches could not be fully restored:")

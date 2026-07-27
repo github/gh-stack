@@ -14,8 +14,9 @@ import (
 )
 
 type syncOptions struct {
-	remote string
-	prune  bool
+	remote    string
+	prune     bool
+	autostash bool
 }
 
 func SyncCmd(cfg *config.Config) *cobra.Command {
@@ -38,6 +39,17 @@ This command performs a safe synchronization:
   6. Syncs PR state from GitHub
   7. Links the stack's open PRs into a stack on GitHub (creating or updating
      the remote stack object) when two or more PRs exist
+
+Requires no rebase in progress and no uncommitted changes to tracked files,
+since git refuses to rebase otherwise. Untracked files are fine. Use
+--autostash to stash your changes for the duration of the sync and restore
+them afterwards.
+
+If the local trunk branch cannot be brought up to date — because it is
+checked out in another worktree, or has diverged from the remote — the
+stack is rebased onto the remote-tracking branch instead. Branches are only
+pushed once sync has verified that each one really does sit on top of its
+parent.
 
 If PRs have been added to the stack on GitHub, their branches are pulled
 down and appended to your local stack so it mirrors the remote. A clean
@@ -70,6 +82,7 @@ the first active branch in the stack, or the trunk if all are merged.`,
 
 	cmd.Flags().StringVar(&opts.remote, "remote", "", "Remote to fetch from and push to (defaults to auto-detected remote)")
 	cmd.Flags().BoolVar(&opts.prune, "prune", false, "Delete local branches for merged PRs")
+	cmd.Flags().BoolVar(&opts.autostash, "autostash", false, "Stash uncommitted changes before rebasing and restore them afterwards")
 
 	return cmd
 }
@@ -84,6 +97,27 @@ func runSync(cfg *config.Config, opts *syncOptions) error {
 	if err := modify.CheckStateGuard(gitDir); err != nil {
 		cfg.Errorf("%s", err)
 		return ErrModifyRecovery
+	}
+
+	// git refuses to rebase when another rebase is in progress or tracked files
+	// are dirty, and sync has no interactive conflict recovery, so check before
+	// touching any refs.
+	if err := preflightRebase(cfg, "sync", opts.autostash); err != nil {
+		return err
+	}
+
+	// Stash once around the whole run. sync has no interactive conflict
+	// recovery — it restores the branches itself — so the stash is always
+	// popped before returning.
+	if opts.autostash {
+		stashed, stashErr := stashForRebase(cfg)
+		if stashErr != nil {
+			cfg.Errorf("%s", stashErr)
+			return ErrSilent
+		}
+		if stashed {
+			defer restoreStash(cfg)
+		}
 	}
 
 	sf := result.StackFile
@@ -106,10 +140,17 @@ func runSync(cfg *config.Config, opts *syncOptions) error {
 	}
 
 	// Fetch trunk + active branches so tracking refs are current for
-	// fast-forward detection (Step 2) and --force-with-lease (Step 4).
+	// fast-forward detection (Step 2) and --force-with-lease (Step 4). The
+	// trunk name is normalized first so a remote-qualified trunk does not
+	// produce a "origin/origin/main" refspec.
+	normalizeStackTrunk(cfg, s, remote)
 	fetchTargets := append([]string{s.Trunk.Branch}, activeBranchNames(s)...)
-	_ = git.FetchBranches(remote, fetchTargets)
-	cfg.Successf("Fetched latest changes from %s", remote)
+	if err := git.FetchBranches(remote, fetchTargets); err != nil {
+		cfg.Warningf("Failed to fetch from %s: %v", remote, err)
+		cfg.Printf("  Continuing with the refs already available locally, which may be out of date.")
+	} else {
+		cfg.Successf("Fetched latest changes from %s", remote)
+	}
 
 	// --- Step 1b: Reconcile remote-ahead stack changes ---
 	// Pull in branches for PRs that were added to the stack on GitHub, or
@@ -139,9 +180,16 @@ func runSync(cfg *config.Config, opts *syncOptions) error {
 		currentBranch = cb
 	}
 
-	// --- Step 2: Fast-forward trunk ---
-	trunk := s.Trunk.Branch
-	trunkUpdated := fastForwardTrunk(cfg, trunk, remote, currentBranch)
+	// --- Step 2: Resolve and fast-forward trunk ---
+	// Resolves the ref the cascade rebases the bottom branch onto: the local
+	// trunk when it can be brought up to date, otherwise the remote-tracking
+	// ref, so a trunk that cannot be moved never leaves the stack silently
+	// based on a stale commit.
+	trunk, err := resolveTrunkTarget(cfg, s, remote, currentBranch)
+	if err != nil {
+		return err
+	}
+	trunkUpdated := trunk.Moved
 
 	// --- Step 2b: Fast-forward stack branches behind their remote tracking branch ---
 	updatedBranches := fastForwardBranches(cfg, s, remote, currentBranch)
@@ -150,7 +198,7 @@ func runSync(cfg *config.Config, opts *syncOptions) error {
 	// --- Step 3: Cascade rebase ---
 	// Rebase if trunk or any branch moved, or if the stack is stale
 	// (branches not yet rebased onto their parent's current tip).
-	needsRebase := trunkUpdated || branchesUpdated || stackNeedsRebase(s)
+	needsRebase := trunkUpdated || branchesUpdated || stackNeedsRebase(s, trunk.Ref)
 	rebased := false
 	if needsRebase {
 		cfg.Printf("")
@@ -169,6 +217,7 @@ func runSync(cfg *config.Config, opts *syncOptions) error {
 				Branches:     s.Branches,
 				StartAbsIdx:  0,
 				OriginalRefs: originalRefs,
+				TrunkRef:     trunk.Ref,
 			})
 
 			if result.Err != nil {
@@ -202,6 +251,16 @@ func runSync(cfg *config.Config, opts *syncOptions) error {
 			}
 		}
 		_ = git.CheckoutBranch(currentBranch)
+	}
+
+	// Never push branches that are not actually stacked on the trunk target. A
+	// rebase that reported success but left the stack where it was must not be
+	// force-pushed over the remote.
+	if unstacked := verifyStacked(s, trunk.Ref, 0, len(s.Branches)); len(unstacked) > 0 {
+		_ = git.CheckoutBranch(currentBranch)
+		reportUnstacked(cfg, trunk.Ref, unstacked)
+		stack.SaveNonBlocking(gitDir, sf)
+		return ErrSilent
 	}
 
 	// --- Step 4: Push ---
@@ -329,7 +388,7 @@ func runSync(cfg *config.Config, opts *syncOptions) error {
 				}
 			}
 			if needsSwitch {
-				switchTarget := trunk
+				switchTarget := trunk.Branch
 				for _, b := range s.Branches {
 					if !b.IsSkipped() {
 						switchTarget = b.Branch
@@ -385,6 +444,7 @@ func runSync(cfg *config.Config, opts *syncOptions) error {
 		// unavailable, or a divergence). Report only what actually happened.
 		cfg.Successf("Branches synced")
 	}
+	cfg.Printf("  Stacked on %s", trunk.Describe())
 	return nil
 }
 

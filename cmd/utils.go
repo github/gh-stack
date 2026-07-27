@@ -887,11 +887,28 @@ func resolveOriginalRefs(s *stack.Stack) (map[string]string, error) {
 	return originalRefs, nil
 }
 
+// normalizeTrunkBranch strips a leading "<remote>/" from a trunk branch name.
+// `gh stack init --base origin/main` records the remote-qualified name, which
+// is then re-qualified into "origin/origin/main" wherever a remote ref is built
+// from it. The prefix is only stripped when no local branch is literally named
+// that way, so a genuine branch called "origin/main" still works.
+func normalizeTrunkBranch(trunk, remote string) string {
+	if remote == "" {
+		return trunk
+	}
+	stripped, ok := strings.CutPrefix(trunk, remote+"/")
+	if !ok || stripped == "" || git.BranchExists(trunk) {
+		return trunk
+	}
+	return stripped
+}
+
 // ensureLocalTrunk ensures the trunk branch exists locally. If it does not,
 // it fetches the branch from the remote and creates a local tracking branch.
 // This handles the case where a user started their stack after renaming their
 // initial branch (e.g. `git branch -m newbranch`), leaving no local trunk.
 func ensureLocalTrunk(cfg *config.Config, trunk, remote string) error {
+	trunk = normalizeTrunkBranch(trunk, remote)
 	if git.BranchExists(trunk) {
 		return nil
 	}
@@ -909,57 +926,204 @@ func ensureLocalTrunk(cfg *config.Config, trunk, remote string) error {
 	return nil
 }
 
-// fastForwardTrunk fast-forwards the trunk branch to match its remote tracking
-// branch. Returns true if trunk was updated.
-func fastForwardTrunk(cfg *config.Config, trunk, remote, currentBranch string) bool {
-	// If the local trunk branch doesn't exist, there's nothing to
-	// fast-forward. Callers should use ensureLocalTrunk beforehand if
-	// they need trunk to be resolvable as a local ref.
-	if !git.BranchExists(trunk) {
-		return false
+// normalizeStackTrunk rewrites a remote-qualified trunk name (e.g. "origin/main"
+// recorded by `gh stack init --base origin/main`) to the plain local branch
+// name, so refspecs and remote refs built from it are not double-prefixed.
+// It is idempotent and reports the rewrite once.
+func normalizeStackTrunk(cfg *config.Config, s *stack.Stack, remote string) {
+	trunk := normalizeTrunkBranch(s.Trunk.Branch, remote)
+	if trunk == s.Trunk.Branch {
+		return
+	}
+	cfg.Warningf("Stack trunk %q is remote-qualified — using local branch %q on %s",
+		s.Trunk.Branch, trunk, remote)
+	s.Trunk.Branch = trunk
+}
+
+// trunkTarget describes the ref a cascade rebase must use as the base of the
+// bottom branch of a stack.
+type trunkTarget struct {
+	// Branch is the normalized local trunk branch name.
+	Branch string
+	// Ref is the ref to rebase onto: Branch when the local trunk is current,
+	// or "<remote>/<Branch>" when the local ref could not be updated.
+	Ref string
+	// SHA is the commit Ref resolves to.
+	SHA string
+	// Moved reports whether the effective trunk advanced during this run.
+	Moved bool
+	// Detached reports whether Ref is the remote-tracking ref because the local
+	// trunk branch could not be brought up to date.
+	Detached bool
+}
+
+// Describe renders the trunk target for the closing summary, naming the SHA so
+// a run against a stale trunk is visible at a glance.
+func (t trunkTarget) Describe() string {
+	return fmt.Sprintf("%s (%s)", t.Ref, short(t.SHA))
+}
+
+// resolveTrunkTarget determines the ref a cascade rebase must use as the base
+// of the bottom branch of the stack, bringing the local trunk up to date where
+// possible.
+//
+// The local trunk ref cannot always be moved: it may be checked out in another
+// worktree, or have diverged from the remote. Rebasing onto it anyway bases the
+// whole stack on a stale trunk while every branch still looks correctly
+// stacked, which is why sync and rebase could report a complete success without
+// pulling anything in. In that situation the remote-tracking ref is used as the
+// rebase target instead, so the stack ends up current regardless of why the
+// local ref is stuck.
+//
+// Diagnostics are printed here, so a returned error is always ErrSilent.
+func resolveTrunkTarget(cfg *config.Config, s *stack.Stack, remote, currentBranch string) (trunkTarget, error) {
+	normalizeStackTrunk(cfg, s, remote)
+	trunk := s.Trunk.Branch
+
+	remoteRef := remote + "/" + trunk
+	remoteSHA, remoteErr := git.RevParse(remoteRef)
+	if remoteErr != nil {
+		cfg.Errorf("%s does not exist on %s — cannot bring the stack up to date with its trunk", trunk, remote)
+		cfg.Printf("  If %s was merged and deleted, re-point the stack at its new trunk.", trunk)
+		cfg.Printf("  To rebase the stack on itself without touching the trunk, run `%s`.",
+			cfg.ColorCyan("gh stack rebase --no-trunk"))
+		return trunkTarget{}, ErrSilent
 	}
 
-	localSHA, remoteSHA := "", ""
-	trunkRefs, trunkErr := git.RevParseMulti([]string{trunk, remote + "/" + trunk})
-	if trunkErr == nil {
-		localSHA, remoteSHA = trunkRefs[0], trunkRefs[1]
+	if err := ensureLocalTrunk(cfg, trunk, remote); err != nil {
+		cfg.Errorf("%s", err)
+		return trunkTarget{}, ErrSilent
 	}
 
-	if trunkErr != nil {
-		cfg.Warningf("Could not compare trunk %s with remote — skipping trunk update", trunk)
-		return false
+	localSHA, err := git.RevParse(trunk)
+	if err != nil {
+		cfg.Errorf("could not resolve trunk branch %s: %s", trunk, err)
+		return trunkTarget{}, ErrSilent
 	}
 
 	if localSHA == remoteSHA {
 		cfg.Successf("Trunk %s is already up to date", trunk)
-		return false
+		return trunkTarget{Branch: trunk, Ref: trunk, SHA: localSHA}, nil
 	}
 
-	isAncestor, err := git.IsAncestor(localSHA, remoteSHA)
-	if err != nil {
-		cfg.Warningf("Could not determine fast-forward status for %s: %v", trunk, err)
-		return false
-	}
-	if !isAncestor {
-		cfg.Warningf("Trunk %s has diverged from %s — skipping trunk update", trunk, remote)
-		cfg.Printf("  Local and remote %s have diverged. Resolve manually.", trunk)
-		return false
+	// Local trunk already contains the remote tip — unpushed local commits on
+	// trunk. Rebasing onto the remote ref would drop them, so keep the local.
+	if isAnc, ancErr := git.IsAncestor(remoteSHA, localSHA); ancErr == nil && isAnc {
+		cfg.Successf("Trunk %s is ahead of %s — using the local branch", trunk, remoteRef)
+		return trunkTarget{Branch: trunk, Ref: trunk, SHA: localSHA}, nil
 	}
 
-	if currentBranch == trunk {
-		if err := git.MergeFF(remote + "/" + trunk); err != nil {
-			cfg.Warningf("Failed to fast-forward %s: %v", trunk, err)
-			return false
+	canFastForward, ffErr := git.IsAncestor(localSHA, remoteSHA)
+	if ffErr != nil {
+		cfg.Warningf("Could not determine fast-forward status for %s: %v", trunk, ffErr)
+		canFastForward = false
+	}
+
+	if canFastForward {
+		var updateErr error
+		if currentBranch == trunk {
+			updateErr = git.MergeFF(remoteRef)
+		} else {
+			updateErr = git.UpdateBranchRef(trunk, remoteSHA)
 		}
+		if updateErr == nil {
+			cfg.Successf("Trunk %s fast-forwarded to %s", trunk, short(remoteSHA))
+			return trunkTarget{Branch: trunk, Ref: trunk, SHA: remoteSHA, Moved: true}, nil
+		}
+		cfg.Warningf("Could not update local %s: %v", trunk, updateErr)
 	} else {
-		if err := git.UpdateBranchRef(trunk, remoteSHA); err != nil {
-			cfg.Warningf("Failed to fast-forward %s: %v", trunk, err)
-			return false
-		}
+		cfg.Warningf("Local %s has diverged from %s", trunk, remoteRef)
 	}
 
-	cfg.Successf("Trunk %s fast-forwarded to %s", trunk, short(remoteSHA))
-	return true
+	// The local ref is stuck. Rebase onto the remote-tracking ref so the stack
+	// still ends up on the latest trunk.
+	cfg.Printf("  Rebasing the stack onto %s (%s) instead — your local %s is left untouched.",
+		remoteRef, short(remoteSHA), trunk)
+	return trunkTarget{Branch: trunk, Ref: remoteRef, SHA: remoteSHA, Moved: true, Detached: true}, nil
+}
+
+// requireNoRebaseInProgress fails when a rebase is already in progress. git
+// refuses to start another one, so continuing would leave the caller reporting
+// work it never did.
+func requireNoRebaseInProgress(cfg *config.Config) error {
+	if !git.IsRebaseInProgress() {
+		return nil
+	}
+	cfg.Errorf("a rebase is currently in progress")
+	cfg.Printf("Complete the rebase with `%s` or abort with `%s`",
+		cfg.ColorCyan("gh stack rebase --continue"),
+		cfg.ColorCyan("gh stack rebase --abort"))
+	return ErrRebaseActive
+}
+
+// requireCleanWorkingTree fails when tracked files have uncommitted changes.
+// git refuses to rebase over them, so this turns a confusing mid-cascade
+// failure into an actionable message up front. Untracked files are not checked:
+// git rebases happily with them present. An inability to inspect the tree is
+// treated as a reason to stop — a failed status must not read as "clean".
+func requireCleanWorkingTree(cfg *config.Config, command string) error {
+	dirty, err := git.HasUncommittedTrackedChanges()
+	if err != nil {
+		cfg.Errorf("failed to check working tree status: %s", err)
+		return ErrSilent
+	}
+	if !dirty {
+		return nil
+	}
+	cfg.Errorf("uncommitted changes in working tree")
+	cfg.Printf("Commit or stash your changes before running %s, or re-run with `%s`",
+		command, cfg.ColorCyan("--autostash"))
+	return ErrSilent
+}
+
+// preflightRebase runs the checks that must pass before any cascade rebase.
+// With autostash the clean-tree requirement is lifted, since stashForRebase
+// clears the working tree instead.
+func preflightRebase(cfg *config.Config, command string, autostash bool) error {
+	if err := requireNoRebaseInProgress(cfg); err != nil {
+		return err
+	}
+	if autostash {
+		return nil
+	}
+	return requireCleanWorkingTree(cfg, command)
+}
+
+// stashMessage labels the stash entry gh-stack creates for --autostash.
+const stashMessage = "gh-stack: autostash"
+
+// stashForRebase stashes tracked working-tree changes for the duration of a
+// cascade rebase, reporting whether anything was stashed.
+//
+// git's own `rebase --autostash` cannot be used here: it pops the stash at the
+// end of every individual rebase, which lands the changes on whichever branch
+// that rebase left checked out and conflicts against files that do not exist
+// there. Stashing once around the whole cascade keeps the changes intact.
+func stashForRebase(cfg *config.Config) (bool, error) {
+	dirty, err := git.HasUncommittedTrackedChanges()
+	if err != nil {
+		return false, fmt.Errorf("failed to check working tree status: %w", err)
+	}
+	if !dirty {
+		return false, nil
+	}
+	if err := git.StashPush(stashMessage); err != nil {
+		return false, fmt.Errorf("could not stash local changes: %w", err)
+	}
+	cfg.Successf("Stashed local changes")
+	return true, nil
+}
+
+// restoreStash pops the stash created by stashForRebase, warning rather than
+// failing if it cannot be applied — the entry is still in the stash list.
+func restoreStash(cfg *config.Config) {
+	if err := git.StashPop(); err != nil {
+		cfg.Warningf("Could not restore your stashed changes: %v", err)
+		cfg.Printf("  They are still saved — run `%s` to restore them.",
+			cfg.ColorCyan("git stash pop"))
+		return
+	}
+	cfg.Successf("Restored stashed changes")
 }
 
 // cascadeRebaseOpts holds parameters for a cascade rebase across a range of
@@ -973,6 +1137,18 @@ type cascadeRebaseOpts struct {
 	NeedsOnto                 bool
 	OntoOldBase               string
 	CommitterDateIsAuthorDate bool
+	// TrunkRef is the ref the bottom branch is rebased onto. It defaults to
+	// Stack.Trunk.Branch, but resolveTrunkTarget substitutes the
+	// remote-tracking ref when the local trunk could not be brought up to date.
+	TrunkRef string
+}
+
+// trunkRef returns the ref to rebase the bottom branch onto.
+func (o cascadeRebaseOpts) trunkRef() string {
+	if o.TrunkRef != "" {
+		return o.TrunkRef
+	}
+	return o.Stack.Trunk.Branch
 }
 
 // cascadeRebaseResult describes the outcome of a cascade rebase.
@@ -998,14 +1174,17 @@ func cascadeRebase(opts cascadeRebaseOpts) cascadeRebaseResult {
 	ontoOldBase := opts.OntoOldBase
 	originalRefs := opts.OriginalRefs
 	result := cascadeRebaseResult{}
-	rebaseOpts := git.RebaseOpts{CommitterDateIsAuthorDate: opts.CommitterDateIsAuthorDate}
+	rebaseOpts := git.RebaseOpts{
+		CommitterDateIsAuthorDate: opts.CommitterDateIsAuthorDate,
+	}
+	trunkRef := opts.trunkRef()
 
 	for i, br := range opts.Branches {
 		absIdx := opts.StartAbsIdx + i
 
 		var base string
 		if absIdx == 0 {
-			base = s.Trunk.Branch
+			base = trunkRef
 		} else {
 			base = s.Branches[absIdx-1].Branch
 		}
@@ -1034,7 +1213,7 @@ func cascadeRebase(opts cascadeRebaseOpts) cascadeRebaseResult {
 		if needsOnto {
 			// Find --onto target: first non-merged ancestor, or trunk. Queued
 			// ancestors keep their commits, so they are valid --onto targets.
-			newBase := s.Trunk.Branch
+			newBase := trunkRef
 			for j := absIdx - 1; j >= 0; j-- {
 				if !s.Branches[j].IsMerged() {
 					newBase = s.Branches[j].Branch
@@ -1054,6 +1233,12 @@ func cascadeRebase(opts cascadeRebaseOpts) cascadeRebaseResult {
 			}
 
 			if err := git.RebaseOnto(newBase, actualOldBase, br.Branch, rebaseOpts); err != nil {
+				if git.IsRebaseStartError(err) {
+					return cascadeRebaseResult{
+						Rebased: result.Rebased,
+						Err:     rebaseStartFailure(br.Branch, newBase, err),
+					}
+				}
 				remaining := make([]string, 0, len(opts.Branches)-i-1)
 				for j := i + 1; j < len(opts.Branches); j++ {
 					remaining = append(remaining, opts.Branches[j].Branch)
@@ -1088,6 +1273,12 @@ func cascadeRebase(opts cascadeRebaseOpts) cascadeRebaseResult {
 			}
 
 			if rebaseErr != nil {
+				if git.IsRebaseStartError(rebaseErr) {
+					return cascadeRebaseResult{
+						Rebased: result.Rebased,
+						Err:     rebaseStartFailure(br.Branch, base, rebaseErr),
+					}
+				}
 				remaining := make([]string, 0, len(opts.Branches)-i-1)
 				for j := i + 1; j < len(opts.Branches); j++ {
 					remaining = append(remaining, opts.Branches[j].Branch)
@@ -1112,17 +1303,53 @@ func cascadeRebase(opts cascadeRebaseOpts) cascadeRebaseResult {
 	return result
 }
 
+// rebaseStartFailure wraps a rebase that git refused to start. There is nothing
+// to resolve or continue, so it must not be reported as a conflict. git's own
+// message names the cause (dirty working tree, branch checked out in another
+// worktree, unresolvable upstream, rebase already in progress), so it is
+// preserved verbatim.
+func rebaseStartFailure(branch, base string, err error) error {
+	return fmt.Errorf("could not start rebase of %s onto %s: %w", branch, base, err)
+}
+
 // stackNeedsRebase returns true if any active branch in the stack is not based
 // on its parent's current tip. This detects when the stack needs rebasing even
 // if trunk was not updated in the current run.
-func stackNeedsRebase(s *stack.Stack) bool {
-	trunk := s.Trunk.Branch
-	for i, br := range s.Branches {
+//
+// trunkRef is the ref the bottom branch must sit on. Passing an empty string
+// falls back to the local trunk branch, which is only correct when the local
+// trunk is known to be current — otherwise a stack sitting on a stale local
+// trunk looks perfectly up to date.
+func stackNeedsRebase(s *stack.Stack, trunkRef string) bool {
+	return len(verifyStacked(s, trunkRef, 0, len(s.Branches))) > 0
+}
+
+// verifyStacked returns the names of branches in s.Branches[startIdx:endIdx]
+// that do not have their effective parent (the nearest non-skipped ancestor,
+// or trunkRef) in their commit history.
+//
+// It doubles as the post-condition for a cascade rebase: if any branch in the
+// rebased range still fails this check, the rebase did not actually take
+// effect and reporting success would be a lie.
+func verifyStacked(s *stack.Stack, trunkRef string, startIdx, endIdx int) []string {
+	if trunkRef == "" {
+		trunkRef = s.Trunk.Branch
+	}
+	if startIdx < 0 {
+		startIdx = 0
+	}
+	if endIdx > len(s.Branches) {
+		endIdx = len(s.Branches)
+	}
+
+	var unstacked []string
+	for i := startIdx; i < endIdx; i++ {
+		br := s.Branches[i]
 		if br.IsSkipped() {
 			continue
 		}
 		// Find the nearest non-skipped parent.
-		parent := trunk
+		parent := trunkRef
 		for j := i - 1; j >= 0; j-- {
 			if !s.Branches[j].IsSkipped() {
 				parent = s.Branches[j].Branch
@@ -1131,10 +1358,24 @@ func stackNeedsRebase(s *stack.Stack) bool {
 		}
 		isAnc, err := git.IsAncestor(parent, br.Branch)
 		if err != nil || !isAnc {
-			return true
+			unstacked = append(unstacked, br.Branch)
 		}
 	}
-	return false
+	return unstacked
+}
+
+// reportUnstacked prints a diagnostic for branches that are still not stacked
+// on their parent after a cascade rebase reported success.
+func reportUnstacked(cfg *config.Config, trunkRef string, unstacked []string) {
+	cfg.Errorf("Rebase reported success but %s still not based on %s: %s",
+		plural(len(unstacked), "this branch is", "these branches are"),
+		plural(len(unstacked), "its parent", "their parents"),
+		strings.Join(unstacked, ", "))
+	cfg.Printf("  Trunk: %s", trunkRef)
+	cfg.Printf("  This usually means git refused the rebase. Check for uncommitted")
+	cfg.Printf("  changes, a branch checked out in another worktree, or a rebase")
+	cfg.Printf("  already in progress, then run `%s` again.",
+		cfg.ColorCyan("gh stack rebase"))
 }
 
 // resolvePR resolves a user-provided target to a stack and branch using

@@ -17,6 +17,15 @@ type RebaseOpts struct {
 	CommitterDateIsAuthorDate bool
 }
 
+// flags renders the options as git rebase command-line flags.
+func (o RebaseOpts) flags() []string {
+	var args []string
+	if o.CommitterDateIsAuthorDate {
+		args = append(args, "--committer-date-is-author-date")
+	}
+	return args
+}
+
 // Ops defines the interface for git operations used by commands.
 // The package-level functions are the default production implementation.
 // Tests can substitute a mock via SetOps().
@@ -74,6 +83,9 @@ type Ops interface {
 	CherryPickContinue() error
 	IsCherryPickInProgress() bool
 	HasUncommittedChanges() (bool, error)
+	HasUncommittedTrackedChanges() (bool, error)
+	StashPush(message string) error
+	StashPop() error
 	LogMerges(base, head string) ([]CommitInfo, error)
 }
 
@@ -142,11 +154,27 @@ func (d *defaultOps) FetchBranches(remote string, branches []string) error {
 	}
 	// Fallback: one branch may be absent on the remote or deleted since
 	// the last fetch. Fetch individually so one missing branch doesn't
-	// block the rest. Per-branch failure is expected and tolerated.
+	// block the rest. A missing ref is expected and tolerated; any other
+	// failure (no network, bad credentials, unknown remote) means the fetch
+	// itself did not work and callers must not report success.
+	var fetchErr error
 	for _, rs := range refspecs {
-		_ = runSilent("fetch", remote, rs)
+		err := runSilent("fetch", remote, rs)
+		if err == nil || isMissingRemoteRefError(err) {
+			continue
+		}
+		if fetchErr == nil {
+			fetchErr = fmt.Errorf("fetching from %s: %w", remote, err)
+		}
 	}
-	return nil
+	return fetchErr
+}
+
+// isMissingRemoteRefError reports whether a fetch failed only because the
+// requested ref does not exist on the remote — the normal case for a local
+// branch that has never been pushed, or one whose remote branch was deleted.
+func isMissingRemoteRefError(err error) bool {
+	return err != nil && strings.Contains(err.Error(), "couldn't find remote ref")
 }
 
 func (d *defaultOps) DefaultBranch() (string, error) {
@@ -241,15 +269,17 @@ func (d *defaultOps) ResolveRemote(branch string) (string, error) {
 
 func (d *defaultOps) Rebase(base string, opts RebaseOpts) error {
 	args := []string{"rebase"}
-	if opts.CommitterDateIsAuthorDate {
-		args = append(args, "--committer-date-is-author-date")
-	}
+	args = append(args, opts.flags()...)
 	args = append(args, base)
-	err := runSilent(args...)
-	if err == nil {
-		return nil
-	}
-	return tryAutoResolveRebase(err, opts)
+	return runRebaseCommand(args, opts)
+}
+
+func (d *defaultOps) StashPush(message string) error {
+	return runSilent("stash", "push", "--message", message)
+}
+
+func (d *defaultOps) StashPop() error {
+	return runSilent("stash", "pop")
 }
 
 func (d *defaultOps) EnableRerere() error {
@@ -298,19 +328,13 @@ func (d *defaultOps) ClearRemote() error {
 
 func (d *defaultOps) RebaseOnto(newBase, oldBase, branch string, opts RebaseOpts) error {
 	args := []string{"rebase"}
-	if opts.CommitterDateIsAuthorDate {
-		args = append(args, "--committer-date-is-author-date")
-	}
+	args = append(args, opts.flags()...)
 	args = append(args, "--onto", newBase, oldBase, branch)
-	err := runSilent(args...)
-	if err == nil {
-		return nil
-	}
-	return tryAutoResolveRebase(err, opts)
+	return runRebaseCommand(args, opts)
 }
 
 func (d *defaultOps) RebaseContinue(opts RebaseOpts) error {
-	err := rebaseContinueOnce(opts)
+	err := rebaseContinueOnce()
 	if err == nil {
 		return nil
 	}
@@ -650,6 +674,17 @@ func (d *defaultOps) IsCherryPickInProgress() bool {
 
 func (d *defaultOps) HasUncommittedChanges() (bool, error) {
 	out, err := run("status", "--porcelain")
+	if err != nil {
+		return false, err
+	}
+	return out != "", nil
+}
+
+func (d *defaultOps) HasUncommittedTrackedChanges() (bool, error) {
+	// Untracked files are deliberately excluded: git rebase happily runs with
+	// them present, so treating them as "dirty" would block rebases that git
+	// itself would accept.
+	out, err := run("status", "--porcelain", "--untracked-files=no")
 	if err != nil {
 		return false, err
 	}

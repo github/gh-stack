@@ -1292,13 +1292,7 @@ func TestRebase_FastForwardsBranchFromRemote(t *testing.T) {
 		}
 		return "sha-" + ref, nil
 	}
-	mock.IsAncestorFn = func(a, d string) (bool, error) {
-		// b1-local is ancestor of b1-remote → can fast-forward
-		if a == "b1-local-sha" && d == "b1-remote-sha" {
-			return true, nil
-		}
-		return false, nil
-	}
+	mock.IsAncestorFn, _ = ancestorMock([][2]string{{"b1-remote-sha", "b1-local-sha"}}, nil)
 	mock.UpdateBranchRefFn = func(branch, sha string) error {
 		updateBranchRefCalls = append(updateBranchRefCalls, struct{ branch, sha string }{branch, sha})
 		return nil
@@ -1414,9 +1408,10 @@ func TestRebase_BranchDiverged_NoFF(t *testing.T) {
 		return "sha-" + ref, nil
 	}
 	// Neither is ancestor of the other — diverged
-	mock.IsAncestorFn = func(a, d string) (bool, error) {
-		return false, nil
-	}
+	mock.IsAncestorFn, _ = ancestorMock([][2]string{
+		{"b1-local-sha", "b1-remote-sha"},
+		{"b1-remote-sha", "b1-local-sha"},
+	}, nil)
 	mock.UpdateBranchRefFn = func(string, string) error {
 		updateBranchRefCalls++
 		return nil

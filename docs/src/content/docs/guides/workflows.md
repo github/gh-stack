@@ -174,6 +174,20 @@ gh stack rebase --upstack
 gh stack rebase --no-trunk
 ```
 
+Rebasing needs a working tree with no uncommitted changes to tracked files, because git refuses to rebase over them. Untracked files are fine. Commit or stash your work first, or let `gh stack` stash it for you:
+
+```sh
+gh stack rebase --autostash
+```
+
+The same applies to `gh stack sync`, which runs the cascading rebase as one of its steps.
+
+If your local trunk branch can't be updated — because it's checked out in another worktree, or has diverged from the remote — the stack is rebased onto `origin/<trunk>` instead, and the command tells you so. Your local trunk is left alone. The closing summary always names the ref and commit the stack actually landed on:
+
+```
+All branches in stack rebased locally with origin/main (84bacb3)
+```
+
 After rebasing, push the updated branches:
 
 ```sh

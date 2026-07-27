@@ -682,7 +682,7 @@ func TestStackNeedsRebase_AllCurrent(t *testing.T) {
 	restore := git.SetOps(mock)
 	defer restore()
 
-	assert.False(t, stackNeedsRebase(s), "stack should not need rebase when all branches are current")
+	assert.False(t, stackNeedsRebase(s, ""), "stack should not need rebase when all branches are current")
 }
 
 func TestStackNeedsRebase_FirstBranchStale(t *testing.T) {
@@ -705,7 +705,7 @@ func TestStackNeedsRebase_FirstBranchStale(t *testing.T) {
 	restore := git.SetOps(mock)
 	defer restore()
 
-	assert.True(t, stackNeedsRebase(s), "stack should need rebase when first branch is stale")
+	assert.True(t, stackNeedsRebase(s, ""), "stack should need rebase when first branch is stale")
 }
 
 func TestStackNeedsRebase_SkipsMergedBranches(t *testing.T) {
@@ -725,7 +725,7 @@ func TestStackNeedsRebase_SkipsMergedBranches(t *testing.T) {
 	restore := git.SetOps(mock)
 	defer restore()
 
-	assert.False(t, stackNeedsRebase(s), "should skip merged branches and find stack up to date")
+	assert.False(t, stackNeedsRebase(s, ""), "should skip merged branches and find stack up to date")
 }
 
 // setTestRepo sets RepoOverride so tests don't depend on real git context.
@@ -850,4 +850,41 @@ func TestEnrichPRContent(t *testing.T) {
 	assert.Equal(t, "Fetched title", details["merged"].Title)
 	assert.Equal(t, "Fetched body", details["merged"].Body)
 	assert.Equal(t, "Has it", details["open"].Title, "PRs that already have a title are untouched")
+}
+
+// ancestorMock builds a directional IsAncestor func for git.MockOps.
+//
+// Every pair reports true except those listed, so branch/parent relationships
+// hold by default and only the modelled exception reports false:
+//
+//   - permanent: pairs that are never in an ancestor relationship, such as a
+//     local trunk that has diverged from its remote.
+//   - untilRebase: pairs that report false until markRebased is called, which
+//     models a stack that is stale until the cascade fixes it. sync and rebase
+//     verify after the cascade that every branch really does sit on top of its
+//     parent, so a mock whose rebase never "lands" is correctly reported as a
+//     rebase that did not happen.
+//
+// markRebased must be called from the mock's Rebase/RebaseOnto funcs.
+func ancestorMock(permanent, untilRebase [][2]string) (fn func(string, string) (bool, error), markRebased func()) {
+	listed := func(pairs [][2]string, a, d string) bool {
+		for _, p := range pairs {
+			if p[0] == a && p[1] == d {
+				return true
+			}
+		}
+		return false
+	}
+	rebased := false
+	fn = func(a, d string) (bool, error) {
+		if listed(permanent, a, d) {
+			return false, nil
+		}
+		if !rebased && listed(untilRebase, a, d) {
+			return false, nil
+		}
+		return true, nil
+	}
+	markRebased = func() { rebased = true }
+	return fn, markRebased
 }

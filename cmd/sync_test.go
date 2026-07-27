@@ -139,21 +139,19 @@ func TestSync_TrunkUpToDate_StackStale(t *testing.T) {
 		}
 		return "sha-" + ref, nil
 	}
-	// Stack branches are NOT rebased onto trunk — parent is not an ancestor.
-	mock.IsAncestorFn = func(a, d string) (bool, error) {
-		// main is NOT an ancestor of b1 → stack is stale
-		if a == "main" && d == "b1" {
-			return false, nil
-		}
-		return true, nil
-	}
+	// Stack branches are NOT rebased onto trunk — parent is not an ancestor
+	// until the cascade runs.
+	isAncestor, markRebased := ancestorMock(nil, [][2]string{{"main", "b1"}})
+	mock.IsAncestorFn = isAncestor
 	mock.CheckoutBranchFn = func(string) error { return nil }
 	mock.RebaseFn = func(base string, opts git.RebaseOpts) error {
 		rebaseCalls = append(rebaseCalls, rebaseCall{branch: "(rebase)" + base})
+		markRebased()
 		return nil
 	}
 	mock.RebaseOntoFn = func(newBase, oldBase, branch string, opts git.RebaseOpts) error {
 		rebaseCalls = append(rebaseCalls, rebaseCall{newBase, oldBase, branch})
+		markRebased()
 		return nil
 	}
 	mock.PushFn = func(remote string, branches []string, force, atomic bool) error {
@@ -219,13 +217,7 @@ func TestSync_TrunkFastForward_TriggersRebase(t *testing.T) {
 		}
 		return "sha-" + ref, nil
 	}
-	mock.IsAncestorFn = func(a, d string) (bool, error) {
-		// local is ancestor of remote → can fast-forward
-		if a == "local-sha" && d == "remote-sha" {
-			return true, nil
-		}
-		return true, nil
-	}
+	mock.IsAncestorFn, _ = ancestorMock([][2]string{{"remote-sha", "local-sha"}}, nil)
 	mock.UpdateBranchRefFn = func(branch, sha string) error {
 		updateBranchRefCalls = append(updateBranchRefCalls, struct{ branch, sha string }{branch, sha})
 		return nil
@@ -298,11 +290,13 @@ func TestSync_TrunkFastForward_WhenOnTrunk(t *testing.T) {
 		if ref == "origin/main" {
 			return "remote-sha", nil
 		}
+		// Stack branches match their remote — no branch fast-forward.
+		if strings.HasPrefix(ref, "origin/") {
+			return "sha-" + strings.TrimPrefix(ref, "origin/"), nil
+		}
 		return "sha-" + ref, nil
 	}
-	mock.IsAncestorFn = func(a, d string) (bool, error) {
-		return a == "local-sha" && d == "remote-sha", nil
-	}
+	mock.IsAncestorFn, _ = ancestorMock([][2]string{{"remote-sha", "local-sha"}}, nil)
 	mock.MergeFFFn = func(target string) error {
 		mergeFFCalls = append(mergeFFCalls, target)
 		return nil
@@ -333,8 +327,9 @@ func TestSync_TrunkFastForward_WhenOnTrunk(t *testing.T) {
 	assert.Empty(t, updateBranchRefCalls, "should NOT use UpdateBranchRef when on trunk")
 }
 
-// TestSync_TrunkDiverged verifies that when trunk has diverged from origin,
-// no rebase occurs and a warning is shown.
+// TestSync_TrunkDiverged verifies that when the local trunk has diverged from
+// its remote, sync warns and rebases the stack onto the remote-tracking ref
+// rather than silently leaving it on the stale local trunk.
 func TestSync_TrunkDiverged(t *testing.T) {
 	s := stack.Stack{
 		Trunk: stack.BranchRef{Branch: "main"},
@@ -346,7 +341,7 @@ func TestSync_TrunkDiverged(t *testing.T) {
 	tmpDir := t.TempDir()
 	writeStackFile(t, tmpDir, s)
 
-	var rebaseCalls []rebaseCall
+	var rebaseBases []string
 	var pushCalls []pushCall
 
 	mock := newSyncMock(tmpDir, "b1")
@@ -363,20 +358,14 @@ func TestSync_TrunkDiverged(t *testing.T) {
 		}
 		return "sha-" + ref, nil
 	}
-	// Neither is ancestor of the other → diverged (for trunk FF check)
-	// But stack branches DO have local trunk as ancestor (for stackNeedsRebase)
-	mock.IsAncestorFn = func(a, d string) (bool, error) {
-		if a == "local-sha" && d == "remote-sha" {
-			return false, nil
-		}
-		if a == "remote-sha" && d == "local-sha" {
-			return false, nil
-		}
-		// Stack branches have their parent as ancestor
-		return true, nil
-	}
-	mock.RebaseOntoFn = func(newBase, oldBase, branch string, opts git.RebaseOpts) error {
-		rebaseCalls = append(rebaseCalls, rebaseCall{newBase, oldBase, branch})
+	// Neither trunk SHA is an ancestor of the other → diverged.
+	mock.IsAncestorFn, _ = ancestorMock([][2]string{
+		{"local-sha", "remote-sha"},
+		{"remote-sha", "local-sha"},
+	}, nil)
+	mock.CheckoutBranchFn = func(string) error { return nil }
+	mock.RebaseFn = func(base string, opts git.RebaseOpts) error {
+		rebaseBases = append(rebaseBases, base)
 		return nil
 	}
 	mock.PushFn = func(remote string, branches []string, force, atomic bool) error {
@@ -399,11 +388,15 @@ func TestSync_TrunkDiverged(t *testing.T) {
 
 	assert.NoError(t, err)
 	assert.Contains(t, output, "diverged")
-	assert.Empty(t, rebaseCalls, "no rebase should occur when trunk diverged")
+	assert.Contains(t, output, "origin/main")
 
-	// Push should happen without force (no rebase occurred)
+	// The stack is rebased onto the remote-tracking ref, not the stale local
+	// trunk, so it still ends up current.
+	require.Equal(t, []string{"origin/main"}, rebaseBases,
+		"stack should be rebased onto origin/main when local trunk diverged")
+
 	require.Len(t, pushCalls, 1)
-	assert.False(t, pushCalls[0].force, "push should not use force when no rebase")
+	assert.True(t, pushCalls[0].force, "push should use force after the rebase")
 }
 
 // TestSync_NoLocalTrunk_SkipsSilently verifies that when the trunk branch
@@ -624,9 +617,7 @@ func TestSync_PushForceFlagDependsOnRebase(t *testing.T) {
 					}
 					return "sha-" + ref, nil
 				}
-				mock.IsAncestorFn = func(a, d string) (bool, error) {
-					return a == "local-sha" && d == "remote-sha", nil
-				}
+				mock.IsAncestorFn, _ = ancestorMock([][2]string{{"remote-sha", "local-sha"}}, nil)
 				mock.UpdateBranchRefFn = func(string, string) error { return nil }
 			} else {
 				mock.RevParseFn = func(ref string) (string, error) {
@@ -779,6 +770,7 @@ func TestSync_QueuedBranch_DownstreamStaysStacked(t *testing.T) {
 		}
 		return "sha-" + ref, nil
 	}
+	mock.IsAncestorFn, _ = ancestorMock([][2]string{{"remote-sha", "local-sha"}}, nil)
 	mock.UpdateBranchRefFn = func(string, string) error { return nil }
 	mock.CheckoutBranchFn = func(string) error { return nil }
 	mock.RebaseOntoFn = func(newBase, oldBase, branch string, opts git.RebaseOpts) error {
@@ -937,9 +929,7 @@ func TestSync_PushFailureAfterRebase(t *testing.T) {
 		}
 		return "sha-" + ref, nil
 	}
-	mock.IsAncestorFn = func(a, d string) (bool, error) {
-		return a == "local-sha" && d == "remote-sha", nil
-	}
+	mock.IsAncestorFn, _ = ancestorMock([][2]string{{"remote-sha", "local-sha"}}, nil)
 	mock.UpdateBranchRefFn = func(string, string) error { return nil }
 	mock.CheckoutBranchFn = func(string) error { return nil }
 	mock.RebaseFn = func(string, git.RebaseOpts) error { return nil }
@@ -1005,12 +995,7 @@ func TestSync_BranchFastForward_TriggersRebase(t *testing.T) {
 		}
 		return "sha-" + ref, nil
 	}
-	mock.IsAncestorFn = func(a, d string) (bool, error) {
-		if a == "b1-local-sha" && d == "b1-remote-sha" {
-			return true, nil
-		}
-		return false, nil
-	}
+	mock.IsAncestorFn, _ = ancestorMock([][2]string{{"b1-remote-sha", "b1-local-sha"}}, nil)
 	mock.MergeFFFn = func(target string) error {
 		mergeFFCalls = append(mergeFFCalls, target)
 		return nil
@@ -1095,15 +1080,10 @@ func TestSync_BranchFastForward_WithTrunkUpdate(t *testing.T) {
 		}
 		return "sha-" + ref, nil
 	}
-	mock.IsAncestorFn = func(a, d string) (bool, error) {
-		if a == "trunk-local" && d == "trunk-remote" {
-			return true, nil
-		}
-		if a == "b2-local" && d == "b2-remote" {
-			return true, nil
-		}
-		return false, nil
-	}
+	mock.IsAncestorFn, _ = ancestorMock([][2]string{
+		{"trunk-remote", "trunk-local"},
+		{"b2-remote", "b2-local"},
+	}, nil)
 	mock.UpdateBranchRefFn = func(branch, sha string) error {
 		updateBranchRefCalls = append(updateBranchRefCalls, struct{ branch, sha string }{branch, sha})
 		return nil

@@ -2,6 +2,7 @@ package git
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -64,14 +65,63 @@ func runInteractive(args ...string) error {
 	return cmd.Run()
 }
 
-// rebaseContinueOnce runs a single git rebase --continue without auto-resolve.
-func rebaseContinueOnce(opts RebaseOpts) error {
-	args := []string{"rebase"}
-	if opts.CommitterDateIsAuthorDate {
-		args = append(args, "--committer-date-is-author-date")
+// errRebaseAlreadyInProgress is returned when a rebase is started while an
+// earlier one is still unresolved.
+var errRebaseAlreadyInProgress = errors.New("a rebase is already in progress — resolve or abort it first")
+
+// RebaseStartError indicates that a git rebase command failed before it created
+// any rebase state, meaning nothing was rebased at all. Common causes are a
+// dirty working tree, a branch that is checked out in another worktree, an
+// upstream ref that does not resolve, or a rebase that is already in progress.
+//
+// It is distinct from a rebase that started and stopped on a conflict: there is
+// nothing to --continue or --abort, so callers must treat it as a hard failure
+// rather than a recoverable conflict.
+type RebaseStartError struct {
+	Err error
+}
+
+func (e *RebaseStartError) Error() string {
+	// cli/cli's GitError prefixes its stderr with "failed to run git: ", which
+	// reads as noise once the message is wrapped in gh-stack's own context.
+	return strings.TrimSpace(strings.TrimPrefix(e.Err.Error(), "failed to run git: "))
+}
+
+func (e *RebaseStartError) Unwrap() error {
+	return e.Err
+}
+
+// IsRebaseStartError reports whether err indicates a rebase that never started.
+func IsRebaseStartError(err error) bool {
+	var rse *RebaseStartError
+	return errors.As(err, &rse)
+}
+
+// runRebaseCommand starts a rebase and classifies the outcome.
+//
+// A rebase that is already in progress is reported as a *RebaseStartError up
+// front: git would refuse the new rebase, and the leftover state belongs to the
+// earlier one, so its conflicted files must not be mistaken for this rebase's
+// conflicts.
+func runRebaseCommand(args []string, opts RebaseOpts) error {
+	if IsRebaseInProgress() {
+		return &RebaseStartError{Err: errRebaseAlreadyInProgress}
 	}
-	args = append(args, "--continue")
-	cmd := exec.Command("git", args...)
+	err := runSilent(args...)
+	if err == nil {
+		return nil
+	}
+	return tryAutoResolveRebase(err, opts)
+}
+
+// rebaseContinueOnce runs a single git rebase --continue without auto-resolve.
+//
+// No rebase options are passed: git rejects "git rebase <option> --continue"
+// with a usage error, and it already persists the options the rebase was
+// started with (e.g. cdate_is_adate for --committer-date-is-author-date) in the
+// rebase state directory, so they are honored automatically.
+func rebaseContinueOnce() error {
+	cmd := exec.Command("git", "rebase", "--continue")
 	cmd.Env = append(os.Environ(), "GIT_EDITOR=true")
 	return cmd.Run()
 }
@@ -80,9 +130,18 @@ func rebaseContinueOnce(opts RebaseOpts) error {
 // from a failed rebase. If so, it auto-continues the rebase (potentially
 // multiple times for multi-commit rebases). Returns originalErr if any
 // conflicts remain that need manual resolution.
+//
+// If no rebase is in progress on the very first check, the rebase never started
+// and originalErr is returned wrapped in a *RebaseStartError. Treating that
+// case as success is what previously made a rebase that did nothing report
+// "rebased successfully". On later iterations the same condition legitimately
+// means the auto-continued rebase finished.
 func tryAutoResolveRebase(originalErr error, opts RebaseOpts) error {
 	for i := 0; i < 1000; i++ {
 		if !IsRebaseInProgress() {
+			if i == 0 {
+				return &RebaseStartError{Err: originalErr}
+			}
 			return nil
 		}
 		conflicts, err := ConflictedFiles()
@@ -93,7 +152,7 @@ func tryAutoResolveRebase(originalErr error, opts RebaseOpts) error {
 			return originalErr
 		}
 		// Rerere resolved all conflicts — auto-continue.
-		if rebaseContinueOnce(opts) == nil {
+		if rebaseContinueOnce() == nil {
 			return nil
 		}
 		// Continue hit another conflicting commit; loop to check
@@ -426,6 +485,24 @@ func CherryPickContinue() error {
 // HasUncommittedChanges returns true if the working tree has uncommitted changes.
 func HasUncommittedChanges() (bool, error) {
 	return ops.HasUncommittedChanges()
+}
+
+// HasUncommittedTrackedChanges returns true if the working tree has uncommitted
+// changes to tracked files. Untracked files are ignored, since git rebase runs
+// fine with them present.
+func HasUncommittedTrackedChanges() (bool, error) {
+	return ops.HasUncommittedTrackedChanges()
+}
+
+// StashPush stashes uncommitted changes to tracked files under the given
+// message. Untracked files are left in place.
+func StashPush(message string) error {
+	return ops.StashPush(message)
+}
+
+// StashPop restores and drops the most recent stash entry.
+func StashPop() error {
+	return ops.StashPop()
 }
 
 // LogMerges returns merge commits in the range base..head.
