@@ -17,6 +17,11 @@ type RebaseOpts struct {
 	CommitterDateIsAuthorDate bool
 }
 
+// ErrRemoteBranchNotFound indicates that a requested branch does not exist on
+// the remote. It is distinct from transport, authentication, and other fetch
+// failures.
+var ErrRemoteBranchNotFound = errors.New("remote branch not found")
+
 // Ops defines the interface for git operations used by commands.
 // The package-level functions are the default production implementation.
 // Tests can substitute a mock via SetOps().
@@ -27,6 +32,7 @@ type Ops interface {
 	BranchExists(name string) bool
 	CheckoutBranch(name string) error
 	Fetch(remote string) error
+	FetchBranch(remote, branch string) error
 	FetchBranches(remote string, branches []string) error
 	DefaultBranch() (string, error)
 	CreateBranch(name, base string) error
@@ -59,6 +65,7 @@ type Ops interface {
 	DeleteTrackingRef(remote, branch string) error
 	ResetHard(ref string) error
 	SetUpstreamTracking(branch, remote string) error
+	UpstreamRemote(branch string) (string, error)
 	MergeFF(target string) error
 	UpdateBranchRef(branch, sha string) error
 	StageAll() error
@@ -123,6 +130,17 @@ func (d *defaultOps) Fetch(remote string) error {
 	return client.Fetch(context.Background(), remote, "")
 }
 
+func (d *defaultOps) FetchBranch(remote, branch string) error {
+	refspec := fmt.Sprintf("+refs/heads/%s:refs/remotes/%s/%s", branch, remote, branch)
+	if err := runSilent("fetch", remote, refspec); err != nil {
+		if isMissingRemoteRefError(err) {
+			return fmt.Errorf("%w: %s/%s", ErrRemoteBranchNotFound, remote, branch)
+		}
+		return err
+	}
+	return nil
+}
+
 func (d *defaultOps) FetchBranches(remote string, branches []string) error {
 	if len(branches) == 0 {
 		return nil
@@ -142,11 +160,22 @@ func (d *defaultOps) FetchBranches(remote string, branches []string) error {
 	}
 	// Fallback: one branch may be absent on the remote or deleted since
 	// the last fetch. Fetch individually so one missing branch doesn't
-	// block the rest. Per-branch failure is expected and tolerated.
+	// block the rest, while still surfacing real fetch failures.
+	var fetchErr error
 	for _, rs := range refspecs {
-		_ = runSilent("fetch", remote, rs)
+		err := runSilent("fetch", remote, rs)
+		if err == nil || isMissingRemoteRefError(err) {
+			continue
+		}
+		if fetchErr == nil {
+			fetchErr = fmt.Errorf("fetching from %s: %w", remote, err)
+		}
 	}
-	return nil
+	return fetchErr
+}
+
+func isMissingRemoteRefError(err error) bool {
+	return err != nil && strings.Contains(err.Error(), "couldn't find remote ref")
 }
 
 func (d *defaultOps) DefaultBranch() (string, error) {
@@ -245,11 +274,7 @@ func (d *defaultOps) Rebase(base string, opts RebaseOpts) error {
 		args = append(args, "--committer-date-is-author-date")
 	}
 	args = append(args, base)
-	err := runSilent(args...)
-	if err == nil {
-		return nil
-	}
-	return tryAutoResolveRebase(err, opts)
+	return runRebaseCommand(args, opts)
 }
 
 func (d *defaultOps) EnableRerere() error {
@@ -302,11 +327,7 @@ func (d *defaultOps) RebaseOnto(newBase, oldBase, branch string, opts RebaseOpts
 		args = append(args, "--committer-date-is-author-date")
 	}
 	args = append(args, "--onto", newBase, oldBase, branch)
-	err := runSilent(args...)
-	if err == nil {
-		return nil
-	}
-	return tryAutoResolveRebase(err, opts)
+	return runRebaseCommand(args, opts)
 }
 
 func (d *defaultOps) RebaseContinue(opts RebaseOpts) error {
@@ -562,6 +583,10 @@ func (d *defaultOps) ResetHard(ref string) error {
 
 func (d *defaultOps) SetUpstreamTracking(branch, remote string) error {
 	return runSilent("branch", "--set-upstream-to="+remote+"/"+branch, branch)
+}
+
+func (d *defaultOps) UpstreamRemote(branch string) (string, error) {
+	return run("config", "--get", "branch."+branch+".remote")
 }
 
 func (d *defaultOps) MergeFF(target string) error {

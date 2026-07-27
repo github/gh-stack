@@ -44,9 +44,9 @@ func newRebaseMock(tmpDir string, currentBranch string) *git.MockOps {
 			}
 			return "sha-" + ref, nil
 		},
-		IsAncestorFn:    func(a, d string) (bool, error) { return true, nil },
-		FetchFn:         func(string) error { return nil },
-		EnableRerereFn:  func() error { return nil },
+		IsAncestorFn:         func(a, d string) (bool, error) { return true, nil },
+		FetchFn:              func(string) error { return nil },
+		EnableRerereFn:       func() error { return nil },
 		IsRebaseInProgressFn: func() bool { return false },
 	}
 }
@@ -1293,11 +1293,7 @@ func TestRebase_FastForwardsBranchFromRemote(t *testing.T) {
 		return "sha-" + ref, nil
 	}
 	mock.IsAncestorFn = func(a, d string) (bool, error) {
-		// b1-local is ancestor of b1-remote → can fast-forward
-		if a == "b1-local-sha" && d == "b1-remote-sha" {
-			return true, nil
-		}
-		return false, nil
+		return true, nil
 	}
 	mock.UpdateBranchRefFn = func(branch, sha string) error {
 		updateBranchRefCalls = append(updateBranchRefCalls, struct{ branch, sha string }{branch, sha})
@@ -1415,7 +1411,11 @@ func TestRebase_BranchDiverged_NoFF(t *testing.T) {
 	}
 	// Neither is ancestor of the other — diverged
 	mock.IsAncestorFn = func(a, d string) (bool, error) {
-		return false, nil
+		if (a == "b1-local-sha" && d == "b1-remote-sha") ||
+			(a == "b1-remote-sha" && d == "b1-local-sha") {
+			return false, nil
+		}
+		return true, nil
 	}
 	mock.UpdateBranchRefFn = func(string, string) error {
 		updateBranchRefCalls++

@@ -36,6 +36,10 @@ type rebaseState struct {
 	OntoOldBase               string            `json:"ontoOldBase,omitempty"`
 	CommitterDateIsAuthorDate bool              `json:"committerDateIsAuthorDate,omitempty"`
 	NoTrunk                   bool              `json:"noTrunk,omitempty"`
+	TrunkRef                  string            `json:"trunkRef,omitempty"`
+	TrunkSHA                  string            `json:"trunkSha,omitempty"`
+	StartIndex                int               `json:"startIndex,omitempty"`
+	EndIndex                  int               `json:"endIndex,omitempty"`
 }
 
 const rebaseStateFile = "gh-stack-rebase-state"
@@ -125,6 +129,7 @@ func runRebase(cfg *config.Config, opts *rebaseOptions) error {
 		return ErrSilent
 	}
 
+	var trunk trunkTarget
 	if !opts.noTrunk {
 		// Resolve remote for fetch and trunk comparison
 		remote, err := pickRemote(cfg, currentBranch, opts.remote)
@@ -135,22 +140,16 @@ func runRebase(cfg *config.Config, opts *rebaseOptions) error {
 			return ErrSilent
 		}
 
-		if err := git.Fetch(remote); err != nil {
-			cfg.Warningf("Failed to fetch %s: %v", remote, err)
-		} else {
-			cfg.Successf("Fetched %s", remote)
+		trunk, err = resolveTrunkTarget(cfg, s, remote, currentBranch)
+		if err != nil {
+			return err
 		}
-
-		// Ensure trunk exists locally before fast-forward or cascade rebase.
-		if err := ensureLocalTrunk(cfg, s.Trunk.Branch, remote); err != nil {
-			cfg.Errorf("%s", err)
-			return ErrSilent
-		}
-
-		// Fast-forward trunk so the cascade rebase targets the latest upstream.
-		fastForwardTrunk(cfg, s.Trunk.Branch, remote, currentBranch)
 
 		// Fast-forward stack branches that are behind their remote tracking branch.
+		if err := git.FetchBranches(remote, activeBranchNames(s)); err != nil {
+			cfg.Errorf("failed to fetch stack branches from %s: %v", remote, err)
+			return ErrSilent
+		}
 		fastForwardBranches(cfg, s, remote, currentBranch)
 	}
 
@@ -222,10 +221,16 @@ func runRebase(cfg *config.Config, opts *rebaseOptions) error {
 		NeedsOnto:                 needsOnto,
 		OntoOldBase:               ontoOldBase,
 		CommitterDateIsAuthorDate: opts.committerDateIsAuthorDate,
+		TrunkRef:                  trunk.Ref,
 	})
 
 	if rebaseResult.Err != nil {
 		cfg.Errorf("%v", rebaseResult.Err)
+		if rebaseResult.Rebased {
+			restoreRebaseRefs(cfg, currentBranch, originalRefs)
+		} else {
+			_ = git.CheckoutBranch(currentBranch)
+		}
 		return ErrSilent
 	}
 
@@ -242,6 +247,10 @@ func runRebase(cfg *config.Config, opts *rebaseOptions) error {
 			OntoOldBase:               rebaseResult.OntoOldBase,
 			CommitterDateIsAuthorDate: opts.committerDateIsAuthorDate,
 			NoTrunk:                   opts.noTrunk,
+			TrunkRef:                  trunk.Ref,
+			TrunkSHA:                  trunk.SHA,
+			StartIndex:                startIdx,
+			EndIndex:                  endIdx,
 		}
 		if err := saveRebaseState(gitDir, state); err != nil {
 			cfg.Warningf("failed to save rebase state: %s", err)
@@ -258,6 +267,14 @@ func runRebase(cfg *config.Config, opts *rebaseOptions) error {
 	}
 
 	_ = git.CheckoutBranch(currentBranch)
+
+	if unstacked := verifyStacked(s, trunk.Ref, startIdx, endIdx); len(unstacked) > 0 {
+		reportUnstacked(cfg, trunk.Ref, unstacked)
+		if rebaseResult.Rebased {
+			restoreRebaseRefs(cfg, currentBranch, originalRefs)
+		}
+		return ErrSilent
+	}
 
 	updateBaseSHAs(s)
 
@@ -284,7 +301,7 @@ func runRebase(cfg *config.Config, opts *rebaseOptions) error {
 	if opts.noTrunk {
 		cfg.Printf("%s rebased locally (without trunk)", rangeDesc)
 	} else {
-		cfg.Printf("%s rebased locally with %s", rangeDesc, s.Trunk.Branch)
+		cfg.Printf("%s rebased locally with %s", rangeDesc, trunk.Describe())
 	}
 	cfg.Printf("To push up your changes, run `%s`",
 		cfg.ColorCyan("gh stack push"))
@@ -313,6 +330,14 @@ func continueRebase(cfg *config.Config, gitDir string) error {
 	}
 	if s == nil {
 		return fmt.Errorf("no stack found for branch %s", state.OriginalBranch)
+	}
+	trunkRef := state.TrunkRef
+	if trunkRef == "" {
+		trunkRef = s.Trunk.Branch
+	}
+	trunkBase := state.TrunkSHA
+	if trunkBase == "" {
+		trunkBase = trunkRef
 	}
 
 	// Refresh PR state before selecting the base and cascading the remaining
@@ -343,7 +368,7 @@ func continueRebase(cfg *config.Config, gitDir string) error {
 	var baseBranch string
 	if state.UseOnto {
 		// The --onto path targets the first non-merged ancestor, or trunk.
-		baseBranch = s.Trunk.Branch
+		baseBranch = trunkRef
 		for j := state.CurrentBranchIndex - 1; j >= 0; j-- {
 			if !s.Branches[j].IsMerged() {
 				baseBranch = s.Branches[j].Branch
@@ -353,7 +378,7 @@ func continueRebase(cfg *config.Config, gitDir string) error {
 	} else if state.CurrentBranchIndex > 0 {
 		baseBranch = s.Branches[state.CurrentBranchIndex-1].Branch
 	} else {
-		baseBranch = s.Trunk.Branch
+		baseBranch = trunkRef
 	}
 	cfg.Successf("Rebased %s onto %s", conflictBranch, baseBranch)
 
@@ -385,10 +410,13 @@ func continueRebase(cfg *config.Config, gitDir string) error {
 			NeedsOnto:                 state.UseOnto,
 			OntoOldBase:               state.OntoOldBase,
 			CommitterDateIsAuthorDate: state.CommitterDateIsAuthorDate,
+			TrunkRef:                  trunkBase,
 		})
 
 		if result.Err != nil {
 			cfg.Errorf("%v", result.Err)
+			restoreRebaseRefs(cfg, state.OriginalBranch, state.OriginalRefs)
+			clearRebaseState(gitDir)
 			return ErrSilent
 		}
 
@@ -414,9 +442,23 @@ func continueRebase(cfg *config.Config, gitDir string) error {
 		}
 	}
 
-	clearRebaseState(gitDir)
 	_ = git.CheckoutBranch(state.OriginalBranch)
 
+	verifyStart, verifyEnd := state.StartIndex, state.EndIndex
+	if verifyEnd <= verifyStart {
+		verifyStart, verifyEnd = 0, len(s.Branches)
+		if state.NoTrunk {
+			verifyStart = 1
+		}
+	}
+	if unstacked := verifyStacked(s, trunkBase, verifyStart, verifyEnd); len(unstacked) > 0 {
+		reportUnstacked(cfg, trunkRef, unstacked)
+		restoreRebaseRefs(cfg, state.OriginalBranch, state.OriginalRefs)
+		clearRebaseState(gitDir)
+		return ErrSilent
+	}
+
+	clearRebaseState(gitDir)
 	updateBaseSHAs(s)
 
 	_ = syncStackPRs(cfg, s)
@@ -425,8 +467,10 @@ func continueRebase(cfg *config.Config, gitDir string) error {
 
 	if state.NoTrunk {
 		cfg.Printf("All branches in stack rebased locally (without trunk)")
+	} else if state.TrunkSHA != "" {
+		cfg.Printf("All branches in stack rebased locally with %s (%s)", trunkRef, short(state.TrunkSHA))
 	} else {
-		cfg.Printf("All branches in stack rebased locally with %s", s.Trunk.Branch)
+		cfg.Printf("All branches in stack rebased locally with %s", trunkRef)
 	}
 	cfg.Printf("To push up your changes and open/update the stack of PRs, run `%s`",
 		cfg.ColorCyan("gh stack submit"))

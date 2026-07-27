@@ -909,57 +909,125 @@ func ensureLocalTrunk(cfg *config.Config, trunk, remote string) error {
 	return nil
 }
 
-// fastForwardTrunk fast-forwards the trunk branch to match its remote tracking
-// branch. Returns true if trunk was updated.
-func fastForwardTrunk(cfg *config.Config, trunk, remote, currentBranch string) bool {
-	// If the local trunk branch doesn't exist, there's nothing to
-	// fast-forward. Callers should use ensureLocalTrunk beforehand if
-	// they need trunk to be resolvable as a local ref.
+func normalizeTrunkBranch(trunk, remote string) string {
+	if remote == "" || git.BranchExists(trunk) {
+		return trunk
+	}
+	if stripped, ok := strings.CutPrefix(trunk, remote+"/"); ok && stripped != "" {
+		return stripped
+	}
+	return trunk
+}
+
+func normalizeStackTrunk(cfg *config.Config, s *stack.Stack, remote string) {
+	trunk := normalizeTrunkBranch(s.Trunk.Branch, remote)
+	if trunk == s.Trunk.Branch {
+		return
+	}
+	cfg.Warningf("Stack trunk %q is remote-qualified — using %q", s.Trunk.Branch, trunk)
+	s.Trunk.Branch = trunk
+}
+
+type trunkTarget struct {
+	Branch string
+	Ref    string
+	SHA    string
+	Moved  bool
+}
+
+func (t trunkTarget) Describe() string {
+	return fmt.Sprintf("%s (%s)", t.Ref, short(t.SHA))
+}
+
+// resolveTrunkTarget fetches the trunk explicitly, then returns the ref the
+// cascade must use. Updating the local trunk is best-effort; the fetched remote
+// ref remains the source of truth when the local branch is stale or immovable.
+func resolveTrunkTarget(cfg *config.Config, s *stack.Stack, remote, currentBranch string) (trunkTarget, error) {
+	normalizeStackTrunk(cfg, s, remote)
+	trunk := s.Trunk.Branch
+	remoteRef := remote + "/" + trunk
+
+	if err := git.FetchBranch(remote, trunk); err != nil {
+		if errors.Is(err, git.ErrRemoteBranchNotFound) {
+			return trunkWithoutRemote(cfg, trunk, remote)
+		}
+		cfg.Errorf("failed to fetch trunk branch %s from %s: %v", trunk, remote, err)
+		return trunkTarget{}, ErrSilent
+	}
+
+	remoteSHA, err := git.RevParse(remoteRef)
+	if err != nil {
+		cfg.Errorf("could not resolve fetched trunk %s: %v", remoteRef, err)
+		return trunkTarget{}, ErrSilent
+	}
+	cfg.Successf("Fetched latest %s from %s", trunk, remote)
+
 	if !git.BranchExists(trunk) {
-		return false
+		if err := git.CreateBranch(trunk, remoteRef); err != nil {
+			cfg.Errorf("could not create local trunk branch %s from %s: %v", trunk, remoteRef, err)
+			return trunkTarget{}, ErrSilent
+		}
+		cfg.Successf("Created local trunk branch %s from %s", trunk, remoteRef)
+		return trunkTarget{Branch: trunk, Ref: trunk, SHA: remoteSHA, Moved: true}, nil
 	}
 
-	localSHA, remoteSHA := "", ""
-	trunkRefs, trunkErr := git.RevParseMulti([]string{trunk, remote + "/" + trunk})
-	if trunkErr == nil {
-		localSHA, remoteSHA = trunkRefs[0], trunkRefs[1]
+	localSHA, err := git.RevParse(trunk)
+	if err != nil {
+		cfg.Errorf("could not resolve local trunk branch %s: %v", trunk, err)
+		return trunkTarget{}, ErrSilent
 	}
-
-	if trunkErr != nil {
-		cfg.Warningf("Could not compare trunk %s with remote — skipping trunk update", trunk)
-		return false
-	}
-
 	if localSHA == remoteSHA {
 		cfg.Successf("Trunk %s is already up to date", trunk)
-		return false
+		return trunkTarget{Branch: trunk, Ref: trunk, SHA: localSHA}, nil
 	}
 
-	isAncestor, err := git.IsAncestor(localSHA, remoteSHA)
-	if err != nil {
-		cfg.Warningf("Could not determine fast-forward status for %s: %v", trunk, err)
-		return false
-	}
-	if !isAncestor {
-		cfg.Warningf("Trunk %s has diverged from %s — skipping trunk update", trunk, remote)
-		cfg.Printf("  Local and remote %s have diverged. Resolve manually.", trunk)
-		return false
-	}
-
-	if currentBranch == trunk {
-		if err := git.MergeFF(remote + "/" + trunk); err != nil {
-			cfg.Warningf("Failed to fast-forward %s: %v", trunk, err)
-			return false
+	canFastForward, ffErr := git.IsAncestor(localSHA, remoteSHA)
+	if ffErr == nil && canFastForward {
+		var updateErr error
+		if currentBranch == trunk {
+			updateErr = git.MergeFF(remoteRef)
+		} else {
+			updateErr = git.UpdateBranchRef(trunk, remoteSHA)
 		}
+		if updateErr == nil {
+			cfg.Successf("Trunk %s fast-forwarded to %s", trunk, short(remoteSHA))
+			return trunkTarget{Branch: trunk, Ref: trunk, SHA: remoteSHA, Moved: true}, nil
+		}
+		cfg.Warningf("Could not update local %s: %v", trunk, updateErr)
+	} else if ffErr != nil {
+		cfg.Warningf("Could not determine fast-forward status for %s: %v", trunk, ffErr)
+	} else if isAncestor, ancErr := git.IsAncestor(remoteSHA, localSHA); ancErr == nil && isAncestor {
+		// Keep unpushed local trunk commits when they already contain the
+		// fetched remote tip.
+		cfg.Successf("Trunk %s is ahead of %s — using the local branch", trunk, remoteRef)
+		return trunkTarget{Branch: trunk, Ref: trunk, SHA: localSHA}, nil
 	} else {
-		if err := git.UpdateBranchRef(trunk, remoteSHA); err != nil {
-			cfg.Warningf("Failed to fast-forward %s: %v", trunk, err)
-			return false
-		}
+		cfg.Warningf("Local %s has diverged from %s", trunk, remoteRef)
 	}
 
-	cfg.Successf("Trunk %s fast-forwarded to %s", trunk, short(remoteSHA))
-	return true
+	cfg.Printf("  Rebasing the stack onto %s instead; local %s is unchanged.", remoteRef, trunk)
+	return trunkTarget{Branch: trunk, Ref: remoteRef, SHA: remoteSHA}, nil
+}
+
+func trunkWithoutRemote(cfg *config.Config, trunk, remote string) (trunkTarget, error) {
+	if !git.BranchExists(trunk) {
+		cfg.Errorf("trunk branch %s exists neither locally nor on %s", trunk, remote)
+		return trunkTarget{}, ErrSilent
+	}
+	if trackedRemote, err := git.UpstreamRemote(trunk); err == nil && trackedRemote != "" {
+		cfg.Errorf("%s no longer exists on %s", trunk, remote)
+		cfg.Printf("  Re-point the stack at an existing trunk branch, or use `%s`.",
+			cfg.ColorCyan("gh stack rebase --no-trunk"))
+		return trunkTarget{}, ErrSilent
+	}
+
+	localSHA, err := git.RevParse(trunk)
+	if err != nil {
+		cfg.Errorf("could not resolve local trunk branch %s: %v", trunk, err)
+		return trunkTarget{}, ErrSilent
+	}
+	cfg.Warningf("Trunk %s only exists locally — %s has no such branch", trunk, remote)
+	return trunkTarget{Branch: trunk, Ref: trunk, SHA: localSHA}, nil
 }
 
 // cascadeRebaseOpts holds parameters for a cascade rebase across a range of
@@ -973,6 +1041,14 @@ type cascadeRebaseOpts struct {
 	NeedsOnto                 bool
 	OntoOldBase               string
 	CommitterDateIsAuthorDate bool
+	TrunkRef                  string
+}
+
+func (o cascadeRebaseOpts) trunkRef() string {
+	if o.TrunkRef != "" {
+		return o.TrunkRef
+	}
+	return o.Stack.Trunk.Branch
 }
 
 // cascadeRebaseResult describes the outcome of a cascade rebase.
@@ -999,13 +1075,14 @@ func cascadeRebase(opts cascadeRebaseOpts) cascadeRebaseResult {
 	originalRefs := opts.OriginalRefs
 	result := cascadeRebaseResult{}
 	rebaseOpts := git.RebaseOpts{CommitterDateIsAuthorDate: opts.CommitterDateIsAuthorDate}
+	trunkRef := opts.trunkRef()
 
 	for i, br := range opts.Branches {
 		absIdx := opts.StartAbsIdx + i
 
 		var base string
 		if absIdx == 0 {
-			base = s.Trunk.Branch
+			base = trunkRef
 		} else {
 			base = s.Branches[absIdx-1].Branch
 		}
@@ -1034,7 +1111,7 @@ func cascadeRebase(opts cascadeRebaseOpts) cascadeRebaseResult {
 		if needsOnto {
 			// Find --onto target: first non-merged ancestor, or trunk. Queued
 			// ancestors keep their commits, so they are valid --onto targets.
-			newBase := s.Trunk.Branch
+			newBase := trunkRef
 			for j := absIdx - 1; j >= 0; j-- {
 				if !s.Branches[j].IsMerged() {
 					newBase = s.Branches[j].Branch
@@ -1054,6 +1131,12 @@ func cascadeRebase(opts cascadeRebaseOpts) cascadeRebaseResult {
 			}
 
 			if err := git.RebaseOnto(newBase, actualOldBase, br.Branch, rebaseOpts); err != nil {
+				if git.IsRebaseStartError(err) {
+					return cascadeRebaseResult{
+						Rebased: result.Rebased,
+						Err:     fmt.Errorf("could not start rebase of %s onto %s: %w", br.Branch, newBase, err),
+					}
+				}
 				remaining := make([]string, 0, len(opts.Branches)-i-1)
 				for j := i + 1; j < len(opts.Branches); j++ {
 					remaining = append(remaining, opts.Branches[j].Branch)
@@ -1088,6 +1171,12 @@ func cascadeRebase(opts cascadeRebaseOpts) cascadeRebaseResult {
 			}
 
 			if rebaseErr != nil {
+				if git.IsRebaseStartError(rebaseErr) {
+					return cascadeRebaseResult{
+						Rebased: result.Rebased,
+						Err:     fmt.Errorf("could not start rebase of %s onto %s: %w", br.Branch, base, rebaseErr),
+					}
+				}
 				remaining := make([]string, 0, len(opts.Branches)-i-1)
 				for j := i + 1; j < len(opts.Branches); j++ {
 					remaining = append(remaining, opts.Branches[j].Branch)
@@ -1112,29 +1201,48 @@ func cascadeRebase(opts cascadeRebaseOpts) cascadeRebaseResult {
 	return result
 }
 
-// stackNeedsRebase returns true if any active branch in the stack is not based
-// on its parent's current tip. This detects when the stack needs rebasing even
-// if trunk was not updated in the current run.
-func stackNeedsRebase(s *stack.Stack) bool {
-	trunk := s.Trunk.Branch
-	for i, br := range s.Branches {
+// verifyStacked returns active branches in the requested range that do not
+// contain their effective parent.
+func verifyStacked(s *stack.Stack, trunkRef string, startIdx, endIdx int) []string {
+	if trunkRef == "" {
+		trunkRef = s.Trunk.Branch
+	}
+	if startIdx < 0 {
+		startIdx = 0
+	}
+	if endIdx > len(s.Branches) {
+		endIdx = len(s.Branches)
+	}
+
+	var unstacked []string
+	for i := startIdx; i < endIdx; i++ {
+		br := s.Branches[i]
 		if br.IsSkipped() {
 			continue
 		}
-		// Find the nearest non-skipped parent.
-		parent := trunk
+		parent := trunkRef
 		for j := i - 1; j >= 0; j-- {
-			if !s.Branches[j].IsSkipped() {
+			if !s.Branches[j].IsMerged() {
 				parent = s.Branches[j].Branch
 				break
 			}
 		}
 		isAnc, err := git.IsAncestor(parent, br.Branch)
 		if err != nil || !isAnc {
-			return true
+			unstacked = append(unstacked, br.Branch)
 		}
 	}
-	return false
+	return unstacked
+}
+
+func stackNeedsRebase(s *stack.Stack, trunkRef string) bool {
+	return len(verifyStacked(s, trunkRef, 0, len(s.Branches))) > 0
+}
+
+func reportUnstacked(cfg *config.Config, trunkRef string, unstacked []string) {
+	cfg.Errorf("rebase did not leave these branches on their expected parents: %s",
+		strings.Join(unstacked, ", "))
+	cfg.Printf("  Trunk target: %s", trunkRef)
 }
 
 // resolvePR resolves a user-provided target to a stack and branch using

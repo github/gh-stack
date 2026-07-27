@@ -12,6 +12,7 @@ type MockOps struct {
 	BranchExistsFn           func(string) bool
 	CheckoutBranchFn         func(string) error
 	FetchFn                  func(string) error
+	FetchBranchFn            func(string, string) error
 	FetchBranchesFn          func(string, []string) error
 	DefaultBranchFn          func() (string, error)
 	CreateBranchFn           func(string, string) error
@@ -44,6 +45,7 @@ type MockOps struct {
 	DeleteTrackingRefFn      func(string, string) error
 	ResetHardFn              func(string) error
 	SetUpstreamTrackingFn    func(string, string) error
+	UpstreamRemoteFn         func(string) (string, error)
 	MergeFFFn                func(string) error
 	UpdateBranchRefFn        func(string, string) error
 	StageAllFn               func() error
@@ -102,6 +104,13 @@ func (m *MockOps) CheckoutBranch(name string) error {
 func (m *MockOps) Fetch(remote string) error {
 	if m.FetchFn != nil {
 		return m.FetchFn(remote)
+	}
+	return nil
+}
+
+func (m *MockOps) FetchBranch(remote, branch string) error {
+	if m.FetchBranchFn != nil {
+		return m.FetchBranchFn(remote, branch)
 	}
 	return nil
 }
@@ -337,6 +346,13 @@ func (m *MockOps) SetUpstreamTracking(branch, remote string) error {
 		return m.SetUpstreamTrackingFn(branch, remote)
 	}
 	return nil
+}
+
+func (m *MockOps) UpstreamRemote(branch string) (string, error) {
+	if m.UpstreamRemoteFn != nil {
+		return m.UpstreamRemoteFn(branch)
+	}
+	return "", nil
 }
 
 func (m *MockOps) MergeFF(target string) error {
