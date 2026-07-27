@@ -92,6 +92,38 @@ func TestResolveOntoOldBase(t *testing.T) {
 		assert.Equal(t, "trunk", got)
 	})
 
+	// Stacks written by an older version recorded the parent's amended tip as
+	// the child's base, so the metadata is no more usable than the recorded
+	// tip. git's fork-point reads the parent's reflog and still finds the real
+	// boundary, which lets those stacks heal on their next rebase.
+	t.Run("uses the fork point when the metadata base is also stale", func(t *testing.T) {
+		restore := git.SetOps(&git.MockOps{
+			IsAncestorFn:         ancestryMock(history),
+			MergeBaseFn:          func(a, b string) (string, error) { return "trunk", nil },
+			MergeBaseForkPointFn: func(ref, branch string) (string, error) { return "a-old", nil },
+		})
+		defer restore()
+
+		// Both the recorded tip and the metadata base are the amended commit.
+		got := resolveOntoOldBase("a-new", "a-new", "b1", "b2")
+		assert.Equal(t, "a-old", got,
+			"the fork point is the only remaining record of where b2 diverged")
+	})
+
+	t.Run("ignores an unavailable fork point", func(t *testing.T) {
+		restore := git.SetOps(&git.MockOps{
+			IsAncestorFn: ancestryMock(history),
+			MergeBaseFn:  func(a, b string) (string, error) { return "trunk", nil },
+			MergeBaseForkPointFn: func(ref, branch string) (string, error) {
+				return "", errors.New("no fork point found")
+			},
+		})
+		defer restore()
+
+		got := resolveOntoOldBase("a-new", "", "b1", "b2")
+		assert.Equal(t, "trunk", got)
+	})
+
 	t.Run("returns the recorded value when nothing is usable", func(t *testing.T) {
 		restore := git.SetOps(&git.MockOps{
 			IsAncestorFn: func(string, string) (bool, error) { return false, nil },

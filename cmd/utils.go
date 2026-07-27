@@ -1240,7 +1240,10 @@ type cascadeRebaseResult struct {
 //  2. metadataBase — the parent tip this branch was last stacked on, from the
 //     stack file. Correct when the parent was amended, reordered, or
 //     squash-merged since.
-//  3. merge-base(recordedOldBase, branch) / merge-base(newBase, branch).
+//  3. merge-base --fork-point, which reads the parent's reflog and so still
+//     finds the right boundary when the stack file itself is stale — for
+//     example a stack whose metadata was written by an older version.
+//  4. merge-base(recordedOldBase, branch) / merge-base(newBase, branch).
 //
 // Returns recordedOldBase unchanged when nothing better can be determined.
 func resolveOntoOldBase(recordedOldBase, metadataBase, newBase, branch string) string {
@@ -1257,6 +1260,9 @@ func resolveOntoOldBase(recordedOldBase, metadataBase, newBase, branch string) s
 	}
 
 	candidates := []string{metadataBase}
+	if fp, err := git.MergeBaseForkPoint(newBase, branch); err == nil && fp != "" {
+		candidates = append(candidates, fp)
+	}
 	if mb, err := git.MergeBase(recordedOldBase, branch); err == nil {
 		candidates = append(candidates, mb)
 	}
