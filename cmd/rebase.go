@@ -389,7 +389,12 @@ func continueRebase(cfg *config.Config, gitDir string) (rerr error) {
 		return err
 	}
 	if s == nil {
-		return fmt.Errorf("no stack found for branch %s", state.OriginalBranch)
+		// The stack changed under the paused rebase. Recovery state is still on
+		// disk, so say how to get out of it rather than leaving a dead end.
+		cfg.Errorf("no stack found for branch %s — the stack may have been modified since the rebase started", state.OriginalBranch)
+		cfg.Printf("  Run `%s` to restore all branches to their pre-rebase state.",
+			cfg.ColorCyan("gh stack rebase --abort"))
+		return ErrSilent
 	}
 
 	// Refresh PR state before selecting the base and cascading the remaining
