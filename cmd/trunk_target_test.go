@@ -3,6 +3,7 @@ package cmd
 import (
 	"errors"
 	"io"
+	"strings"
 	"testing"
 
 	"github.com/github/gh-stack/internal/config"
@@ -223,9 +224,11 @@ func TestResolveTrunkTarget(t *testing.T) {
 		assert.False(t, target.Detached)
 	})
 
-	// Issue #225 shape: the trunk branch was merged and deleted on the remote.
-	t.Run("fails when the trunk no longer exists on the remote", func(t *testing.T) {
+	// Issue #225 shape: the trunk branch was tracked on the remote and has since
+	// been merged and deleted, orphaning the stack.
+	t.Run("fails when a tracked trunk no longer exists on the remote", func(t *testing.T) {
 		mock := trunkTargetMock("local", "")
+		mock.UpstreamRemoteFn = func(string) (string, error) { return "origin", nil }
 		restore := git.SetOps(mock)
 		defer restore()
 
@@ -237,8 +240,53 @@ func TestResolveTrunkTarget(t *testing.T) {
 
 		cfg.Err.Close()
 		out, _ := io.ReadAll(errR)
-		assert.Contains(t, string(out), "does not exist on origin")
+		assert.Contains(t, string(out), "no longer exists on origin")
 		assert.Contains(t, string(out), "--no-trunk")
+	})
+
+	// A stack based on a local integration branch that was never pushed: the
+	// local branch is the source of truth, so the cascade must still run.
+	t.Run("uses a local-only trunk that was never pushed", func(t *testing.T) {
+		restore := git.SetOps(&git.MockOps{
+			BranchExistsFn:   func(string) bool { return true },
+			UpstreamRemoteFn: func(string) (string, error) { return "", nil },
+			RevParseFn: func(ref string) (string, error) {
+				if strings.HasPrefix(ref, "origin/") {
+					return "", errors.New("unknown revision")
+				}
+				return "sha-" + ref, nil
+			},
+		})
+		defer restore()
+
+		cfg, _, errR := config.NewTestConfig()
+		s := &stack.Stack{Trunk: stack.BranchRef{Branch: "integration"}}
+
+		target, err := resolveTrunkTarget(cfg, s, "origin", "b1")
+		require.NoError(t, err)
+		assert.Equal(t, "integration", target.Ref)
+		assert.False(t, target.Detached)
+
+		cfg.Err.Close()
+		out, _ := io.ReadAll(errR)
+		assert.Contains(t, string(out), "only exists locally")
+	})
+
+	t.Run("fails when the trunk exists neither locally nor remotely", func(t *testing.T) {
+		mock := trunkTargetMock("local", "")
+		mock.BranchExistsFn = func(string) bool { return false }
+		restore := git.SetOps(mock)
+		defer restore()
+
+		cfg, _, errR := config.NewTestConfig()
+		s := &stack.Stack{Trunk: stack.BranchRef{Branch: "main"}}
+
+		_, err := resolveTrunkTarget(cfg, s, "origin", "b1")
+		assert.ErrorIs(t, err, ErrSilent)
+
+		cfg.Err.Close()
+		out, _ := io.ReadAll(errR)
+		assert.Contains(t, string(out), "neither locally nor on origin")
 	})
 
 	// Issue #176: `gh stack init --base origin/main` records a remote-qualified

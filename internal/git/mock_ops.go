@@ -44,6 +44,7 @@ type MockOps struct {
 	DeleteTrackingRefFn            func(string, string) error
 	ResetHardFn                    func(string) error
 	SetUpstreamTrackingFn          func(string, string) error
+	UpstreamRemoteFn               func(string) (string, error)
 	MergeFFFn                      func(string) error
 	UpdateBranchRefFn              func(string, string) error
 	StageAllFn                     func() error
@@ -340,6 +341,13 @@ func (m *MockOps) SetUpstreamTracking(branch, remote string) error {
 		return m.SetUpstreamTrackingFn(branch, remote)
 	}
 	return nil
+}
+
+func (m *MockOps) UpstreamRemote(branch string) (string, error) {
+	if m.UpstreamRemoteFn != nil {
+		return m.UpstreamRemoteFn(branch)
+	}
+	return "", nil
 }
 
 func (m *MockOps) MergeFF(target string) error {

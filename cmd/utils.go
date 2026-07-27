@@ -757,6 +757,15 @@ func syncStackPRsFromRemote(client github.ClientOps, s *stack.Stack) (map[string
 // updateBaseSHAs refreshes the Base and Head SHAs for all active branches
 // in a stack. Call this after any operation that may have moved branch refs
 // (rebase, push, etc.).
+//
+// Base records the parent tip a branch is actually stacked on, and is used as
+// the `git rebase --onto <newBase> <upstream>` boundary on the next cascade. It
+// is therefore only advanced when the parent's current tip really is in the
+// branch's history: a parent that moved out of band (an amended, reordered, or
+// force-pushed commit) leaves the branch behind, and recording the parent's new
+// tip anyway would claim a boundary the branch does not contain — making the
+// next rebase replay the parent's superseded commits into it. Head is always
+// accurate, since it is the branch's own tip.
 func updateBaseSHAs(s *stack.Stack) {
 	// Collect all refs we need to resolve, then batch into one git call.
 	var refs []string
@@ -791,13 +800,33 @@ func updateBaseSHAs(s *stack.Stack) {
 		return
 	}
 	for _, p := range pairs {
-		if base, ok := shaMap[p.parent]; ok {
+		if base, ok := shaMap[p.parent]; ok && isStackedOn(base, p.branch, s.Branches[p.index].Base) {
 			s.Branches[p.index].Base = base
 		}
 		if head, ok := shaMap[p.branch]; ok {
 			s.Branches[p.index].Head = head
 		}
 	}
+}
+
+// isStackedOn reports whether parentSHA can be recorded as branch's base.
+//
+// The parent tip must be in the branch's history for the record to be true. A
+// previously recorded base is only ever replaced by another genuine ancestor,
+// so a parent that has moved out of band cannot overwrite the boundary the
+// branch is really built on. With no usable previous value there is nothing to
+// preserve, so the current tip is recorded regardless.
+func isStackedOn(parentSHA, branch, currentBase string) bool {
+	if currentBase == "" || currentBase == parentSHA {
+		return true
+	}
+	isAnc, err := git.IsAncestor(parentSHA, branch)
+	if err != nil {
+		// Unable to tell — keep the recorded base rather than assert a
+		// boundary that may not hold.
+		return false
+	}
+	return isAnc
 }
 
 // activeBranchNames returns the branch names for all non-merged branches in a stack.
@@ -983,11 +1012,7 @@ func resolveTrunkTarget(cfg *config.Config, s *stack.Stack, remote, currentBranc
 	remoteRef := remote + "/" + trunk
 	remoteSHA, remoteErr := git.RevParse(remoteRef)
 	if remoteErr != nil {
-		cfg.Errorf("%s does not exist on %s — cannot bring the stack up to date with its trunk", trunk, remote)
-		cfg.Printf("  If %s was merged and deleted, re-point the stack at its new trunk.", trunk)
-		cfg.Printf("  To rebase the stack on itself without touching the trunk, run `%s`.",
-			cfg.ColorCyan("gh stack rebase --no-trunk"))
-		return trunkTarget{}, ErrSilent
+		return trunkWithoutRemote(cfg, trunk, remote)
 	}
 
 	if err := ensureLocalTrunk(cfg, trunk, remote); err != nil {
@@ -1042,9 +1067,41 @@ func resolveTrunkTarget(cfg *config.Config, s *stack.Stack, remote, currentBranc
 	return trunkTarget{Branch: trunk, Ref: remoteRef, SHA: remoteSHA, Moved: true, Detached: true}, nil
 }
 
-// requireNoRebaseInProgress fails when a rebase is already in progress. git
-// refuses to start another one, so continuing would leave the caller reporting
-// work it never did.
+// trunkWithoutRemote handles a trunk with no resolvable remote-tracking ref.
+//
+// Two very different situations produce that, and they need opposite handling:
+//
+//   - The trunk was tracked on the remote and has since been deleted — the
+//     usual cause is a stack whose trunk was itself a feature branch that got
+//     merged. The stack is now orphaned, and rebasing it onto the stale local
+//     copy would quietly keep it off the real trunk forever, so this fails.
+//   - The trunk was never on the remote at all, e.g. a stack based on a local
+//     integration branch. There the local branch *is* the source of truth, so
+//     the cascade proceeds against it.
+func trunkWithoutRemote(cfg *config.Config, trunk, remote string) (trunkTarget, error) {
+	if !git.BranchExists(trunk) {
+		cfg.Errorf("trunk branch %s exists neither locally nor on %s", trunk, remote)
+		cfg.Printf("  Re-point the stack at an existing trunk branch.")
+		return trunkTarget{}, ErrSilent
+	}
+
+	tracked, err := git.UpstreamRemote(trunk)
+	if err == nil && tracked != "" {
+		cfg.Errorf("%s no longer exists on %s — cannot bring the stack up to date with its trunk", trunk, remote)
+		cfg.Printf("  If %s was merged and deleted, re-point the stack at its new trunk.", trunk)
+		cfg.Printf("  To rebase the stack on itself without touching the trunk, run `%s`.",
+			cfg.ColorCyan("gh stack rebase --no-trunk"))
+		return trunkTarget{}, ErrSilent
+	}
+
+	localSHA, err := git.RevParse(trunk)
+	if err != nil {
+		cfg.Errorf("could not resolve trunk branch %s: %s", trunk, err)
+		return trunkTarget{}, ErrSilent
+	}
+	cfg.Warningf("Trunk %s only exists locally — %s has no such branch", trunk, remote)
+	return trunkTarget{Branch: trunk, Ref: trunk, SHA: localSHA}, nil
+}
 func requireNoRebaseInProgress(cfg *config.Config) error {
 	if !git.IsRebaseInProgress() {
 		return nil
@@ -1164,6 +1221,71 @@ type cascadeRebaseResult struct {
 	OntoOldBase    string   // ontoOldBase at the conflict point (for --continue)
 }
 
+// resolveOntoOldBase picks the commit to pass as the <upstream> argument of
+//
+//	git rebase --onto <newBase> <upstream> <branch>
+//
+// The upstream marks the boundary of the commits to replay: everything after it,
+// up to the branch tip, is re-applied on top of newBase. Passing a commit the
+// branch does not actually contain makes git fall back to a merge base and
+// replay commits that are already represented in newBase — the cause of the old
+// version of an amended parent commit reappearing in the branches above it.
+//
+// Candidates are considered in order of preference and the *latest* one that is
+// genuinely an ancestor of the branch wins, since that replays the fewest
+// commits and therefore cannot duplicate anything:
+//
+//  1. recordedOldBase — the parent's tip at the start of this run. Correct
+//     whenever the parent has not moved out of band.
+//  2. metadataBase — the parent tip this branch was last stacked on, from the
+//     stack file. Correct when the parent was amended, reordered, or
+//     squash-merged since.
+//  3. merge-base(recordedOldBase, branch) / merge-base(newBase, branch).
+//
+// Returns recordedOldBase unchanged when nothing better can be determined.
+func resolveOntoOldBase(recordedOldBase, metadataBase, newBase, branch string) string {
+	isAncestorOfBranch := func(sha string) bool {
+		if sha == "" {
+			return false
+		}
+		ok, err := git.IsAncestor(sha, branch)
+		return err == nil && ok
+	}
+
+	if isAncestorOfBranch(recordedOldBase) {
+		return recordedOldBase
+	}
+
+	candidates := []string{metadataBase}
+	if mb, err := git.MergeBase(recordedOldBase, branch); err == nil {
+		candidates = append(candidates, mb)
+	}
+	if mb, err := git.MergeBase(newBase, branch); err == nil {
+		candidates = append(candidates, mb)
+	}
+
+	best := ""
+	for _, c := range candidates {
+		if !isAncestorOfBranch(c) {
+			continue
+		}
+		if best == "" {
+			best = c
+			continue
+		}
+		// Both are ancestors of branch, so they are ordered along its history.
+		// Keep the later one — it replays strictly fewer commits.
+		if isAnc, err := git.IsAncestor(best, c); err == nil && isAnc {
+			best = c
+		}
+	}
+
+	if best == "" {
+		return recordedOldBase
+	}
+	return best
+}
+
 // cascadeRebase performs a cascade rebase across the given branch range. It
 // stops at the first conflict and returns a result describing what happened.
 // The caller is responsible for conflict recovery (abort+restore or save state).
@@ -1221,16 +1343,11 @@ func cascadeRebase(opts cascadeRebaseOpts) cascadeRebaseResult {
 				}
 			}
 
-			// If ontoOldBase is stale (not an ancestor of the branch), the
-			// branch was already rebased past it. Fall back to
-			// merge-base(newBase, branch) to avoid replaying already-applied
-			// commits.
-			actualOldBase := ontoOldBase
-			if isAnc, err := git.IsAncestor(ontoOldBase, br.Branch); err == nil && !isAnc {
-				if mb, err := git.MergeBase(newBase, br.Branch); err == nil {
-					actualOldBase = mb
-				}
-			}
+			// The recorded upstream can be stale — the parent may have been
+			// amended, reordered, or squash-merged since this branch was
+			// stacked on it. Resolve a boundary the branch actually contains
+			// so already-applied commits are not replayed.
+			actualOldBase := resolveOntoOldBase(ontoOldBase, br.Base, newBase, br.Branch)
 
 			if err := git.RebaseOnto(newBase, actualOldBase, br.Branch, rebaseOpts); err != nil {
 				if git.IsRebaseStartError(err) {
@@ -1261,7 +1378,12 @@ func cascadeRebase(opts cascadeRebaseOpts) cascadeRebaseResult {
 		} else {
 			var rebaseErr error
 			if absIdx > 0 {
-				rebaseErr = git.RebaseOnto(base, originalRefs[base], br.Branch, rebaseOpts)
+				// Same staleness problem as the --onto path above: the parent's
+				// current tip is the wrong boundary once the parent has been
+				// amended or reordered, because this branch still contains the
+				// parent's previous commits.
+				oldBase := resolveOntoOldBase(originalRefs[base], br.Base, base, br.Branch)
+				rebaseErr = git.RebaseOnto(base, oldBase, br.Branch, rebaseOpts)
 			} else {
 				if err := git.CheckoutBranch(br.Branch); err != nil {
 					return cascadeRebaseResult{

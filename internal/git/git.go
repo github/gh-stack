@@ -407,6 +407,13 @@ func SetUpstreamTracking(branch, remote string) error {
 	return ops.SetUpstreamTracking(branch, remote)
 }
 
+// UpstreamRemote returns the remote a branch is configured to track, or an
+// error when the branch has no upstream configured. A branch that has never
+// been pushed or checked out from a remote has none.
+func UpstreamRemote(branch string) (string, error) {
+	return ops.UpstreamRemote(branch)
+}
+
 // MergeFF fast-forwards the currently checked-out branch using a merge.
 func MergeFF(target string) error {
 	return ops.MergeFF(target)

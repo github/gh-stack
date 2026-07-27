@@ -68,6 +68,7 @@ type Ops interface {
 	DeleteTrackingRef(remote, branch string) error
 	ResetHard(ref string) error
 	SetUpstreamTracking(branch, remote string) error
+	UpstreamRemote(branch string) (string, error)
 	MergeFF(target string) error
 	UpdateBranchRef(branch, sha string) error
 	StageAll() error
@@ -586,6 +587,10 @@ func (d *defaultOps) ResetHard(ref string) error {
 
 func (d *defaultOps) SetUpstreamTracking(branch, remote string) error {
 	return runSilent("branch", "--set-upstream-to="+remote+"/"+branch, branch)
+}
+
+func (d *defaultOps) UpstreamRemote(branch string) (string, error) {
+	return run("config", "--get", "branch."+branch+".remote")
 }
 
 func (d *defaultOps) MergeFF(target string) error {

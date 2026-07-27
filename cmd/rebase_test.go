@@ -44,9 +44,9 @@ func newRebaseMock(tmpDir string, currentBranch string) *git.MockOps {
 			}
 			return "sha-" + ref, nil
 		},
-		IsAncestorFn:    func(a, d string) (bool, error) { return true, nil },
-		FetchFn:         func(string) error { return nil },
-		EnableRerereFn:  func() error { return nil },
+		IsAncestorFn:         func(a, d string) (bool, error) { return true, nil },
+		FetchFn:              func(string) error { return nil },
+		EnableRerereFn:       func() error { return nil },
 		IsRebaseInProgressFn: func() bool { return false },
 	}
 }

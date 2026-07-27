@@ -303,9 +303,10 @@ func TestRebase_RemoteQualifiedTrunk_IsNormalized(t *testing.T) {
 	assert.NotContains(t, string(out), "origin/origin/main")
 }
 
-// Issue #225 shape: the trunk branch was merged and deleted on the remote, so
-// there is nothing to bring the stack up to date with. That must be reported
-// rather than silently rebasing onto a stale local trunk.
+// Issue #225 shape: the trunk branch was tracked on the remote and has since
+// been merged and deleted, so there is nothing to bring the stack up to date
+// with. That must be reported rather than silently rebasing onto a stale local
+// trunk.
 func TestRebase_TrunkMissingOnRemote_Fails(t *testing.T) {
 	tmpDir := t.TempDir()
 	writeStackFile(t, tmpDir, twoBranchStack())
@@ -314,6 +315,7 @@ func TestRebase_TrunkMissingOnRemote_Fails(t *testing.T) {
 
 	mock := newRebaseMock(tmpDir, "b2")
 	mock.BranchExistsFn = func(string) bool { return true }
+	mock.UpstreamRemoteFn = func(string) (string, error) { return "origin", nil }
 	mock.RevParseFn = func(ref string) (string, error) {
 		if ref == "origin/main" {
 			return "", errors.New("unknown revision")
@@ -338,8 +340,55 @@ func TestRebase_TrunkMissingOnRemote_Fails(t *testing.T) {
 
 	assert.ErrorIs(t, err, ErrSilent)
 	assert.Zero(t, rebaseCalls, "nothing should be rebased onto a stale trunk")
-	assert.Contains(t, output, "does not exist on origin")
+	assert.Contains(t, output, "no longer exists on origin")
 	assert.Contains(t, output, "--no-trunk")
+}
+
+// A trunk that was never pushed is a local integration branch, not an orphaned
+// stack: the cascade must still run against it.
+func TestRebase_LocalOnlyTrunk_StillRebases(t *testing.T) {
+	s := twoBranchStack()
+	s.Trunk.Branch = "integration"
+
+	tmpDir := t.TempDir()
+	writeStackFile(t, tmpDir, s)
+
+	var rebaseBases []string
+
+	mock := newRebaseMock(tmpDir, "b2")
+	mock.BranchExistsFn = func(string) bool { return true }
+	mock.UpstreamRemoteFn = func(string) (string, error) { return "", nil }
+	mock.RevParseFn = func(ref string) (string, error) {
+		if strings.HasPrefix(ref, "origin/") {
+			return "", errors.New("unknown revision")
+		}
+		return "sha-" + ref, nil
+	}
+	mock.CheckoutBranchFn = func(string) error { return nil }
+	mock.RebaseFn = func(base string, _ git.RebaseOpts) error {
+		rebaseBases = append(rebaseBases, base)
+		return nil
+	}
+	mock.RebaseOntoFn = func(newBase, _, _ string, _ git.RebaseOpts) error {
+		rebaseBases = append(rebaseBases, newBase)
+		return nil
+	}
+
+	restore := git.SetOps(mock)
+	defer restore()
+
+	cfg, _, errR := config.NewTestConfig()
+	cmd := RebaseCmd(cfg)
+	cmd.SetOut(io.Discard)
+	cmd.SetErr(io.Discard)
+	err := cmd.Execute()
+
+	cfg.Err.Close()
+	out, _ := io.ReadAll(errR)
+
+	assert.NoError(t, err)
+	assert.Equal(t, []string{"integration", "b1"}, rebaseBases)
+	assert.Contains(t, string(out), "only exists locally")
 }
 
 // --no-trunk still works without a reachable remote trunk.
