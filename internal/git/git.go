@@ -2,6 +2,7 @@ package git
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -64,6 +65,40 @@ func runInteractive(args ...string) error {
 	return cmd.Run()
 }
 
+// RebaseStartError indicates that git rejected a rebase before creating any
+// rebase state. There is nothing to continue or abort in this case.
+type RebaseStartError struct {
+	Err error
+}
+
+func (e *RebaseStartError) Error() string {
+	return e.Err.Error()
+}
+
+func (e *RebaseStartError) Unwrap() error {
+	return e.Err
+}
+
+func IsRebaseStartError(err error) bool {
+	var startErr *RebaseStartError
+	return errors.As(err, &startErr)
+}
+
+func runRebaseCommand(args []string, opts RebaseOpts) error {
+	if IsRebaseInProgress() {
+		return &RebaseStartError{Err: errors.New("a rebase is already in progress")}
+	}
+	err := runSilent(args...)
+	if err == nil {
+		return nil
+	}
+	err = tryAutoResolveRebase(err, opts)
+	if err != nil && !IsRebaseInProgress() {
+		return &RebaseStartError{Err: err}
+	}
+	return err
+}
+
 // rebaseContinueOnce runs a single git rebase --continue without auto-resolve.
 func rebaseContinueOnce(opts RebaseOpts) error {
 	args := []string{"rebase"}
@@ -83,6 +118,9 @@ func rebaseContinueOnce(opts RebaseOpts) error {
 func tryAutoResolveRebase(originalErr error, opts RebaseOpts) error {
 	for i := 0; i < 1000; i++ {
 		if !IsRebaseInProgress() {
+			if i == 0 {
+				return originalErr
+			}
 			return nil
 		}
 		conflicts, err := ConflictedFiles()
@@ -132,6 +170,11 @@ func CheckoutBranch(name string) error {
 // Fetch fetches from the given remote.
 func Fetch(remote string) error {
 	return ops.Fetch(remote)
+}
+
+// FetchBranch fetches one branch into its remote-tracking ref.
+func FetchBranch(remote, branch string) error {
+	return ops.FetchBranch(remote, branch)
 }
 
 // FetchBranches fetches specific branches from a remote,
@@ -346,6 +389,11 @@ func ResetHard(ref string) error {
 // SetUpstreamTracking sets the upstream tracking branch.
 func SetUpstreamTracking(branch, remote string) error {
 	return ops.SetUpstreamTracking(branch, remote)
+}
+
+// UpstreamRemote returns the remote configured as a branch's upstream.
+func UpstreamRemote(branch string) (string, error) {
+	return ops.UpstreamRemote(branch)
 }
 
 // MergeFF fast-forwards the currently checked-out branch using a merge.

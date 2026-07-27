@@ -139,10 +139,10 @@ func TestSync_TrunkUpToDate_StackStale(t *testing.T) {
 		}
 		return "sha-" + ref, nil
 	}
-	// Stack branches are NOT rebased onto trunk — parent is not an ancestor.
+	// Stack branches are NOT rebased onto trunk until the cascade runs.
+	rebased := false
 	mock.IsAncestorFn = func(a, d string) (bool, error) {
-		// main is NOT an ancestor of b1 → stack is stale
-		if a == "main" && d == "b1" {
+		if a == "main" && d == "b1" && !rebased {
 			return false, nil
 		}
 		return true, nil
@@ -150,10 +150,12 @@ func TestSync_TrunkUpToDate_StackStale(t *testing.T) {
 	mock.CheckoutBranchFn = func(string) error { return nil }
 	mock.RebaseFn = func(base string, opts git.RebaseOpts) error {
 		rebaseCalls = append(rebaseCalls, rebaseCall{branch: "(rebase)" + base})
+		rebased = true
 		return nil
 	}
 	mock.RebaseOntoFn = func(newBase, oldBase, branch string, opts git.RebaseOpts) error {
 		rebaseCalls = append(rebaseCalls, rebaseCall{newBase, oldBase, branch})
+		rebased = true
 		return nil
 	}
 	mock.PushFn = func(remote string, branches []string, force, atomic bool) error {
@@ -298,10 +300,13 @@ func TestSync_TrunkFastForward_WhenOnTrunk(t *testing.T) {
 		if ref == "origin/main" {
 			return "remote-sha", nil
 		}
+		if strings.HasPrefix(ref, "origin/") {
+			return "sha-" + strings.TrimPrefix(ref, "origin/"), nil
+		}
 		return "sha-" + ref, nil
 	}
 	mock.IsAncestorFn = func(a, d string) (bool, error) {
-		return a == "local-sha" && d == "remote-sha", nil
+		return true, nil
 	}
 	mock.MergeFFFn = func(target string) error {
 		mergeFFCalls = append(mergeFFCalls, target)
@@ -625,7 +630,7 @@ func TestSync_PushForceFlagDependsOnRebase(t *testing.T) {
 					return "sha-" + ref, nil
 				}
 				mock.IsAncestorFn = func(a, d string) (bool, error) {
-					return a == "local-sha" && d == "remote-sha", nil
+					return true, nil
 				}
 				mock.UpdateBranchRefFn = func(string, string) error { return nil }
 			} else {
@@ -938,7 +943,7 @@ func TestSync_PushFailureAfterRebase(t *testing.T) {
 		return "sha-" + ref, nil
 	}
 	mock.IsAncestorFn = func(a, d string) (bool, error) {
-		return a == "local-sha" && d == "remote-sha", nil
+		return true, nil
 	}
 	mock.UpdateBranchRefFn = func(string, string) error { return nil }
 	mock.CheckoutBranchFn = func(string) error { return nil }
@@ -1006,10 +1011,7 @@ func TestSync_BranchFastForward_TriggersRebase(t *testing.T) {
 		return "sha-" + ref, nil
 	}
 	mock.IsAncestorFn = func(a, d string) (bool, error) {
-		if a == "b1-local-sha" && d == "b1-remote-sha" {
-			return true, nil
-		}
-		return false, nil
+		return true, nil
 	}
 	mock.MergeFFFn = func(target string) error {
 		mergeFFCalls = append(mergeFFCalls, target)
@@ -1096,13 +1098,7 @@ func TestSync_BranchFastForward_WithTrunkUpdate(t *testing.T) {
 		return "sha-" + ref, nil
 	}
 	mock.IsAncestorFn = func(a, d string) (bool, error) {
-		if a == "trunk-local" && d == "trunk-remote" {
-			return true, nil
-		}
-		if a == "b2-local" && d == "b2-remote" {
-			return true, nil
-		}
-		return false, nil
+		return true, nil
 	}
 	mock.UpdateBranchRefFn = func(branch, sha string) error {
 		updateBranchRefCalls = append(updateBranchRefCalls, struct{ branch, sha string }{branch, sha})

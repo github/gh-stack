@@ -107,9 +107,11 @@ func runSync(cfg *config.Config, opts *syncOptions) error {
 
 	// Fetch trunk + active branches so tracking refs are current for
 	// fast-forward detection (Step 2) and --force-with-lease (Step 4).
-	fetchTargets := append([]string{s.Trunk.Branch}, activeBranchNames(s)...)
-	_ = git.FetchBranches(remote, fetchTargets)
-	cfg.Successf("Fetched latest changes from %s", remote)
+	normalizeStackTrunk(cfg, s, remote)
+	if err := git.FetchBranches(remote, activeBranchNames(s)); err != nil {
+		cfg.Errorf("failed to fetch stack branches from %s: %v", remote, err)
+		return ErrSilent
+	}
 
 	// --- Step 1b: Reconcile remote-ahead stack changes ---
 	// Pull in branches for PRs that were added to the stack on GitHub, or
@@ -139,18 +141,17 @@ func runSync(cfg *config.Config, opts *syncOptions) error {
 		currentBranch = cb
 	}
 
-	// --- Step 2: Fast-forward trunk ---
-	trunk := s.Trunk.Branch
-	trunkUpdated := fastForwardTrunk(cfg, trunk, remote, currentBranch)
+	// --- Step 2: Resolve trunk ---
+	trunk, err := resolveTrunkTarget(cfg, s, remote, currentBranch)
+	if err != nil {
+		return err
+	}
 
 	// --- Step 2b: Fast-forward stack branches behind their remote tracking branch ---
 	updatedBranches := fastForwardBranches(cfg, s, remote, currentBranch)
-	branchesUpdated := len(updatedBranches) > 0
 
 	// --- Step 3: Cascade rebase ---
-	// Rebase if trunk or any branch moved, or if the stack is stale
-	// (branches not yet rebased onto their parent's current tip).
-	needsRebase := trunkUpdated || branchesUpdated || stackNeedsRebase(s)
+	needsRebase := trunk.Moved || len(updatedBranches) > 0 || stackNeedsRebase(s, trunk.Ref)
 	rebased := false
 	if needsRebase {
 		cfg.Printf("")
@@ -169,6 +170,7 @@ func runSync(cfg *config.Config, opts *syncOptions) error {
 				Branches:     s.Branches,
 				StartAbsIdx:  0,
 				OriginalRefs: originalRefs,
+				TrunkRef:     trunk.Ref,
 			})
 
 			if result.Err != nil {
@@ -202,6 +204,13 @@ func runSync(cfg *config.Config, opts *syncOptions) error {
 			}
 		}
 		_ = git.CheckoutBranch(currentBranch)
+	}
+
+	if unstacked := verifyStacked(s, trunk.Ref, 0, len(s.Branches)); len(unstacked) > 0 {
+		_ = git.CheckoutBranch(currentBranch)
+		reportUnstacked(cfg, trunk.Ref, unstacked)
+		stack.SaveNonBlocking(gitDir, sf)
+		return ErrSilent
 	}
 
 	// --- Step 4: Push ---
@@ -329,7 +338,7 @@ func runSync(cfg *config.Config, opts *syncOptions) error {
 				}
 			}
 			if needsSwitch {
-				switchTarget := trunk
+				switchTarget := trunk.Branch
 				for _, b := range s.Branches {
 					if !b.IsSkipped() {
 						switchTarget = b.Branch
@@ -385,6 +394,7 @@ func runSync(cfg *config.Config, opts *syncOptions) error {
 		// unavailable, or a divergence). Report only what actually happened.
 		cfg.Successf("Branches synced")
 	}
+	cfg.Printf("  Stacked on %s", trunk.Describe())
 	return nil
 }
 
