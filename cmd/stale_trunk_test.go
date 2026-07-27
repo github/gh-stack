@@ -514,3 +514,133 @@ func TestRebase_Autostash_KeepsStashOnConflict(t *testing.T) {
 	assert.True(t, state.Stashed, "recovery state must record the pending stash")
 	assert.Equal(t, "main", state.TrunkRef, "recovery must resume against the same trunk ref")
 }
+
+// A `gh stack rebase` before `gh stack sync` leaves the branches diverged from
+// their remote refs. sync used to derive the force flag purely from whether it
+// had rebased in that same run, so the atomic push failed and the stack stayed
+// unpushed while sync still reported success.
+func TestSync_ForcePushesBranchesRebasedEarlier(t *testing.T) {
+	tmpDir := t.TempDir()
+	writeStackFile(t, tmpDir, twoBranchStack())
+
+	var pushCalls []pushCall
+
+	mock := newSyncMock(tmpDir, "b1")
+	mock.RevParseFn = func(ref string) (string, error) {
+		if ref == "main" || ref == "origin/main" {
+			return "trunk-sha", nil
+		}
+		// The local branches carry rewritten history.
+		if strings.HasPrefix(ref, "origin/") {
+			return "old-" + strings.TrimPrefix(ref, "origin/"), nil
+		}
+		return "new-" + ref, nil
+	}
+	// The stack is already correctly stacked, so no rebase happens this run,
+	// but the remote tips are not contained in the local branches.
+	mock.IsAncestorFn = func(ancestor, descendant string) (bool, error) {
+		if strings.HasPrefix(ancestor, "old-") {
+			return false, nil
+		}
+		return true, nil
+	}
+	mock.PushFn = func(remote string, branches []string, force, atomic bool) error {
+		pushCalls = append(pushCalls, pushCall{remote, branches, force, atomic})
+		return nil
+	}
+
+	restore := git.SetOps(mock)
+	defer restore()
+
+	cfg, _, errR := config.NewTestConfig()
+	cmd := SyncCmd(cfg)
+	cmd.SetOut(io.Discard)
+	cmd.SetErr(io.Discard)
+	err := cmd.Execute()
+
+	cfg.Err.Close()
+	out, _ := io.ReadAll(errR)
+
+	assert.NoError(t, err)
+	require.Len(t, pushCalls, 1)
+	assert.True(t, pushCalls[0].force,
+		"branches rebased before this run still need --force-with-lease")
+	assert.Contains(t, string(out), "Pushed")
+}
+
+// When the push does not land, the stack on the remote does not reflect the
+// local one, so sync must not sign off as if it did.
+func TestSync_PushFailure_DoesNotReportSuccess(t *testing.T) {
+	tmpDir := t.TempDir()
+	writeStackFile(t, tmpDir, twoBranchStack())
+
+	mock := newSyncMock(tmpDir, "b1")
+	mock.PushFn = func(string, []string, bool, bool) error {
+		return errors.New("remote rejected")
+	}
+
+	restore := git.SetOps(mock)
+	defer restore()
+
+	cfg, _, errR := config.NewTestConfig()
+	cmd := SyncCmd(cfg)
+	cmd.SetOut(io.Discard)
+	cmd.SetErr(io.Discard)
+	err := cmd.Execute()
+
+	cfg.Err.Close()
+	out, _ := io.ReadAll(errR)
+	output := string(out)
+
+	assert.NoError(t, err, "a failed push is a warning, not a fatal error")
+	assert.Contains(t, output, "were not pushed")
+	assert.NotContains(t, output, "Stack synced")
+	assert.NotContains(t, output, "Branches synced")
+}
+
+func TestBranchesNeedForcePush(t *testing.T) {
+	tests := []struct {
+		name     string
+		ancestor func(string, string) (bool, error)
+		revParse func(string) (string, error)
+		want     bool
+	}{
+		{
+			name:     "remote tip contained locally needs no force",
+			ancestor: func(string, string) (bool, error) { return true, nil },
+			want:     false,
+		},
+		{
+			name:     "rewritten history needs force",
+			ancestor: func(string, string) (bool, error) { return false, nil },
+			want:     true,
+		},
+		{
+			name:     "a branch with no remote ref is ignored",
+			revParse: func(string) (string, error) { return "", errors.New("unknown revision") },
+			ancestor: func(string, string) (bool, error) { return false, nil },
+			want:     false,
+		},
+		{
+			name:     "unknown ancestry does not force",
+			ancestor: func(string, string) (bool, error) { return false, errors.New("boom") },
+			want:     false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			revParse := tt.revParse
+			if revParse == nil {
+				revParse = func(ref string) (string, error) { return "sha-" + ref, nil }
+			}
+			restore := git.SetOps(&git.MockOps{
+				RevParseFn:   revParse,
+				IsAncestorFn: tt.ancestor,
+			})
+			defer restore()
+
+			assert.Equal(t, tt.want, branchesNeedForcePush("origin", []string{"b1", "b2"}))
+		})
+	}
+}

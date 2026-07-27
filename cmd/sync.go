@@ -266,6 +266,7 @@ func runSync(cfg *config.Config, opts *syncOptions) error {
 	// --- Step 4: Push ---
 	cfg.Printf("")
 	branches := activeBranchNames(s)
+	pushed := true
 
 	if mergedCount := len(s.MergedBranches()); mergedCount > 0 {
 		cfg.Printf("Skipping %d merged %s", mergedCount, plural(mergedCount, "branch", "branches"))
@@ -277,11 +278,14 @@ func runSync(cfg *config.Config, opts *syncOptions) error {
 	if len(branches) == 0 {
 		cfg.Printf("No active branches to push (all merged)")
 	} else {
-		// After rebase, force-with-lease is required (history rewritten).
-		// Without rebase, try a normal push first.
-		force := rebased
+		// Rewritten history needs --force-with-lease. That is not only true of
+		// a rebase this run performed: a `gh stack rebase` beforehand leaves
+		// exactly the same divergence, and a plain push then fails for the
+		// whole atomic set.
+		force := rebased || branchesNeedForcePush(remote, branches)
 		cfg.Printf("Pushing %d %s to %s...", len(branches), plural(len(branches), "branch", "branches"), remote)
 		if err := git.Push(remote, branches, force, true); err != nil {
+			pushed = false
 			if !force {
 				cfg.Warningf("Push failed — branches may need force push after rebase")
 				cfg.Printf("  Run `%s` to push with --force-with-lease.",
@@ -436,9 +440,16 @@ func runSync(cfg *config.Config, opts *syncOptions) error {
 	}
 
 	cfg.Printf("")
-	if stackSynced {
+	switch {
+	case !pushed:
+		// The branches were rebased and the PR state refreshed, but the remote
+		// does not have the new commits, so nothing downstream of the push
+		// actually reflects the local stack yet.
+		cfg.Warningf("Synced locally, but the branches were not pushed")
+		cfg.Printf("  Run `%s` to push them.", cfg.ColorCyan("gh stack push"))
+	case stackSynced:
 		cfg.Successf("Stack synced")
-	} else {
+	default:
 		// The branches were fetched, rebased, and pushed, but no stack object on
 		// GitHub was created or updated (no PRs, fewer than two PRs, stacked PRs
 		// unavailable, or a divergence). Report only what actually happened.
@@ -446,6 +457,26 @@ func runSync(cfg *config.Config, opts *syncOptions) error {
 	}
 	cfg.Printf("  Stacked on %s", trunk.Describe())
 	return nil
+}
+
+// branchesNeedForcePush reports whether pushing any of the branches would
+// rewrite history on the remote, which requires --force-with-lease.
+//
+// A branch qualifies when its remote-tracking ref is not contained in the local
+// branch — the state a rebase leaves behind. Branches with no remote ref yet,
+// or whose ancestry cannot be determined, do not qualify: a plain push is the
+// safer default and its failure is reported.
+func branchesNeedForcePush(remote string, branches []string) bool {
+	for _, b := range branches {
+		remoteSHA, err := git.RevParse(remote + "/" + b)
+		if err != nil {
+			continue
+		}
+		if isAnc, err := git.IsAncestor(remoteSHA, b); err == nil && !isAnc {
+			return true
+		}
+	}
+	return false
 }
 
 // restoreBranches resets each branch to its original SHA, collecting any errors.
