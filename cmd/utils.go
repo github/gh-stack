@@ -980,12 +980,21 @@ func adoptRemoteRebasedBranches(cfg *config.Config, s *stack.Stack, remote, curr
 		remoteParent = remoteBranch
 	}
 
-	dirty, err := git.HasUncommittedChanges()
-	if err != nil {
-		return nil, fmt.Errorf("could not determine whether the working tree is clean: %w", err)
+	currentBranchWillMove := false
+	for _, update := range updates {
+		if update.branch == currentBranch {
+			currentBranchWillMove = true
+			break
+		}
 	}
-	if dirty {
-		return nil, errors.New("uncommitted changes prevent adopting the remote-rebased branches; commit or stash them first")
+	if currentBranchWillMove {
+		dirty, err := git.HasUncommittedChanges()
+		if err != nil {
+			return nil, fmt.Errorf("could not determine whether the working tree is clean: %w", err)
+		}
+		if dirty {
+			return nil, errors.New("uncommitted changes prevent adopting the remote-rebased branches; commit or stash them first")
+		}
 	}
 
 	var applied []remoteRebaseUpdate

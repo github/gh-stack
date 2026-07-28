@@ -1033,7 +1033,7 @@ func TestAdoptRemoteRebasedBranchesAllowsLocalOnlyUpstackBranch(t *testing.T) {
 			return ancestor == "main-old" && descendant == "b1", nil
 		},
 		RangeDiffEquivalentFn:   func(string, string, string, string) (bool, error) { return true, nil },
-		HasUncommittedChangesFn: func() (bool, error) { return false, nil },
+		HasUncommittedChangesFn: func() (bool, error) { return true, nil },
 		UpdateBranchRefFn: func(branch, sha string) error {
 			refUpdates = append(refUpdates, [2]string{branch, sha})
 			return nil
@@ -1047,6 +1047,46 @@ func TestAdoptRemoteRebasedBranchesAllowsLocalOnlyUpstackBranch(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, []string{"b1"}, adopted)
 	assert.Equal(t, [][2]string{{"b1", "b1-new"}}, refUpdates)
+}
+
+func TestAdoptRemoteRebasedBranchesRejectsDirtyCurrentBranch(t *testing.T) {
+	s := &stack.Stack{
+		Trunk:    stack.BranchRef{Branch: "main"},
+		Branches: []stack.BranchRef{{Branch: "b1", Base: "main-old"}},
+	}
+	snapshots := map[string]branchTipSnapshot{
+		"b1": {localSHA: "b1-old", remoteSHA: "b1-old", hasRemote: true},
+	}
+
+	resetCalled := false
+	restore := git.SetOps(&git.MockOps{
+		RevParseFn: func(ref string) (string, error) {
+			if ref == "b1" {
+				return "b1-old", nil
+			}
+			return "b1-new", nil
+		},
+		IsAncestorFn: func(ancestor, descendant string) (bool, error) {
+			if ancestor == "origin/main" && descendant == "origin/b1" {
+				return true, nil
+			}
+			return ancestor == "main-old" && descendant == "b1", nil
+		},
+		RangeDiffEquivalentFn:   func(string, string, string, string) (bool, error) { return true, nil },
+		HasUncommittedChangesFn: func() (bool, error) { return true, nil },
+		ResetHardFn: func(string) error {
+			resetCalled = true
+			return nil
+		},
+	})
+	defer restore()
+
+	cfg, _, _ := config.NewTestConfig()
+	_, err := adoptRemoteRebasedBranches(cfg, s, "origin", "b1", snapshots)
+
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "uncommitted changes")
+	assert.False(t, resetCalled)
 }
 
 func TestAdoptRemoteRebasedBranchesRejectsConcurrentChanges(t *testing.T) {
