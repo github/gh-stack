@@ -404,7 +404,7 @@ gh stack push [flags]
 |------|-------------|
 | `--remote <name>` | Remote to push to (defaults to auto-detected remote) |
 
-Pushes every branch to the remote using `--force-with-lease --atomic`. This is a lightweight wrapper around `git push` that knows about all branches in the stack. It does not create or update pull requests — use `gh stack submit` for that.
+Pushes every branch in one `git push` using explicit per-branch `--force-with-lease` checks. The update is not atomic: branches whose leases pass may update even if another branch is rejected. Fix the rejected branch and rerun the command; branches already updated will be unchanged. This command does not create or update pull requests — use `gh stack submit` for that.
 
 **Examples:**
 

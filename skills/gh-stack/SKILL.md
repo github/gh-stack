@@ -512,7 +512,8 @@ gh stack push --remote upstream
 
 **Behavior:**
 
-- Pushes all active (non-merged) branches atomically (`--force-with-lease --atomic`)
+- Pushes all active (non-merged, non-queued) branches in one non-atomic multi-ref push with explicit per-branch `--force-with-lease` checks
+- Some branches may update if another is rejected; fix the rejected branch and rerun the command
 - Does **not** create or update pull requests — use `gh stack submit` for that
 
 **Output (stderr):**
@@ -541,7 +542,7 @@ gh stack submit --auto --open
 
 **Behavior:**
 
-- Pushes all active (non-merged) branches atomically (`--force-with-lease --atomic`)
+- Pushes each active (non-merged, non-queued) branch sequentially with explicit per-branch `--force-with-lease` checks; the overall submit is not atomic
 - Creates a new PR for each branch that doesn't have one (base set to the first non-merged ancestor branch)
 - After creating PRs, links them together as a **Stack** on GitHub (requires the repository to have stacks enabled)
 - If every PR in the stack has already been merged, the stack is complete and can't be extended. `submit` automatically forks your unmerged branches into a **new** stack rooted at the trunk and creates it on GitHub, leaving the merged stack untouched.
