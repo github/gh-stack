@@ -2,9 +2,11 @@ package cmd
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -242,11 +244,11 @@ func TestRebase_OntoPropagatesToSubsequentBranches(t *testing.T) {
 		"b4 should rebase --onto b3 with b3's original SHA as oldBase")
 }
 
-// TestRebase_StaleOntoOldBase_FallsBackToMergeBase verifies that when a branch
+// TestRebase_StaleOntoOldBase_UsesForkPoint verifies that when a branch
 // was already rebased past the merged branch's tip (e.g. by a previous run),
-// the stale ontoOldBase is detected via IsAncestor and replaced with
-// merge-base(newBase, branch) to avoid replaying already-applied commits.
-func TestRebase_StaleOntoOldBase_FallsBackToMergeBase(t *testing.T) {
+// the stale ontoOldBase is replaced with a reflog fork-point that the branch
+// actually contains.
+func TestRebase_StaleOntoOldBase_UsesForkPoint(t *testing.T) {
 	s := stack.Stack{
 		Trunk: stack.BranchRef{Branch: "main"},
 		Branches: []stack.BranchRef{
@@ -286,11 +288,11 @@ func TestRebase_StaleOntoOldBase_FallsBackToMergeBase(t *testing.T) {
 		}
 		return true, nil
 	}
-	mock.MergeBaseFn = func(a, b string) (string, error) {
+	mock.MergeBaseForkPointFn = func(a, b string) (string, error) {
 		if a == "main" && b == "b2" {
-			return "main-b2-mergebase", nil
+			return "main-b2-forkpoint", nil
 		}
-		return "default-mergebase", nil
+		return "default-forkpoint", nil
 	}
 	mock.RebaseOntoFn = func(newBase, oldBase, branch string, opts git.RebaseOpts) error {
 		rebaseCalls = append(rebaseCalls, rebaseCall{newBase, oldBase, branch})
@@ -312,9 +314,9 @@ func TestRebase_StaleOntoOldBase_FallsBackToMergeBase(t *testing.T) {
 	assert.NoError(t, err)
 	require.Len(t, rebaseCalls, 2)
 
-	// b2: stale ontoOldBase detected → falls back to merge-base(main, b2)
-	assert.Equal(t, rebaseCall{"main", "main-b2-mergebase", "b2"}, rebaseCalls[0],
-		"b2 should use merge-base as oldBase when ontoOldBase is stale")
+	// b2: stale ontoOldBase detected → uses fork-point(main, b2)
+	assert.Equal(t, rebaseCall{"main", "main-b2-forkpoint", "b2"}, rebaseCalls[0],
+		"b2 should use the reflog fork-point when ontoOldBase is stale")
 
 	// b3: b2's SHA is a valid ancestor → uses it directly
 	assert.Equal(t, rebaseCall{"b2", "b2-on-main-sha", "b3"}, rebaseCalls[1],
@@ -643,7 +645,7 @@ func TestRebase_SkipsMergedBranches(t *testing.T) {
 	s := stack.Stack{
 		Trunk: stack.BranchRef{Branch: "main"},
 		Branches: []stack.BranchRef{
-			{Branch: "b1", PullRequest: &stack.PullRequestRef{Number: 42, Merged: true}},
+			{Branch: "b1", Head: "sha-b1", PullRequest: &stack.PullRequestRef{Number: 42, Merged: true}},
 			{Branch: "b2"},
 		},
 	}
@@ -1962,4 +1964,240 @@ func TestRebase_NoTrunk_ConflictSavesState(t *testing.T) {
 	require.NoError(t, err)
 	assert.True(t, loaded.NoTrunk,
 		"saved rebase state should preserve NoTrunk flag")
+}
+
+func TestResolveRebaseOldBase(t *testing.T) {
+	t.Run("uses current parent tip when the branch contains it", func(t *testing.T) {
+		restore := git.SetOps(&git.MockOps{
+			IsAncestorFn: func(ancestor, branch string) (bool, error) {
+				return ancestor == "current-parent" && branch == "child", nil
+			},
+		})
+		defer restore()
+
+		oldBase, err := resolveRebaseOldBase("current-parent", "recorded-base", "parent", "child")
+		require.NoError(t, err)
+		assert.Equal(t, "current-parent", oldBase)
+	})
+
+	t.Run("uses recorded base after the parent was rewritten", func(t *testing.T) {
+		restore := git.SetOps(&git.MockOps{
+			IsAncestorFn: func(ancestor, branch string) (bool, error) {
+				return ancestor == "recorded-base" && branch == "child", nil
+			},
+		})
+		defer restore()
+
+		oldBase, err := resolveRebaseOldBase("amended-parent", "recorded-base", "parent", "child")
+		require.NoError(t, err)
+		assert.Equal(t, "recorded-base", oldBase)
+	})
+
+	t.Run("uses fork point when metadata was already corrupted", func(t *testing.T) {
+		restore := git.SetOps(&git.MockOps{
+			IsAncestorFn: func(ancestor, branch string) (bool, error) {
+				return ancestor == "old-parent" && branch == "child", nil
+			},
+			MergeBaseForkPointFn: func(ref, branch string) (string, error) {
+				return "old-parent", nil
+			},
+		})
+		defer restore()
+
+		oldBase, err := resolveRebaseOldBase("amended-parent", "amended-parent", "parent", "child")
+		require.NoError(t, err)
+		assert.Equal(t, "old-parent", oldBase)
+	})
+
+	t.Run("fails when no safe boundary can be recovered", func(t *testing.T) {
+		restore := git.SetOps(&git.MockOps{
+			IsAncestorFn: func(string, string) (bool, error) { return false, nil },
+			MergeBaseForkPointFn: func(string, string) (string, error) {
+				return "", errors.New("no fork point")
+			},
+		})
+		defer restore()
+
+		_, err := resolveRebaseOldBase("amended-parent", "amended-parent", "parent", "child")
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "rebase this branch manually")
+	})
+}
+
+type amendedParentRepo struct {
+	dir       string
+	gitDir    string
+	oldParent string
+	newParent string
+}
+
+func issue250Git(t *testing.T, dir string, args ...string) string {
+	t.Helper()
+	cmd := exec.Command("git", args...)
+	cmd.Dir = dir
+	cmd.Env = append(os.Environ(),
+		"GIT_AUTHOR_NAME=Test",
+		"GIT_AUTHOR_EMAIL=test@example.com",
+		"GIT_COMMITTER_NAME=Test",
+		"GIT_COMMITTER_EMAIL=test@example.com",
+	)
+	out, err := cmd.CombinedOutput()
+	require.NoError(t, err, "git %s:\n%s", strings.Join(args, " "), out)
+	return strings.TrimSpace(string(out))
+}
+
+func issue250GitMayFail(t *testing.T, dir string, args ...string) error {
+	t.Helper()
+	cmd := exec.Command("git", args...)
+	cmd.Dir = dir
+	cmd.Env = append(os.Environ(),
+		"GIT_AUTHOR_NAME=Test",
+		"GIT_AUTHOR_EMAIL=test@example.com",
+		"GIT_COMMITTER_NAME=Test",
+		"GIT_COMMITTER_EMAIL=test@example.com",
+	)
+	return cmd.Run()
+}
+
+func issue250WriteFile(t *testing.T, dir, name, content string) {
+	t.Helper()
+	require.NoError(t, os.WriteFile(filepath.Join(dir, name), []byte(content), 0644))
+}
+
+func setupAmendedParentRepo(t *testing.T, corruptBase bool) amendedParentRepo {
+	t.Helper()
+	remoteDir := filepath.Join(t.TempDir(), "remote.git")
+	cloneDir := filepath.Join(t.TempDir(), "clone")
+
+	issue250Git(t, ".", "-c", "safe.bareRepository=all", "init", "--bare", "-b", "main", remoteDir)
+	issue250Git(t, ".", "clone", remoteDir, cloneDir)
+	issue250Git(t, cloneDir, "config", "user.name", "Test")
+	issue250Git(t, cloneDir, "config", "user.email", "test@example.com")
+
+	issue250WriteFile(t, cloneDir, "base.txt", "base\n")
+	issue250Git(t, cloneDir, "add", ".")
+	issue250Git(t, cloneDir, "commit", "-m", "base")
+	issue250Git(t, cloneDir, "push", "-u", "origin", "main")
+	mainSHA := issue250Git(t, cloneDir, "rev-parse", "main")
+
+	issue250Git(t, cloneDir, "checkout", "-b", "parent")
+	issue250WriteFile(t, cloneDir, "old-parent.txt", "old parent\n")
+	issue250Git(t, cloneDir, "add", ".")
+	issue250Git(t, cloneDir, "commit", "-m", "parent old")
+	oldParent := issue250Git(t, cloneDir, "rev-parse", "parent")
+	issue250Git(t, cloneDir, "push", "-u", "origin", "parent")
+
+	issue250Git(t, cloneDir, "checkout", "-b", "child")
+	issue250WriteFile(t, cloneDir, "child.txt", "child\n")
+	issue250Git(t, cloneDir, "add", ".")
+	issue250Git(t, cloneDir, "commit", "-m", "child commit")
+	childSHA := issue250Git(t, cloneDir, "rev-parse", "child")
+	issue250Git(t, cloneDir, "push", "-u", "origin", "child")
+
+	gitDir := filepath.Join(cloneDir, ".git")
+	s := stack.Stack{
+		Trunk: stack.BranchRef{Branch: "main", Head: mainSHA},
+		Branches: []stack.BranchRef{
+			{Branch: "parent", Head: oldParent, Base: mainSHA},
+			{Branch: "child", Head: childSHA, Base: oldParent},
+		},
+	}
+	writeStackFile(t, gitDir, s)
+
+	issue250Git(t, cloneDir, "checkout", "parent")
+	issue250Git(t, cloneDir, "rm", "old-parent.txt")
+	issue250WriteFile(t, cloneDir, "new-parent.txt", "new parent\n")
+	issue250Git(t, cloneDir, "add", ".")
+	issue250Git(t, cloneDir, "commit", "--amend", "-m", "parent amended")
+	newParent := issue250Git(t, cloneDir, "rev-parse", "parent")
+
+	if corruptBase {
+		issue250Git(t, cloneDir, "push", "--force", "origin", "parent")
+		s.Branches[0].Head = newParent
+		s.Branches[1].Base = newParent
+		writeStackFile(t, gitDir, s)
+	}
+	issue250Git(t, cloneDir, "checkout", "child")
+
+	return amendedParentRepo{
+		dir:       cloneDir,
+		gitDir:    gitDir,
+		oldParent: oldParent,
+		newParent: newParent,
+	}
+}
+
+func issue250TestConfig(t *testing.T) *config.Config {
+	t.Helper()
+	cfg, outR, errR := config.NewTestConfig()
+	cfg.GitHubClientOverride = &github.MockClient{}
+	t.Cleanup(func() {
+		_ = cfg.Out.Close()
+		_ = cfg.Err.Close()
+		_ = outR.Close()
+		_ = errR.Close()
+	})
+	return cfg
+}
+
+func withIssue250Repo(t *testing.T, dir string) {
+	t.Helper()
+	originalDir, err := os.Getwd()
+	require.NoError(t, err)
+	require.NoError(t, os.Chdir(dir))
+	t.Cleanup(func() { _ = os.Chdir(originalDir) })
+}
+
+func assertIssue250History(t *testing.T, repo amendedParentRepo) {
+	t.Helper()
+	subjects := strings.Split(issue250Git(t, repo.dir, "log", "--format=%s", "main..child"), "\n")
+	assert.Equal(t, []string{"child commit", "parent amended"}, subjects)
+	assert.Error(t, issue250GitMayFail(t, repo.dir, "merge-base", "--is-ancestor", repo.oldParent, "child"))
+	require.NoError(t, issue250GitMayFail(t, repo.dir, "merge-base", "--is-ancestor", repo.newParent, "child"))
+	_, oldErr := os.Stat(filepath.Join(repo.dir, "old-parent.txt"))
+	assert.True(t, os.IsNotExist(oldErr))
+	_, newErr := os.Stat(filepath.Join(repo.dir, "new-parent.txt"))
+	assert.NoError(t, newErr)
+}
+
+func TestIntegration_AmendedParentPushThenRebase(t *testing.T) {
+	repo := setupAmendedParentRepo(t, false)
+	withIssue250Repo(t, repo.dir)
+	cfg := issue250TestConfig(t)
+
+	require.NoError(t, runPush(cfg, &pushOptions{remote: "origin"}))
+
+	sf, err := stack.Load(repo.gitDir)
+	require.NoError(t, err)
+	require.Len(t, sf.Stacks, 1)
+	assert.Equal(t, repo.oldParent, sf.Stacks[0].Branches[1].Base,
+		"push must not replace the child's valid base with an amended parent tip")
+
+	require.NoError(t, runRebase(cfg, &rebaseOptions{remote: "origin"}))
+	assertIssue250History(t, repo)
+}
+
+func TestIntegration_AmendedParentRecoversCorruptedBase(t *testing.T) {
+	repo := setupAmendedParentRepo(t, true)
+	withIssue250Repo(t, repo.dir)
+	cfg := issue250TestConfig(t)
+
+	require.NoError(t, runRebase(cfg, &rebaseOptions{remote: "origin"}))
+	assertIssue250History(t, repo)
+}
+
+func TestIntegration_AmendedParentWithoutForkPointFailsSafely(t *testing.T) {
+	repo := setupAmendedParentRepo(t, true)
+	issue250Git(t, repo.dir, "reflog", "expire", "--expire=now", "--all")
+	require.Error(t, issue250GitMayFail(t, repo.dir, "merge-base", "--fork-point", "parent", "child"))
+
+	withIssue250Repo(t, repo.dir)
+	cfg := issue250TestConfig(t)
+	parentBefore := issue250Git(t, repo.dir, "rev-parse", "parent")
+	childBefore := issue250Git(t, repo.dir, "rev-parse", "child")
+
+	err := runRebase(cfg, &rebaseOptions{remote: "origin"})
+	require.Error(t, err)
+	assert.Equal(t, parentBefore, issue250Git(t, repo.dir, "rev-parse", "parent"))
+	assert.Equal(t, childBefore, issue250Git(t, repo.dir, "rev-parse", "child"))
 }

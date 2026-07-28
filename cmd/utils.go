@@ -791,13 +791,25 @@ func updateBaseSHAs(s *stack.Stack) {
 		return
 	}
 	for _, p := range pairs {
-		if base, ok := shaMap[p.parent]; ok {
+		if base, ok := shaMap[p.parent]; ok && canUpdateBase(base, p.branch, s.Branches[p.index].Base) {
 			s.Branches[p.index].Base = base
 		}
 		if head, ok := shaMap[p.branch]; ok {
 			s.Branches[p.index].Head = head
 		}
 	}
+}
+
+// canUpdateBase reports whether parentSHA can replace a branch's recorded base.
+// Once a base is known, only a parent tip the branch actually contains may
+// replace it; otherwise an amended parent would corrupt the next rebase
+// boundary. Empty bases retain the historical best-effort behavior.
+func canUpdateBase(parentSHA, branch, currentBase string) bool {
+	if currentBase == "" || currentBase == parentSHA {
+		return true
+	}
+	isAncestor, err := git.IsAncestor(parentSHA, branch)
+	return err == nil && isAncestor
 }
 
 // activeBranchNames returns the branch names for all non-merged branches in a stack.
@@ -1051,6 +1063,35 @@ func (o cascadeRebaseOpts) trunkRef() string {
 	return o.Stack.Trunk.Branch
 }
 
+// resolveRebaseOldBase returns a boundary the branch actually contains.
+// An ordinary merge-base is intentionally not a fallback: after a parent is
+// amended it falls below the old parent commit and would replay that commit
+// into the child, which is the corruption this helper prevents.
+func resolveRebaseOldBase(currentParentTip, recordedBase, newBase, branch string) (string, error) {
+	isValid := func(candidate string) bool {
+		if candidate == "" {
+			return false
+		}
+		ok, err := git.IsAncestor(candidate, branch)
+		return err == nil && ok
+	}
+
+	if isValid(currentParentTip) {
+		return currentParentTip, nil
+	}
+	if recordedBase != currentParentTip && isValid(recordedBase) {
+		return recordedBase, nil
+	}
+	if forkPoint, err := git.MergeBaseForkPoint(newBase, branch); err == nil && isValid(forkPoint) {
+		return forkPoint, nil
+	}
+
+	return "", fmt.Errorf(
+		"could not determine the previous base of %s after %s changed; rebase this branch manually",
+		branch, newBase,
+	)
+}
+
 // cascadeRebaseResult describes the outcome of a cascade rebase.
 type cascadeRebaseResult struct {
 	Rebased        bool     // at least one branch was successfully rebased
@@ -1119,14 +1160,11 @@ func cascadeRebase(opts cascadeRebaseOpts) cascadeRebaseResult {
 				}
 			}
 
-			// If ontoOldBase is stale (not an ancestor of the branch), the
-			// branch was already rebased past it. Fall back to
-			// merge-base(newBase, branch) to avoid replaying already-applied
-			// commits.
-			actualOldBase := ontoOldBase
-			if isAnc, err := git.IsAncestor(ontoOldBase, br.Branch); err == nil && !isAnc {
-				if mb, err := git.MergeBase(newBase, br.Branch); err == nil {
-					actualOldBase = mb
+			actualOldBase, err := resolveRebaseOldBase(ontoOldBase, br.Base, newBase, br.Branch)
+			if err != nil {
+				return cascadeRebaseResult{
+					Rebased: result.Rebased,
+					Err:     err,
 				}
 			}
 
@@ -1159,7 +1197,14 @@ func cascadeRebase(opts cascadeRebaseOpts) cascadeRebaseResult {
 		} else {
 			var rebaseErr error
 			if absIdx > 0 {
-				rebaseErr = git.RebaseOnto(base, originalRefs[base], br.Branch, rebaseOpts)
+				oldBase, err := resolveRebaseOldBase(originalRefs[base], br.Base, base, br.Branch)
+				if err != nil {
+					return cascadeRebaseResult{
+						Rebased: result.Rebased,
+						Err:     err,
+					}
+				}
+				rebaseErr = git.RebaseOnto(base, oldBase, br.Branch, rebaseOpts)
 			} else {
 				if err := git.CheckoutBranch(br.Branch); err != nil {
 					return cascadeRebaseResult{
