@@ -2201,3 +2201,60 @@ func TestIntegration_AmendedParentWithoutForkPointFailsSafely(t *testing.T) {
 	assert.Equal(t, parentBefore, issue250Git(t, repo.dir, "rev-parse", "parent"))
 	assert.Equal(t, childBefore, issue250Git(t, repo.dir, "rev-parse", "child"))
 }
+
+func TestIntegration_AdoptedBranchRebasesFromCommonAncestor(t *testing.T) {
+	remoteDir := filepath.Join(t.TempDir(), "remote.git")
+	cloneDir := filepath.Join(t.TempDir(), "clone")
+
+	issue250Git(t, ".", "-c", "safe.bareRepository=all", "init", "--bare", "-b", "main", remoteDir)
+	issue250Git(t, ".", "clone", remoteDir, cloneDir)
+	issue250Git(t, cloneDir, "config", "user.name", "Test")
+	issue250Git(t, cloneDir, "config", "user.email", "test@example.com")
+
+	issue250WriteFile(t, cloneDir, "base.txt", "base\n")
+	issue250Git(t, cloneDir, "add", ".")
+	issue250Git(t, cloneDir, "commit", "-m", "base")
+	issue250Git(t, cloneDir, "push", "-u", "origin", "main")
+	mainSHA := issue250Git(t, cloneDir, "rev-parse", "main")
+
+	issue250Git(t, cloneDir, "checkout", "-b", "parent")
+	issue250WriteFile(t, cloneDir, "parent.txt", "parent\n")
+	issue250Git(t, cloneDir, "add", ".")
+	issue250Git(t, cloneDir, "commit", "-m", "parent commit")
+	parentSHA := issue250Git(t, cloneDir, "rev-parse", "parent")
+
+	issue250Git(t, cloneDir, "checkout", "-b", "imported", "main")
+	issue250WriteFile(t, cloneDir, "imported-one.txt", "one\n")
+	issue250Git(t, cloneDir, "add", ".")
+	issue250Git(t, cloneDir, "commit", "-m", "imported one")
+	issue250WriteFile(t, cloneDir, "imported-two.txt", "two\n")
+	issue250Git(t, cloneDir, "add", ".")
+	issue250Git(t, cloneDir, "commit", "-m", "imported two")
+
+	gitDir := filepath.Join(cloneDir, ".git")
+	writeStackFile(t, gitDir, stack.Stack{
+		Trunk: stack.BranchRef{Branch: "main", Head: mainSHA},
+		Branches: []stack.BranchRef{
+			{Branch: "parent", Head: parentSHA, Base: mainSHA},
+		},
+	})
+
+	issue250Git(t, cloneDir, "checkout", "parent")
+	withIssue250Repo(t, cloneDir)
+	cfg := issue250TestConfig(t)
+
+	require.NoError(t, runAdd(cfg, &addOptions{}, []string{"imported"}))
+
+	sf, err := stack.Load(gitDir)
+	require.NoError(t, err)
+	require.Len(t, sf.Stacks, 1)
+	require.Len(t, sf.Stacks[0].Branches, 2)
+	assert.Equal(t, mainSHA, sf.Stacks[0].Branches[1].Base,
+		"adopting a separate main-based branch should record main as its old boundary")
+
+	require.NoError(t, runRebase(cfg, &rebaseOptions{remote: "origin"}))
+
+	subjects := strings.Split(issue250Git(t, cloneDir, "log", "--format=%s", "main..imported"), "\n")
+	assert.Equal(t, []string{"imported two", "imported one", "parent commit"}, subjects)
+	require.NoError(t, issue250GitMayFail(t, cloneDir, "merge-base", "--is-ancestor", "parent", "imported"))
+}

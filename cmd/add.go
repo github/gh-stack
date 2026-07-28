@@ -169,6 +169,14 @@ func runAdd(cfg *config.Config, opts *addOptions, args []string) error {
 	// If the branch already exists in git but is not part of any stack,
 	// adopt it instead of erroring. This mirrors the init command's behavior.
 	adopted := git.BranchExists(branchName)
+	var adoptedBase string
+	if adopted {
+		adoptedBase, err = git.MergeBase(currentBranch, branchName)
+		if err != nil {
+			cfg.Errorf("failed to determine the common base of %s and %s: %s", currentBranch, branchName, err)
+			return ErrSilent
+		}
+	}
 
 	// Stage changes before creating the branch so we can fail early if
 	// there's nothing to commit (avoids leaving an empty orphan branch).
@@ -191,9 +199,12 @@ func runAdd(cfg *config.Config, opts *addOptions, args []string) error {
 		return ErrSilent
 	}
 
-	base, err := git.RevParse(currentBranch)
-	if err != nil {
-		cfg.Warningf("could not resolve base SHA for %s: %s", currentBranch, err)
+	base := adoptedBase
+	if !adopted {
+		base, err = git.RevParse(currentBranch)
+		if err != nil {
+			cfg.Warningf("could not resolve base SHA for %s: %s", currentBranch, err)
+		}
 	}
 	s.Branches = append(s.Branches, stack.BranchRef{Branch: branchName, Base: base})
 
