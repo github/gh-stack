@@ -347,13 +347,13 @@ gh stack sync --prune
 
 ### `gh stack push`
 
-Push all branches in the current stack to the remote.
+Push active branches in the current stack to the remote.
 
 ```
 gh stack push [flags]
 ```
 
-Pushes every branch in one `git push` using explicit per-branch `--force-with-lease` checks. The update is not atomic: branches whose leases pass may update even if another branch is rejected. Fix the rejected branch and rerun the command; branches already updated will be unchanged. This command does not create or update pull requests — use `gh stack submit` for that.
+Pushes every active branch (excluding merged and queued branches) in one `git push` using explicit per-branch `--force-with-lease` checks. The update is not atomic: branches whose leases pass may update even if another branch is rejected. Fix the rejected branch and rerun the command; branches already updated will be unchanged. This command does not create or update pull requests — use `gh stack submit` for that.
 
 | Flag | Description |
 |------|-------------|

@@ -492,7 +492,7 @@ gh stack add -um "Fix auth bug" auth-fix
 
 ### Push branches to remote — `gh stack push`
 
-Push all stack branches to the remote.
+Push active stack branches to the remote.
 
 ```
 gh stack push [flags]
@@ -543,6 +543,7 @@ gh stack submit --auto --open
 **Behavior:**
 
 - Pushes each active (non-merged, non-queued) branch sequentially with explicit per-branch `--force-with-lease` checks; the overall submit is not atomic
+- If a later branch push is rejected, earlier branch pushes and PR updates remain; fix the rejection and rerun the same command
 - Creates a new PR for each branch that doesn't have one (base set to the first non-merged ancestor branch)
 - After creating PRs, links them together as a **Stack** on GitHub (requires the repository to have stacks enabled)
 - If every PR in the stack has already been merged, the stack is complete and can't be extended. `submit` automatically forks your unmerged branches into a **new** stack rooted at the trunk and creates it on GitHub, leaving the merged stack untouched.

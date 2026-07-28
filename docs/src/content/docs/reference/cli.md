@@ -394,7 +394,7 @@ gh stack rebase --committer-date-is-author-date
 
 ### `gh stack push`
 
-Push all branches in the current stack to the remote.
+Push active branches in the current stack to the remote.
 
 ```sh
 gh stack push [flags]
@@ -404,7 +404,7 @@ gh stack push [flags]
 |------|-------------|
 | `--remote <name>` | Remote to push to (defaults to auto-detected remote) |
 
-Pushes every branch in one `git push` using explicit per-branch `--force-with-lease` checks. The update is not atomic: branches whose leases pass may update even if another branch is rejected. Fix the rejected branch and rerun the command; branches already updated will be unchanged. This command does not create or update pull requests — use `gh stack submit` for that.
+Pushes every active branch (excluding merged and queued branches) in one `git push` using explicit per-branch `--force-with-lease` checks. The update is not atomic: branches whose leases pass may update even if another branch is rejected. Fix the rejected branch and rerun the command; branches already updated will be unchanged. This command does not create or update pull requests — use `gh stack submit` for that.
 
 **Examples:**
 
