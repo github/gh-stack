@@ -113,6 +113,8 @@ When the stack is not linear (e.g., after changes were pushed to a lower branch,
 
 After the rebase completes, all PRs in the stack reflect the updated branches and CI checks are re-triggered.
 
+The next `gh stack sync` or `gh stack rebase` fetches and adopts these rewritten branch tips when the local branches have not changed since their previous remote-tracking tips and the ordered commits are equivalent. If both local and remote commits changed, the CLI stops instead of choosing a side.
+
 :::note[Commit signing]
 Commits created by a server-side rebase are **not signed**. If your repository requires signed commits, we recommend using the CLI. Running `gh stack rebase` uses local git operations, so the generated commits will follow your local git signing configuration. After rebasing locally, you can force push your updated branches with `gh stack push`.
 :::

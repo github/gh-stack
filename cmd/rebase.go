@@ -55,6 +55,10 @@ func RebaseCmd(cfg *config.Config) *cobra.Command {
 Ensures that each branch in the stack has the tip of the previous
 layer in its commit history, rebasing if necessary.
 
+If the stack was already rebased on the remote, matching rewritten branch tips
+are adopted locally when the local branches have not changed since the previous
+fetch and the ordered commit ranges are equivalent.
+
 Use --no-trunk to skip fetching and rebasing with the trunk branch.
 Only the inter-branch rebases are performed (branch 2 onto branch 1,
 branch 3 onto branch 2, etc.).`,
@@ -146,11 +150,24 @@ func runRebase(cfg *config.Config, opts *rebaseOptions) error {
 		}
 
 		// Fast-forward stack branches that are behind their remote tracking branch.
+		branchSnapshots := snapshotBranchTips(s, remote)
 		if err := git.FetchBranches(remote, activeBranchNames(s)); err != nil {
 			cfg.Errorf("failed to fetch stack branches from %s: %v", remote, err)
 			return ErrSilent
 		}
+		adopted, err := adoptRemoteRebasedBranches(cfg, s, remote, currentBranch, branchSnapshots)
+		if err != nil {
+			cfg.Errorf("%v", err)
+			return ErrSilent
+		}
 		fastForwardBranches(cfg, s, remote, currentBranch)
+		if len(adopted) > 0 && !stackNeedsRebase(s, trunk.Ref) {
+			updateBaseSHAs(s)
+			_ = syncStackPRs(cfg, s)
+			stack.SaveNonBlocking(gitDir, sf)
+			cfg.Printf("Local branches now match the rebased stack on %s", remote)
+			return nil
+		}
 	}
 
 	cfg.Printf("Stack detected: %s", s.DisplayChain())

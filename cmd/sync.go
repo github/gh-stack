@@ -48,6 +48,11 @@ GitHub and recreate it later with sync/submit, or cancel. Cancelling — or a
 divergence in a non-interactive terminal — aborts the sync without pushing
 branches or updating PRs.
 
+When the same branches were rewritten by a server-side stack rebase, sync
+adopts the remote tips only if the local tips still match their pre-fetch
+tracking refs and the ordered commit ranges are equivalent. Otherwise it stops
+instead of overwriting either side.
+
 If a rebase conflict is detected, all branches are restored to their
 original state and you are advised to run "gh stack rebase" to resolve
 conflicts interactively.
@@ -108,6 +113,7 @@ func runSync(cfg *config.Config, opts *syncOptions) error {
 	// Fetch trunk + active branches so tracking refs are current for
 	// fast-forward detection (Step 2) and --force-with-lease (Step 4).
 	normalizeStackTrunk(cfg, s, remote)
+	branchSnapshots := snapshotBranchTips(s, remote)
 	if err := git.FetchBranches(remote, activeBranchNames(s)); err != nil {
 		cfg.Errorf("failed to fetch stack branches from %s: %v", remote, err)
 		return ErrSilent
@@ -145,6 +151,11 @@ func runSync(cfg *config.Config, opts *syncOptions) error {
 	trunk, err := resolveTrunkTarget(cfg, s, remote, currentBranch)
 	if err != nil {
 		return err
+	}
+
+	if _, err := adoptRemoteRebasedBranches(cfg, s, remote, currentBranch, branchSnapshots); err != nil {
+		cfg.Errorf("%v", err)
+		return ErrSilent
 	}
 
 	// --- Step 2b: Fast-forward stack branches behind their remote tracking branch ---

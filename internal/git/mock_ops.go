@@ -37,6 +37,7 @@ type MockOps struct {
 	RevParseMultiFn          func([]string) ([]string, error)
 	MergeBaseFn              func(string, string) (string, error)
 	MergeBaseForkPointFn     func(string, string) (string, error)
+	RangeDiffEquivalentFn    func(string, string, string, string) (bool, error)
 	LogFn                    func(string, int) ([]CommitInfo, error)
 	LogRangeFn               func(string, string) ([]CommitInfo, error)
 	DiffStatRangeFn          func(string, string) (int, int, error)
@@ -291,6 +292,13 @@ func (m *MockOps) MergeBaseForkPoint(ref, branch string) (string, error) {
 		return m.MergeBaseForkPointFn(ref, branch)
 	}
 	return "", nil
+}
+
+func (m *MockOps) RangeDiffEquivalent(oldBase, oldHead, newBase, newHead string) (bool, error) {
+	if m.RangeDiffEquivalentFn != nil {
+		return m.RangeDiffEquivalentFn(oldBase, oldHead, newBase, newHead)
+	}
+	return false, nil
 }
 
 func (m *MockOps) Log(ref string, maxCount int) ([]CommitInfo, error) {

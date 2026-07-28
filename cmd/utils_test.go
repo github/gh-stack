@@ -885,3 +885,300 @@ func TestUpdateBaseSHAsPreservesLastValidBase(t *testing.T) {
 	assert.Equal(t, "old-parent", s.Branches[1].Base)
 	assert.Equal(t, "child-tip", s.Branches[1].Head)
 }
+
+func TestAdoptRemoteRebasedBranches(t *testing.T) {
+	s := &stack.Stack{
+		Trunk: stack.BranchRef{Branch: "main"},
+		Branches: []stack.BranchRef{
+			{Branch: "b1", Base: "main-old"},
+			{Branch: "b2", Base: "b1-old"},
+		},
+	}
+	snapshots := map[string]branchTipSnapshot{
+		"b1": {localSHA: "b1-old", remoteSHA: "b1-old", hasRemote: true},
+		"b2": {localSHA: "b2-old", remoteSHA: "b2-old", hasRemote: true},
+	}
+
+	var resetTargets []string
+	var refUpdates [][2]string
+	restore := git.SetOps(&git.MockOps{
+		RevParseFn: func(ref string) (string, error) {
+			switch ref {
+			case "b1":
+				return "b1-old", nil
+			case "b2":
+				return "b2-old", nil
+			case "origin/b1":
+				return "b1-new", nil
+			case "origin/b2":
+				return "b2-new", nil
+			default:
+				return "", fmt.Errorf("unexpected ref %s", ref)
+			}
+		},
+		IsAncestorFn: func(ancestor, descendant string) (bool, error) {
+			switch {
+			case ancestor == "origin/main" && descendant == "origin/b1":
+				return true, nil
+			case ancestor == "origin/b1" && descendant == "origin/b2":
+				return true, nil
+			case ancestor == "main-old" && descendant == "b1":
+				return true, nil
+			case ancestor == "b1-old" && descendant == "b2":
+				return true, nil
+			default:
+				return false, nil
+			}
+		},
+		RangeDiffEquivalentFn: func(oldBase, oldHead, newBase, newHead string) (bool, error) {
+			switch oldHead {
+			case "b1":
+				assert.Equal(t, "main-old", oldBase)
+				assert.Equal(t, "origin/main", newBase)
+				assert.Equal(t, "origin/b1", newHead)
+			case "b2":
+				assert.Equal(t, "b1-old", oldBase)
+				assert.Equal(t, "origin/b1", newBase)
+				assert.Equal(t, "origin/b2", newHead)
+			default:
+				t.Fatalf("unexpected old head %s", oldHead)
+			}
+			return true, nil
+		},
+		HasUncommittedChangesFn: func() (bool, error) { return false, nil },
+		ResetHardFn: func(ref string) error {
+			resetTargets = append(resetTargets, ref)
+			return nil
+		},
+		UpdateBranchRefFn: func(branch, sha string) error {
+			refUpdates = append(refUpdates, [2]string{branch, sha})
+			return nil
+		},
+	})
+	defer restore()
+
+	cfg, _, _ := config.NewTestConfig()
+	adopted, err := adoptRemoteRebasedBranches(cfg, s, "origin", "b1", snapshots)
+
+	require.NoError(t, err)
+	assert.Equal(t, []string{"b1", "b2"}, adopted)
+	assert.Equal(t, []string{"origin/b1"}, resetTargets)
+	assert.Equal(t, [][2]string{{"b2", "b2-new"}}, refUpdates)
+}
+
+func TestAdoptRemoteRebasedBranchesPreservesLocalRewrite(t *testing.T) {
+	s := &stack.Stack{
+		Trunk:    stack.BranchRef{Branch: "main"},
+		Branches: []stack.BranchRef{{Branch: "b1", Base: "main-old"}},
+	}
+	snapshots := map[string]branchTipSnapshot{
+		"b1": {localSHA: "b1-local", remoteSHA: "b1-remote", hasRemote: true},
+	}
+
+	updated := false
+	restore := git.SetOps(&git.MockOps{
+		RevParseFn: func(ref string) (string, error) {
+			if ref == "b1" {
+				return "b1-local", nil
+			}
+			return "b1-remote", nil
+		},
+		IsAncestorFn: func(string, string) (bool, error) { return false, nil },
+		UpdateBranchRefFn: func(string, string) error {
+			updated = true
+			return nil
+		},
+	})
+	defer restore()
+
+	cfg, _, _ := config.NewTestConfig()
+	adopted, err := adoptRemoteRebasedBranches(cfg, s, "origin", "other", snapshots)
+
+	require.NoError(t, err)
+	assert.Empty(t, adopted)
+	assert.False(t, updated)
+}
+
+func TestAdoptRemoteRebasedBranchesAllowsLocalOnlyUpstackBranch(t *testing.T) {
+	s := &stack.Stack{
+		Trunk: stack.BranchRef{Branch: "main"},
+		Branches: []stack.BranchRef{
+			{Branch: "b1", Base: "main-old"},
+			{Branch: "local-only", Base: "b1-old"},
+		},
+	}
+	snapshots := map[string]branchTipSnapshot{
+		"b1":         {localSHA: "b1-old", remoteSHA: "b1-old", hasRemote: true},
+		"local-only": {localSHA: "local-only-tip"},
+	}
+
+	var refUpdates [][2]string
+	restore := git.SetOps(&git.MockOps{
+		RevParseFn: func(ref string) (string, error) {
+			switch ref {
+			case "b1":
+				return "b1-old", nil
+			case "origin/b1":
+				return "b1-new", nil
+			case "local-only":
+				return "local-only-tip", nil
+			default:
+				return "", fmt.Errorf("missing ref %s", ref)
+			}
+		},
+		IsAncestorFn: func(ancestor, descendant string) (bool, error) {
+			if ancestor == "origin/main" && descendant == "origin/b1" {
+				return true, nil
+			}
+			return ancestor == "main-old" && descendant == "b1", nil
+		},
+		RangeDiffEquivalentFn:   func(string, string, string, string) (bool, error) { return true, nil },
+		HasUncommittedChangesFn: func() (bool, error) { return false, nil },
+		UpdateBranchRefFn: func(branch, sha string) error {
+			refUpdates = append(refUpdates, [2]string{branch, sha})
+			return nil
+		},
+	})
+	defer restore()
+
+	cfg, _, _ := config.NewTestConfig()
+	adopted, err := adoptRemoteRebasedBranches(cfg, s, "origin", "local-only", snapshots)
+
+	require.NoError(t, err)
+	assert.Equal(t, []string{"b1"}, adopted)
+	assert.Equal(t, [][2]string{{"b1", "b1-new"}}, refUpdates)
+}
+
+func TestAdoptRemoteRebasedBranchesRejectsConcurrentChanges(t *testing.T) {
+	s := &stack.Stack{
+		Trunk:    stack.BranchRef{Branch: "main"},
+		Branches: []stack.BranchRef{{Branch: "b1", Base: "main-old"}},
+	}
+	snapshots := map[string]branchTipSnapshot{
+		"b1": {localSHA: "b1-local", remoteSHA: "b1-old-remote", hasRemote: true},
+	}
+
+	restore := git.SetOps(&git.MockOps{
+		RevParseFn: func(ref string) (string, error) {
+			if ref == "b1" {
+				return "b1-local", nil
+			}
+			return "b1-new-remote", nil
+		},
+		IsAncestorFn: func(string, string) (bool, error) { return false, nil },
+	})
+	defer restore()
+
+	cfg, _, _ := config.NewTestConfig()
+	_, err := adoptRemoteRebasedBranches(cfg, s, "origin", "b1", snapshots)
+
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "both changed")
+}
+
+func TestAdoptRemoteRebasedBranchesRejectsDifferentCommits(t *testing.T) {
+	s := &stack.Stack{
+		Trunk:    stack.BranchRef{Branch: "main"},
+		Branches: []stack.BranchRef{{Branch: "b1", Base: "main-old"}},
+	}
+	snapshots := map[string]branchTipSnapshot{
+		"b1": {localSHA: "b1-old", remoteSHA: "b1-old", hasRemote: true},
+	}
+
+	updated := false
+	restore := git.SetOps(&git.MockOps{
+		RevParseFn: func(ref string) (string, error) {
+			if ref == "b1" {
+				return "b1-old", nil
+			}
+			return "b1-new", nil
+		},
+		IsAncestorFn: func(ancestor, descendant string) (bool, error) {
+			if ancestor == "origin/main" && descendant == "origin/b1" {
+				return true, nil
+			}
+			return ancestor == "main-old" && descendant == "b1", nil
+		},
+		RangeDiffEquivalentFn: func(string, string, string, string) (bool, error) {
+			return false, nil
+		},
+		UpdateBranchRefFn: func(string, string) error {
+			updated = true
+			return nil
+		},
+	})
+	defer restore()
+
+	cfg, _, _ := config.NewTestConfig()
+	_, err := adoptRemoteRebasedBranches(cfg, s, "origin", "other", snapshots)
+
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "different commits")
+	assert.False(t, updated)
+}
+
+func TestAdoptRemoteRebasedBranchesRollsBackPartialUpdate(t *testing.T) {
+	s := &stack.Stack{
+		Trunk: stack.BranchRef{Branch: "main"},
+		Branches: []stack.BranchRef{
+			{Branch: "b1", Base: "main-old"},
+			{Branch: "b2", Base: "b1-old"},
+		},
+	}
+	snapshots := map[string]branchTipSnapshot{
+		"b1": {localSHA: "b1-old", remoteSHA: "b1-old", hasRemote: true},
+		"b2": {localSHA: "b2-old", remoteSHA: "b2-old", hasRemote: true},
+	}
+
+	var resetTargets []string
+	restore := git.SetOps(&git.MockOps{
+		RevParseFn: func(ref string) (string, error) {
+			switch ref {
+			case "b1":
+				return "b1-old", nil
+			case "b2":
+				return "b2-old", nil
+			case "origin/b1":
+				return "b1-new", nil
+			case "origin/b2":
+				return "b2-new", nil
+			default:
+				return "", fmt.Errorf("unexpected ref %s", ref)
+			}
+		},
+		IsAncestorFn: func(ancestor, descendant string) (bool, error) {
+			switch {
+			case ancestor == "origin/main" && descendant == "origin/b1":
+				return true, nil
+			case ancestor == "origin/b1" && descendant == "origin/b2":
+				return true, nil
+			case ancestor == "main-old" && descendant == "b1":
+				return true, nil
+			case ancestor == "b1-old" && descendant == "b2":
+				return true, nil
+			default:
+				return false, nil
+			}
+		},
+		RangeDiffEquivalentFn:   func(string, string, string, string) (bool, error) { return true, nil },
+		HasUncommittedChangesFn: func() (bool, error) { return false, nil },
+		ResetHardFn: func(ref string) error {
+			resetTargets = append(resetTargets, ref)
+			return nil
+		},
+		UpdateBranchRefFn: func(branch, sha string) error {
+			if branch == "b2" && sha == "b2-new" {
+				return assert.AnError
+			}
+			return nil
+		},
+	})
+	defer restore()
+
+	cfg, _, _ := config.NewTestConfig()
+	_, err := adoptRemoteRebasedBranches(cfg, s, "origin", "b1", snapshots)
+
+	require.Error(t, err)
+	assert.Equal(t, []string{"origin/b1", "b1-old"}, resetTargets,
+		"the current branch should be restored after a later ref update fails")
+}

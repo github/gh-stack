@@ -2258,3 +2258,103 @@ func TestIntegration_AdoptedBranchRebasesFromCommonAncestor(t *testing.T) {
 	assert.Equal(t, []string{"imported two", "imported one", "parent commit"}, subjects)
 	require.NoError(t, issue250GitMayFail(t, cloneDir, "merge-base", "--is-ancestor", "parent", "imported"))
 }
+
+type serverRebasedRepo struct {
+	dir         string
+	gitDir      string
+	oldImported string
+	newImported string
+	parentSHA   string
+}
+
+func setupServerRebasedRepo(t *testing.T) serverRebasedRepo {
+	t.Helper()
+	remoteDir := filepath.Join(t.TempDir(), "remote.git")
+	localDir := filepath.Join(t.TempDir(), "local")
+	serverDir := filepath.Join(t.TempDir(), "server")
+
+	issue250Git(t, ".", "-c", "safe.bareRepository=all", "init", "--bare", "-b", "main", remoteDir)
+	issue250Git(t, ".", "clone", remoteDir, localDir)
+	issue250Git(t, localDir, "config", "user.name", "Test")
+	issue250Git(t, localDir, "config", "user.email", "test@example.com")
+
+	issue250WriteFile(t, localDir, "base.txt", "base\n")
+	issue250Git(t, localDir, "add", ".")
+	issue250Git(t, localDir, "commit", "-m", "base")
+	issue250Git(t, localDir, "push", "-u", "origin", "main")
+	mainSHA := issue250Git(t, localDir, "rev-parse", "main")
+
+	issue250Git(t, localDir, "checkout", "-b", "parent")
+	issue250WriteFile(t, localDir, "parent.txt", "parent\n")
+	issue250Git(t, localDir, "add", ".")
+	issue250Git(t, localDir, "commit", "-m", "parent commit")
+	issue250Git(t, localDir, "push", "-u", "origin", "parent")
+	parentSHA := issue250Git(t, localDir, "rev-parse", "parent")
+
+	issue250Git(t, localDir, "checkout", "-b", "imported", "main")
+	issue250WriteFile(t, localDir, "imported.txt", "imported\n")
+	issue250Git(t, localDir, "add", ".")
+	issue250Git(t, localDir, "commit", "-m", "imported commit")
+	issue250Git(t, localDir, "push", "-u", "origin", "imported")
+	oldImported := issue250Git(t, localDir, "rev-parse", "imported")
+
+	gitDir := filepath.Join(localDir, ".git")
+	writeStackFile(t, gitDir, stack.Stack{
+		Trunk: stack.BranchRef{Branch: "main", Head: mainSHA},
+		Branches: []stack.BranchRef{
+			{Branch: "parent", Head: parentSHA, Base: mainSHA},
+			{Branch: "imported", Head: oldImported, Base: mainSHA},
+		},
+	})
+
+	issue250Git(t, ".", "clone", remoteDir, serverDir)
+	issue250Git(t, serverDir, "config", "user.name", "Test")
+	issue250Git(t, serverDir, "config", "user.email", "test@example.com")
+	issue250Git(t, serverDir, "checkout", "parent")
+	issue250Git(t, serverDir, "checkout", "imported")
+	issue250Git(t, serverDir, "rebase", "--onto", "parent", "main", "imported")
+	issue250Git(t, serverDir, "push", "--force", "origin", "imported")
+	newImported := issue250Git(t, serverDir, "rev-parse", "imported")
+
+	issue250Git(t, localDir, "checkout", "imported")
+
+	return serverRebasedRepo{
+		dir:         localDir,
+		gitDir:      gitDir,
+		oldImported: oldImported,
+		newImported: newImported,
+		parentSHA:   parentSHA,
+	}
+}
+
+func assertServerRebasedRepoAdopted(t *testing.T, repo serverRebasedRepo) {
+	t.Helper()
+	assert.Equal(t, repo.newImported, issue250Git(t, repo.dir, "rev-parse", "imported"))
+	assert.NotEqual(t, repo.oldImported, repo.newImported)
+	require.NoError(t, issue250GitMayFail(t, repo.dir, "merge-base", "--is-ancestor", "parent", "imported"))
+
+	sf, err := stack.Load(repo.gitDir)
+	require.NoError(t, err)
+	require.Len(t, sf.Stacks, 1)
+	require.Len(t, sf.Stacks[0].Branches, 2)
+	assert.Equal(t, repo.parentSHA, sf.Stacks[0].Branches[1].Base)
+	assert.Equal(t, repo.newImported, sf.Stacks[0].Branches[1].Head)
+}
+
+func TestIntegration_RebaseAdoptsServerRebasedBranches(t *testing.T) {
+	repo := setupServerRebasedRepo(t)
+	withIssue250Repo(t, repo.dir)
+	cfg := issue250TestConfig(t)
+
+	require.NoError(t, runRebase(cfg, &rebaseOptions{remote: "origin"}))
+	assertServerRebasedRepoAdopted(t, repo)
+}
+
+func TestIntegration_SyncAdoptsServerRebasedBranches(t *testing.T) {
+	repo := setupServerRebasedRepo(t)
+	withIssue250Repo(t, repo.dir)
+	cfg := issue250TestConfig(t)
+
+	require.NoError(t, runSync(cfg, &syncOptions{remote: "origin"}))
+	assertServerRebasedRepoAdopted(t, repo)
+}

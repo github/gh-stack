@@ -344,6 +344,12 @@ func MergeBaseForkPoint(ref, branch string) (string, error) {
 	return ops.MergeBaseForkPoint(ref, branch)
 }
 
+// RangeDiffEquivalent reports whether two commit ranges contain the same
+// ordered commits after accounting for rewritten commit IDs.
+func RangeDiffEquivalent(oldBase, oldHead, newBase, newHead string) (bool, error) {
+	return ops.RangeDiffEquivalent(oldBase, oldHead, newBase, newHead)
+}
+
 // Log returns recent commits for the given branch.
 func Log(ref string, maxCount int) ([]CommitInfo, error) {
 	return ops.Log(ref, maxCount)
