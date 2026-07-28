@@ -33,6 +33,10 @@ Use `gh stack add <branch-name>` to add a new branch on top of the current stack
 
 You can also add PRs to an existing stack from the GitHub UI — either a brand-new PR or an already-open PR (via the recommendation banner), added to the top of the stack. See [Adding to an Existing Stack](/gh-stack/guides/ui/#adding-to-an-existing-stack) for details.
 
+### How many PRs can a stack contain?
+
+A stack can contain up to **100 pull requests**. If your work requires more than 100 PRs, split it into multiple stacks.
+
 ### How can I modify my stack?
 
 Use `gh stack modify` to restructure a stack. It opens an interactive terminal UI where you can reorder, drop, fold (combine), insert, and rename branches — then applies all changes at once. See the [Restructuring Stacks](/gh-stack/guides/modify/) guide for a full walkthrough.
