@@ -56,6 +56,7 @@ type Ops interface {
 	RevParse(ref string) (string, error)
 	RevParseMulti(refs []string) ([]string, error)
 	MergeBase(a, b string) (string, error)
+	MergeBaseForkPoint(ref, branch string) (string, error)
 	Log(ref string, maxCount int) ([]CommitInfo, error)
 	LogRange(base, head string) ([]CommitInfo, error)
 	DiffStatRange(base, head string) (additions, deletions int, err error)
@@ -436,6 +437,10 @@ func (d *defaultOps) RevParseMulti(refs []string) ([]string, error) {
 
 func (d *defaultOps) MergeBase(a, b string) (string, error) {
 	return run("merge-base", a, b)
+}
+
+func (d *defaultOps) MergeBaseForkPoint(ref, branch string) (string, error) {
+	return run("merge-base", "--fork-point", ref, branch)
 }
 
 func (d *defaultOps) Log(ref string, maxCount int) ([]CommitInfo, error) {

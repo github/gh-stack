@@ -446,6 +446,11 @@ func TestAdd_AdoptsExistingBranch(t *testing.T) {
 		GitDirFn:        func() (string, error) { return gitDir, nil },
 		CurrentBranchFn: func() (string, error) { return "b1", nil },
 		BranchExistsFn:  func(name string) bool { return name == "existing-branch" },
+		MergeBaseFn: func(parent, branch string) (string, error) {
+			assert.Equal(t, "b1", parent)
+			assert.Equal(t, "existing-branch", branch)
+			return "common-base", nil
+		},
 		CreateBranchFn: func(name, base string) error {
 			createBranchCalled = true
 			return nil
@@ -472,6 +477,8 @@ func TestAdd_AdoptsExistingBranch(t *testing.T) {
 	require.NoError(t, err)
 	names := sf.Stacks[0].BranchNames()
 	assert.Equal(t, "existing-branch", names[len(names)-1], "adopted branch appended to stack")
+	assert.Equal(t, "common-base", sf.Stacks[0].Branches[len(sf.Stacks[0].Branches)-1].Base,
+		"adopted branch should record the actual common ancestor")
 }
 
 func TestAdd_RejectsExistingBranchInStack(t *testing.T) {
@@ -520,6 +527,7 @@ func TestAdd_AdoptsExistingBranchWithCommit(t *testing.T) {
 		GitDirFn:        func() (string, error) { return gitDir, nil },
 		CurrentBranchFn: func() (string, error) { return "b1", nil },
 		BranchExistsFn:  func(name string) bool { return name == "existing-branch" },
+		MergeBaseFn:     func(string, string) (string, error) { return "common-base", nil },
 		RevParseMultiFn: func(refs []string) ([]string, error) {
 			return []string{"aaa", "bbb"}, nil // different SHAs = branch has commits
 		},
@@ -547,4 +555,37 @@ func TestAdd_AdoptsExistingBranchWithCommit(t *testing.T) {
 	assert.False(t, createBranchCalled, "CreateBranch should NOT be called")
 	assert.True(t, commitCalled, "Commit should be called on the adopted branch")
 	assert.Contains(t, output, "Adopted")
+}
+
+func TestAdd_AdoptExistingBranchWithoutCommonBaseFails(t *testing.T) {
+	gitDir := t.TempDir()
+	saveStack(t, gitDir, stack.Stack{
+		Trunk:    stack.BranchRef{Branch: "main"},
+		Branches: []stack.BranchRef{{Branch: "b1"}},
+	})
+
+	checkedOut := false
+	restore := git.SetOps(&git.MockOps{
+		GitDirFn:        func() (string, error) { return gitDir, nil },
+		CurrentBranchFn: func() (string, error) { return "b1", nil },
+		BranchExistsFn:  func(name string) bool { return name == "unrelated" },
+		MergeBaseFn:     func(string, string) (string, error) { return "", assert.AnError },
+		CheckoutBranchFn: func(string) error {
+			checkedOut = true
+			return nil
+		},
+	})
+	defer restore()
+
+	cfg, outR, errR := config.NewTestConfig()
+	err := runAdd(cfg, &addOptions{}, []string{"unrelated"})
+	output := collectOutput(cfg, outR, errR)
+
+	assert.ErrorIs(t, err, ErrSilent)
+	assert.False(t, checkedOut)
+	assert.Contains(t, output, "failed to determine the common base")
+
+	sf, loadErr := stack.Load(gitDir)
+	require.NoError(t, loadErr)
+	assert.Equal(t, []string{"b1"}, sf.Stacks[0].BranchNames())
 }

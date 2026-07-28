@@ -495,7 +495,7 @@ func TestSync_RebaseConflict_RestoresAll(t *testing.T) {
 		return "sha-" + ref, nil
 	}
 	mock.IsAncestorFn = func(a, d string) (bool, error) {
-		return a == "local-sha" && d == "remote-sha", nil
+		return true, nil
 	}
 	mock.UpdateBranchRefFn = func(string, string) error { return nil }
 	mock.CheckoutBranchFn = func(name string) error {
@@ -840,10 +840,10 @@ func TestSync_QueuedBranch_DownstreamStaysStacked(t *testing.T) {
 		"queued b1 must not be pushed")
 }
 
-// TestSync_StaleOntoOldBase_FallsBackToMergeBase verifies that when a branch
+// TestSync_StaleOntoOldBase_UsesForkPoint verifies that when a branch
 // was already rebased past the merged branch's tip, sync detects the stale
-// ontoOldBase and falls back to merge-base for the correct divergence point.
-func TestSync_StaleOntoOldBase_FallsBackToMergeBase(t *testing.T) {
+// ontoOldBase and uses a reflog fork-point for the correct divergence point.
+func TestSync_StaleOntoOldBase_UsesForkPoint(t *testing.T) {
 	s := stack.Stack{
 		Trunk: stack.BranchRef{Branch: "main"},
 		Branches: []stack.BranchRef{
@@ -889,11 +889,11 @@ func TestSync_StaleOntoOldBase_FallsBackToMergeBase(t *testing.T) {
 		}
 		return true, nil
 	}
-	mock.MergeBaseFn = func(a, b string) (string, error) {
+	mock.MergeBaseForkPointFn = func(a, b string) (string, error) {
 		if a == "main" && b == "b2" {
-			return "main-b2-mergebase", nil
+			return "main-b2-forkpoint", nil
 		}
-		return "default-mergebase", nil
+		return "default-forkpoint", nil
 	}
 	mock.UpdateBranchRefFn = func(string, string) error { return nil }
 	mock.CheckoutBranchFn = func(string) error { return nil }
@@ -918,9 +918,9 @@ func TestSync_StaleOntoOldBase_FallsBackToMergeBase(t *testing.T) {
 	assert.NoError(t, err)
 	require.Len(t, rebaseOntoCalls, 2)
 
-	// b2: stale ontoOldBase → falls back to merge-base(main, b2)
-	assert.Equal(t, rebaseCall{"main", "main-b2-mergebase", "b2"}, rebaseOntoCalls[0],
-		"b2 should use merge-base as oldBase when ontoOldBase is stale")
+	// b2: stale ontoOldBase → uses fork-point(main, b2)
+	assert.Equal(t, rebaseCall{"main", "main-b2-forkpoint", "b2"}, rebaseOntoCalls[0],
+		"b2 should use the reflog fork-point when ontoOldBase is stale")
 
 	// b3: b2's SHA is a valid ancestor → uses it directly
 	assert.Equal(t, rebaseCall{"b2", "b2-on-main-sha", "b3"}, rebaseOntoCalls[1],
