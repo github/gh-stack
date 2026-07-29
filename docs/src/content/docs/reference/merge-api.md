@@ -5,13 +5,13 @@ description: Reference for the asynchronous merge API — the required method fo
 
 Stacked pull requests are merged through a new **asynchronous merge API**. Because a stack merge can involve several pull requests that may take up to a few minutes to merge, the merge runs in the background: you submit a merge request and then poll for its result.
 
-This is the **required method for merging stacked PRs**. A stack cannot be merged with the legacy synchronous [merge endpoints](https://docs.github.com/rest/pulls/pulls#merge-a-pull-request) or [mutations](https://docs.github.com/en/graphql/reference/pulls#mutation-mergepullrequest). When you merge a stacked pull request, every pull request in the stack up to and including the one you request is merged into the base branch.
+This is the **required method for merging stacked PRs**. A stack cannot be merged with the legacy synchronous [merge endpoints](https://docs.github.com/rest/pulls/pulls#merge-a-pull-request) or [mutations](https://docs.github.com/en/graphql/reference/pulls#mutation-mergepullrequest). When you merge a stacked pull request, every pull request in the stack up to and including the one you request is merged or queued to merge into the base branch.
 
 ## How it works
 
 Merging is a two-step flow:
 
-1. **Submit** a merge request with `PUT .../merge-async`, then read the `status`. Only a `pending` response includes a `uuid` to poll. The submit can also resolve immediately to `merged` (the pull request was already merged) or `failed` (the pull request is closed or a draft), both of which are terminal.
+1. **Submit** a merge request with `PUT .../merge-async`, then read the `status`. Only a `pending` response includes a `uuid` to poll. The submission may resolve immediately to `merged` (the pull request was already merged) or `failed` (the pull request is closed or a draft), both of which are terminal. It may also resolve to `enqueued` (the pull request was already added to the merge queue).
 2. **Poll** a `pending` request for its result with `GET .../merge-async/{uuid}` until the `status` is no longer `pending`.
 
 Only basic pull request state is checked when you submit (the PR must be open and not a draft). Branch protection and repository rules are evaluated later, when the merge actually runs, and a rule failure is reported as a `failed` result while polling. A stack merge request is **atomic**: either the whole group of pull requests lands (or is added to the merge queue), or none of it does.
@@ -22,17 +22,17 @@ Only basic pull request state is checked when you submit (the PR must be open an
 PUT /repos/{owner}/{repo}/pulls/{pull_number}/merge-async
 ```
 
-Merges the pull request (and, for a stacked PR, everything below it in the stack) into the base branch in the background. Only a `pending` response returns a `uuid` to fetch the result. The submit can also resolve immediately — `merged` if the pull request was already merged, or `failed` if it cannot be merged (for example, it is closed or a draft).
+Merges the pull request (and, for a stacked PR, everything below it in the stack) into the base branch in the background. Only a `pending` response returns a `uuid` to fetch the result. The submit can also resolve immediately — `merged` if the pull request was already merged, or `failed` if it cannot be merged (for example, it is closed or a draft). It may also resolve to `enqueued` (the pull request was already added to the merge queue).
 
 All body fields are optional.
 
 | Body field | Type | Description |
 |------------|------|-------------|
-| `merge_method` | `string` | The merge method: `merge`, `squash`, or `rebase`. Defaults to a merge commit. |
-| `merge_action` | `string` | How to merge: `default` (recommended), `direct_merge`, or `merge_queue`. `default` picks the most appropriate option — it merges directly, or adds the stack to the base branch's merge queue when the branch requires one. `direct_merge` forces a direct merge; `merge_queue` forces the merge queue, if available. Omitting this field is equivalent to `default`. |
+| `merge_method` | `string` | The merge method: `merge`, `squash`, or `rebase`. Defaults to a merge commit. Not supported on `merge_queue` merge actions. |
+| `merge_action` | `string` | How to merge: `default` (recommended), `direct_merge`, or `merge_queue`. `default` picks the most appropriate option — it merges directly, or adds the stack to the base branch's merge queue when the branch requires one. `direct_merge` forces a direct merge; `merge_queue` uses the merge queue, if available. Omitting this field is equivalent to `default`. |
 | `commit_title` | `string` | Title for the automatic commit message. Not supported on `merge_queue` merge actions. |
 | `commit_message` | `string` | Extra detail to append to the automatic commit message. Not supported on `merge_queue` merge actions. |
-| `sha` | `string` | SHA that the pull request head must match to allow the merge. If the PR head does not match the provided SHA, the merge is cancelled. |
+| `sha` | `string` | SHA that the pull request head must match to allow the merge. If the PR head does not match the provided SHA, the merge is rejected. |
 
 ```sh
 echo '{"merge_method": "squash", "merge_action": "default"}' | \
