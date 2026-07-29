@@ -5,9 +5,11 @@ description: Reference for the stacked action and stack object in pull_request w
 
 When a pull request belongs to a stack, GitHub adds a `stack` property to the `pull_request` object in webhook event payloads. This lets apps and integrations inspect the stack's ultimate target branch — not just the direct parent branch of the PR.
 
-The `stack` object is included in the `pull_request` webhook payload for all [pull request lifecycle events](https://docs.github.com/en/actions/reference/workflows-and-actions/events-that-trigger-workflows#pull_request) whenever the pull request is part of a stack.
+The `stack` object is included in the `pull_request` webhook payload for [pull request lifecycle events](https://docs.github.com/en/actions/reference/workflows-and-actions/events-that-trigger-workflows#pull_request) that fire while the pull request is part of a stack.
 
-
+:::note[The `opened` event never includes a stack]
+A pull request is always **created before it is added to a stack**, so the `pull_request` event with the `opened` action never carries a `stack` object — at that point the PR is not yet part of any stack. Listen for the [`stacked` action](#the-stacked-event) to learn exactly when a PR joins a stack and to receive its `stack` object.
+:::
 
 ## The `stack` Object
 
@@ -54,7 +56,7 @@ The `stack` object is **only present** when the pull request belongs to a stack.
 
 ## The `stacked` Event
 
-GitHub delivers the `pull_request` event with the `stacked` action when a pull request is **added to a stack**. Because a PR is created before it joins a stack, this is the event to listen for when you need to know exactly when a PR becomes part of a stack.
+GitHub delivers the `pull_request` event with the `stacked` action when a pull request is **added to a stack**. Because a PR is always created before it joins a stack, the `opened` event never includes a `stack` object — the `stacked` action is the event to listen for when you need to know exactly when a PR becomes part of a stack.
 
 | | |
 |---|---|

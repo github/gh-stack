@@ -123,6 +123,12 @@ jobs:
 
 See the [Webhooks reference](/gh-stack/reference/webhooks/) for the full details on the `stack` object in webhook payloads, or the [REST API reference](/gh-stack/reference/rest-api/) to read the same object on demand from a pull request.
 
+### Why isn't the `stack` object in my `pull_request.opened` webhook?
+
+A pull request is always **created before it's added to a stack**, so the `pull_request.opened` event never includes the `stack` object — at that moment the PR isn't part of any stack yet. The same is true for any other event that fires before the PR joins a stack.
+
+To learn exactly when a PR becomes part of a stack, listen for the `pull_request` event with the **`stacked`** action. It fires when a PR is added to a stack and carries the `stack` object. See the [`stacked` event](/gh-stack/reference/webhooks/#the-stacked-event) in the Webhooks reference for the full payload.
+
 ### How can I optimize CI usage for a stack?
 
 Because a workflow runs for every PR in a stack, a large stack can multiply your CI usage. You can use the `stack` fields to selectively run jobs based on the position of the current PR in the stack.
