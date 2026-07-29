@@ -19,13 +19,14 @@ func PushCmd(cfg *config.Config) *cobra.Command {
 
 	cmd := &cobra.Command{
 		Use:   "push",
-		Short: "Push all branches in the current stack to the remote",
-		Long: `Push all branches in the current stack to the remote.
+		Short: "Push active branches in the current stack to the remote",
+		Long: `Push active branches in the current stack to the remote.
 
-Uses --force-with-lease and --atomic to ensure safe, all-or-nothing pushes.
-Merged and queued branches are automatically skipped. This command is safe to
-run repeatedly — it will only update branches that have changed.`,
-		Example: `  # Push all stack branches to the default remote
+Uses explicit per-branch --force-with-lease checks. Updates are not atomic: a
+branch may update even if another branch is rejected. Fix the rejected branch
+and run the command again; branches already updated will be unchanged.
+Merged and queued branches are automatically skipped.`,
+		Example: `  # Push active stack branches to the default remote
   $ gh stack push
 
   # Push to a specific remote
@@ -77,7 +78,7 @@ func runPush(cfg *config.Config, opts *pushOptions) error {
 	}
 	s := stacks[0]
 
-	// Push all active branches atomically
+	// Push all active branches with explicit per-branch leases.
 	remote, err := pickRemote(cfg, currentBranch, opts.remote)
 	if err != nil {
 		if !errors.Is(err, errInterrupt) {
