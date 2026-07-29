@@ -7,16 +7,12 @@ Stacked pull requests are merged through a new **asynchronous merge API**. Becau
 
 This is the **required method for merging stacked PRs**. A stack cannot be merged with the legacy synchronous [merge endpoints](https://docs.github.com/rest/pulls/pulls#merge-a-pull-request) or [mutations](https://docs.github.com/en/graphql/reference/pulls#mutation-mergepullrequest). When you merge a stacked pull request, every pull request in the stack up to and including the one you request is merged into the base branch.
 
-:::caution[Private Preview]
-Stacked PRs is currently in private preview. These endpoints are only available for repositories where the feature is enabled. [Sign up for the waitlist →](https://gh.io/stacksbeta)
-:::
-
 ## How it works
 
 Merging is a two-step flow:
 
-1. **Submit** a merge request with `PUT .../merge-async`. The response contains a `uuid` identifying the request.
-2. **Poll** for the result with `GET .../merge-async/{uuid}` until the `status` is no longer `pending`.
+1. **Submit** a merge request with `PUT .../merge-async`, then read the `status`. Only a `pending` response includes a `uuid` to poll. The submit can also resolve immediately to `merged` (the pull request was already merged) or `failed` (the pull request is closed or a draft), both of which are terminal.
+2. **Poll** a `pending` request for its result with `GET .../merge-async/{uuid}` until the `status` is no longer `pending`.
 
 Only basic pull request state is checked when you submit (the PR must be open and not a draft). Branch protection and repository rules are evaluated later, when the merge actually runs, and a rule failure is reported as a `failed` result while polling. A stack merge request is **atomic**: either the whole group of pull requests lands (or is added to the merge queue), or none of it does.
 
@@ -26,14 +22,14 @@ Only basic pull request state is checked when you submit (the PR must be open an
 PUT /repos/{owner}/{repo}/pulls/{pull_number}/merge-async
 ```
 
-Merges the pull request (and, for a stacked PR, everything below it in the stack) into the base branch in the background. Returns a `uuid` used to fetch the result.
+Merges the pull request (and, for a stacked PR, everything below it in the stack) into the base branch in the background. Only a `pending` response returns a `uuid` to fetch the result. The submit can also resolve immediately — `merged` if the pull request was already merged, or `failed` if it cannot be merged (for example, it is closed or a draft).
 
 All body fields are optional.
 
 | Body field | Type | Description |
 |------------|------|-------------|
 | `merge_method` | `string` | The merge method: `merge`, `squash`, or `rebase`. Defaults to a merge commit. |
-| `merge_action` | `string` | How to merge: `default` (recommended), `direct_merge`, or `merge_queue`. `default` picks the most appropriate option — it merges directly, or adds the stack to the base branch's merge queue when the branch requires one. `direct_merge` forces a direct merge; `merge_queue` forces the merge queue, if available. |
+| `merge_action` | `string` | How to merge: `default` (recommended), `direct_merge`, or `merge_queue`. `default` picks the most appropriate option — it merges directly, or adds the stack to the base branch's merge queue when the branch requires one. `direct_merge` forces a direct merge; `merge_queue` forces the merge queue, if available. Omitting this field is equivalent to `default`. |
 | `commit_title` | `string` | Title for the automatic commit message. Not supported on `merge_queue` merge actions. |
 | `commit_message` | `string` | Extra detail to append to the automatic commit message. Not supported on `merge_queue` merge actions. |
 | `sha` | `string` | SHA that the pull request head must match to allow the merge. If the PR head does not match the provided SHA, the merge is cancelled. |
@@ -52,6 +48,7 @@ echo '{"merge_method": "squash", "merge_action": "default"}' | \
 | `409 Conflict` | A merge request already exists for this pull request. The existing request's `uuid` is returned — its options may differ from those you requested. | `pending` |
 | `400 Bad Request` | The pull request is not ready to be merged (for example, it is closed or a draft). | `failed` |
 | `404 Not Found` | Async merge is not available for this repository, or the pull request was not found. | — |
+| `422 Unprocessable Entity` | The request body failed validation (for example, an invalid `merge_method` or `merge_action` value). | — |
 
 ```json
 // 202 Accepted
@@ -147,7 +144,7 @@ The fields present in `details` depend on the state:
 | `message` | `string` | always | A human-readable description of the current state. |
 | `uuid` | `string` | `pending` | The identifier of the merge request, used to poll for the result. |
 | `merge_method` | `string` | `pending` | The merge method being used (`merge`, `squash`, or `rebase`). |
-| `merge_action` | `string` | `pending` | The resolved action (`default`, `direct_merge`, or `merge_queue`). |
+| `merge_action` | `string` | `pending` | The requested merge action (`default`, `direct_merge`, or `merge_queue`). |
 | `expected_head_sha` | `string` | `pending` | The SHA the pull request head must match for the merge to proceed. |
 | `sha` | `string` | `merged` | The resulting merge commit SHA. |
 
