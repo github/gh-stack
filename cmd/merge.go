@@ -313,7 +313,7 @@ func runMergeInteractive(cfg *config.Config, client github.ClientOps, stackNumbe
 		}
 	}
 
-	submit, poll := mergeFuncs(client)
+	submit, poll := mergeFuncs(client, mergeActionFor(usesMergeQueue))
 
 	model := mergeview.New(mergeview.Options{
 		PRs:               candidates,
@@ -373,7 +373,7 @@ func runMergeHeadless(cfg *config.Config, client github.ClientOps, base string, 
 		cfg.Printf("Merging %s into %s via %s...", list, base, method)
 	}
 
-	res, err := client.MergeStackAsync(targetPR, method)
+	res, err := client.MergeStackAsync(targetPR, method, mergeActionFor(usesMergeQueue))
 	if err != nil {
 		if errors.Is(err, github.ErrAsyncMergeUnavailable) {
 			warnAsyncMergeUnavailable(cfg)
@@ -439,10 +439,10 @@ func runMergeHeadless(cfg *config.Config, client github.ClientOps, base string, 
 }
 
 // baseBranchUsesMergeQueue reports whether the stack's base branch merges through
-// a merge queue. Detection only tailors the wizard (skipping the method step and
-// switching to enqueue wording), so a lookup failure falls back to the
-// direct-merge flow: the async merge always sends merge_action "default" and the
-// server still routes to the queue when the branch requires one.
+// a merge queue. Detection tailors the wizard (skipping the method step and
+// switching to enqueue wording) and selects the explicit merge_action. On a
+// lookup failure it falls back to the direct-merge flow (method step shown,
+// "direct_merge" sent), matching what the user is shown.
 func baseBranchUsesMergeQueue(client github.ClientOps, base string) bool {
 	uses, err := client.BaseBranchUsesMergeQueue(base)
 	if err != nil {
@@ -451,11 +451,23 @@ func baseBranchUsesMergeQueue(client github.ClientOps, base string) bool {
 	return uses
 }
 
+// mergeActionFor maps merge-queue detection to the explicit async-merge action: a
+// detected queue forces "merge_queue" (the server rejects it when the branch has
+// no queue, guarding against a wrong guess), and everything else forces a
+// "direct_merge". Being explicit ensures the merge matches the wizard the user
+// saw rather than letting the server choose the routing.
+func mergeActionFor(usesMergeQueue bool) string {
+	if usesMergeQueue {
+		return github.MergeActionMergeQueue
+	}
+	return github.MergeActionDirectMerge
+}
+
 // mergeFuncs returns submit/poll closures that adapt the GitHub client to the
-// mergeview injection points.
-func mergeFuncs(client github.ClientOps) (mergeview.SubmitFunc, mergeview.PollFunc) {
+// mergeview injection points. The merge action is fixed for the session.
+func mergeFuncs(client github.ClientOps, mergeAction string) (mergeview.SubmitFunc, mergeview.PollFunc) {
 	submit := func(targetPR int, method string) (mergeview.MergeStatus, error) {
-		res, err := client.MergeStackAsync(targetPR, method)
+		res, err := client.MergeStackAsync(targetPR, method, mergeAction)
 		if err != nil {
 			return mergeview.MergeStatus{}, err
 		}

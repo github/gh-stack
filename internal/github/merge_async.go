@@ -19,6 +19,18 @@ const (
 	MergeMethodRebase = "rebase"
 )
 
+// Merge action values for the async merge API's merge_action field. "default"
+// lets the server choose between a direct merge and the base branch's merge
+// queue; "direct_merge" and "merge_queue" force the respective path. Sending an
+// explicit action makes the caller's merge-queue detection authoritative: the
+// server rejects "merge_queue" on a branch with no queue rather than silently
+// merging directly.
+const (
+	MergeActionDefault     = "default"
+	MergeActionDirectMerge = "direct_merge"
+	MergeActionMergeQueue  = "merge_queue"
+)
+
 // ErrAsyncMergeUnavailable indicates the async merge API is not available for
 // the repository (or the token lacks access). Surfaced on a 404 from the submit
 // endpoint.
@@ -196,21 +208,26 @@ func (c *Client) BaseBranchUsesMergeQueue(baseRef string) (bool, error) {
 // a stacked PR this merges all members of the stack up to and including
 // prNumber. A blank method lets the server apply its default.
 //
-// The merge_action is always "default", which lets the server route the stack
-// to a direct merge or the base branch's merge queue automatically, based on
-// the repository's rules and configuration.
+// mergeAction selects the routing: MergeActionDirectMerge or MergeActionMergeQueue
+// force the respective path, and MergeActionDefault (also the fallback for an
+// empty value) lets the server choose. Sending an explicit action makes the
+// caller's merge-queue detection authoritative — the server rejects
+// "merge_queue" on a branch with no queue instead of silently merging directly.
 //
 // On success the returned result is populated for the 200 (already merged) and
 // 202 (enqueued for background processing) responses. A 404 returns
 // ErrAsyncMergeUnavailable, a 409 (a request already exists) returns a clear
 // "already exists" error, and any other non-2xx status is returned as-is.
-func (c *Client) MergeStackAsync(prNumber int, method string) (*AsyncMergeResult, error) {
+func (c *Client) MergeStackAsync(prNumber int, method, mergeAction string) (*AsyncMergeResult, error) {
+	if mergeAction == "" {
+		mergeAction = MergeActionDefault
+	}
 	type reqBody struct {
 		MergeMethod string `json:"merge_method,omitempty"`
 		MergeAction string `json:"merge_action"`
 	}
 
-	body, err := json.Marshal(reqBody{MergeMethod: method, MergeAction: "default"})
+	body, err := json.Marshal(reqBody{MergeMethod: method, MergeAction: mergeAction})
 	if err != nil {
 		return nil, fmt.Errorf("marshaling request: %w", err)
 	}

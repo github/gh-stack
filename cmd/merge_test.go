@@ -91,7 +91,7 @@ func TestRunMerge_NoArg_MergesWholeStack(t *testing.T) {
 		RepoMergeConfigFn: func() (*github.RepoMergeConfig, error) {
 			return &github.RepoMergeConfig{MergeAllowed: true, SquashAllowed: true, RebaseAllowed: true, DefaultMethod: "squash"}, nil
 		},
-		MergeStackAsyncFn: func(pr int, method string) (*github.AsyncMergeResult, error) {
+		MergeStackAsyncFn: func(pr int, method, mergeAction string) (*github.AsyncMergeResult, error) {
 			gotPR, gotMethod = pr, method
 			return &github.AsyncMergeResult{Status: github.AsyncMergeStatusPending, Details: github.AsyncMergeDetails{UUID: "u"}}, nil
 		},
@@ -111,14 +111,15 @@ func TestRunMerge_NoArg_MergesWholeStack(t *testing.T) {
 
 func TestRunMerge_StackNumberArg(t *testing.T) {
 	var gotPR int
+	gotAction := "unset"
 	cfg, outR, errR := config.NewTestConfig()
 	cfg.GitHubClientOverride = &github.MockClient{
 		GetStackFn: func(n int) (*github.RemoteStack, error) {
 			assert.Equal(t, 7, n)
 			return remoteStack(7, "main", openStackPR(10, "a"), openStackPR(11, "b")), nil
 		},
-		MergeStackAsyncFn: func(pr int, method string) (*github.AsyncMergeResult, error) {
-			gotPR = pr
+		MergeStackAsyncFn: func(pr int, method, mergeAction string) (*github.AsyncMergeResult, error) {
+			gotPR, gotAction = pr, mergeAction
 			return &github.AsyncMergeResult{Status: github.AsyncMergeStatusPending, Details: github.AsyncMergeDetails{UUID: "u"}}, nil
 		},
 	}
@@ -128,11 +129,12 @@ func TestRunMerge_StackNumberArg(t *testing.T) {
 
 	require.NoError(t, err)
 	assert.Equal(t, 11, gotPR)
+	assert.Equal(t, github.MergeActionDirectMerge, gotAction, "a non-queue base sends an explicit direct_merge action")
 	assert.Contains(t, output, "Merged #10, #11 into main")
 }
 
 func TestRunMerge_MergeQueue_Headless(t *testing.T) {
-	gotMethod := "unset"
+	gotMethod, gotAction := "unset", "unset"
 	cfg, outR, errR := config.NewTestConfig()
 	cfg.GitHubClientOverride = &github.MockClient{
 		GetStackFn: func(n int) (*github.RemoteStack, error) {
@@ -142,8 +144,8 @@ func TestRunMerge_MergeQueue_Headless(t *testing.T) {
 			assert.Equal(t, "main", base)
 			return true, nil
 		},
-		MergeStackAsyncFn: func(pr int, method string) (*github.AsyncMergeResult, error) {
-			gotMethod = method
+		MergeStackAsyncFn: func(pr int, method, mergeAction string) (*github.AsyncMergeResult, error) {
+			gotMethod, gotAction = method, mergeAction
 			return &github.AsyncMergeResult{
 				Status:  github.AsyncMergeStatusEnqueued,
 				Details: github.AsyncMergeDetails{Message: "Pull request was added to the merge queue."},
@@ -156,19 +158,20 @@ func TestRunMerge_MergeQueue_Headless(t *testing.T) {
 
 	require.NoError(t, err)
 	assert.Equal(t, "", gotMethod, "a merge queue picks the method; none is sent")
+	assert.Equal(t, github.MergeActionMergeQueue, gotAction, "an explicit merge_queue action is sent")
 	assert.Contains(t, output, "merge queue")
 }
 
 func TestRunMerge_MergeQueue_IgnoresMethodFlag(t *testing.T) {
-	gotMethod := "unset"
+	gotMethod, gotAction := "unset", "unset"
 	cfg, outR, errR := config.NewTestConfig()
 	cfg.GitHubClientOverride = &github.MockClient{
 		GetStackFn: func(n int) (*github.RemoteStack, error) {
 			return remoteStack(7, "main", openStackPR(10, "a"), openStackPR(11, "b")), nil
 		},
 		BaseBranchUsesMergeQueueFn: func(base string) (bool, error) { return true, nil },
-		MergeStackAsyncFn: func(pr int, method string) (*github.AsyncMergeResult, error) {
-			gotMethod = method
+		MergeStackAsyncFn: func(pr int, method, mergeAction string) (*github.AsyncMergeResult, error) {
+			gotMethod, gotAction = method, mergeAction
 			return &github.AsyncMergeResult{
 				Status:  github.AsyncMergeStatusEnqueued,
 				Details: github.AsyncMergeDetails{Message: "queued"},
@@ -183,11 +186,12 @@ func TestRunMerge_MergeQueue_IgnoresMethodFlag(t *testing.T) {
 
 	require.NoError(t, err)
 	assert.Equal(t, "", gotMethod, "the requested method is ignored under a merge queue")
+	assert.Equal(t, github.MergeActionMergeQueue, gotAction)
 	assert.Contains(t, output, "ignoring the merge method")
 }
 
 func TestRunMerge_MergeQueueDetectionError_FallsBackToDirect(t *testing.T) {
-	gotMethod := "unset"
+	gotMethod, gotAction := "unset", "unset"
 	cfg, outR, errR := config.NewTestConfig()
 	cfg.GitHubClientOverride = &github.MockClient{
 		GetStackFn: func(n int) (*github.RemoteStack, error) {
@@ -199,8 +203,8 @@ func TestRunMerge_MergeQueueDetectionError_FallsBackToDirect(t *testing.T) {
 		RepoMergeConfigFn: func() (*github.RepoMergeConfig, error) {
 			return &github.RepoMergeConfig{MergeAllowed: true, DefaultMethod: "merge"}, nil
 		},
-		MergeStackAsyncFn: func(pr int, method string) (*github.AsyncMergeResult, error) {
-			gotMethod = method
+		MergeStackAsyncFn: func(pr int, method, mergeAction string) (*github.AsyncMergeResult, error) {
+			gotMethod, gotAction = method, mergeAction
 			return &github.AsyncMergeResult{
 				Status:  github.AsyncMergeStatusMerged,
 				Details: github.AsyncMergeDetails{SHA: "abc1234"},
@@ -213,6 +217,7 @@ func TestRunMerge_MergeQueueDetectionError_FallsBackToDirect(t *testing.T) {
 
 	require.NoError(t, err)
 	assert.Equal(t, "merge", gotMethod, "detection failure falls back to a direct merge with a method")
+	assert.Equal(t, github.MergeActionDirectMerge, gotAction, "the direct-merge UI sends an explicit direct_merge action")
 	assert.Contains(t, output, "Merged")
 }
 
@@ -227,7 +232,7 @@ func TestRunMerge_PRNumberArg(t *testing.T) {
 			assert.Equal(t, 2, n)
 			return remoteStack(5, "main", openStackPR(1, "b1"), openStackPR(2, "b2"), openStackPR(3, "b3")), nil
 		},
-		MergeStackAsyncFn: func(pr int, method string) (*github.AsyncMergeResult, error) {
+		MergeStackAsyncFn: func(pr int, method, mergeAction string) (*github.AsyncMergeResult, error) {
 			gotPR = pr
 			return &github.AsyncMergeResult{Status: github.AsyncMergeStatusPending, Details: github.AsyncMergeDetails{UUID: "u"}}, nil
 		},
@@ -249,7 +254,7 @@ func TestRunMerge_SquashFlag(t *testing.T) {
 		GetStackFn: func(n int) (*github.RemoteStack, error) {
 			return remoteStack(7, "main", openStackPR(1, "b1"), openStackPR(2, "b2")), nil
 		},
-		MergeStackAsyncFn: func(pr int, method string) (*github.AsyncMergeResult, error) {
+		MergeStackAsyncFn: func(pr int, method, mergeAction string) (*github.AsyncMergeResult, error) {
 			gotMethod = method
 			return &github.AsyncMergeResult{Status: github.AsyncMergeStatusPending, Details: github.AsyncMergeDetails{UUID: "u"}}, nil
 		},
@@ -367,7 +372,7 @@ func TestRunMerge_WholeStackBlockedByDraft(t *testing.T) {
 		RepoMergeConfigFn: func() (*github.RepoMergeConfig, error) {
 			return &github.RepoMergeConfig{MergeAllowed: true, DefaultMethod: "merge"}, nil
 		},
-		MergeStackAsyncFn: func(pr int, method string) (*github.AsyncMergeResult, error) {
+		MergeStackAsyncFn: func(pr int, method, mergeAction string) (*github.AsyncMergeResult, error) {
 			submitCalled = true
 			return nil, nil
 		},
@@ -405,7 +410,7 @@ func TestRunMerge_SubmitNotMergeable(t *testing.T) {
 		GetStackFn: func(n int) (*github.RemoteStack, error) {
 			return remoteStack(7, "main", openStackPR(1, "b1"), openStackPR(2, "b2")), nil
 		},
-		MergeStackAsyncFn: func(pr int, method string) (*github.AsyncMergeResult, error) {
+		MergeStackAsyncFn: func(pr int, method, mergeAction string) (*github.AsyncMergeResult, error) {
 			return nil, errors.New("the stack can no longer be merged as requested; refresh and try again")
 		},
 	}
@@ -424,7 +429,7 @@ func TestRunMerge_PollFailedConflict(t *testing.T) {
 		GetStackFn: func(n int) (*github.RemoteStack, error) {
 			return remoteStack(7, "main", openStackPR(1, "b1"), openStackPR(2, "b2")), nil
 		},
-		MergeStackAsyncFn: func(pr int, method string) (*github.AsyncMergeResult, error) {
+		MergeStackAsyncFn: func(pr int, method, mergeAction string) (*github.AsyncMergeResult, error) {
 			return &github.AsyncMergeResult{Status: github.AsyncMergeStatusPending, Details: github.AsyncMergeDetails{UUID: "u"}}, nil
 		},
 		GetAsyncMergeResultFn: func(pr int, uuid string) (*github.AsyncMergeResult, error) {
@@ -446,7 +451,7 @@ func TestRunMerge_AlreadyMergedOnSubmit(t *testing.T) {
 		GetStackFn: func(n int) (*github.RemoteStack, error) {
 			return remoteStack(7, "main", openStackPR(1, "b1"), openStackPR(2, "b2")), nil
 		},
-		MergeStackAsyncFn: func(pr int, method string) (*github.AsyncMergeResult, error) {
+		MergeStackAsyncFn: func(pr int, method, mergeAction string) (*github.AsyncMergeResult, error) {
 			return &github.AsyncMergeResult{Status: github.AsyncMergeStatusMerged, Details: github.AsyncMergeDetails{SHA: "abc"}}, nil
 		},
 	}
@@ -464,7 +469,7 @@ func TestRunMerge_Enqueued(t *testing.T) {
 		GetStackFn: func(n int) (*github.RemoteStack, error) {
 			return remoteStack(7, "main", openStackPR(1, "b1"), openStackPR(2, "b2")), nil
 		},
-		MergeStackAsyncFn: func(pr int, method string) (*github.AsyncMergeResult, error) {
+		MergeStackAsyncFn: func(pr int, method, mergeAction string) (*github.AsyncMergeResult, error) {
 			return &github.AsyncMergeResult{Status: github.AsyncMergeStatusPending, Details: github.AsyncMergeDetails{UUID: "u"}}, nil
 		},
 		GetAsyncMergeResultFn: func(pr int, uuid string) (*github.AsyncMergeResult, error) {
@@ -485,7 +490,7 @@ func TestRunMerge_EnqueuedOnSubmit(t *testing.T) {
 		GetStackFn: func(n int) (*github.RemoteStack, error) {
 			return remoteStack(7, "main", openStackPR(1, "b1"), openStackPR(2, "b2")), nil
 		},
-		MergeStackAsyncFn: func(pr int, method string) (*github.AsyncMergeResult, error) {
+		MergeStackAsyncFn: func(pr int, method, mergeAction string) (*github.AsyncMergeResult, error) {
 			return &github.AsyncMergeResult{Status: github.AsyncMergeStatusEnqueued, Details: github.AsyncMergeDetails{Message: "Pull request was added to the merge queue."}}, nil
 		},
 	}
@@ -503,7 +508,7 @@ func TestRunMerge_AsyncMergeUnavailable(t *testing.T) {
 		GetStackFn: func(n int) (*github.RemoteStack, error) {
 			return remoteStack(7, "main", openStackPR(1, "b1"), openStackPR(2, "b2")), nil
 		},
-		MergeStackAsyncFn: func(pr int, method string) (*github.AsyncMergeResult, error) {
+		MergeStackAsyncFn: func(pr int, method, mergeAction string) (*github.AsyncMergeResult, error) {
 			return nil, github.ErrAsyncMergeUnavailable
 		},
 	}
@@ -554,7 +559,7 @@ func TestRunMerge_DefaultMethodFallsBackToAllowed(t *testing.T) {
 			// Viewer default is a method the repo no longer allows.
 			return &github.RepoMergeConfig{SquashAllowed: true, DefaultMethod: "merge"}, nil
 		},
-		MergeStackAsyncFn: func(pr int, method string) (*github.AsyncMergeResult, error) {
+		MergeStackAsyncFn: func(pr int, method, mergeAction string) (*github.AsyncMergeResult, error) {
 			gotMethod = method
 			return &github.AsyncMergeResult{Status: github.AsyncMergeStatusPending, Details: github.AsyncMergeDetails{UUID: "u"}}, nil
 		},

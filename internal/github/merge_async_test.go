@@ -53,12 +53,12 @@ func TestMergeStackAsync_Accepted(t *testing.T) {
 	body := `{"status":"pending","details":{"message":"Merge request enqueued.","uuid":"u-1","merge_method":"squash","expected_head_sha":"abc"}}`
 	c := testAsyncClient(t, http.StatusAccepted, body, &rec)
 
-	res, err := c.MergeStackAsync(42, "squash")
+	res, err := c.MergeStackAsync(42, "squash", MergeActionDirectMerge)
 	require.NoError(t, err)
 
 	assert.Equal(t, http.MethodPut, rec.method)
 	assert.Equal(t, "/repos/o/r/pulls/42/merge-async", rec.path)
-	assert.JSONEq(t, `{"merge_method":"squash","merge_action":"default"}`, rec.body)
+	assert.JSONEq(t, `{"merge_method":"squash","merge_action":"direct_merge"}`, rec.body)
 
 	assert.True(t, res.IsPending())
 	assert.False(t, res.IsMerged())
@@ -68,7 +68,7 @@ func TestMergeStackAsync_Accepted(t *testing.T) {
 
 func TestMergeStackAsync_AlreadyMerged(t *testing.T) {
 	body := `{"status":"merged","details":{"message":"Pull request is already merged.","sha":"deadbeef"}}`
-	res, err := testAsyncClient(t, http.StatusOK, body, nil).MergeStackAsync(42, "merge")
+	res, err := testAsyncClient(t, http.StatusOK, body, nil).MergeStackAsync(42, "merge", MergeActionDirectMerge)
 	require.NoError(t, err)
 	assert.True(t, res.IsMerged())
 	assert.Equal(t, "deadbeef", res.Details.SHA)
@@ -77,7 +77,7 @@ func TestMergeStackAsync_AlreadyMerged(t *testing.T) {
 func TestMergeStackAsync_ExistingRequestConflict(t *testing.T) {
 	// The go-gh REST client discards the 409 body, so we can't recover the
 	// existing UUID; the request surfaces as a clear "already exists" error.
-	_, err := testAsyncClient(t, http.StatusConflict, `{"status":"pending","details":{"uuid":"u-2"}}`, nil).MergeStackAsync(42, "merge")
+	_, err := testAsyncClient(t, http.StatusConflict, `{"status":"pending","details":{"uuid":"u-2"}}`, nil).MergeStackAsync(42, "merge", MergeActionDirectMerge)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "already exists")
 }
@@ -85,18 +85,18 @@ func TestMergeStackAsync_ExistingRequestConflict(t *testing.T) {
 func TestMergeStackAsync_NotMergeable(t *testing.T) {
 	// A 400 preflight failure is reported as a clear error (the specific
 	// details.message isn't recoverable through the REST client).
-	_, err := testAsyncClient(t, http.StatusBadRequest, `{"status":"failed","details":{"message":"Pull request is closed."}}`, nil).MergeStackAsync(42, "merge")
+	_, err := testAsyncClient(t, http.StatusBadRequest, `{"status":"failed","details":{"message":"Pull request is closed."}}`, nil).MergeStackAsync(42, "merge", MergeActionDirectMerge)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "can no longer be merged")
 }
 
 func TestMergeStackAsync_NotAvailable(t *testing.T) {
-	_, err := testAsyncClient(t, http.StatusNotFound, `{"message":"Not Found"}`, nil).MergeStackAsync(42, "merge")
+	_, err := testAsyncClient(t, http.StatusNotFound, `{"message":"Not Found"}`, nil).MergeStackAsync(42, "merge", MergeActionDirectMerge)
 	assert.ErrorIs(t, err, ErrAsyncMergeUnavailable)
 }
 
 func TestMergeStackAsync_ValidationFailed(t *testing.T) {
-	_, err := testAsyncClient(t, http.StatusUnprocessableEntity, `{"message":"Validation Failed"}`, nil).MergeStackAsync(42, "merge")
+	_, err := testAsyncClient(t, http.StatusUnprocessableEntity, `{"message":"Validation Failed"}`, nil).MergeStackAsync(42, "merge", MergeActionDirectMerge)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "Validation Failed")
 }
@@ -178,12 +178,12 @@ func TestAsyncMergeResult_Status(t *testing.T) {
 // sends merge_action.
 func TestMergeStackAsync_OmitsEmptyMethod(t *testing.T) {
 	var rec recordedRequest
-	_, err := testAsyncClient(t, http.StatusAccepted, `{"status":"pending","details":{"message":"m","uuid":"u","merge_method":"merge","merge_action":"default","expected_head_sha":"x"}}`, &rec).MergeStackAsync(1, "")
+	_, err := testAsyncClient(t, http.StatusAccepted, `{"status":"pending","details":{"message":"m","uuid":"u","merge_method":"merge","merge_action":"default","expected_head_sha":"x"}}`, &rec).MergeStackAsync(1, "", MergeActionMergeQueue)
 	require.NoError(t, err)
 
 	var parsed map[string]any
 	require.NoError(t, json.Unmarshal([]byte(rec.body), &parsed))
 	_, hasMethod := parsed["merge_method"]
 	assert.False(t, hasMethod, "merge_method should be omitted when empty")
-	assert.Equal(t, "default", parsed["merge_action"], "merge_action should always be sent")
+	assert.Equal(t, "merge_queue", parsed["merge_action"], "the explicit merge_action is always sent")
 }

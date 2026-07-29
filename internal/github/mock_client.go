@@ -18,7 +18,7 @@ type MockClient struct {
 	AddToStackFn               func(int, []int) (*RemoteStack, error)
 	UnstackFn                  func(int) (*RemoteStack, bool, error)
 	RepoMergeConfigFn          func() (*RepoMergeConfig, error)
-	MergeStackAsyncFn          func(int, string) (*AsyncMergeResult, error)
+	MergeStackAsyncFn          func(int, string, string) (*AsyncMergeResult, error)
 	GetAsyncMergeResultFn      func(int, string) (*AsyncMergeResult, error)
 	PRTitlesFn                 func([]int) (map[int]string, error)
 	BaseBranchUsesMergeQueueFn func(string) (bool, error)
@@ -130,9 +130,9 @@ func (m *MockClient) RepoMergeConfig() (*RepoMergeConfig, error) {
 	}, nil
 }
 
-func (m *MockClient) MergeStackAsync(prNumber int, method string) (*AsyncMergeResult, error) {
+func (m *MockClient) MergeStackAsync(prNumber int, method, mergeAction string) (*AsyncMergeResult, error) {
 	if m.MergeStackAsyncFn != nil {
-		return m.MergeStackAsyncFn(prNumber, method)
+		return m.MergeStackAsyncFn(prNumber, method, mergeAction)
 	}
 	return &AsyncMergeResult{
 		Status: AsyncMergeStatusPending,

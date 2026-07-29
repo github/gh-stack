@@ -18,7 +18,7 @@ type ClientOps interface {
 	AddToStack(stackNumber int, prNumbers []int) (*RemoteStack, error)
 	Unstack(stackNumber int) (*RemoteStack, bool, error)
 	RepoMergeConfig() (*RepoMergeConfig, error)
-	MergeStackAsync(prNumber int, method string) (*AsyncMergeResult, error)
+	MergeStackAsync(prNumber int, method, mergeAction string) (*AsyncMergeResult, error)
 	GetAsyncMergeResult(prNumber int, uuid string) (*AsyncMergeResult, error)
 	PRTitles(numbers []int) (map[int]string, error)
 	BaseBranchUsesMergeQueue(baseRef string) (bool, error)

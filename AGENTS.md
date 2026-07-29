@@ -109,7 +109,7 @@ if errors.As(err, &exitErr) { ... }
 ### Key interfaces
 
 - **`git.Ops`** (`internal/git/gitops.go`): 52 methods wrapping git CLI calls. The production implementation uses `cli/go-gh`'s `client.Command()` via `run()` and `runSilent()` helpers. Package-level functions (e.g., `git.CurrentBranch()`) delegate to a swappable package-level `ops` variable.
-- **`github.ClientOps`** (`internal/github/client_interface.go`): 17 methods for GitHub API (PRs, stacks, merges). Stack operations use the public Stacks REST API (`/repos/{owner}/{repo}/stacks`): `ListStacks`, `FindStackForPR`, `GetStack`, `CreateStack`, `AddToStack` (delta append), `Unstack`. Async stack merges use `RepoMergeConfig` (GraphQL: allowed merge methods + viewer's default), `MergeStackAsync`, and `GetAsyncMergeResult` (`/repos/{owner}/{repo}/pulls/{n}/merge-async`). Injected via `cfg.GitHubClientOverride` in tests.
+- **`github.ClientOps`** (`internal/github/client_interface.go`): 18 methods for GitHub API (PRs, stacks, merges). Stack operations use the public Stacks REST API (`/repos/{owner}/{repo}/stacks`): `ListStacks`, `FindStackForPR`, `GetStack`, `CreateStack`, `AddToStack` (delta append), `Unstack`. Async stack merges use `RepoMergeConfig` (GraphQL: allowed merge methods + viewer's default), `BaseBranchUsesMergeQueue` (GraphQL: detects a base-branch merge queue to select the explicit `merge_action`), `MergeStackAsync`, and `GetAsyncMergeResult` (`/repos/{owner}/{repo}/pulls/{n}/merge-async`). Injected via `cfg.GitHubClientOverride` in tests.
 - **`config.Config`** (`internal/config/config.go`): Central configuration passed to all commands. Holds I/O streams, color functions, and test hook fields (`SelectFn`, `ConfirmFn`, `InputFn`, `RepoOverride`).
 
 ### Stack file
