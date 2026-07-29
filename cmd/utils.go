@@ -822,6 +822,229 @@ func activeBranchNames(s *stack.Stack) []string {
 	return names
 }
 
+type branchTipSnapshot struct {
+	localSHA  string
+	remoteSHA string
+	hasRemote bool
+}
+
+// snapshotBranchTips captures local and remote-tracking tips before a fetch.
+// The old remote tip lets us distinguish a server rewrite from an unpushed
+// local rewrite after FetchBranches updates the tracking refs.
+func snapshotBranchTips(s *stack.Stack, remote string) map[string]branchTipSnapshot {
+	snapshots := make(map[string]branchTipSnapshot)
+	for _, br := range s.Branches {
+		if br.IsMerged() {
+			continue
+		}
+		localSHA, err := git.RevParse(br.Branch)
+		if err != nil {
+			continue
+		}
+		snapshot := branchTipSnapshot{localSHA: localSHA}
+		remoteRef := remote + "/" + br.Branch
+		if remoteSHA, err := git.RevParse(remoteRef); err == nil {
+			snapshot.remoteSHA = remoteSHA
+			snapshot.hasRemote = true
+			if remoteSHA != localSHA {
+				localForkPoint, _ := git.MergeBaseForkPoint(br.Branch, remoteRef)
+				if localForkPoint != remoteSHA {
+					snapshot.hasRemote = false
+					for _, candidate := range []string{localSHA, br.Head} {
+						if candidate == "" {
+							continue
+						}
+						if forkPoint, _ := git.MergeBaseForkPoint(remoteRef, candidate); forkPoint == candidate {
+							snapshot.remoteSHA = candidate
+							snapshot.hasRemote = true
+							break
+						}
+					}
+				}
+			}
+		}
+		snapshots[br.Branch] = snapshot
+	}
+	return snapshots
+}
+
+type remoteRebaseUpdate struct {
+	branch    string
+	localSHA  string
+	remoteSHA string
+	remoteRef string
+}
+
+// adoptRemoteRebasedBranches updates local branches after a remote stack
+// rebase when the pre-fetch tracking refs prove the local tips were unchanged
+// and range-diff proves each branch retained the same ordered commits.
+func adoptRemoteRebasedBranches(cfg *config.Config, s *stack.Stack, remote, currentBranch string, snapshots map[string]branchTipSnapshot) ([]string, error) {
+	var updates []remoteRebaseUpdate
+	for _, br := range s.Branches {
+		if br.IsMerged() {
+			continue
+		}
+		snapshot, ok := snapshots[br.Branch]
+		if !ok {
+			continue
+		}
+		localSHA, err := git.RevParse(br.Branch)
+		if err != nil {
+			return nil, fmt.Errorf("could not resolve local branch %s: %w", br.Branch, err)
+		}
+		if localSHA != snapshot.localSHA {
+			return nil, fmt.Errorf("local branch %s changed while syncing", br.Branch)
+		}
+
+		remoteRef := remote + "/" + br.Branch
+		remoteSHA, err := git.RevParse(remoteRef)
+		if err != nil || localSHA == remoteSHA {
+			continue
+		}
+
+		localBehind, err := git.IsAncestor(localSHA, remoteSHA)
+		if err != nil {
+			return nil, fmt.Errorf("could not compare %s with %s: %w", br.Branch, remoteRef, err)
+		}
+		if localBehind {
+			// An ordinary fast-forward is handled by fastForwardBranches.
+			continue
+		}
+
+		if !snapshot.hasRemote {
+			return nil, fmt.Errorf(
+				"%s and %s have diverged, but no pre-fetch tracking tip is available; reconcile them manually",
+				br.Branch, remoteRef,
+			)
+		}
+		if snapshot.remoteSHA == remoteSHA {
+			// Only the local branch changed; preserve it for the normal local
+			// rebase and push flow.
+			continue
+		}
+		if snapshot.localSHA != snapshot.remoteSHA {
+			return nil, fmt.Errorf(
+				"%s and %s both changed since the last fetch; reconcile them manually",
+				br.Branch, remoteRef,
+			)
+		}
+
+		updates = append(updates, remoteRebaseUpdate{
+			branch:    br.Branch,
+			localSHA:  localSHA,
+			remoteSHA: remoteSHA,
+			remoteRef: remoteRef,
+		})
+	}
+	if len(updates) == 0 {
+		return nil, nil
+	}
+
+	updateByBranch := make(map[string]remoteRebaseUpdate, len(updates))
+	for _, update := range updates {
+		updateByBranch[update.branch] = update
+	}
+	lastUpdateIndex := -1
+	for i, br := range s.Branches {
+		if _, ok := updateByBranch[br.Branch]; ok {
+			lastUpdateIndex = i
+		}
+	}
+
+	localParent := s.Trunk.Branch
+	remoteParent := remote + "/" + s.Trunk.Branch
+	for i, br := range s.Branches {
+		if i > lastUpdateIndex {
+			break
+		}
+		if br.IsMerged() {
+			continue
+		}
+		remoteBranch := remote + "/" + br.Branch
+		stacked, err := git.IsAncestor(remoteParent, remoteBranch)
+		if err != nil || !stacked {
+			return nil, fmt.Errorf(
+				"remote branch %s is not stacked on %s; refusing to replace local branches",
+				remoteBranch, remoteParent,
+			)
+		}
+
+		if _, ok := updateByBranch[br.Branch]; ok {
+			localBase := br.Base
+			validBase := false
+			if localBase != "" {
+				validBase, _ = git.IsAncestor(localBase, br.Branch)
+			}
+			if !validBase {
+				localBase, err = git.MergeBase(localParent, br.Branch)
+				if err != nil {
+					return nil, fmt.Errorf("could not determine the local commit range for %s: %w", br.Branch, err)
+				}
+			}
+			equivalent, err := git.RangeDiffEquivalent(localBase, br.Branch, remoteParent, remoteBranch)
+			if err != nil {
+				return nil, fmt.Errorf("could not compare local and remote commits for %s: %w", br.Branch, err)
+			}
+			if !equivalent {
+				return nil, fmt.Errorf(
+					"%s was rewritten on the remote with different commits; reconcile it manually",
+					br.Branch,
+				)
+			}
+		}
+
+		localParent = br.Branch
+		remoteParent = remoteBranch
+	}
+
+	currentBranchWillMove := false
+	for _, update := range updates {
+		if update.branch == currentBranch {
+			currentBranchWillMove = true
+			break
+		}
+	}
+	if currentBranchWillMove {
+		dirty, err := git.HasUncommittedChanges()
+		if err != nil {
+			return nil, fmt.Errorf("could not determine whether the working tree is clean: %w", err)
+		}
+		if dirty {
+			return nil, errors.New("uncommitted changes prevent adopting the remote-rebased branches; commit or stash them first")
+		}
+	}
+
+	var applied []remoteRebaseUpdate
+	for _, update := range updates {
+		var updateErr error
+		if update.branch == currentBranch {
+			updateErr = git.ResetHard(update.remoteRef)
+		} else {
+			updateErr = git.UpdateBranchRef(update.branch, update.remoteSHA)
+		}
+		if updateErr != nil {
+			for i := len(applied) - 1; i >= 0; i-- {
+				previous := applied[i]
+				if previous.branch == currentBranch {
+					_ = git.ResetHard(previous.localSHA)
+				} else {
+					_ = git.UpdateBranchRef(previous.branch, previous.localSHA)
+				}
+			}
+			return nil, fmt.Errorf("failed to update %s from %s: %w", update.branch, update.remoteRef, updateErr)
+		}
+		applied = append(applied, update)
+	}
+
+	names := make([]string, len(updates))
+	for i, update := range updates {
+		names[i] = update.branch
+	}
+	cfg.Successf("Adopted %d server-rebased %s from %s: %s",
+		len(names), plural(len(names), "branch", "branches"), remote, strings.Join(names, ", "))
+	return names, nil
+}
+
 // fastForwardBranches fast-forwards each active stack branch to its remote
 // tracking branch when the local branch is strictly behind. Returns the names
 // of branches that were updated. Branches that are up-to-date, diverged, or

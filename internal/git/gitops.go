@@ -57,6 +57,7 @@ type Ops interface {
 	RevParseMulti(refs []string) ([]string, error)
 	MergeBase(a, b string) (string, error)
 	MergeBaseForkPoint(ref, branch string) (string, error)
+	RangeDiffEquivalent(oldBase, oldHead, newBase, newHead string) (bool, error)
 	Log(ref string, maxCount int) ([]CommitInfo, error)
 	LogRange(base, head string) ([]CommitInfo, error)
 	DiffStatRange(base, head string) (additions, deletions int, err error)
@@ -441,6 +442,41 @@ func (d *defaultOps) MergeBase(a, b string) (string, error) {
 
 func (d *defaultOps) MergeBaseForkPoint(ref, branch string) (string, error) {
 	return run("merge-base", "--fork-point", ref, branch)
+}
+
+func (d *defaultOps) RangeDiffEquivalent(oldBase, oldHead, newBase, newHead string) (bool, error) {
+	for _, rangeSpec := range []string{oldBase + ".." + oldHead, newBase + ".." + newHead} {
+		merges, err := run("log", "--merges", "--format=%H", rangeSpec)
+		if err != nil {
+			return false, err
+		}
+		if merges != "" {
+			// range-diff omits merge commits, so it cannot safely prove that
+			// ranges containing merges are equivalent.
+			return false, nil
+		}
+	}
+
+	output, err := run(
+		"range-diff",
+		"--no-color",
+		"--no-patch",
+		oldBase+".."+oldHead,
+		newBase+".."+newHead,
+	)
+	if err != nil {
+		return false, err
+	}
+	if output == "" {
+		return true, nil
+	}
+	for _, line := range strings.Split(output, "\n") {
+		fields := strings.Fields(line)
+		if len(fields) < 5 || fields[2] != "=" || fields[0] != fields[3] {
+			return false, nil
+		}
+	}
+	return true, nil
 }
 
 func (d *defaultOps) Log(ref string, maxCount int) ([]CommitInfo, error) {

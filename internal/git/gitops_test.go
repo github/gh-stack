@@ -455,6 +455,61 @@ func TestIntegration_Push_PlusPrefixedBranch_NonForce(t *testing.T) {
 		"remote feature must not be force-updated")
 }
 
+func TestIntegration_RangeDiffEquivalent(t *testing.T) {
+	_, cloneDir := setupBareAndClone(t)
+	restore := withGitDir(t, cloneDir)
+	defer restore()
+
+	d := &defaultOps{}
+
+	gitExec(t, cloneDir, "checkout", "-b", "feature")
+	writeFile(t, cloneDir, "feature-one.txt", "one")
+	gitExec(t, cloneDir, "add", ".")
+	gitExec(t, cloneDir, "commit", "-m", "feature one")
+	writeFile(t, cloneDir, "feature-two.txt", "two")
+	gitExec(t, cloneDir, "add", ".")
+	gitExec(t, cloneDir, "commit", "-m", "feature two")
+
+	gitExec(t, cloneDir, "checkout", "-b", "new-base", "main")
+	writeFile(t, cloneDir, "base.txt", "new base")
+	gitExec(t, cloneDir, "add", ".")
+	gitExec(t, cloneDir, "commit", "-m", "new base")
+
+	gitExec(t, cloneDir, "branch", "rebased", "feature")
+	gitExec(t, cloneDir, "rebase", "--onto", "new-base", "main", "rebased")
+
+	equivalent, err := d.RangeDiffEquivalent("main", "feature", "new-base", "rebased")
+	require.NoError(t, err)
+	assert.True(t, equivalent)
+
+	commits := strings.Fields(gitExec(t, cloneDir, "rev-list", "--reverse", "main..feature"))
+	require.Len(t, commits, 2)
+	gitExec(t, cloneDir, "checkout", "-b", "reordered", "main")
+	gitExec(t, cloneDir, "cherry-pick", commits[1], commits[0])
+
+	equivalent, err = d.RangeDiffEquivalent("main", "feature", "main", "reordered")
+	require.NoError(t, err)
+	assert.False(t, equivalent, "the same commits in a different order must not be treated as equivalent")
+
+	gitExec(t, cloneDir, "checkout", "rebased")
+	gitExec(t, cloneDir, "commit", "--amend", "-m", "changed message")
+
+	equivalent, err = d.RangeDiffEquivalent("main", "feature", "new-base", "rebased")
+	require.NoError(t, err)
+	assert.False(t, equivalent, "a commit message change must not be treated as the same rewrite")
+
+	gitExec(t, cloneDir, "checkout", "-b", "merge-side", "main")
+	writeFile(t, cloneDir, "merge-side.txt", "merge")
+	gitExec(t, cloneDir, "add", ".")
+	gitExec(t, cloneDir, "commit", "-m", "merge side")
+	gitExec(t, cloneDir, "checkout", "-b", "merge-range", "main")
+	gitExec(t, cloneDir, "merge", "--no-ff", "merge-side", "-m", "merge commit")
+
+	equivalent, err = d.RangeDiffEquivalent("main", "merge-range", "main", "merge-range")
+	require.NoError(t, err)
+	assert.False(t, equivalent, "ranges containing merge commits cannot be proven equivalent by range-diff")
+}
+
 func TestSplitCommitMessage(t *testing.T) {
 	tests := []struct {
 		name        string

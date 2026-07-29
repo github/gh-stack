@@ -639,6 +639,8 @@ gh stack sync [flags]
 7. **Sync the stack object** — link the open PRs into a stack on GitHub. If the PRs are not yet in a stack, a new stack is created; if some PRs are already in a stack, it is updated (additive only). This only happens when two or more PRs exist. Sync **never opens PRs** — use `gh stack submit` for that
 8. **Prune** — in interactive terminals, prompts to delete local branches for merged PRs. Use `--prune` to skip the prompt. In non-interactive environments, pruning only happens when `--prune` is passed explicitly
 
+If the same branches were already rebased on GitHub, sync adopts the rewritten remote tips only when the local tips have not changed since their previous tracking refs and `git range-diff` confirms the same commits in the same order. If both sides changed, sync stops without overwriting either side.
+
 **Output (stderr):**
 
 - `✓ Fetched latest changes from origin`
@@ -659,6 +661,8 @@ gh stack sync [flags]
 ### Rebase the stack — `gh stack rebase`
 
 Pull from remote and cascade-rebase stack branches. Use this when `sync` reports a conflict or when you need finer control (e.g., rebase only part of the stack).
+
+When GitHub already rebased the stack, matching rewritten remote tips are adopted locally if the local branches are unchanged since the previous fetch and contain the same ordered commits.
 
 ```
 gh stack rebase [flags] [branch]
