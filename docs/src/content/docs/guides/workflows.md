@@ -143,7 +143,7 @@ gh stack merge --yes --squash
 
 In an interactive terminal, a short wizard lets you choose how far up the stack to merge, pick the merge method (only the ones your repository allows, defaulting to your last-used method), and confirm — then shows live progress. In a non-interactive terminal, or with `--yes`, the whole stack (or everything up to the given PR) is merged without prompting. After merging, run `gh stack sync` to update your local branches.
 
-If the base branch uses a merge queue, `gh stack merge` adds the stack to the queue instead of merging directly — it merges once the queue processes it.
+If the base branch uses a merge queue, `gh stack merge` adds the stack to the queue instead of merging directly. The queue chooses the merge method, so the wizard skips the method step and any merge method you pass (for example `--squash`) is ignored with a warning. The selected pull requests are added to the queue together but merge as the queue processes them — they may land in separate groups rather than all at once.
 
 :::note[Bypassing merge requirements not supported]
 Stack merges do not support bypassing merge requirements.

@@ -17,7 +17,7 @@ No Makefile, no code generation, no external linter config. Standard Go toolchai
 
 - `cmd/`: One Cobra command per file. Each exports `<Name>Cmd(cfg *config.Config)` with logic in `run<Name>()`.
 - `internal/git/`: `Ops` interface (52 methods) wrapping git CLI. `MockOps` for tests. Package-level functions delegate to swappable `ops` variable.
-- `internal/github/`: `ClientOps` interface (18 methods) for GitHub API. `MockClient` for tests. Stack operations use the public Stacks REST API (`/repos/{owner}/{repo}/stacks`); merges use the async merge API (`/repos/{owner}/{repo}/pulls/{n}/merge-async`) with an explicit `merge_action` (`direct_merge` or `merge_queue`) selected from the base branch's merge-queue detection.
+- `internal/github/`: `ClientOps` interface (18 methods) for GitHub API. `MockClient` for tests. Stack operations use the public Stacks REST API (`/repos/{owner}/{repo}/stacks`); merges use the async merge API (`/repos/{owner}/{repo}/pulls/{n}/merge-async`) with an explicit `merge_action` (`direct_merge` or `merge_queue`) chosen from the base branch's merge-queue detection. `merge_action` is optional — omitting it (or sending `default`) lets the server auto-route (merge queue if one is configured, else direct merge) — but the CLI sends it explicitly so a wrong detection fails loudly instead of silently merging directly.
 - `internal/config/`: `Config` struct passed to all commands. Holds I/O, colors, and test hooks (`SelectFn`, `ConfirmFn`, `InputFn`, `GitHubClientOverride`).
 - `internal/stack/`: Stack file (`.git/gh-stack`, JSON) management with file locking.
 - `internal/tui/`: bubbletea views (`stackview`, `modifyview`).

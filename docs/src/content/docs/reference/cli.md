@@ -472,11 +472,11 @@ All members of the stack up to and including your chosen pull request are merged
 
 With no argument, the current active local stack is used. Pass a stack number to merge a stack you don't have checked out (a purely remote operation), or a pull request number to merge directly up to that PR.
 
-In an interactive terminal, a short wizard walks you through three steps — choose which PRs to merge, pick the merge method, and confirm. In a non-interactive terminal, or with `--yes`, the whole stack (or everything up to the given PR) is merged without prompting, using your last-used merge method unless one is specified.
+In an interactive terminal, a short wizard walks you through choosing which PRs to merge, picking the merge method, and confirming. In a non-interactive terminal, or with `--yes`, the whole stack (or everything up to the given PR) is merged without prompting, using your last-used merge method unless one is specified.
 
 Only basic pull request state is checked before merging (open and not a draft); GitHub evaluates branch protection and repository rules when the merge runs, so any such failure is reported back to you. **Bypassing merge requirements is not supported** for stacked PR merges.
 
-If the base branch uses a merge queue, the stack is added to the queue and merges once the queue processes it; otherwise it's merged directly.
+If the base branch uses a merge queue, the stack is added to the queue instead of merging directly. The queue chooses the merge method, so the wizard skips the method step and any `--merge-method` (or `--squash`/`--rebase`/`--merge`) flag is ignored with a warning. The selected pull requests are added to the queue together but merge as the queue processes them — they may land in separate groups rather than all at once.
 
 | Flag | Description |
 |------|-------------|
