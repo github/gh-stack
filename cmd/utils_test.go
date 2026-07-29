@@ -851,3 +851,37 @@ func TestEnrichPRContent(t *testing.T) {
 	assert.Equal(t, "Fetched body", details["merged"].Body)
 	assert.Equal(t, "Has it", details["open"].Title, "PRs that already have a title are untouched")
 }
+
+func TestUpdateBaseSHAsPreservesLastValidBase(t *testing.T) {
+	s := &stack.Stack{
+		Trunk: stack.BranchRef{Branch: "main"},
+		Branches: []stack.BranchRef{
+			{Branch: "parent", Base: "main-tip"},
+			{Branch: "child", Base: "old-parent"},
+		},
+	}
+
+	restore := git.SetOps(&git.MockOps{
+		RevParseFn: func(ref string) (string, error) {
+			switch ref {
+			case "main":
+				return "main-tip", nil
+			case "parent":
+				return "amended-parent", nil
+			case "child":
+				return "child-tip", nil
+			default:
+				return "", errors.New("unknown ref")
+			}
+		},
+		IsAncestorFn: func(ancestor, branch string) (bool, error) {
+			return !(ancestor == "amended-parent" && branch == "child"), nil
+		},
+	})
+	defer restore()
+
+	updateBaseSHAs(s)
+
+	assert.Equal(t, "old-parent", s.Branches[1].Base)
+	assert.Equal(t, "child-tip", s.Branches[1].Head)
+}

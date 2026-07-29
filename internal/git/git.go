@@ -338,6 +338,12 @@ func MergeBase(a, b string) (string, error) {
 	return ops.MergeBase(a, b)
 }
 
+// MergeBaseForkPoint returns where branch forked from ref, using ref's reflog
+// to see through rewrites such as amend, rebase, or force-push.
+func MergeBaseForkPoint(ref, branch string) (string, error) {
+	return ops.MergeBaseForkPoint(ref, branch)
+}
+
 // Log returns recent commits for the given branch.
 func Log(ref string, maxCount int) ([]CommitInfo, error) {
 	return ops.Log(ref, maxCount)
