@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/charmbracelet/lipgloss"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -91,8 +92,9 @@ func TestSelect_Viewport(t *testing.T) {
 	}
 	m := New(opts)
 
-	// No size yet: all items are shown.
-	assert.Equal(t, 30, m.visibleItems())
+	// No size yet: capped at maxVisibleItems so a large stack can't overflow
+	// the first frame.
+	assert.Equal(t, 10, m.visibleItems())
 
 	// A tall terminal caps the window at maxVisibleItems (10).
 	nm, _ := m.Update(tea.WindowSizeMsg{Width: 100, Height: 60})
@@ -135,6 +137,21 @@ func TestSelect_ArrowDirection(t *testing.T) {
 	assert.Equal(t, 1, m.cursor)
 	m = step(m, keyType(tea.KeyUp))
 	assert.Equal(t, 2, m.cursor)
+}
+
+func TestTruncate_WideRunes(t *testing.T) {
+	// ASCII truncates to the requested width with a trailing ellipsis (plus an
+	// ANSI reset, which has zero display width).
+	ascii := truncate("abcdef", 3)
+	assert.True(t, strings.HasPrefix(ascii, "ab…"))
+	assert.LessOrEqual(t, lipgloss.Width(ascii), 3)
+
+	// Double-width runes must not push the result past the requested display
+	// width (each CJK rune is two cells).
+	assert.LessOrEqual(t, lipgloss.Width(truncate("你好世界", 5)), 5)
+
+	// A string that already fits is returned unchanged.
+	assert.Equal(t, "hi", truncate("hi", 5))
 }
 
 func TestSelect_AdvanceRequiresSelection(t *testing.T) {

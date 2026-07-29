@@ -385,13 +385,14 @@ func truncate(s string, width int) string {
 			}
 			continue
 		}
-		if w >= width-1 {
+		rw := lipgloss.Width(string(r))
+		if w+rw > width-1 {
 			b.WriteString("…")
 			b.WriteString("\x1b[0m")
 			break
 		}
 		b.WriteRune(r)
-		w++
+		w += rw
 	}
 	return b.String()
 }

@@ -145,8 +145,8 @@ In an interactive terminal, a short wizard lets you choose how far up the stack 
 
 If the base branch uses a merge queue, `gh stack merge` adds the stack to the queue instead of merging directly — it merges once the queue processes it.
 
-:::note[Admin bypass not supported]
-Stack merges currently do not support admin bypass merging.
+:::note[Bypassing merge requirements not supported]
+Stack merges do not support bypassing merge requirements.
 :::
 
 ## Syncing After Merges

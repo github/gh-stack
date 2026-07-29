@@ -181,10 +181,14 @@ const maxVisibleItems = 10
 
 // visibleItems is the number of pull requests shown in the select window at
 // once — capped at maxVisibleItems and shrunk to fit a short terminal (each
-// item renders on two lines). When the terminal size is unknown, all are shown.
+// item renders on two lines). When the terminal size is unknown, it still caps
+// at maxVisibleItems so the first frame can't overflow a large stack.
 func (m Model) visibleItems() int {
 	n := len(m.opts.PRs)
 	if m.height <= 0 {
+		if n > maxVisibleItems {
+			return maxVisibleItems
+		}
 		return n
 	}
 	// Reserve lines for the header, scroll indicators, summary, and footer.

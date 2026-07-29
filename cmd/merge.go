@@ -63,8 +63,8 @@ prompting, using your last-used merge method unless one is specified.
 
 Only basic pull request state is checked before merging (open and not a draft);
 GitHub evaluates branch protection and repository rules when the merge runs, so
-any such failure is reported back to you. Bypassing merge requirements with admin
-privileges is not supported for stacks.
+any such failure is reported back to you. Bypassing merge requirements is not
+supported for stacks.
 
 If the base branch uses a merge queue, the stack is added to the queue and merges
 once the queue processes it; otherwise it is merged directly.`,
@@ -151,6 +151,15 @@ func runMerge(cfg *config.Config, opts *mergeOptions, args []string) error {
 	// Non-interactive (or --yes): merge the whole stack (or up to the given PR)
 	// without prompting.
 	if !target.hasPR {
+		// A draft or closed pull request partway up the stack blocks everything
+		// above it. Rather than silently merging only the portion below it,
+		// refuse and let the user target an explicit pull request.
+		if blocker != nil {
+			top := candidates[len(candidates)-1].Number
+			cfg.Errorf("cannot merge the whole stack: pull request #%d is %s", blocker.Number, blockerState(blocker))
+			cfg.Printf("Merge up to #%d with `%s`", top, cfg.ColorCyan(fmt.Sprintf("gh stack merge %d", top)))
+			return ErrInvalidArgs
+		}
 		targetPR = candidates[len(candidates)-1].Number
 	}
 	if method == "" {

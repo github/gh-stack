@@ -272,6 +272,32 @@ func TestRunMerge_AlreadyMergedTarget(t *testing.T) {
 	assert.Contains(t, output, "#1 is already merged")
 }
 
+func TestRunMerge_WholeStackBlockedByDraft(t *testing.T) {
+	submitCalled := false
+	cfg, outR, errR := config.NewTestConfig()
+	cfg.GitHubClientOverride = &github.MockClient{
+		GetStackFn: func(n int) (*github.RemoteStack, error) {
+			return remoteStack(5, "main", openStackPR(1, "b1"), draftStackPR(2, "b2"), openStackPR(3, "b3")), nil
+		},
+		RepoMergeConfigFn: func() (*github.RepoMergeConfig, error) {
+			return &github.RepoMergeConfig{MergeAllowed: true, DefaultMethod: "merge"}, nil
+		},
+		MergeStackAsyncFn: func(pr int, method string) (*github.AsyncMergeResult, error) {
+			submitCalled = true
+			return nil, nil
+		},
+	}
+
+	err := runMerge(cfg, fastOptions(), []string{"5"})
+	output := collectOutput(cfg, outR, errR)
+
+	assert.ErrorIs(t, err, ErrInvalidArgs)
+	assert.Contains(t, output, "cannot merge the whole stack")
+	assert.Contains(t, output, "#2 is a draft")
+	assert.Contains(t, output, "gh stack merge 1")
+	assert.False(t, submitCalled, "must not silently merge only the portion below the blocker")
+}
+
 func TestRunMerge_NothingToMerge_AllMerged(t *testing.T) {
 	setupLocalStack(t, 100, "b1", "b1", "b2")
 	cfg, outR, errR := config.NewTestConfig()
