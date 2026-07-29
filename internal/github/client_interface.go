@@ -17,6 +17,11 @@ type ClientOps interface {
 	CreateStack(prNumbers []int) (*RemoteStack, error)
 	AddToStack(stackNumber int, prNumbers []int) (*RemoteStack, error)
 	Unstack(stackNumber int) (*RemoteStack, bool, error)
+	RepoMergeConfig() (*RepoMergeConfig, error)
+	MergeStackAsync(prNumber int, method, mergeAction string) (*AsyncMergeResult, error)
+	GetAsyncMergeResult(prNumber int, uuid string) (*AsyncMergeResult, error)
+	PRTitles(numbers []int) (map[int]string, error)
+	BaseBranchUsesMergeQueue(baseRef string) (bool, error)
 }
 
 // Compile-time check that Client satisfies ClientOps.

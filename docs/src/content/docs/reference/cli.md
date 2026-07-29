@@ -460,6 +460,48 @@ gh stack link --base develop --open feat-a feat-b feat-c
 
 ---
 
+### `gh stack merge`
+
+Merge one or multiple stacked PRs at once.
+
+```sh
+gh stack merge [<stack-number> | <pr-number>]
+```
+
+All members of the stack up to and including your chosen pull request are merged into the base branch in a single, all-or-nothing operation: if any PR can't be merged, none are.
+
+With no argument, the current active local stack is used. Pass a stack number to merge a stack you don't have checked out (a purely remote operation), or a pull request number to merge directly up to that PR.
+
+In an interactive terminal, a short wizard walks you through choosing which PRs to merge, picking the merge method, and confirming. In a non-interactive terminal, or with `--yes`, the whole stack (or everything up to the given PR) is merged without prompting, using your last-used merge method unless one is specified.
+
+Only basic pull request state is checked before merging (open and not a draft); GitHub evaluates branch protection and repository rules when the merge runs, so any such failure is reported back to you. **Bypassing merge requirements is not supported** for stacked PR merges.
+
+If the base branch uses a merge queue, the stack is added to the queue instead of merging directly. The queue chooses the merge method, so the wizard skips the method step and any `--merge-method` (or `--squash`/`--rebase`/`--merge`) flag is ignored with a warning. The selected pull requests are added to the queue together but merge as the queue processes them — they may land in separate groups rather than all at once.
+
+| Flag | Description |
+|------|-------------|
+| `--merge-method <method>` | Merge method to use: `merge`, `squash`, or `rebase` |
+| `--merge` / `--squash` / `--rebase` | Shorthands for the corresponding merge method |
+| `-y, --yes` | Merge without prompting for confirmation |
+
+**Examples:**
+
+```sh
+# Merge the current stack (interactive picker)
+gh stack merge
+
+# Merge a stack you don't have checked out, by stack number
+gh stack merge 7
+
+# Merge everything up to and including PR #42
+gh stack merge 42
+
+# Merge the whole current stack without prompting, squashing
+gh stack merge --yes --squash
+```
+
+---
+
 ## Navigation
 
 Move between branches in the current stack without having to remember branch names. The **bottom** of the stack is the branch closest to the trunk, and the **top** is furthest from it. `up` moves away from trunk; `down` moves toward it.

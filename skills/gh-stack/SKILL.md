@@ -7,7 +7,7 @@ description: >
   branch chains, or incremental code review workflows.
 metadata:
   author: github
-  version: "0.0.8"
+  version: "0.0.9"
 ---
 
 # gh-stack
@@ -61,6 +61,7 @@ git config remote.pushDefault origin     # if multiple remotes exist (skips remo
 7. **Use standard `git add` and `git commit` for staging and committing.** This gives you full control over which changes go into each branch. The `-Am` shortcut is available but should not be the default approach—stacked PRs are most effective when each branch contains a deliberate, logical set of changes.
 8. **Navigate down the stack when you need to change a lower layer.** If you're working on a frontend branch and realize you need API changes, don't hack around it at the current layer. Navigate to the appropriate branch (`gh stack down`, `gh stack checkout`, or `gh stack bottom`), make and commit the changes there, run `gh stack rebase --upstack`, then navigate back up to continue.
 9. **Use `gh stack link` for external tool workflows.** When branches are managed by an external tool (jj, Sapling, etc.), use `gh stack link branch-a branch-b`. `link` does not rely on local tracking state and is intended for API-driven PR and stack management. Provide at least two branches/PRs to create or update a stack, or a stack number followed by the new branches/PRs to append them to the top of an existing stack (e.g. `gh stack link 7 branch-c`).
+10. **Use `gh stack merge --yes` to merge stacked PRs.** `gh pr merge` does not work with stacked PRs. In a non-interactive terminal `gh stack merge` runs without prompting and merges the entire stack (bottom to top) atomically; pass `--yes` to be explicit. Scope the merge by passing a pull request number (`gh stack merge 42 --yes` merges everything up to and including PR #42) or a stack number (`gh stack merge 7 --yes`, which needs no local checkout). Choose the method with `--squash`, `--rebase`, `--merge`, or `--merge-method <method>`; without one, the last-used method is used. The merge is all-or-nothing — if any PR can't be merged, none are, and the failure reason is reported. Only basic pull request state is checked before merging (open and not a draft); bypassing merge requirements is not supported for stacks. If the base branch uses a merge queue, the stack is added to the queue instead of merging directly: the queue chooses the merge method (any method you pass is ignored with a warning), and the pull requests are added to the queue together but merge as the queue processes them, so they may land in separate groups rather than all at once.
 
 **Never do any of the following — each triggers an interactive prompt or TUI that will hang:**
 - ❌ `gh stack view` or `gh stack view --short` — always use `gh stack view --json`
@@ -164,6 +165,10 @@ Small, incidental fixes (e.g., fixing a typo you noticed) can go in the current 
 | Check out by branch (local only) | `gh stack checkout feature-auth` |
 | Tear down the current stack to restructure it | `gh stack unstack` |
 | Tear down a specific stack by number | `gh stack unstack 7` |
+| Merge the whole current stack | `gh stack merge --yes` |
+| Merge a stack by number | `gh stack merge 7 --yes` |
+| Merge up to a specific PR | `gh stack merge 42 --yes` |
+| Merge with a specific method | `gh stack merge --yes --squash` |
 
 ---
 
@@ -882,6 +887,5 @@ gh stack unstack --local
 1. **Stacks are strictly linear.** Branching stacks (multiple children on a single parent) are not supported. Each branch has exactly one parent and at most one child. If you need parallel workstreams, use separate stacks.
 2. **Stack disambiguation cannot be bypassed.** If the current branch is the trunk of multiple stacks, commands error with code 6. Check out a non-shared branch first.
 3. **Multiple remotes require `--remote` or config.** If more than one remote is configured, set `remote.pushDefault` in git config, or pass `--remote <name>` to the commands that accept it (`push`, `submit`, `sync`, `rebase`, `link`). `checkout`, `modify`, and `trunk` have no `--remote` flag and rely on `remote.pushDefault`.
-4. **Merging PRs:** Merging Stacked PRs from the CLI is not supported yet. Direct users to open the PR URL in a browser to merge PRs.
-5. **Remote stack checkout requires a stack or PR number.** `checkout` with a branch name only works with locally tracked stacks. Use a stack number or PR number (e.g. `gh stack checkout 7` or `gh stack checkout 123`) to pull a stack from GitHub.
-6. **PR title and body are auto-generated.** There is no flag to set a custom PR title or body during `submit`. The title and body are generated from commit messages plus a footer. Use `gh pr edit` to modify PR title and body after creation.
+4. **Remote stack checkout requires a stack or PR number.** `checkout` with a branch name only works with locally tracked stacks. Use a stack number or PR number (e.g. `gh stack checkout 7` or `gh stack checkout 123`) to pull a stack from GitHub.
+5. **PR title and body are auto-generated.** There is no flag to set a custom PR title or body during `submit`. The title and body are generated from commit messages plus a footer. Use `gh pr edit` to modify PR title and body after creation.
