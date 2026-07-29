@@ -2,6 +2,7 @@ package modify
 
 import (
 	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
 	"testing"
@@ -1415,6 +1416,82 @@ func TestContinueApply_FoldThenCascadeConflict_DoesNotResurrectFoldedBranch(t *t
 	assert.Equal(t, []string{"A", "C"}, names,
 		"folded branch B must stay removed after recovery completes")
 	assert.False(t, StateExists(gitDir), "state should be cleared after successful recovery")
+}
+
+func TestContinueApply_RebaseStartErrorPersistsRetryState(t *testing.T) {
+	s := stack.Stack{
+		Trunk: stack.BranchRef{Branch: "main"},
+		Branches: []stack.BranchRef{
+			{Branch: "A"},
+			{Branch: "B"},
+			{Branch: "C"},
+		},
+	}
+
+	gitDir := t.TempDir()
+	writeTestStackFile(t, gitDir, s)
+
+	state := &StateFile{
+		SchemaVersion:     1,
+		StackName:         "main",
+		StackIndex:        0,
+		Phase:             PhaseConflict,
+		ConflictType:      "cherry_pick",
+		ConflictBranch:    "B",
+		FoldBranch:        "B",
+		FoldTarget:        "A",
+		RemainingBranches: []string{"A", "C"},
+		OriginalBranch:    "A",
+		OriginalRefs:      map[string]string{"A": "sha-main", "C": "sha-A-old"},
+	}
+	require.NoError(t, SaveState(gitDir, state))
+
+	mock := newApplyMock(gitDir, map[string]string{
+		"main": "sha-main", "A": "sha-A", "B": "sha-B", "C": "sha-C",
+	})
+	cherryPickContinues := 0
+	mock.CherryPickContinueFn = func() error {
+		cherryPickContinues++
+		return nil
+	}
+	cRebases := 0
+	mock.RebaseOntoFn = func(newBase, oldBase, branch string, opts git.RebaseOpts) error {
+		if branch == "C" {
+			cRebases++
+			if cRebases == 1 {
+				return &git.RebaseStartError{Err: errors.New("branch is checked out elsewhere")}
+			}
+		}
+		return nil
+	}
+
+	restore := git.SetOps(mock)
+	defer restore()
+
+	cfg, _, _ := config.NewTestConfig()
+	defer cfg.Out.Close()
+	defer cfg.Err.Close()
+
+	err := ContinueApply(cfg, gitDir, noopUpdateBaseSHAs)
+	require.Error(t, err)
+
+	retryState, err := LoadState(gitDir)
+	require.NoError(t, err)
+	require.NotNil(t, retryState)
+	assert.Equal(t, "rebase_start", retryState.ConflictType)
+	assert.Equal(t, "C", retryState.ConflictBranch)
+	assert.Empty(t, retryState.RemainingBranches)
+
+	afterFirst, err := stack.Load(gitDir)
+	require.NoError(t, err)
+	assert.Equal(t, -1, afterFirst.Stacks[0].IndexOf("B"),
+		"completed fold metadata must be saved before waiting to retry the rebase")
+
+	err = ContinueApply(cfg, gitDir, noopUpdateBaseSHAs)
+	require.NoError(t, err)
+	assert.Equal(t, 1, cherryPickContinues, "retry must not repeat the completed cherry-pick")
+	assert.Equal(t, 2, cRebases, "retry must restart the refused rebase")
+	assert.False(t, StateExists(gitDir))
 }
 
 // ─── Unwind restores renamed branch ─────────────────────────────────────────

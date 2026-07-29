@@ -682,7 +682,7 @@ func TestStackNeedsRebase_AllCurrent(t *testing.T) {
 	restore := git.SetOps(mock)
 	defer restore()
 
-	assert.False(t, stackNeedsRebase(s), "stack should not need rebase when all branches are current")
+	assert.False(t, stackNeedsRebase(s, ""), "stack should not need rebase when all branches are current")
 }
 
 func TestStackNeedsRebase_FirstBranchStale(t *testing.T) {
@@ -705,7 +705,7 @@ func TestStackNeedsRebase_FirstBranchStale(t *testing.T) {
 	restore := git.SetOps(mock)
 	defer restore()
 
-	assert.True(t, stackNeedsRebase(s), "stack should need rebase when first branch is stale")
+	assert.True(t, stackNeedsRebase(s, ""), "stack should need rebase when first branch is stale")
 }
 
 func TestStackNeedsRebase_SkipsMergedBranches(t *testing.T) {
@@ -725,7 +725,7 @@ func TestStackNeedsRebase_SkipsMergedBranches(t *testing.T) {
 	restore := git.SetOps(mock)
 	defer restore()
 
-	assert.False(t, stackNeedsRebase(s), "should skip merged branches and find stack up to date")
+	assert.False(t, stackNeedsRebase(s, ""), "should skip merged branches and find stack up to date")
 }
 
 // setTestRepo sets RepoOverride so tests don't depend on real git context.

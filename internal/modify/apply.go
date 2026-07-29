@@ -584,6 +584,13 @@ func ApplyPlan(
 		}
 
 		if err := git.RebaseOnto(newBase, oldBase, b.Branch, git.RebaseOpts{}); err != nil {
+			if git.IsRebaseStartError(err) {
+				if saveErr := stack.SaveWithLock(gitDir, sf, lock); saveErr != nil {
+					cfg.Warningf("failed to save stack metadata: %v", saveErr)
+				}
+				return nil, nil, fmt.Errorf("could not start rebase of %s onto %s: %w", b.Branch, newBase, err)
+			}
+
 			conflict := &modifyview.ConflictInfo{
 				Branch: b.Branch,
 			}
@@ -815,8 +822,12 @@ func ContinueApply(
 		affectsPRs = true
 	}
 
-	// Finish the in-progress git operation (rebase or cherry-pick)
-	if state.ConflictType == "cherry_pick" {
+	remainingBranches := state.RemainingBranches
+
+	// Finish the in-progress git operation, or resume at a rebase that was
+	// previously refused before it could start.
+	switch state.ConflictType {
+	case "cherry_pick":
 		if err := git.CherryPickContinue(); err != nil {
 			return fmt.Errorf("cherry-pick continue failed — resolve remaining conflicts and try again: %w", err)
 		}
@@ -827,7 +838,7 @@ func ContinueApply(
 		if foldIdx >= 0 && foldIdx < len(s.Branches) {
 			s.Branches = append(s.Branches[:foldIdx], s.Branches[foldIdx+1:]...)
 		}
-	} else {
+	case "", "rebase":
 		// Rebase conflict
 		if git.IsRebaseInProgress() {
 			if err := git.RebaseContinue(git.RebaseOpts{}); err != nil {
@@ -835,10 +846,14 @@ func ContinueApply(
 			}
 		}
 		cfg.Successf("Rebased %s", state.ConflictBranch)
+	case "rebase_start":
+		remainingBranches = append([]string{state.ConflictBranch}, remainingBranches...)
+	default:
+		return fmt.Errorf("unknown modify conflict type %q", state.ConflictType)
 	}
 
 	// Continue cascading rebase for remaining branches
-	for _, branchName := range state.RemainingBranches {
+	for _, branchName := range remainingBranches {
 		idx := s.IndexOf(branchName)
 		if idx < 0 {
 			cfg.Warningf("branch %s no longer in stack, skipping", branchName)
@@ -878,10 +893,35 @@ func ContinueApply(
 		}
 
 		if err := git.RebaseOnto(newBase, oldBase, b.Branch, git.RebaseOpts{}); err != nil {
+			if git.IsRebaseStartError(err) {
+				remaining := make([]string, 0)
+				foundCurrent := false
+				for _, rn := range remainingBranches {
+					if rn == branchName {
+						foundCurrent = true
+						continue
+					}
+					if foundCurrent {
+						remaining = append(remaining, rn)
+					}
+				}
+				state.ConflictBranch = branchName
+				state.ConflictType = "rebase_start"
+				state.RemainingBranches = remaining
+				state.AffectsPRs = affectsPRs
+				if saveErr := SaveState(gitDir, state); saveErr != nil {
+					cfg.Warningf("failed to update modify state: %v", saveErr)
+				}
+				if saveErr := stack.SaveWithLock(gitDir, sf, lock); saveErr != nil {
+					cfg.Warningf("failed to save stack metadata: %v", saveErr)
+				}
+				return fmt.Errorf("could not start rebase of %s onto %s: %w", b.Branch, newBase, err)
+			}
+
 			// Another conflict — update state and bail
 			remaining := make([]string, 0)
 			foundCurrent := false
-			for _, rn := range state.RemainingBranches {
+			for _, rn := range remainingBranches {
 				if rn == branchName {
 					foundCurrent = true
 					continue
