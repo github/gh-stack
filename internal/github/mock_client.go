@@ -4,23 +4,24 @@ package github
 // Each field is an optional function that, when set, handles the corresponding
 // ClientOps method call. When nil, a reasonable default is returned.
 type MockClient struct {
-	FindPRForBranchFn        func(string) (*PullRequest, error)
-	FindPRByNumberFn         func(int) (*PullRequest, error)
-	FindPRDetailsForBranchFn func(string) (*PRDetails, error)
-	CreatePRFn               func(string, string, string, string, bool) (*PullRequest, error)
-	UpdatePRBaseFn           func(int, string) error
-	MarkPRReadyForReviewFn   func(string) error
-	DisableAutoMergeFn       func(string) error
-	ListStacksFn             func() ([]RemoteStack, error)
-	FindStackForPRFn         func(int) (*RemoteStack, error)
-	GetStackFn               func(int) (*RemoteStack, error)
-	CreateStackFn            func([]int) (*RemoteStack, error)
-	AddToStackFn             func(int, []int) (*RemoteStack, error)
-	UnstackFn                func(int) (*RemoteStack, bool, error)
-	RepoMergeConfigFn        func() (*RepoMergeConfig, error)
-	MergeStackAsyncFn        func(int, string) (*AsyncMergeResult, error)
-	GetAsyncMergeResultFn    func(int, string) (*AsyncMergeResult, error)
-	PRTitlesFn               func([]int) (map[int]string, error)
+	FindPRForBranchFn          func(string) (*PullRequest, error)
+	FindPRByNumberFn           func(int) (*PullRequest, error)
+	FindPRDetailsForBranchFn   func(string) (*PRDetails, error)
+	CreatePRFn                 func(string, string, string, string, bool) (*PullRequest, error)
+	UpdatePRBaseFn             func(int, string) error
+	MarkPRReadyForReviewFn     func(string) error
+	DisableAutoMergeFn         func(string) error
+	ListStacksFn               func() ([]RemoteStack, error)
+	FindStackForPRFn           func(int) (*RemoteStack, error)
+	GetStackFn                 func(int) (*RemoteStack, error)
+	CreateStackFn              func([]int) (*RemoteStack, error)
+	AddToStackFn               func(int, []int) (*RemoteStack, error)
+	UnstackFn                  func(int) (*RemoteStack, bool, error)
+	RepoMergeConfigFn          func() (*RepoMergeConfig, error)
+	MergeStackAsyncFn          func(int, string) (*AsyncMergeResult, error)
+	GetAsyncMergeResultFn      func(int, string) (*AsyncMergeResult, error)
+	PRTitlesFn                 func([]int) (map[int]string, error)
+	BaseBranchUsesMergeQueueFn func(string) (bool, error)
 }
 
 // Compile-time check that MockClient satisfies ClientOps.
@@ -161,4 +162,11 @@ func (m *MockClient) PRTitles(numbers []int) (map[int]string, error) {
 		return m.PRTitlesFn(numbers)
 	}
 	return map[int]string{}, nil
+}
+
+func (m *MockClient) BaseBranchUsesMergeQueue(baseRef string) (bool, error) {
+	if m.BaseBranchUsesMergeQueueFn != nil {
+		return m.BaseBranchUsesMergeQueueFn(baseRef)
+	}
+	return false, nil
 }

@@ -65,13 +65,22 @@ func New(opts Options) Model {
 		spinner:      sp,
 		usePowerline: powerlineEnabled(),
 	}
+	// A merge queue picks the merge method from its own configuration, so the
+	// wizard doesn't choose one and sends a blank method.
+	if opts.UsesMergeQueue {
+		m.method = ""
+	}
 	m.methodCursor = indexOf(opts.AllowedMethods, m.method)
 
 	if opts.PreselectTopIndex >= 0 && opts.PreselectTopIndex < len(opts.PRs) {
-		// PR-number mode: the target is fixed, so skip the selection step.
+		// PR-number mode: the target is fixed, so skip the selection step (and
+		// the method step too when the base uses a merge queue).
 		m.topIndex = opts.PreselectTopIndex
 		m.cursor = opts.PreselectTopIndex
 		m.step = StepMethod
+		if opts.UsesMergeQueue {
+			m.step = StepConfirm
+		}
 	}
 
 	return m
@@ -165,7 +174,7 @@ func (m Model) handleSelectKey(key string) (tea.Model, tea.Cmd) {
 		}
 	case "enter", "tab":
 		if m.topIndex >= 0 {
-			m.step = StepMethod
+			m.step = m.stepAfterSelect()
 		}
 	case "esc", "q":
 		m.cancelled = true
@@ -173,6 +182,16 @@ func (m Model) handleSelectKey(key string) (tea.Model, tea.Cmd) {
 	}
 	m.scrollOffset = m.clampScroll()
 	return m, nil
+}
+
+// stepAfterSelect is the step reached from the PR-selection step: the merge
+// method picker normally, or straight to confirmation when the base branch uses
+// a merge queue (which chooses the method itself).
+func (m Model) stepAfterSelect() Step {
+	if m.opts.UsesMergeQueue {
+		return StepConfirm
+	}
+	return StepMethod
 }
 
 // maxVisibleItems caps how many pull requests the select step shows at once; the
@@ -248,7 +267,15 @@ func (m Model) handleConfirmKey(key string) (tea.Model, tea.Cmd) {
 		m.submitted = true
 		return m, tea.Batch(m.spinner.Tick, m.submitCmd())
 	case "shift+tab":
-		m.step = StepMethod
+		if m.opts.UsesMergeQueue {
+			// No method step to go back to; return to selection unless the
+			// target was fixed by PR-number mode.
+			if m.opts.PreselectTopIndex < 0 {
+				m.step = StepSelectPRs
+			}
+		} else {
+			m.step = StepMethod
+		}
 	case "esc", "q":
 		m.cancelled = true
 		return m.finish()

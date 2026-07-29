@@ -191,6 +191,63 @@ func TestConfirm_BackWithShiftTab(t *testing.T) {
 	assert.Equal(t, StepMethod, m.step)
 }
 
+func mergeQueueOptions() Options {
+	o := baseOptions()
+	o.UsesMergeQueue = true
+	return o
+}
+
+func TestMergeQueue_SkipsMethodStep(t *testing.T) {
+	m := New(mergeQueueOptions())
+	assert.Equal(t, StepSelectPRs, m.step)
+	assert.Equal(t, "", m.method, "a merge queue picks the method itself")
+
+	// Enter from the selection step goes straight to Confirm, skipping method.
+	m = step(m, keyType(tea.KeyEnter))
+	assert.Equal(t, StepConfirm, m.step)
+}
+
+func TestMergeQueue_ConfirmBackToSelect(t *testing.T) {
+	m := New(mergeQueueOptions())
+	m = step(m, keyType(tea.KeyEnter))
+	require.Equal(t, StepConfirm, m.step)
+
+	// shift+tab returns to selection (there is no method step in between).
+	m = step(m, keyType(tea.KeyShiftTab))
+	assert.Equal(t, StepSelectPRs, m.step)
+}
+
+func TestMergeQueue_PreselectStartsAtConfirm(t *testing.T) {
+	o := mergeQueueOptions()
+	o.PreselectTopIndex = 1
+	m := New(o)
+	assert.Equal(t, StepConfirm, m.step, "PR-number mode skips both select and method")
+	assert.Equal(t, []int{1, 2}, m.selectedNumbers())
+
+	// Confirm is the first step here, so shift+tab has nowhere to go back to.
+	m = step(m, keyType(tea.KeyShiftTab))
+	assert.Equal(t, StepConfirm, m.step)
+}
+
+func TestMergeQueue_ViewWording(t *testing.T) {
+	m := New(mergeQueueOptions())
+
+	// The stepper drops the merge-method stage.
+	assert.NotContains(t, m.stepper(), "Merge Method")
+
+	// The selection summary mentions the merge queue.
+	assert.Contains(t, m.viewSelect(), "via merge queue")
+
+	// The confirm step uses merge-queue wording and an "enqueue" action hint,
+	// and shows no merge method.
+	m = step(m, keyType(tea.KeyEnter))
+	require.Equal(t, StepConfirm, m.step)
+	confirm := m.viewConfirm()
+	assert.Contains(t, confirm, "merge queue")
+	assert.Contains(t, confirm, "enqueue")
+	assert.NotContains(t, confirm, "Create a merge commit")
+}
+
 func TestMethod_SelectAndAdvance(t *testing.T) {
 	m := New(baseOptions())
 	m = step(m, keyType(tea.KeyEnter)) // -> method step

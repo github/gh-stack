@@ -30,7 +30,18 @@ var (
 // blends seamlessly into the shading.
 const stepArrow = "\ue0b0"
 
+// wizardSteps are the selectable stages shown in the top stepper. A merge-queue
+// merge has no method to choose, so it uses the shorter two-step sequence.
 var wizardSteps = []string{"Select PRs", "Select Merge Method", "Confirm"}
+var wizardStepsMergeQueue = []string{"Select PRs", "Confirm"}
+
+// steps returns the stepper labels for the current mode.
+func (m Model) steps() []string {
+	if m.opts.UsesMergeQueue {
+		return wizardStepsMergeQueue
+	}
+	return wizardSteps
+}
 
 // View implements tea.Model.
 func (m Model) View() string {
@@ -92,9 +103,10 @@ func stepFg(i, cur int) lipgloss.TerminalColor {
 
 func (m Model) stepper() string {
 	cur := m.wizardIndex()
+	steps := m.steps()
 	var b strings.Builder
-	n := len(wizardSteps)
-	for i, label := range wizardSteps {
+	n := len(steps)
+	for i, label := range steps {
 		bg := stepBg(i, cur)
 		icon := "•"
 		if i < cur {
@@ -142,8 +154,20 @@ func powerlineEnabled() bool {
 }
 
 // wizardIndex maps the current step to its position in the stepper. Progress and
-// done are past the last selectable step, so all three read as complete.
+// done are past the last selectable step, so all steps read as complete. When
+// the base branch uses a merge queue there is no method step, so confirm is the
+// second (index 1) stage.
 func (m Model) wizardIndex() int {
+	if m.opts.UsesMergeQueue {
+		switch m.step {
+		case StepSelectPRs:
+			return 0
+		case StepConfirm:
+			return 1
+		default:
+			return len(m.steps())
+		}
+	}
 	switch m.step {
 	case StepSelectPRs:
 		return 0
@@ -152,7 +176,7 @@ func (m Model) wizardIndex() int {
 	case StepConfirm:
 		return 2
 	default:
-		return len(wizardSteps)
+		return len(m.steps())
 	}
 }
 
@@ -217,7 +241,11 @@ func (m Model) viewSelect() string {
 
 	b.WriteString("\n")
 	if m.topIndex >= 0 {
-		b.WriteString(mutedStyle.Render(fmt.Sprintf("Will merge %s into %s.", prCount(m.topIndex+1), m.opts.BaseRef)))
+		summary := fmt.Sprintf("Will merge %s into %s.", prCount(m.topIndex+1), m.opts.BaseRef)
+		if m.opts.UsesMergeQueue {
+			summary = fmt.Sprintf("Will merge %s into %s via merge queue.", prCount(m.topIndex+1), m.opts.BaseRef)
+		}
+		b.WriteString(mutedStyle.Render(summary))
 	} else {
 		b.WriteString(faintStyle.Render("Select at least one pull request."))
 	}
@@ -262,19 +290,31 @@ func (m Model) viewConfirm() string {
 	var b strings.Builder
 	nums := m.selectedNumbers()
 
-	b.WriteString(fmt.Sprintf("%s into %s with %s.\n",
-		titleStyle.Render("Merge "+prCount(len(nums))),
-		accentStyle.Render(m.opts.BaseRef),
-		accentStyle.Render(methodLabel(m.method)),
-	))
+	if m.opts.UsesMergeQueue {
+		b.WriteString(fmt.Sprintf("%s into %s via %s.\n",
+			titleStyle.Render("Merge "+prCount(len(nums))),
+			accentStyle.Render(m.opts.BaseRef),
+			accentStyle.Render("merge queue"),
+		))
+	} else {
+		b.WriteString(fmt.Sprintf("%s into %s with %s.\n",
+			titleStyle.Render("Merge "+prCount(len(nums))),
+			accentStyle.Render(m.opts.BaseRef),
+			accentStyle.Render(methodLabel(m.method)),
+		))
+	}
 	// Wrap the PR list so a long stack isn't cut off at the screen edge.
 	listStyle := numberStyle
 	if m.width > 0 {
 		listStyle = listStyle.Width(m.width)
 	}
 	b.WriteString(listStyle.Render(prNumberList(nums)) + "\n\n")
+	confirmLabel := "merge"
+	if m.opts.UsesMergeQueue {
+		confirmLabel = "enqueue"
+	}
 	b.WriteString(shortcuts(
-		[2]string{"enter", "merge"},
+		[2]string{"enter", confirmLabel},
 		[2]string{"shift+tab", "back"},
 		[2]string{"esc", "cancel"},
 	))
@@ -285,12 +325,20 @@ func (m Model) viewProgress() string {
 	var b strings.Builder
 	nums := m.selectedNumbers()
 
-	b.WriteString(fmt.Sprintf("%s Merging %s into %s via %s\n",
-		m.spinner.View(),
-		numberStyle.Render(prNumberList(nums)),
-		accentStyle.Render(m.opts.BaseRef),
-		accentStyle.Render(methodLabel(m.method)),
-	))
+	if m.opts.UsesMergeQueue {
+		b.WriteString(fmt.Sprintf("%s Adding %s to the merge queue for %s\n",
+			m.spinner.View(),
+			numberStyle.Render(prNumberList(nums)),
+			accentStyle.Render(m.opts.BaseRef),
+		))
+	} else {
+		b.WriteString(fmt.Sprintf("%s Merging %s into %s via %s\n",
+			m.spinner.View(),
+			numberStyle.Render(prNumberList(nums)),
+			accentStyle.Render(m.opts.BaseRef),
+			accentStyle.Render(methodLabel(m.method)),
+		))
+	}
 	// Always render a status line so it doesn't pop in later and shift the view.
 	b.WriteString(faintStyle.Render(progressStatus(m.message)) + "\n")
 	b.WriteString("\n")

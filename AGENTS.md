@@ -35,7 +35,7 @@ internal/
     gitops.go                # Ops interface (52 methods)
     mock_ops.go              # MockOps. Each method has a corresponding *Fn field.
   github/                    # github.ClientOps interface + real Client
-    client_interface.go      # ClientOps interface (17 methods)
+    client_interface.go      # ClientOps interface (18 methods)
     mock_client.go           # MockClient. Uses function-pointer fields for testing.
   stack/                     # stack file (.git/gh-stack) management, JSON schema, locking
     schema.json              # JSON Schema for the stack file format

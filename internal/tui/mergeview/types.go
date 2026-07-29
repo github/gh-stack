@@ -90,6 +90,11 @@ type Options struct {
 	// DefaultMethod is the method preselected in the picker (the viewer's
 	// last-used method).
 	DefaultMethod string
+	// UsesMergeQueue reports that the stack's base branch merges through a merge
+	// queue. When set, the wizard skips the merge-method step (the queue picks
+	// the method), labels the summary "via merge queue", and enqueues instead of
+	// merging directly.
+	UsesMergeQueue bool
 	// PreselectTopIndex, when >= 0, preselects PRs[0..PreselectTopIndex] and
 	// skips the PR-selection step (PR-number mode).
 	PreselectTopIndex int

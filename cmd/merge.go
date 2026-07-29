@@ -127,25 +127,44 @@ func runMerge(cfg *config.Config, opts *mergeOptions, args []string) error {
 		return explainNothingToMerge(cfg, remoteStack, blocker)
 	}
 
-	mergeCfg, err := client.RepoMergeConfig()
-	if err != nil {
-		cfg.Errorf("failed to fetch repository merge settings: %s", err)
-		return ErrAPIFailure
-	}
-	allowed := mergeCfg.AllowedMethods()
-	if len(allowed) == 0 {
-		cfg.Errorf("this repository does not allow any merge methods")
-		return ErrAPIFailure
-	}
-	if method != "" && !mergeCfg.Allows(method) {
-		cfg.Errorf("this repository does not allow %s merges", method)
-		return ErrInvalidArgs
-	}
-
 	base := remoteStack.Base.Ref
 
+	// Detect whether the base branch merges through a merge queue so the wizard
+	// can skip the merge-method step and enqueue instead of merging directly.
+	usesMergeQueue := baseBranchUsesMergeQueue(client, base)
+
+	var mergeCfg *github.RepoMergeConfig
+	var allowed []string
+	if usesMergeQueue {
+		// The queue picks the merge method from its own configuration, so a
+		// requested method does not apply.
+		if method != "" {
+			cfg.Warningf("the base branch %q uses a merge queue; ignoring the merge method", base)
+			method = ""
+		}
+	} else {
+		mergeCfg, err = client.RepoMergeConfig()
+		if err != nil {
+			cfg.Errorf("failed to fetch repository merge settings: %s", err)
+			return ErrAPIFailure
+		}
+		allowed = mergeCfg.AllowedMethods()
+		if len(allowed) == 0 {
+			cfg.Errorf("this repository does not allow any merge methods")
+			return ErrAPIFailure
+		}
+		if method != "" && !mergeCfg.Allows(method) {
+			cfg.Errorf("this repository does not allow %s merges", method)
+			return ErrInvalidArgs
+		}
+	}
+
 	if cfg.IsInteractive() && !opts.yes {
-		return runMergeInteractive(cfg, client, remoteStack.Number, base, candidates, allowed, mergeCfg.DefaultMethod, method, preselectIndex, opts)
+		defaultMethod := ""
+		if mergeCfg != nil {
+			defaultMethod = mergeCfg.DefaultMethod
+		}
+		return runMergeInteractive(cfg, client, remoteStack.Number, base, candidates, allowed, defaultMethod, method, preselectIndex, usesMergeQueue, opts)
 	}
 
 	// Non-interactive (or --yes): merge the whole stack (or up to the given PR)
@@ -162,13 +181,13 @@ func runMerge(cfg *config.Config, opts *mergeOptions, args []string) error {
 		}
 		targetPR = candidates[len(candidates)-1].Number
 	}
-	if method == "" {
+	if !usesMergeQueue && method == "" {
 		method = mergeCfg.DefaultMethod
 		if !mergeCfg.Allows(method) {
 			method = allowed[0]
 		}
 	}
-	return runMergeHeadless(cfg, client, base, candidates, targetPR, method, opts)
+	return runMergeHeadless(cfg, client, base, candidates, targetPR, method, usesMergeQueue, opts)
 }
 
 // resolveMergeStack determines the remote stack (and any explicitly targeted PR)
@@ -275,7 +294,7 @@ func resolveActiveRemoteStack(cfg *config.Config, client github.ClientOps) (*git
 	return rs, nil
 }
 
-func runMergeInteractive(cfg *config.Config, client github.ClientOps, stackNumber int, base string, candidates []mergeview.PRItem, allowed []string, viewerDefault, methodFlag string, preselectIndex int, opts *mergeOptions) error {
+func runMergeInteractive(cfg *config.Config, client github.ClientOps, stackNumber int, base string, candidates []mergeview.PRItem, allowed []string, viewerDefault, methodFlag string, preselectIndex int, usesMergeQueue bool, opts *mergeOptions) error {
 	defaultMethod := viewerDefault
 	if methodFlag != "" {
 		defaultMethod = methodFlag
@@ -303,6 +322,7 @@ func runMergeInteractive(cfg *config.Config, client github.ClientOps, stackNumbe
 		AllowedMethods:    allowed,
 		DefaultMethod:     defaultMethod,
 		PreselectTopIndex: preselectIndex,
+		UsesMergeQueue:    usesMergeQueue,
 		Submit:            submit,
 		Poll:              poll,
 		PollInterval:      opts.pollInterval,
@@ -343,11 +363,15 @@ func runMergeInteractive(cfg *config.Config, client github.ClientOps, stackNumbe
 	}
 }
 
-func runMergeHeadless(cfg *config.Config, client github.ClientOps, base string, candidates []mergeview.PRItem, targetPR int, method string, opts *mergeOptions) error {
+func runMergeHeadless(cfg *config.Config, client github.ClientOps, base string, candidates []mergeview.PRItem, targetPR int, method string, usesMergeQueue bool, opts *mergeOptions) error {
 	nums := numbersUpTo(candidates, targetPR)
 	list := prNumberList(nums)
 
-	cfg.Printf("Merging %s into %s via %s...", list, base, method)
+	if usesMergeQueue {
+		cfg.Printf("Adding %s to the merge queue for %s...", list, base)
+	} else {
+		cfg.Printf("Merging %s into %s via %s...", list, base, method)
+	}
 
 	res, err := client.MergeStackAsync(targetPR, method)
 	if err != nil {
@@ -412,6 +436,19 @@ func runMergeHeadless(cfg *config.Config, client github.ClientOps, base string, 
 
 	cfg.Warningf("Merge is still in progress. Check the pull requests on GitHub.")
 	return ErrAPIFailure
+}
+
+// baseBranchUsesMergeQueue reports whether the stack's base branch merges through
+// a merge queue. Detection only tailors the wizard (skipping the method step and
+// switching to enqueue wording), so a lookup failure falls back to the
+// direct-merge flow: the async merge always sends merge_action "default" and the
+// server still routes to the queue when the branch requires one.
+func baseBranchUsesMergeQueue(client github.ClientOps, base string) bool {
+	uses, err := client.BaseBranchUsesMergeQueue(base)
+	if err != nil {
+		return false
+	}
+	return uses
 }
 
 // mergeFuncs returns submit/poll closures that adapt the GitHub client to the

@@ -145,6 +145,53 @@ func (c *Client) RepoMergeConfig() (*RepoMergeConfig, error) {
 	}, nil
 }
 
+// BaseBranchUsesMergeQueue reports whether the given base branch merges through a
+// merge queue, detected via the branch's merge queue object or a MERGE_QUEUE
+// repository rule. It is used only to tailor the merge wizard (skipping the
+// merge-method step and switching to "enqueue" wording): the async stack merge
+// itself always sends merge_action "default", which lets the server route the
+// stack to the queue or a direct merge automatically.
+func (c *Client) BaseBranchUsesMergeQueue(baseRef string) (bool, error) {
+	var query struct {
+		Repository struct {
+			MergeQueue *struct {
+				ID string `graphql:"id"`
+			} `graphql:"mergeQueue(branch: $branch)"`
+			Ref *struct {
+				Rules struct {
+					Nodes []struct {
+						Type string `graphql:"type"`
+					} `graphql:"nodes"`
+				} `graphql:"rules(first: 50)"`
+			} `graphql:"ref(qualifiedName: $qualified)"`
+		} `graphql:"repository(owner: $owner, name: $name)"`
+	}
+
+	variables := map[string]interface{}{
+		"owner":     graphql.String(c.owner),
+		"name":      graphql.String(c.repo),
+		"branch":    graphql.String(baseRef),
+		"qualified": graphql.String("refs/heads/" + baseRef),
+	}
+
+	if err := c.gql.Query("BaseBranchMergeQueue", &query, variables); err != nil {
+		return false, fmt.Errorf("querying base branch merge queue: %w", err)
+	}
+
+	r := query.Repository
+	if r.MergeQueue != nil {
+		return true, nil
+	}
+	if r.Ref != nil {
+		for _, node := range r.Ref.Rules.Nodes {
+			if node.Type == "MERGE_QUEUE" {
+				return true, nil
+			}
+		}
+	}
+	return false, nil
+}
+
 // MergeStackAsync requests an asynchronous merge of the given pull request. For
 // a stacked PR this merges all members of the stack up to and including
 // prNumber. A blank method lets the server apply its default.

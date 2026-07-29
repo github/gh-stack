@@ -131,6 +131,91 @@ func TestRunMerge_StackNumberArg(t *testing.T) {
 	assert.Contains(t, output, "Merged #10, #11 into main")
 }
 
+func TestRunMerge_MergeQueue_Headless(t *testing.T) {
+	gotMethod := "unset"
+	cfg, outR, errR := config.NewTestConfig()
+	cfg.GitHubClientOverride = &github.MockClient{
+		GetStackFn: func(n int) (*github.RemoteStack, error) {
+			return remoteStack(7, "main", openStackPR(10, "a"), openStackPR(11, "b")), nil
+		},
+		BaseBranchUsesMergeQueueFn: func(base string) (bool, error) {
+			assert.Equal(t, "main", base)
+			return true, nil
+		},
+		MergeStackAsyncFn: func(pr int, method string) (*github.AsyncMergeResult, error) {
+			gotMethod = method
+			return &github.AsyncMergeResult{
+				Status:  github.AsyncMergeStatusEnqueued,
+				Details: github.AsyncMergeDetails{Message: "Pull request was added to the merge queue."},
+			}, nil
+		},
+	}
+
+	err := runMerge(cfg, fastOptions(), []string{"7"})
+	output := collectOutput(cfg, outR, errR)
+
+	require.NoError(t, err)
+	assert.Equal(t, "", gotMethod, "a merge queue picks the method; none is sent")
+	assert.Contains(t, output, "merge queue")
+}
+
+func TestRunMerge_MergeQueue_IgnoresMethodFlag(t *testing.T) {
+	gotMethod := "unset"
+	cfg, outR, errR := config.NewTestConfig()
+	cfg.GitHubClientOverride = &github.MockClient{
+		GetStackFn: func(n int) (*github.RemoteStack, error) {
+			return remoteStack(7, "main", openStackPR(10, "a"), openStackPR(11, "b")), nil
+		},
+		BaseBranchUsesMergeQueueFn: func(base string) (bool, error) { return true, nil },
+		MergeStackAsyncFn: func(pr int, method string) (*github.AsyncMergeResult, error) {
+			gotMethod = method
+			return &github.AsyncMergeResult{
+				Status:  github.AsyncMergeStatusEnqueued,
+				Details: github.AsyncMergeDetails{Message: "queued"},
+			}, nil
+		},
+	}
+
+	opts := fastOptions()
+	opts.squash = true
+	err := runMerge(cfg, opts, []string{"7"})
+	output := collectOutput(cfg, outR, errR)
+
+	require.NoError(t, err)
+	assert.Equal(t, "", gotMethod, "the requested method is ignored under a merge queue")
+	assert.Contains(t, output, "ignoring the merge method")
+}
+
+func TestRunMerge_MergeQueueDetectionError_FallsBackToDirect(t *testing.T) {
+	gotMethod := "unset"
+	cfg, outR, errR := config.NewTestConfig()
+	cfg.GitHubClientOverride = &github.MockClient{
+		GetStackFn: func(n int) (*github.RemoteStack, error) {
+			return remoteStack(7, "main", openStackPR(10, "a"), openStackPR(11, "b")), nil
+		},
+		BaseBranchUsesMergeQueueFn: func(base string) (bool, error) {
+			return false, errors.New("boom")
+		},
+		RepoMergeConfigFn: func() (*github.RepoMergeConfig, error) {
+			return &github.RepoMergeConfig{MergeAllowed: true, DefaultMethod: "merge"}, nil
+		},
+		MergeStackAsyncFn: func(pr int, method string) (*github.AsyncMergeResult, error) {
+			gotMethod = method
+			return &github.AsyncMergeResult{
+				Status:  github.AsyncMergeStatusMerged,
+				Details: github.AsyncMergeDetails{SHA: "abc1234"},
+			}, nil
+		},
+	}
+
+	err := runMerge(cfg, fastOptions(), []string{"7"})
+	output := collectOutput(cfg, outR, errR)
+
+	require.NoError(t, err)
+	assert.Equal(t, "merge", gotMethod, "detection failure falls back to a direct merge with a method")
+	assert.Contains(t, output, "Merged")
+}
+
 func TestRunMerge_PRNumberArg(t *testing.T) {
 	var gotPR int
 	cfg, outR, errR := config.NewTestConfig()
