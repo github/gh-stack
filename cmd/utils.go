@@ -842,9 +842,26 @@ func snapshotBranchTips(s *stack.Stack, remote string) map[string]branchTipSnaps
 			continue
 		}
 		snapshot := branchTipSnapshot{localSHA: localSHA}
-		if remoteSHA, err := git.RevParse(remote + "/" + br.Branch); err == nil {
+		remoteRef := remote + "/" + br.Branch
+		if remoteSHA, err := git.RevParse(remoteRef); err == nil {
 			snapshot.remoteSHA = remoteSHA
 			snapshot.hasRemote = true
+			if remoteSHA != localSHA {
+				localForkPoint, _ := git.MergeBaseForkPoint(br.Branch, remoteRef)
+				if localForkPoint != remoteSHA {
+					snapshot.hasRemote = false
+					for _, candidate := range []string{localSHA, br.Head} {
+						if candidate == "" {
+							continue
+						}
+						if forkPoint, _ := git.MergeBaseForkPoint(remoteRef, candidate); forkPoint == candidate {
+							snapshot.remoteSHA = candidate
+							snapshot.hasRemote = true
+							break
+						}
+					}
+				}
+			}
 		}
 		snapshots[br.Branch] = snapshot
 	}

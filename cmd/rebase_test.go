@@ -1419,6 +1419,7 @@ func TestRebase_BranchDiverged_NoFF(t *testing.T) {
 		}
 		return true, nil
 	}
+	mock.MergeBaseForkPointFn = func(string, string) (string, error) { return "b1-remote-sha", nil }
 	mock.UpdateBranchRefFn = func(string, string) error {
 		updateBranchRefCalls++
 		return nil
@@ -2262,6 +2263,7 @@ func TestIntegration_AdoptedBranchRebasesFromCommonAncestor(t *testing.T) {
 type serverRebasedRepo struct {
 	dir         string
 	gitDir      string
+	serverDir   string
 	oldImported string
 	newImported string
 	parentSHA   string
@@ -2321,6 +2323,7 @@ func setupServerRebasedRepo(t *testing.T) serverRebasedRepo {
 	return serverRebasedRepo{
 		dir:         localDir,
 		gitDir:      gitDir,
+		serverDir:   serverDir,
 		oldImported: oldImported,
 		newImported: newImported,
 		parentSHA:   parentSHA,
@@ -2341,8 +2344,9 @@ func assertServerRebasedRepoAdopted(t *testing.T, repo serverRebasedRepo) {
 	assert.Equal(t, repo.newImported, sf.Stacks[0].Branches[1].Head)
 }
 
-func TestIntegration_RebaseAdoptsServerRebasedBranches(t *testing.T) {
+func TestIntegration_RebaseAdoptsServerRebasedBranchesAfterPriorFetch(t *testing.T) {
 	repo := setupServerRebasedRepo(t)
+	issue250Git(t, repo.dir, "fetch", "origin")
 	withIssue250Repo(t, repo.dir)
 	cfg := issue250TestConfig(t)
 
@@ -2357,4 +2361,22 @@ func TestIntegration_SyncAdoptsServerRebasedBranches(t *testing.T) {
 
 	require.NoError(t, runSync(cfg, &syncOptions{remote: "origin"}))
 	assertServerRebasedRepoAdopted(t, repo)
+}
+
+func TestIntegration_SyncRejectsPrefetchedNonEquivalentRemoteRewrite(t *testing.T) {
+	repo := setupServerRebasedRepo(t)
+	issue250Git(t, repo.serverDir, "checkout", "imported")
+	issue250WriteFile(t, repo.serverDir, "server-only.txt", "server only\n")
+	issue250Git(t, repo.serverDir, "add", ".")
+	issue250Git(t, repo.serverDir, "commit", "-m", "server-only change")
+	issue250Git(t, repo.serverDir, "push", "origin", "imported")
+	issue250Git(t, repo.dir, "fetch", "origin")
+
+	withIssue250Repo(t, repo.dir)
+	cfg := issue250TestConfig(t)
+	require.ErrorIs(t, runSync(cfg, &syncOptions{remote: "origin"}), ErrSilent)
+
+	assert.Equal(t, repo.oldImported, issue250Git(t, repo.dir, "rev-parse", "imported"))
+	issue250Git(t, repo.serverDir, "fetch", "origin")
+	assert.Equal(t, "server only", issue250Git(t, repo.serverDir, "show", "origin/imported:server-only.txt"))
 }
