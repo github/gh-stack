@@ -8,8 +8,6 @@ For help or questions about using this project, please use GitHub Discussions. A
 
 **gh-stack** is under active development and maintained by GitHub staff. We will do our best to respond to support, feature requests, and community questions in a timely manner.
 
-Please note that the Stacked PRs feature is currently in private preview and **gh-stack** will not work without that feature enabled.
-
 ## GitHub Support Policy
 
 Support for this project is limited to the resources listed above.

@@ -4,10 +4,6 @@ A GitHub CLI extension for managing stacked branches and pull requests.
 
 Stacked PRs break large changes into a chain of small, reviewable pull requests that build on each other. `gh stack` automates the tedious parts — creating branches, keeping them rebased, setting correct PR base branches, and navigating between layers.
 
-> [!NOTE]
-> Stacked PRs is currently in private preview. This CLI and the referenced functionality will not work unless the feature has been enabled for your repository.
-> You can sign up for the waitlist at [gh.io/stacksbeta](https://gh.io/stacksbeta).
-
 ## Installation
 
 ```sh
@@ -722,5 +718,3 @@ See [CODEOWNERS](CODEOWNERS)
 ## Support
 
 See [SUPPORT.md](SUPPORT.md)
-
-Please note that the Stacked PRs feature is currently in private preview and **gh-stack** will not work without that feature enabled.

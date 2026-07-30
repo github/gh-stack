@@ -8,10 +8,6 @@ GitHub exposes stacks through the REST API in two ways:
 1. **A `stack` object on pull request resources** — every pull request returned by the REST API carries a `stack` object describing its stack membership when it belongs to one.
 2. **A dedicated Stacks API** — endpoints to list, read, create, extend, and dissolve stacks directly.
 
-:::caution[Private Preview]
-Stacked PRs is currently in private preview. These endpoints are only available for repositories where the feature is enabled. [Sign up for the waitlist →](https://gh.io/stacksbeta)
-:::
-
 ## The `stack` object on Pull Requests
 
 When a pull request belongs to a stack, GitHub includes a `stack` object on the pull request resource. This lets you read a PR's stack membership — the stack it belongs to, its size, and this PR's position within it — directly from the pull request, without a separate lookup.

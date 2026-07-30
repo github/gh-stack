@@ -15,7 +15,7 @@ hero:
       icon: right-arrow
 ---
 
-import { Card, CardGrid, Aside } from '@astrojs/starlight/components';
+import { Card, CardGrid } from '@astrojs/starlight/components';
 import { Image } from 'astro:assets';
 import StackDiagram from '../../components/StackDiagram.astro';
 import stackNavigator from '../../assets/screenshots/stack-navigator.png';
@@ -58,10 +58,6 @@ GitHub understands stacks end-to-end: the pull request UI shows a **stack map** 
 When you're ready to merge, click **Merge** on the highest PR you want to land — that PR **and every unmerged PR below it are merged together, from the bottom up**. Merge the top PR to land the whole stack in one click, or merge a lower PR to land just part of it (the PRs above stay open). After a partial merge, the remaining PRs are automatically rebased so the lowest unmerged PR targets the updated base branch.
 
 ## Get Started
-
-<Aside type="caution" title="Private Preview">
-Stacked PRs is currently in private preview. This feature will **not work** unless enabled for your repository. [Sign up for the waitlist →](https://gh.io/stacksbeta)
-</Aside>
 
 ```sh
 # Install the CLI extension
