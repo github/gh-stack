@@ -7,6 +7,20 @@ export default defineConfig({
 	site: 'https://github.github.com',
 	base: '/gh-stack/',
 	trailingSlash: 'always',
+	redirects: {
+		'/': 'https://docs.github.com/en/pull-requests/how-tos/stacked-pull-requests',
+		'/introduction/overview/': 'https://docs.github.com/en/pull-requests/get-started/about-stacked-prs',
+		'/getting-started/quick-start/': 'https://docs.github.com/en/pull-requests/get-started/stacked-prs-quickstart',
+		'/guides/stacked-prs/': 'https://docs.github.com/en/pull-requests/tutorials/stack-code-changes-in-pull-requests',
+		'/guides/ui/': 'https://docs.github.com/en/pull-requests/how-tos/create-pull-requests/creating-stacked-pull-requests',
+		'/guides/workflows/': 'https://docs.github.com/en/pull-requests/how-tos/create-pull-requests/managing-stacked-pull-requests',
+		'/guides/modify/': 'https://docs.github.com/en/pull-requests/how-tos/create-pull-requests/managing-stacked-pull-requests',
+		'/reference/cli/': 'https://docs.github.com/en/pull-requests/reference/stacked-prs-cli-commands',
+		'/reference/webhooks/': 'https://docs.github.com/en/pull-requests/how-tos/merge-and-close-pull-requests/optimizing-ci-for-stacked-pull-requests',
+		'/reference/graphql-api/': 'https://docs.github.com/en/pull-requests/reference/stacked-pull-requests-rest-and-graphql-apis',
+		'/reference/rest-api/': 'https://docs.github.com/en/pull-requests/reference/stacked-pull-requests-rest-and-graphql-apis',
+		'/faq/': 'https://docs.github.com/en/pull-requests/how-tos/merge-and-close-pull-requests/troubleshooting-stacked-pull-requests',
+	},
 	devToolbar: {
 		enabled: false
 	},
