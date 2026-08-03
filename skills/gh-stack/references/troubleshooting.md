@@ -87,8 +87,24 @@ gh stack submit --auto                 # re-link on GitHub
 `init` adopts branches that already exist, so the rebuild reuses them rather than creating new ones.
 Existing PRs survive and are re-based onto their new parents by `submit`.
 
-Only the branch *order* and *membership* change this way. To move commits between layers, rebase or
-cherry-pick them onto the right branch first, then run `gh stack rebase --upstack`.
+Changing metadata does **not** change Git ancestry. Reorder commits first, then rebuild the stack.
+For example, to change `main <- models <- migration <- ui` into
+`main <- migration <- models <- ui`:
+
+```bash
+old_models=$(git rev-parse models)
+old_migration=$(git rev-parse migration)
+git rebase --onto main "$old_models" migration
+git rebase --onto migration main models
+git rebase --onto models "$old_migration" ui
+gh stack unstack
+gh stack init --base main migration models ui
+```
+
+The first rebase moves migration-only commits onto trunk, the second replays model commits above
+them, and the third replays UI-only commits above models. Preserve the old boundary SHAs before
+moving any branch. For a different reorder, identify each layer's range with
+`git log <old-parent>..<branch>`, then replay the ranges bottom to top.
 
 ## Branch belongs to several stacks (exit 6)
 
