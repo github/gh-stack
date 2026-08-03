@@ -1,10 +1,10 @@
 ---
 name: gh-stack
 description: >
-  Creates and manages stacked branches and pull requests with the gh-stack GitHub CLI
-  extension. Use when working with stacked PRs, stacked diffs, dependent pull requests,
-  or branch chains, when running any gh stack command, or before splitting a large
-  change into a chain of dependent PRs.
+  Manages stacked PRs and splits multi-part work into reviewable branches with gh-stack.
+  Use for stack creation, viewing, edits, push, submit, sync, rebase, merge, or checkout;
+  when asked to split or isolate work for review; whenever a user mentions a stack,
+  branch layers, dependent PRs, or gh stack; or when a stack is checked out.
 metadata:
   author: github
   version: "0.1.0"
@@ -41,6 +41,10 @@ git config remote.pushDefault origin   # required if the repo has more than one 
 static text; under a PTY the same commands open a prompt or a full-screen TUI and block forever.
 Agent harnesses differ, so always pass the flags below instead of relying on that detection.
 
+**Multiple remotes:** never run `push`, `submit`, `sync`, `rebase`, or `link` without
+`--remote <name>` unless `remote.pushDefault` is configured. `checkout` and `trunk` have no
+`--remote` flag and require the config.
+
 | Always run | Never run bare | Why |
 |---|---|---|
 | `gh stack view --json` | `gh stack view` | opens a TUI under a PTY |
@@ -53,11 +57,25 @@ Agent harnesses differ, so always pass the flags below instead of relying on tha
 | — | `gh stack modify` | TUI-only, no non-interactive path |
 
 - `view --short` is safe in both modes, but it is formatted for humans. Use `--json` to parse.
-- **Multiple remotes:** set `remote.pushDefault`, or pass `--remote <name>` to `push`, `submit`,
-  `sync`, `rebase`, and `link`. `checkout` and `trunk` have no `--remote` flag and rely on the
-  config.
 - **`checkout <pr>` when a different local stack already covers those branches** cannot be forced.
   Run `gh stack unstack --local` first (this keeps the stack on GitHub), then retry.
+
+## Branch placement
+
+- **Starting multi-part work:** create the stack before writing files. Do not implement every
+  concern on trunk and split it later. Put one dependent concern in each layer, bottom to top.
+- **Editing an existing stack:** check out the layer that owns the change before editing. Never
+  commit a lower layer's concern on the current top branch. Run `gh stack view --json`; if
+  ownership is unclear, inspect `git log --all -- <path>`. Then check out the owner, edit, commit,
+  rebase upstack, and return to top.
+
+```bash
+gh stack down                   # or: gh stack checkout api
+git add ... && git commit -m "Add get-user endpoint"
+gh stack rebase --upstack       # replay every branch above onto the change
+gh stack top                    # return to where you were
+gh stack push
+```
 
 ## Core loop
 
@@ -70,21 +88,8 @@ gh stack submit --auto          # push every branch and open draft PRs
 gh stack view --json            # confirm
 ```
 
-Add `--open` to `submit` to create PRs ready for review instead of drafts. Branch names are used
+Add `--open` to `submit` to create PRs ready for review instead of drafts. Branch names are
 verbatim — `gh stack add refactor/foo` creates `refactor/foo`.
-
-## Changing a lower layer
-
-Agents get this wrong most often. If work belongs in a lower layer, do not patch around it at the
-current layer — the change lands in the wrong PR.
-
-```bash
-gh stack down                   # or: gh stack checkout api
-git add ... && git commit -m "Add get-user endpoint"
-gh stack rebase --upstack       # replay every branch above onto the change
-gh stack top                    # return to where you were
-gh stack push
-```
 
 ## Staying in sync
 
@@ -154,6 +159,8 @@ an ancestor of the branch.
 
 `gh stack <command> --help` is authoritative for flags and arguments. Note that
 `gh stack help <command>` does **not** work — it prints the top-level help.
+
+Open the reference whose trigger matches the task; no need to preload all three.
 
 - `references/stack-design.md` — read before creating a stack, when deciding how many layers to
   use, what belongs in each one, or whether work belongs in a new stack.
