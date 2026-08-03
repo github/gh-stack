@@ -23,9 +23,10 @@ explain: preconditions, side effects, atomicity, and failure modes.
 Creates the stack and checks out the **last** branch in the list, so a single `init` can lay down
 the whole chain: `gh stack init auth api frontend`.
 
-Branches that already exist are adopted; branches that do not are created from the trunk. There is
-no separate adopt command and no flag to choose — existence decides. `--base` sets the trunk when
-it should be something other than the repository default.
+`init` processes branch arguments from bottom to top. Existing branches are adopted. If the first
+branch does not exist, it is created from the trunk; each later new branch is created from the
+branch immediately before it. There is no separate adopt mode — existence decides. `--base`
+selects a non-default trunk.
 
 `init` also enables `git rerere`. Under a TTY the first run in a repo asks for confirmation; set
 `git config rerere.enabled true` beforehand to skip it.
@@ -93,9 +94,10 @@ The routine command. Steps, in order:
 2. **Reconcile with the GitHub stack.** PRs added to the stack on github.com are pulled down and
    appended locally. On divergence, aborts when non-interactive (see `troubleshooting.md`).
 3. **Fast-forward the trunk.** Skipped when already current; warns when diverged.
-4. **Cascade rebase** every branch onto its updated parent — *only if the trunk moved*. Merged PRs
-   are handled automatically. On conflict, **all branches are restored** to their pre-rebase state
-   and the command exits **3**.
+4. **Cascade rebase when needed.** This runs if the trunk moved, a stack branch was fast-forwarded
+   from its remote, or a branch no longer contains its expected parent. Merged PRs are handled
+   automatically. On conflict, **all branches are restored** to their pre-rebase state and the
+   command exits **3**.
 5. **Push** all active branches, atomically.
 6. **Refresh PR state** from GitHub.
 7. **Sync the stack object** — link open PRs into a stack, additively. Only when two or more PRs

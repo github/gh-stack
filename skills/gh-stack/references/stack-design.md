@@ -14,8 +14,8 @@ How to decide what goes in each layer. Read this before running `gh stack init`.
 
 A stack is a dependency chain. If code in one layer depends on code in another, the dependency must
 live in the same branch or a lower one. That constraint is much cheaper to satisfy by planning than
-by restructuring later, because there is no in-place reorder — fixing the order means `unstack` and
-`init` again.
+by restructuring later, because there is no non-interactive in-place reorder — fixing the order
+means`unstack` and `init` again.
 
 Decide the layers first, then write code into them:
 

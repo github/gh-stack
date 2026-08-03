@@ -43,8 +43,10 @@ gh stack sync
 gh stack view --json    # merged branch reports "isMerged": true, "state": "MERGED"
 ```
 
-No manual action is needed. If the replay conflicts, `sync` restores all branches and exits 3 —
-resolve as above. Use `gh stack sync --prune` to also delete local branches for merged PRs.
+No manual action is needed. If the replay conflicts, `sync` restores all branches and exits 3.
+Run `gh stack rebase` to rerun the rebase, which will stop at the conflict and allow you to resolve
+and then `--continue` until complete. Use `gh stack sync --prune` to also delete local branches for
+merged PRs.
 
 ## Local and remote stacks have diverged
 
@@ -73,7 +75,7 @@ Two resolution paths:
 
 Neither path deletes pull requests or branches.
 Remote unstacking leaves PRs that are merging (auto-merge enabled) or are queued (in a merge queue)
-stacked. If needed, clear those state before retrying.
+stacked. If needed, clear that state before retrying.
 
 ## Restructuring a stack
 

@@ -132,7 +132,8 @@ branches[]      name, head, base, isCurrent, isMerged, isQueued, needsRebase
 branches[].pr   number, url, state ("OPEN" | "MERGED" | "QUEUED"); absent when no PR exists
 ```
 
-`base` is the parent's HEAD SHA at the last sync. `needsRebase` is true when the base is no longer
+`base` is the saved SHA of the parent branch that this branch was last known to contain. It may be
+older than the parent's current tip. `needsRebase` is true when the current parent tip is no longer
 an ancestor of the branch.
 
 ## Exit codes
@@ -142,7 +143,7 @@ an ancestor of the branch.
 | 0 | Success | — |
 | 1 | Generic error | Read stderr |
 | 2 | Not in a stack | `gh stack init`, or `gh stack checkout <target>` |
-| 3 | Rebase conflict | Resolve, `git add`, `gh stack rebase --continue`, or `--abort` |
+| 3 | Rebase conflict | Follow the Exit 3 recovery below |
 | 4 | GitHub API failure | Check `gh auth status`, retry |
 | 5 | Invalid arguments | Fix the invocation; see `<command> --help` |
 | 6 | Disambiguation required | Branch is in several stacks; check out a non-shared branch |
@@ -150,6 +151,13 @@ an ancestor of the branch.
 | 8 | Stack file locked | Another `gh stack` process is writing; retry after ~5s |
 | 9 | Stacked PRs unavailable | Not enabled on the repository; tell the user |
 | 10 | Modify recovery required | `gh stack modify --abort` |
+
+**Exit 3 recovery:**
+
+- After `gh stack rebase`: resolve the files, run `git add`, then
+  `gh stack rebase --continue`; use `gh stack rebase --abort` to restore the stack.
+- After `gh stack sync`: the stack has already been restored. Run `gh stack rebase` to recreate the
+  conflict, then resolve and continue as above.
 
 ## Constraints
 
