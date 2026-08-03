@@ -27,7 +27,8 @@ gh stack rebase --continue     # repeat if the next branch also conflicts
 
 Because `init` enables `git rerere`, a conflict you resolve once is replayed automatically the next
 time the same conflict appears — which is common, since a change low in the stack is rebased through
-every branch above it. If `rerere` was declined, the same conflict must be resolved once per layer.
+every branch above it. Without `rerere`, repeated conflicts may need manual resolution on each
+affected layer.
 
 ## After a squash merge
 
@@ -71,6 +72,8 @@ Two resolution paths:
   ```
 
 Neither path deletes pull requests or branches.
+Remote unstacking leaves PRs that are merging (auto-merge enabled) or are queued (in a merge queue)
+stacked. If needed, clear those state before retrying.
 
 ## Restructuring a stack
 
@@ -79,13 +82,14 @@ There is no non-interactive reorder, rename, or removal. `add` run from the wron
 
 ```bash
 gh stack unstack                       # removes local tracking and the GitHub grouping
-git branch -m old-name new-name        # reorder, rename, or drop branches as needed
+# Rename or drop branches, and rewrite ancestry as needed.
 gh stack init --base main branch-1 branch-2 branch-3
 gh stack submit --auto                 # re-link on GitHub
 ```
 
 `init` adopts branches that already exist, so the rebuild reuses them rather than creating new ones.
-Existing PRs survive and are re-based onto their new parents by `submit`.
+Existing PRs survive. Once Git ancestry is correct, `submit` updates their base branches and
+re-links the stack on GitHub.
 
 Changing metadata does **not** change Git ancestry. Reorder commits first, then rebuild the stack.
 For example, to change `main <- models <- migration <- ui` into
@@ -137,8 +141,8 @@ will not work on the result. Use `gh stack checkout <stack-number>` if you later
 ## Stack file is locked (exit 8)
 
 Another `gh stack` process holds the exclusive lock on `.git/gh-stack.lock`. The lock times out
-after about five seconds, so wait and retry. A persistent exit 8 means a `gh stack` process is
-hung — most often one blocked on a prompt or TUI under a PTY. Terminate it and retry.
+after about five seconds, so wait and retry. A persistent exit 8 means another process still holds
+the lock; identify and stop that process before retrying.
 
 ## An interrupted modify session (exit 10)
 
