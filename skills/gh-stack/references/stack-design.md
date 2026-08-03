@@ -20,22 +20,26 @@ by restructuring later, because there is no in-place reorder — fixing the orde
 Decide the layers first, then write code into them:
 
 ```
-(main) <- data-models <- api-endpoints <- frontend-ui <- integration
+(main) <- todo-app/models <- todo-app/api <- todo-app/frontend <- todo-app/integration
 ```
 
-- `data-models` — shared types and schema
-- `api-endpoints` — routes that use the models
-- `frontend-ui` — components that call the routes
-- `integration` — tests exercising the whole feature
+- `todo-app/models` — shared types and schema
+- `todo-app/api` — routes that use the models
+- `todo-app/frontend` — components that call the routes
+- `todo-app/integration` — tests exercising the whole feature
 
-Those names are illustrative. Pick boundaries that reflect the actual work.
+This is illustrative. Infer the stack topic and layer names from the actual task; do not reuse
+`todo-app` or these layer names literally.
 
 The failure mode to avoid is writing everything on one branch and trying to split it afterwards.
 If a task is large enough to warrant a stack, create the stack at the start.
 
 ## Branch naming
 
-Each layer's name should describe the concern it contains: `auth`, `api-routes`, `frontend`.
+Prefer a shared topic prefix plus the layer's concern:
+`<topic>/<concern>` — for example, `billing/schema`, `billing/api`, `billing/ui`.
+This keeps related branches recognizable without using generic names that could belong to any
+stack. **User and repository branch naming conventions take precedence; follow them instead.**
 
 Names are used exactly as given — nothing is prepended or transformed, and slashes are kept, so
 `gh stack add refactor/foo` creates a branch literally named `refactor/foo`.
