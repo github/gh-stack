@@ -49,7 +49,7 @@ Agent harnesses differ, so always pass the flags below instead of relying on tha
 |---|---|---|
 | `gh stack view --json` | `gh stack view` | opens a TUI under a PTY |
 | `gh stack submit --auto` | `gh stack submit` | prompts for a title per new PR |
-| `gh stack merge --yes` | `gh pr merge` | `gh pr merge` cannot merge a stack |
+| `gh stack merge <target> --yes` | `gh pr merge` | `gh pr merge` cannot merge a stack |
 | `gh stack init <branch>...` | `gh stack init` | prompts for branch names |
 | `gh stack add <branch>` | `gh stack add` | prompts for a name, and fails even when piped |
 | `gh stack checkout <target>` | `gh stack checkout` | opens a selection menu |
@@ -104,16 +104,21 @@ diverged, `sync` prints both chains, makes no changes, and exits 0 with `Sync ab
 
 ## Merging
 
+Scope the merge with an argument:
+
 ```bash
-gh stack merge --yes            # merge the whole current stack, bottom to top
-gh stack merge 42 --yes         # merge up to and including PR #42
-gh stack merge 7 --yes          # merge stack #7, no local checkout needed
-gh stack merge --yes --squash   # or --merge, --rebase, --merge-method <method>
+gh stack merge 42 --yes          # PR #42 plus every unmerged PR below it
+gh stack merge 7 --yes           # every unmerged PR in stack #7
+gh stack merge 42 --yes --squash # or --merge, --rebase, --merge-method <method>
 ```
 
-All-or-nothing: if any PR cannot merge, none do. Without a method flag the last-used method is
-reused. If the base branch uses a merge queue, the stack is queued instead and the queue picks the
-method, ignoring any flag you passed with a warning; queued PRs may land in separate groups.
+Pass a PR number to merge that PR and every unmerged PR below it, or a stack number to merge every
+unmerged PR in that stack. The operation is all-or-nothing: if any PR in that set cannot merge,
+none do.
+
+Without a method flag the last-used method is reused. If the base branch uses a merge queue, the
+stack is queued instead and the queue picks the method, ignoring any flag you passed with a
+warning; queued PRs may land in separate groups.
 
 ## Reading state
 

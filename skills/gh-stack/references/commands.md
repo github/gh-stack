@@ -1,7 +1,6 @@
 # Command behavior
 
-`gh stack <command> --help` is authoritative for flags and arguments. (`gh stack help <command>`
-does not work — it prints the top-level help.) This file covers only behavior `--help` does not
+`gh stack <command> --help` is authoritative for flags and arguments. (`gh stack help <command>` only prints the top-level help.) This file only covers behavior `--help` does not
 explain: preconditions, side effects, atomicity, and failure modes.
 
 ## Contents
@@ -26,7 +25,7 @@ the whole chain: `gh stack init auth api frontend`.
 
 Branches that already exist are adopted; branches that do not are created from the trunk. There is
 no separate adopt command and no flag to choose — existence decides. `--base` sets the trunk when
-it should not be the repository default.
+it should be something other than the repository default.
 
 `init` also enables `git rerere`. Under a TTY the first run in a repo asks for confirmation; set
 `git config rerere.enabled true` beforehand to skip it.
@@ -155,9 +154,10 @@ Removes the stack **grouping** only. It never deletes pull requests or branches.
 
 ## merge
 
-- **All-or-nothing.** If any PR cannot be merged, none are, and the reason is reported.
-- Scope with an argument: a PR number merges everything up to and including that PR; a stack number
-  merges that stack and needs no local checkout.
+- Scope with an argument: pass a PR number to merge that PR and every unmerged PR below it in the
+  stack, or pass a stack number to merge every unmerged PR in that stack.
+- **All-or-nothing.** If any PR in that exact merge set cannot be merged, none are, and the reason
+  is reported.
 - The method comes from `--squash`, `--rebase`, `--merge`, or `--merge-method <method>`. Without
   one, the last-used method is reused.
 - Only basic PR state is checked before merging: open and not a draft. Bypassing merge requirements
