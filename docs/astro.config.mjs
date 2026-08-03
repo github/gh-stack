@@ -19,6 +19,7 @@ export default defineConfig({
 		'/reference/webhooks/': 'https://docs.github.com/en/pull-requests/how-tos/merge-and-close-pull-requests/optimizing-ci-for-stacked-pull-requests',
 		'/reference/graphql-api/': 'https://docs.github.com/en/pull-requests/reference/stacked-pull-requests-rest-and-graphql-apis',
 		'/reference/rest-api/': 'https://docs.github.com/en/pull-requests/reference/stacked-pull-requests-rest-and-graphql-apis',
+		'/reference/merge-api/': 'https://docs.github.com/en/pull-requests/reference/stacked-pull-requests-rest-and-graphql-apis',
 		'/faq/': 'https://docs.github.com/en/pull-requests/how-tos/merge-and-close-pull-requests/troubleshooting-stacked-pull-requests',
 	},
 	devToolbar: {
