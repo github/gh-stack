@@ -1,5 +1,8 @@
 /gh-stack
 /gh-stack.exe
+/evals/results/
+/evals/**/__pycache__/
+/evals/**/*.pyc
 
 # VS Code
 .vscode

@@ -20,6 +20,8 @@ Install the gh-stack skill so your AI coding agent knows how to work with stacke
 gh skill install github/gh-stack
 ```
 
+The repository includes a public [agent skill evaluation suite](evals/README.md) covering common stack workflows, traps, recovery, and large-diff splitting.
+
 ## Quick start
 
 ```sh
