@@ -304,6 +304,7 @@ gh stack sync [flags]
 
 | Flag | Description |
 |------|-------------|
+| `--atomic` | Require all branch updates to succeed or fail together (enabled by default; use `--atomic=false` to disable) |
 | `--remote <name>` | Remote to fetch from and push to (defaults to auto-detected remote) |
 | `--prune` | Delete local branches for merged PRs |
 
@@ -313,7 +314,7 @@ Performs a synchronization of the entire stack:
 2. **Reconcile the remote stack** — mirrors the GitHub stack locally. When PRs have been added to the stack on GitHub (the remote is ahead of your local stack), their branches are pulled down and appended to your local stack automatically. When the local and remote stacks have genuinely diverged (for example, you added a branch locally while different PRs were added to the stack on GitHub), you are prompted to resolve (see **Diverged stacks** below). In a non-interactive terminal a divergence aborts the sync (nothing is pushed or updated).
 3. **Fast-forward trunk** — fast-forwards the trunk branch to match the remote (skips if diverged).
 4. **Cascade rebase** — rebases all stack branches onto their updated parents (only if trunk moved). If a conflict is detected, all branches are restored to their original state, and you are advised to run `gh stack rebase` to resolve conflicts interactively.
-5. **Push** — pushes all branches (uses `--force-with-lease` if a rebase occurred).
+5. **Push** — pushes all branches atomically by default (uses `--force-with-lease` if a rebase occurred). Use `--atomic=false` to allow branches whose updates succeed to proceed when another branch is rejected.
 6. **Sync PRs** — syncs PR state from GitHub and reports the status of each PR.
 7. **Sync the stack** — links the stack's open PRs into a stack on GitHub, creating the remote stack object if it doesn't exist yet or updating it if it's partially formed. This only happens when two or more PRs exist; sync never opens PRs (use `gh stack submit` for that).
 8. **Prune** — in interactive terminals, prompts to delete local branches for merged PRs. Use `--prune` to prune automatically.
@@ -334,6 +335,9 @@ In a non-interactive terminal, a divergence aborts the sync (exit success) witho
 
 ```sh
 gh stack sync
+
+# Explicitly allow partial branch updates
+gh stack sync --atomic=false
 
 # Sync and automatically prune merged branches
 gh stack sync --prune
@@ -402,14 +406,16 @@ gh stack push [flags]
 
 | Flag | Description |
 |------|-------------|
+| `--atomic` | Require all branch updates to succeed or fail together (disabled by default) |
 | `--remote <name>` | Remote to push to (defaults to auto-detected remote) |
 
-Pushes every active branch (excluding merged and queued branches) in one `git push` using explicit per-branch `--force-with-lease` checks. The update is not atomic: branches whose leases pass may update even if another branch is rejected. Fix the rejected branch and rerun the command; branches already updated will be unchanged. This command does not create or update pull requests — use `gh stack submit` for that.
+Pushes every active branch (excluding merged and queued branches) in one `git push` using explicit per-branch `--force-with-lease` checks. By default, the update is not atomic: branches whose leases pass may update even if another branch is rejected. Use `--atomic` to make the multi-ref push all-or-nothing. This command does not create or update pull requests — use `gh stack submit` for that.
 
 **Examples:**
 
 ```sh
 gh stack push
+gh stack push --atomic
 gh stack push --remote upstream
 ```
 
