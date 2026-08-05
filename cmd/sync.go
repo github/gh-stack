@@ -16,6 +16,7 @@ import (
 type syncOptions struct {
 	remote string
 	prune  bool
+	atomic bool
 }
 
 func SyncCmd(cfg *config.Config) *cobra.Command {
@@ -34,10 +35,13 @@ This command performs a safe synchronization:
      resolve a divergence in an interactive terminal
   3. Fast-forwards the trunk branch to match the remote
   4. Cascade-rebases stack branches onto their updated parents
-  5. Pushes all branches atomically (using --force-with-lease --atomic)
+  5. Pushes all branches atomically by default
   6. Syncs PR state from GitHub
   7. Links the stack's open PRs into a stack on GitHub (creating or updating
      the remote stack object) when two or more PRs exist
+
+Atomic sync uses --atomic and, after a rebase, --force-with-lease. Use
+--atomic=false to allow partial branch updates.
 
 If PRs have been added to the stack on GitHub, their branches are pulled
 down and appended to your local stack so it mirrors the remote. A clean
@@ -70,6 +74,7 @@ the first active branch in the stack, or the trunk if all are merged.`,
 
 	cmd.Flags().StringVar(&opts.remote, "remote", "", "Remote to fetch from and push to (defaults to auto-detected remote)")
 	cmd.Flags().BoolVar(&opts.prune, "prune", false, "Delete local branches for merged PRs")
+	cmd.Flags().BoolVar(&opts.atomic, "atomic", true, "Require all branch updates to succeed or fail together")
 
 	return cmd
 }
@@ -239,7 +244,7 @@ func runSync(cfg *config.Config, opts *syncOptions) error {
 		// Without rebase, try a normal push first.
 		force := rebased
 		cfg.Printf("Pushing %d %s to %s...", len(branches), plural(len(branches), "branch", "branches"), remote)
-		if err := git.Push(remote, branches, force, true); err != nil {
+		if err := git.Push(remote, branches, force, opts.atomic); err != nil {
 			if !force {
 				cfg.Warningf("Push failed — branches may need force push after rebase")
 				cfg.Printf("  Run `%s` to push with --force-with-lease.",

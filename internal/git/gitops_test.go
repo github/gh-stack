@@ -240,6 +240,58 @@ func TestIntegration_Push_RemoteAdvancedByOther(t *testing.T) {
 	assert.NotEqual(t, otherSHA, finalRemoteSHA, "remote should have advanced past original other SHA")
 }
 
+func TestIntegration_Push_AtomicRejectsAllRefs(t *testing.T) {
+	bareDir, cloneDir := setupBareAndClone(t)
+	restore := withGitDir(t, cloneDir)
+	defer restore()
+
+	d := &defaultOps{}
+
+	gitExec(t, cloneDir, "checkout", "-b", "b1")
+	writeFile(t, cloneDir, "b1.txt", "v1")
+	gitExec(t, cloneDir, "add", ".")
+	gitExec(t, cloneDir, "commit", "-m", "b1 initial")
+	gitExec(t, cloneDir, "push", "origin", "b1")
+
+	gitExec(t, cloneDir, "checkout", "-b", "b2")
+	writeFile(t, cloneDir, "b2.txt", "v1")
+	gitExec(t, cloneDir, "add", ".")
+	gitExec(t, cloneDir, "commit", "-m", "b2 initial")
+	gitExec(t, cloneDir, "push", "origin", "b2")
+
+	require.NoError(t, d.FetchBranches("origin", []string{"b1", "b2"}))
+	remoteB1Before := remoteBranchSHA(t, bareDir, "b1")
+
+	gitExec(t, cloneDir, "checkout", "b1")
+	writeFile(t, cloneDir, "b1.txt", "local update")
+	gitExec(t, cloneDir, "add", ".")
+	gitExec(t, cloneDir, "commit", "-m", "b1 local update")
+	localB1 := gitExec(t, cloneDir, "rev-parse", "b1")
+	require.NotEqual(t, remoteB1Before, localB1)
+
+	gitExec(t, cloneDir, "checkout", "b2")
+	writeFile(t, cloneDir, "b2.txt", "local update")
+	gitExec(t, cloneDir, "add", ".")
+	gitExec(t, cloneDir, "commit", "-m", "b2 local update")
+
+	otherClone := filepath.Join(t.TempDir(), "other")
+	gitExec(t, ".", "clone", bareDir, otherClone)
+	gitExec(t, otherClone, "checkout", "b2")
+	writeFile(t, otherClone, "b2.txt", "competing update")
+	gitExec(t, otherClone, "add", ".")
+	gitExec(t, otherClone, "commit", "-m", "b2 competing update")
+	gitExec(t, otherClone, "push", "origin", "b2")
+	competingB2 := remoteBranchSHA(t, bareDir, "b2")
+
+	err := d.Push("origin", []string{"b1", "b2"}, true, true)
+	require.Error(t, err, "atomic push should fail when one branch has a stale lease")
+
+	assert.Equal(t, remoteB1Before, remoteBranchSHA(t, bareDir, "b1"),
+		"valid branch must not update when another ref is rejected")
+	assert.Equal(t, competingB2, remoteBranchSHA(t, bareDir, "b2"),
+		"rejected branch must preserve the competing remote update")
+}
+
 // Test 4: Brand-new branch, absent on remote.
 // Push should create the branch via empty-expect lease.
 func TestIntegration_Push_NewBranchAbsentOnRemote(t *testing.T) {
