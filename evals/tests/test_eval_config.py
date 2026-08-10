@@ -1,13 +1,15 @@
 from __future__ import annotations
 
 import importlib.util
-import json
+import sys
+import tempfile
 import unittest
 from pathlib import Path
 
 
 EVAL_ROOT = Path(__file__).resolve().parents[1]
 REPO_ROOT = EVAL_ROOT.parent
+sys.path.insert(0, str(EVAL_ROOT))
 
 
 def load_module(name: str, path: Path):
@@ -24,9 +26,8 @@ aggregate = load_module("eval_aggregate", EVAL_ROOT / "aggregate.py")
 
 class EvalConfigurationTest(unittest.TestCase):
     def test_corpus_has_at_least_twelve_unique_cases(self):
-        cases = json.loads((EVAL_ROOT / "cases.json").read_text())
-        names = [case["name"] for case in cases]
-        self.assertGreaterEqual(len(cases), 12)
+        names = list(runner.CASES)
+        self.assertGreaterEqual(len(names), 12)
         self.assertEqual(len(names), len(set(names)))
 
     def test_every_case_has_required_fields_and_renderable_prompt(self):
@@ -47,6 +48,9 @@ class EvalConfigurationTest(unittest.TestCase):
                 )
                 self.assertNotIn("{", prompt)
                 self.assertNotIn("}", prompt)
+                contract = Path(case["contract_path"])
+                self.assertEqual(contract.name, "case.json")
+                self.assertTrue((contract.parent / "prompt.md").is_file())
 
     def test_public_cases_cover_core_workflows(self):
         expected = {
@@ -74,6 +78,12 @@ class EvalConfigurationTest(unittest.TestCase):
 
     def test_current_skill_exists(self):
         self.assertTrue((REPO_ROOT / "skills/gh-stack/SKILL.md").is_file())
+
+    def test_skill_can_be_exported_from_git_ref(self):
+        with tempfile.TemporaryDirectory() as directory:
+            skill = runner.export_skill("HEAD", Path(directory))
+            self.assertTrue((skill / "SKILL.md").is_file())
+            self.assertEqual(len(runner.directory_sha256(skill)), 64)
 
     def test_current_skill_reference_links_resolve(self):
         skill_dir = REPO_ROOT / "skills/gh-stack"

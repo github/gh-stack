@@ -1,0 +1,16 @@
+{
+  "name": "link-stack",
+  "title": "Link externally managed branches",
+  "summary": "Create PRs and Stack metadata without adopting local gh-stack tracking.",
+  "tier": "happy",
+  "fixture": "link",
+  "required": true,
+  "network": "github",
+  "timeout_seconds": 600,
+  "assertions": [
+    "Both pull requests are open and ready for review.",
+    "The top PR targets the base branch.",
+    "Both PRs belong to one GitHub Stack.",
+    "No local gh-stack tracking file is created."
+  ]
+}

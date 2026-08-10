@@ -1,109 +1,99 @@
-# gh-stack agent skill evals
+# gh-stack skill evals
 
-This suite evaluates whether coding agents use `gh stack` correctly, efficiently, and
-non-interactively. It runs agents against deterministic Git/GitHub fixtures, then grades the final
-repository and GitHub state with objective assertions.
+This suite measures whether coding agents use the repository's `gh-stack` skill correctly and
+non-interactively. Agents run against prepared Git/GitHub scenarios; deterministic graders inspect
+the final branch graph, file ownership, pull requests, and Stack metadata. No LLM judges are used.
 
-The suite is intentionally separate from the Go unit tests:
+These are live agent evaluations, not Go unit tests. They consume Copilot requests and some cases
+create real branches and pull requests in a disposable repository.
 
-- It calls real language models through GitHub Copilot CLI.
-- Several cases create real branches, pull requests, and GitHub Stack objects.
-- Results are nondeterministic, slower, and consume Copilot requests.
+## Layout
 
-## Cases
+```text
+evals/
+├── cases/<number-name>/
+│   ├── case.json          # contract, timeout, fixture, assertions
+│   └── prompt.md          # exact instruction given to the agent
+├── runner.py              # one isolated trial
+├── run_suite.py           # repeated/matrix execution
+├── aggregate.py           # Markdown, JSON, and CSV reports
+├── cleanup.py             # recovery after interrupted batches
+└── tests/                 # offline harness validation
+```
 
-| Case | What it tests |
+Each case is self-contained and reviewable without reading the runner. Its `network` field is
+descriptive metadata included in results; all trials currently use GitHub to create their isolated
+base branch.
+
+## Scenarios
+
+| Case | Contract |
 |---|---|
-| `preemptive-feature` | Recognizing multi-part work before implementation |
-| `read-state` | Using `gh stack view --json` without modifying the repo |
-| `lower-layer-edit` | Editing the owning middle layer and rebasing upstack |
-| `multi-remote-push` | Selecting the requested remote without a picker |
-| `submit-prs` | Opening dependent, ready-for-review PRs in one Stack |
-| `reorder-stack` | Rewriting Git ancestry before rebuilding stack metadata |
-| `merge-stack` | Merging a PR cutoff and every PR below it |
-| `split-worktree` | Splitting one uncommitted diff into dependency-ordered layers |
-| `split-branch` | Splitting one large committed branch without losing changes |
-| `split-open-pr` | Splitting an open PR while resolving its review history |
-| `continue-stack` | Adding another top layer to an existing stack |
-| `link-stack` | Linking externally managed branches without local tracking |
+| `preemptive-feature` | Recognize multi-part work before implementation (informational) |
+| `read-state` | Read state through `view --json` without mutations |
+| `lower-layer-edit` | Commit an API change in its owning middle layer and restack |
+| `multi-remote-push` | Push the complete stack to the requested remote |
+| `submit-prs` | Open dependent, ready-for-review PRs in one Stack |
+| `reorder-stack` | Rewrite ancestry and stack metadata without losing content |
+| `merge-stack` | Merge a PR cutoff and every PR below it |
+| `split-worktree` | Split one dirty worktree into ordered layers |
+| `split-branch` | Split one large committed branch with exact content parity |
+| `split-open-pr` | Split an open PR while preserving or superseding its identity |
+| `continue-stack` | Add another top layer without rewriting existing layers |
+| `link-stack` | Link externally managed branches without local tracking |
 
-`preemptive-feature` is informational rather than blocking: skill selection before any stack
-language appears remains model-dependent. All other cases are required for the `current`
-configuration.
-
-## What is measured
-
-Each run records:
-
-- Pass/fail against case-specific Git and GitHub assertions
-- Copilot skill invocation and reference-file reads
-- Tool and shell call counts
-- Input/output tokens from the isolated Copilot session database
-- Duration and timeout status
-- Full JSONL agent transcript
-
-Results are written under `evals/results/<run-id>/`. That directory is ignored by Git.
+`preemptive-feature` is non-blocking because skill selection without stack vocabulary remains
+model-dependent. Every other current-skill case is required.
 
 ## Requirements
 
-- Python 3.10+
-- Git
-- GitHub CLI (`gh`), authenticated
+- Python 3.9+
+- Git and GitHub CLI (`gh`)
 - GitHub Copilot CLI (`copilot`)
-- Go toolchain, to build the local extension
+- Go, to build the local extension
 - A **disposable** GitHub repository with Stacked PRs enabled
-- A local checkout of that disposable repository
+- A local checkout of that repository
 
-Never point the suite at a production repository. It creates and deletes branches and PRs.
-
-## Authentication
-
-Copilot CLI supports headless authentication with `COPILOT_GITHUB_TOKEN`. Use a fine-grained PAT
-with the account-level **Copilot Requests** permission.
-
-GitHub API and Git pushes use, in order:
-
-1. `GH_STACK_EVAL_GITHUB_TOKEN`
-2. `GH_TOKEN`
-3. The token returned by `gh auth token`
-
-The GitHub token needs read/write access to the disposable test repository. The two tokens may be
-the same when one token has both permissions.
-
-## Configuration
+Never target a production repository.
 
 ```bash
 export GH_STACK_EVAL_SOURCE_REPO="$HOME/test"
 export GH_STACK_EVAL_REPO="owner/test"
+# Optional:
 export COPILOT_GITHUB_TOKEN="github_pat_..."
-
-# Optional when the checkout's origin is already correct:
+export GH_STACK_EVAL_GITHUB_TOKEN="github_pat_..."
 export GH_STACK_EVAL_REMOTE_URL="https://github.com/owner/test.git"
-
-# Optional; defaults to main:
 export GH_STACK_EVAL_DEFAULT_BRANCH="main"
+export GH_STACK_EVAL_SEED_REF="eval-fixture-v1"
+export GH_STACK_EVAL_SEED_SHA="<expected commit>"
 ```
 
-The runner creates a unique `eval-base/<run-id>` branch for every run. All PRs and merge tests
-target that branch, so the test repository's default branch is never modified. Cleanup runs after
-grading and removes the run's open PRs, branches, and base branch. Merge cases leave normal merged
-PR history in the disposable repository.
+When set, `COPILOT_GITHUB_TOKEN` needs the account-level **Copilot Requests** permission. If it is
+unset, Copilot CLI uses `GH_STACK_EVAL_GITHUB_TOKEN`, `GH_TOKEN`, or `gh auth token`; that fallback
+token must also be valid for Copilot requests. GitHub operations use the same fallback order.
 
-## Run locally
+Every trial creates a unique `eval-base/<run-id>` branch. PRs and merges target that branch, so the
+test repository's default branch is not modified. Cleanup removes open PRs, Stack metadata, feature
+branches, and the base branch. Merge scenarios leave normal merged-PR history.
 
-Build the extension first:
+For published comparisons, point `GH_STACK_EVAL_SEED_REF` at an immutable fixture branch and set
+`GH_STACK_EVAL_SEED_SHA`; the runner fails before setup if the seed moved.
+
+## Run
+
+Build the extension:
 
 ```bash
 go build -o gh-stack .
 ```
 
-List cases:
+List scenarios:
 
 ```bash
 python3 evals/runner.py --list
 ```
 
-Run one case:
+Run one trial:
 
 ```bash
 python3 evals/runner.py \
@@ -113,90 +103,94 @@ python3 evals/runner.py \
   --iteration local
 ```
 
-Run the full current-skill suite on both models:
+Run the complete suite:
 
 ```bash
 python3 evals/run_suite.py \
   --cases all \
   --arms current \
   --models mini,sonnet \
-  --repetitions 1 \
+  --repetitions 3 \
   --jobs 2 \
   --prefix local
 ```
 
-Optionally compare the current skill with no skill:
+`run_suite.py` writes its deterministic shuffled schedule before starting. Supply
+`--shuffle-seed <value>` to reuse the same order.
+
+Aggregate a batch:
 
 ```bash
+python3 evals/aggregate.py --prefix local
+```
+
+Generated artifacts live in `evals/results/` and are ignored by Git.
+
+After an interrupted batch, remove and audit its remote state:
+
+```bash
+python3 evals/cleanup.py \
+  --repo owner/test \
+  --prefix local \
+  --source-repo "$GH_STACK_EVAL_SOURCE_REPO" \
+  --audit-path evals/results/local-cleanup-audit.json
+```
+
+## Evaluate another skill revision
+
+Load `skills/gh-stack` from any local commit, tag, or branch:
+
+```bash
+git fetch origin <commit>
 python3 evals/run_suite.py \
   --cases all \
-  --arms current,none \
-  --models mini,sonnet \
-  --repetitions 1 \
-  --jobs 2 \
-  --prefix benchmark
-```
-
-The `none` configuration installs no gh-stack skill. It is useful for diagnostics but is not part
-of normal regression validation.
-
-`--fail-on-failure` fails only required cases in the `current` configuration. Failures in `none`
-or the informational trigger case remain visible without making a diagnostic comparison red.
-
-Aggregate results:
-
-```bash
-python3 evals/aggregate.py --prefix benchmark
-```
-
-This writes `summary.md`, `summary.json`, `results.csv`, and `results.json` under `evals/results/`.
-
-## Candidate skill from another directory
-
-Use `--skill-path` with `runner.py` or `run_suite.py`:
-
-```bash
-python3 evals/run_suite.py \
-  --cases read-state,lower-layer-edit \
   --arms current \
-  --models mini \
-  --skill-path /path/to/skill-directory \
-  --prefix candidate
+  --models mini,sonnet \
+  --repetitions 3 \
+  --skill-ref <commit> \
+  --prefix commit-<short-sha>
 ```
 
-The directory must contain `SKILL.md` and any referenced files.
+The runner exports the skill directly from Git without changing the working tree. Each result
+records the resolved commit, Git tree, skill-directory SHA-256, repository state, model, CLI
+versions, platform, and case-contract hash.
 
-## Interpreting results
+For uncommitted candidates, use `--skill-path /path/to/skill-directory`. The optional `none`
+configuration installs no skill and is diagnostic only.
 
-Agent runs are nondeterministic. Do not make release decisions from one close result.
+## Results and metrics
 
-- Run important comparisons at least three times per case/model.
-- Treat any interactive hang as blocking.
-- Inspect every current/no-skill divergence, not just the aggregate score.
-- A reference file opened in most runs probably belongs inline.
-- A reference file never opened is either poorly signposted or unnecessary.
-- Preserve the transcripts and result JSON when reporting a regression.
+Each `result.json` contains:
 
-## GitHub Actions
+- Objective assertions, failed assertions, and a failure class
+- Full Copilot JSONL transcript and issued shell commands
+- Skill invocation and reference-file reads
+- Model calls, all tool calls, failed tool calls, and VC-related shell calls
+- Tool-output bytes, duration, timeouts, and token usage
+- Skill, binary, model, CLI, platform, and scenario provenance
 
-Two workflows support the suite:
+`input_tokens` is **cumulative across all model requests in the trial**, not the size of one prompt
+or context window. `tool_calls` counts all agent-issued tools; `vc_shell_calls` counts shell-tool
+invocations containing `git`, `gh stack`, or `gh pr` and is not an internal-subprocess trace.
+Infrastructure failures are reported separately and excluded from pass-rate denominators.
 
-- `evals-validate.yml` runs safe, offline validation on pull requests.
-- `skill-evals.yml` runs live model/GitHub evals via `workflow_dispatch`.
+Correctness is the gate. Compare efficiency only among correct runs, and repeat important cells:
 
-The live workflow requires repository secrets:
+- Use at least three trials per case/model.
+- Treat interactive hangs as blocking.
+- Inspect every divergent run and its failed assertions.
+- Keep the same shuffle seed for paired comparisons.
+- Preserve result JSON and transcripts when reporting a regression.
 
-- `COPILOT_GITHUB_TOKEN`
-- `GH_STACK_EVAL_GITHUB_TOKEN`
+To publish a batch, include its saved plan, summary Markdown/JSON, results CSV, selected failing
+transcripts, and the repository commit or `--skill-ref`. Review transcripts for sensitive data
+before committing them.
 
-And repository variables:
+## Add a scenario
 
-- `GH_STACK_EVAL_REPO` — for example `owner/test`
-- `GH_STACK_EVAL_DEFAULT_BRANCH` — optional, defaults to `main`
-
-It checks out the disposable test repository into the workspace, runs the requested matrix, writes
-the Markdown summary to the Actions job summary, and uploads all result artifacts.
-
-The live workflow is manual rather than a required pull-request check because it uses privileged
-credentials, consumes Copilot requests, and executes nondeterministic agents. Once its flake rate
-and cost are understood, maintainers can add a scheduled run or a protected label-triggered check.
+1. Add `evals/cases/<number-name>/case.json` and `prompt.md`.
+2. Add or reuse a fixture in `runner.py`.
+3. Add objective grading assertions; avoid judging prose or command style.
+4. Add the case name to `test_public_cases_cover_core_workflows` when it is a core contract.
+5. Run `python3 -m unittest discover -s evals/tests -v`.
+6. Smoke-test both models against the disposable repository.

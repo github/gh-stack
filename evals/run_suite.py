@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import argparse
 import concurrent.futures
+import hashlib
 import json
 import os
 import subprocess
@@ -12,13 +13,12 @@ import sys
 import time
 from pathlib import Path
 
+from case_loader import load_cases
+
 
 EVAL_ROOT = Path(__file__).resolve().parent
 RUNNER = EVAL_ROOT / "runner.py"
-CASES = {
-    item["name"]: item
-    for item in json.loads((EVAL_ROOT / "cases.json").read_text())
-}
+CASES = load_cases()
 
 
 def split_values(value: str, allowed: set[str], label: str) -> list[str]:
@@ -35,6 +35,7 @@ def run_one(
     model: str,
     iteration: str,
     skill_path: Path | None,
+    skill_ref: str | None,
 ) -> tuple[str, int, bool]:
     command = [
         sys.executable,
@@ -50,6 +51,8 @@ def run_one(
     ]
     if skill_path and arm == "current":
         command.extend(["--skill-path", str(skill_path)])
+    if skill_ref and arm == "current":
+        command.extend(["--skill-ref", skill_ref])
     result = subprocess.run(command, text=True, capture_output=True)
     label = f"{case}/{model}/{arm}"
     blocking = arm == "current" and CASES[case].get("required", True)
@@ -73,22 +76,49 @@ def run_one(
 
 def main() -> int:
     parser = argparse.ArgumentParser()
-    parser.add_argument("--cases", default="all")
-    parser.add_argument("--arms", default="current")
-    parser.add_argument("--models", default="mini,sonnet")
+    parser.add_argument(
+        "--cases",
+        default="all",
+        help="Comma-separated scenario names, or all",
+    )
+    parser.add_argument(
+        "--arms",
+        default="current",
+        help="Comma-separated configurations: current,none",
+    )
+    parser.add_argument(
+        "--models",
+        default="mini,sonnet",
+        help="Comma-separated model aliases: mini,sonnet",
+    )
     parser.add_argument("--repetitions", type=int, default=1)
-    parser.add_argument("--jobs", type=int, default=2)
-    parser.add_argument("--prefix", default="")
-    parser.add_argument("--skill-path", type=Path)
+    parser.add_argument("--jobs", type=int, default=2, help="Concurrent trials")
+    parser.add_argument("--prefix", default="", help="Batch/run ID prefix")
+    parser.add_argument(
+        "--shuffle-seed",
+        help="Deterministically shuffle run order; defaults to the suite prefix",
+    )
+    parser.add_argument(
+        "--skill-path",
+        type=Path,
+        help="Evaluate an uncommitted skill directory",
+    )
+    parser.add_argument(
+        "--skill-ref",
+        help="Evaluate skills/gh-stack from a git commit, tag, or branch",
+    )
     parser.add_argument(
         "--fail-on-failure",
         action="store_true",
         help="Return nonzero when any eval fails",
     )
     args = parser.parse_args()
-    Path(
+    if args.skill_path and args.skill_ref:
+        parser.error("--skill-path and --skill-ref are mutually exclusive")
+    results_dir = Path(
         os.environ.get("GH_STACK_EVAL_RESULTS_DIR", EVAL_ROOT / "results")
-    ).mkdir(parents=True, exist_ok=True)
+    )
+    results_dir.mkdir(parents=True, exist_ok=True)
 
     cases = split_values(args.cases, set(CASES), "cases")
     arms = split_values(args.arms, {"current", "none"}, "arms")
@@ -100,7 +130,47 @@ def main() -> int:
         for case in cases:
             for arm in arms:
                 for model in models:
-                    jobs.append((case, arm, model, iteration, args.skill_path))
+                    jobs.append(
+                        (
+                            case,
+                            arm,
+                            model,
+                            iteration,
+                            args.skill_path,
+                            args.skill_ref,
+                        )
+                    )
+    seed = args.shuffle_seed or prefix
+    jobs.sort(
+        key=lambda job: hashlib.sha256(
+            f"{seed}|{'|'.join(str(value) for value in job[:4])}".encode()
+        ).hexdigest()
+    )
+    (results_dir / f"{prefix}-plan.json").write_text(
+        json.dumps(
+            {
+                "prefix": prefix,
+                "shuffle_seed": seed,
+                "cases": cases,
+                "arms": arms,
+                "models": models,
+                "repetitions": args.repetitions,
+                "skill_ref": args.skill_ref,
+                "skill_path": str(args.skill_path) if args.skill_path else None,
+                "jobs": [
+                    {
+                        "case": case,
+                        "arm": arm,
+                        "model": model,
+                        "iteration": iteration,
+                    }
+                    for case, arm, model, iteration, _, _ in jobs
+                ],
+            },
+            indent=2,
+        )
+        + "\n"
+    )
 
     failures = []
     print(f"Running {len(jobs)} evals with {args.jobs} workers (prefix: {prefix})")

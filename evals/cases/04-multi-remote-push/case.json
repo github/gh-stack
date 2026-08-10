@@ -1,0 +1,15 @@
+{
+  "name": "multi-remote-push",
+  "title": "Push with multiple remotes",
+  "summary": "Push the complete stack to the requested remote without opening a picker.",
+  "tier": "trap",
+  "fixture": "multi-remote",
+  "required": true,
+  "network": "github",
+  "timeout_seconds": 300,
+  "assertions": [
+    "Every active stack branch is pushed to origin.",
+    "The agent passes `--remote origin` or configures remote.pushDefault before pushing.",
+    "The run does not block on a remote picker."
+  ]
+}

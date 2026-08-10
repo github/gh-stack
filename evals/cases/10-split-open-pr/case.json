@@ -1,0 +1,17 @@
+{
+  "name": "split-open-pr",
+  "title": "Split an open pull request",
+  "summary": "Split a large open PR while preserving or explicitly superseding its review identity.",
+  "tier": "split",
+  "fixture": "split-pr",
+  "required": true,
+  "network": "github",
+  "timeout_seconds": 720,
+  "assertions": [
+    "The stack has at least three dependent layers.",
+    "The top of the stack reproduces the original PR head exactly.",
+    "Dependency order is respected.",
+    "The original pull request is reused as the top layer or closed.",
+    "No layer is empty and the worktree is clean."
+  ]
+}

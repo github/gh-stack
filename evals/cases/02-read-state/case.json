@@ -1,0 +1,15 @@
+{
+  "name": "read-state",
+  "title": "Read stack state",
+  "summary": "Inspect the current stack through the machine-readable interface without mutations.",
+  "tier": "happy",
+  "fixture": "three-layer",
+  "required": true,
+  "network": "github",
+  "timeout_seconds": 240,
+  "assertions": [
+    "The repository remains unchanged.",
+    "The current branch remains the top branch.",
+    "The agent uses `gh stack view --json` rather than the TUI-oriented bare command."
+  ]
+}

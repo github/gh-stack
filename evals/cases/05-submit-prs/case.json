@@ -1,0 +1,17 @@
+{
+  "name": "submit-prs",
+  "title": "Submit dependent pull requests",
+  "summary": "Create two review-ready dependent PRs and register one GitHub Stack.",
+  "tier": "happy",
+  "fixture": "clean",
+  "required": true,
+  "network": "github",
+  "timeout_seconds": 600,
+  "assertions": [
+    "Two dependent branches exist with the requested names.",
+    "Both pull requests are open and not drafts.",
+    "The consumer PR is based on the data branch.",
+    "Both PRs belong to one GitHub Stack object.",
+    "The run does not block on title prompts."
+  ]
+}

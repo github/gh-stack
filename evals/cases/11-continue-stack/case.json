@@ -1,0 +1,16 @@
+{
+  "name": "continue-stack",
+  "title": "Continue an existing stack",
+  "summary": "Add one dependency-ordered top layer without rewriting existing layers.",
+  "tier": "happy",
+  "fixture": "three-layer",
+  "required": true,
+  "network": "local",
+  "timeout_seconds": 360,
+  "assertions": [
+    "The stack gains a fourth top layer with the requested name.",
+    "The new layer contains audit.js and depends on the previous top layer.",
+    "The existing three layers remain unchanged.",
+    "The run finishes on the new top layer with a clean worktree."
+  ]
+}

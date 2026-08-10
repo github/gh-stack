@@ -1,0 +1,17 @@
+{
+  "name": "split-branch",
+  "title": "Split a committed branch",
+  "summary": "Split one large commit into layers without losing or inventing content.",
+  "tier": "split",
+  "fixture": "split-branch",
+  "required": true,
+  "network": "local",
+  "timeout_seconds": 600,
+  "assertions": [
+    "The stack has at least three dependent layers.",
+    "The top of the stack reproduces the original commit exactly.",
+    "The legacy.js deletion is preserved.",
+    "Dependency order is respected.",
+    "No layer is empty and the worktree is clean."
+  ]
+}

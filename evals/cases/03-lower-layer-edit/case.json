@@ -1,0 +1,16 @@
+{
+  "name": "lower-layer-edit",
+  "title": "Edit a lower layer",
+  "summary": "Route an API change into its owning middle layer and restack the UI.",
+  "tier": "trap",
+  "fixture": "three-layer",
+  "required": true,
+  "network": "local",
+  "timeout_seconds": 420,
+  "assertions": [
+    "serializer.js gains createdAt in the API/middle layer, not only in the UI/top layer.",
+    "The top branch is rebased onto the updated API branch.",
+    "The run finishes on the top branch.",
+    "No remote branches or pull requests are created."
+  ]
+}

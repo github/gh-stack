@@ -1,0 +1,17 @@
+{
+  "name": "reorder-stack",
+  "title": "Reorder a stack",
+  "summary": "Rewrite ancestry and metadata so migration moves below models without losing content.",
+  "tier": "recovery",
+  "fixture": "reorder",
+  "required": true,
+  "network": "local",
+  "timeout_seconds": 600,
+  "assertions": [
+    "The final gh-stack order is migration, models, ui.",
+    "The migration branch contains only the migration layer over the trunk.",
+    "The models branch contains migration plus models, but not ui.",
+    "The ui branch contains all three layers.",
+    "The run finishes on ui with a clean worktree."
+  ]
+}

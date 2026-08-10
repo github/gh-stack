@@ -1,0 +1,16 @@
+{
+  "name": "merge-stack",
+  "title": "Merge a stack",
+  "summary": "Merge a PR cutoff and every unmerged PR below it with the stack merge API.",
+  "tier": "trap",
+  "fixture": "merge",
+  "required": true,
+  "network": "github",
+  "timeout_seconds": 600,
+  "assertions": [
+    "The bottom PR is merged.",
+    "The top PR is merged.",
+    "The agent uses gh stack merge rather than gh pr merge.",
+    "The run does not stop at a confirmation prompt."
+  ]
+}

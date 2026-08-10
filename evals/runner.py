@@ -4,8 +4,11 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import os
+import platform
+import re
 import shutil
 import signal
 import sqlite3
@@ -15,6 +18,8 @@ import time
 import uuid
 from pathlib import Path
 from typing import Any
+
+from case_loader import load_cases
 
 
 EVAL_ROOT = Path(__file__).resolve().parent
@@ -26,13 +31,12 @@ SOURCE_REPO = Path(
 REMOTE_URL = os.environ.get("GH_STACK_EVAL_REMOTE_URL", "")
 REPO_SLUG = os.environ.get("GH_STACK_EVAL_REPO", "")
 DEFAULT_BRANCH = os.environ.get("GH_STACK_EVAL_DEFAULT_BRANCH", "main")
+SEED_REF = os.environ.get("GH_STACK_EVAL_SEED_REF", DEFAULT_BRANCH)
+EXPECTED_SEED_SHA = os.environ.get("GH_STACK_EVAL_SEED_SHA", "")
 RESULTS_ROOT = Path(
     os.environ.get("GH_STACK_EVAL_RESULTS_DIR", str(EVAL_ROOT / "results"))
 ).expanduser().resolve()
-CASES = {
-    item["name"]: item
-    for item in json.loads((EVAL_ROOT / "cases.json").read_text())
-}
+CASES = load_cases()
 MODELS = {
     "sonnet": ("claude-sonnet-4.5", []),
     "mini": ("gpt-5.4-mini", ["--effort", "low"]),
@@ -74,6 +78,8 @@ def gh(repo: Path, *args: str, check: bool = True, timeout: int = 180) -> str:
 
 def configure() -> None:
     global REPO_SLUG
+    if not (REPO_ROOT / "gh-stack").is_file():
+        raise RuntimeError("build the extension first: go build -o gh-stack .")
     eval_token = os.environ.get("GH_STACK_EVAL_GITHUB_TOKEN")
     if eval_token and not os.environ.get("GH_TOKEN"):
         os.environ["GH_TOKEN"] = eval_token
@@ -101,10 +107,101 @@ def commit(repo: Path, message: str, *paths: str) -> str:
     return git(repo, "rev-parse", "HEAD")
 
 
+def export_skill(ref: str, destination: Path) -> Path:
+    paths = git(
+        REPO_ROOT,
+        "ls-tree",
+        "-r",
+        "--name-only",
+        ref,
+        "--",
+        "skills/gh-stack",
+    ).splitlines()
+    if not paths:
+        raise RuntimeError(
+            f"{ref!r} does not contain skills/gh-stack; fetch the commit first"
+        )
+    skill = destination / "gh-stack"
+    for path in paths:
+        relative = Path(path).relative_to("skills/gh-stack")
+        target = skill / relative
+        target.parent.mkdir(parents=True, exist_ok=True)
+        result = subprocess.run(
+            ["git", "show", f"{ref}:{path}"],
+            cwd=REPO_ROOT,
+            capture_output=True,
+            check=True,
+        )
+        target.write_bytes(result.stdout)
+    return skill
+
+
+def directory_sha256(root: Path) -> str:
+    digest = hashlib.sha256()
+    for path in sorted(item for item in root.rglob("*") if item.is_file()):
+        digest.update(str(path.relative_to(root)).encode())
+        digest.update(b"\0")
+        digest.update(path.read_bytes())
+        digest.update(b"\0")
+    return digest.hexdigest()
+
+
+def file_sha256(path: Path) -> str | None:
+    if not path.is_file():
+        return None
+    return hashlib.sha256(path.read_bytes()).hexdigest()
+
+
+def command_version(command: list[str]) -> str:
+    result = shell(command, check=False)
+    output = (result.stdout or result.stderr).strip()
+    return output.splitlines()[0] if output else "unknown"
+
+
+def provenance(
+    case_name: str,
+    skill: Path | None,
+    skill_ref: str | None,
+    skill_source: str,
+    model_key: str,
+) -> dict[str, Any]:
+    binary = REPO_ROOT / "gh-stack"
+    return {
+        "case_contract_sha256": hashlib.sha256(
+            Path(CASES[case_name]["contract_path"]).read_bytes()
+            + CASES[case_name]["prompt"].encode()
+        ).hexdigest(),
+        "skill_source": skill_source,
+        "skill_commit": (
+            git(REPO_ROOT, "rev-parse", skill_ref) if skill_ref else None
+        ),
+        "skill_tree": (
+            git(REPO_ROOT, "rev-parse", f"{skill_ref}:skills/gh-stack")
+            if skill_ref
+            else None
+        ),
+        "skill_sha256": directory_sha256(skill) if skill else None,
+        "repository_commit": git(REPO_ROOT, "rev-parse", "HEAD"),
+        "repository_dirty": bool(git(REPO_ROOT, "status", "--porcelain")),
+        "fixture_seed_ref": SEED_REF,
+        "fixture_seed_sha": EXPECTED_SEED_SHA or None,
+        "gh_stack_binary_sha256": file_sha256(binary),
+        "gh_stack_cli": command_version([str(binary), "--version"]),
+        "model_alias": model_key,
+        "model": MODELS[model_key][0],
+        "copilot_cli": command_version(["copilot", "--version"]),
+        "gh_cli": command_version(["gh", "--version"]),
+        "git": command_version(["git", "--version"]),
+        "python": platform.python_version(),
+        "platform": platform.platform(),
+    }
+
+
 def prepare_repo(
     run_dir: Path,
     arm: str,
     skill_path: Path | None = None,
+    skill_ref: str | None = None,
 ) -> Path:
     if not SOURCE_REPO.is_dir():
         raise RuntimeError(
@@ -115,14 +212,30 @@ def prepare_repo(
     shell(["git", "clone", "--quiet", "--no-hardlinks", str(SOURCE_REPO), str(repo)])
     remote_url = REMOTE_URL or git(SOURCE_REPO, "remote", "get-url", "origin")
     git(repo, "remote", "set-url", "origin", remote_url)
-    git(repo, "fetch", "--quiet", "origin", DEFAULT_BRANCH)
+    git(
+        repo,
+        "fetch",
+        "--quiet",
+        "origin",
+        f"+refs/heads/{DEFAULT_BRANCH}:refs/remotes/origin/{DEFAULT_BRANCH}",
+    )
+    git(repo, "remote", "set-head", "origin", DEFAULT_BRANCH)
+    if SEED_REF == DEFAULT_BRANCH:
+        seed_sha = git(repo, "rev-parse", f"origin/{DEFAULT_BRANCH}")
+    else:
+        git(repo, "fetch", "--quiet", "origin", SEED_REF)
+        seed_sha = git(repo, "rev-parse", "FETCH_HEAD")
+    if EXPECTED_SEED_SHA and seed_sha != EXPECTED_SEED_SHA:
+        raise RuntimeError(
+            f"fixture seed mismatch: expected {EXPECTED_SEED_SHA}, got {seed_sha}"
+        )
     git(
         repo,
         "checkout",
         "-q",
         "-B",
         DEFAULT_BRANCH,
-        f"origin/{DEFAULT_BRANCH}",
+        seed_sha,
     )
     git(repo, "config", "user.name", "gh-stack skill eval")
     git(repo, "config", "user.email", "gh-stack-eval@example.com")
@@ -144,7 +257,9 @@ def prepare_repo(
         handle.write("\n.agents/skills/gh-stack/\n")
 
     if arm != "none":
-        if skill_path:
+        if skill_ref:
+            source = export_skill(skill_ref, run_dir / "skill-source")
+        elif skill_path:
             source = skill_path.resolve()
         else:
             source = REPO_ROOT / "skills/gh-stack"
@@ -157,7 +272,7 @@ def prepare_repo(
 
 def create_eval_base(repo: Path, run_id: str) -> str:
     branch = f"eval-base/{run_id}"
-    git(repo, "checkout", "-q", "-b", branch, f"origin/{DEFAULT_BRANCH}")
+    git(repo, "checkout", "-q", "-b", branch, "HEAD")
     git(repo, "push", "-q", "origin", branch)
     return branch
 
@@ -439,7 +554,7 @@ def render_prompt(
     metadata: dict[str, Any] | None = None,
 ) -> str:
     values = metadata or {}
-    return CASES[case_name]["prompt_template"].format(
+    return CASES[case_name]["prompt"].format(
         run_id=run_id,
         branch_prefix=prefix,
         top_pr=values.get("top_pr", ""),
@@ -454,6 +569,7 @@ def run_agent(
     home: Path,
     model_key: str,
     prompt: str,
+    timeout_seconds: int,
 ) -> dict[str, Any]:
     model, model_flags = MODELS[model_key]
     events = run_dir / "events.jsonl"
@@ -510,7 +626,7 @@ def run_agent(
             start_new_session=True,
         )
         try:
-            return_code = process.wait(timeout=360)
+            return_code = process.wait(timeout=timeout_seconds)
         except subprocess.TimeoutExpired:
             timed_out = True
             os.killpg(process.pid, signal.SIGTERM)
@@ -544,19 +660,26 @@ def telemetry(run_dir: Path, home: Path) -> dict[str, Any]:
     events = load_events(run_dir / "events.jsonl")
     requests: list[dict[str, Any]] = []
     final_messages: list[str] = []
+    completed_tools: list[dict[str, Any]] = []
     for event in events:
-        if event.get("type") != "assistant.message":
-            continue
+        event_type = event.get("type")
         data = event.get("data", {})
-        requests.extend(data.get("toolRequests") or [])
-        if data.get("content"):
-            final_messages.append(data["content"])
+        if event_type == "assistant.message":
+            requests.extend(data.get("toolRequests") or [])
+            if data.get("content"):
+                final_messages.append(data["content"])
+        elif event_type == "tool.execution_complete":
+            completed_tools.append(data)
 
     bash_commands = [
         request.get("arguments", {}).get("command", "")
         for request in requests
         if request.get("name") == "bash"
     ]
+    vc_shell_calls = sum(
+        bool(re.search(r"(^|[;&|]\s*)(git|gh\s+(stack|pr))\b", command))
+        for command in bash_commands
+    )
     skill_invoked = any(
         request.get("name") == "skill"
         and request.get("arguments", {}).get("skill") == "gh-stack"
@@ -571,22 +694,39 @@ def telemetry(run_dir: Path, home: Path) -> dict[str, Any]:
 
     input_tokens = 0
     output_tokens = 0
+    model_calls = 0
     db = home / ".copilot/session-store.db"
     if db.exists():
         connection = sqlite3.connect(db)
         try:
             row = connection.execute(
-                "SELECT COALESCE(SUM(input_tokens),0), COALESCE(SUM(output_tokens),0) "
+                "SELECT COUNT(*), COALESCE(SUM(input_tokens),0), "
+                "COALESCE(SUM(output_tokens),0) "
                 "FROM assistant_usage_events"
             ).fetchone()
-            input_tokens, output_tokens = int(row[0]), int(row[1])
+            model_calls = int(row[0])
+            input_tokens, output_tokens = int(row[1]), int(row[2])
         finally:
             connection.close()
 
+    tool_output_bytes = sum(
+        len(
+            str(data.get("result", {}).get("content", "")).encode(
+                errors="replace"
+            )
+        )
+        for data in completed_tools
+    )
     return {
         "tool_calls": len(requests),
         "bash_calls": len(bash_commands),
+        "vc_shell_calls": vc_shell_calls,
         "bash_commands": bash_commands,
+        "failed_tool_calls": sum(
+            data.get("success") is False for data in completed_tools
+        ),
+        "tool_output_bytes": tool_output_bytes,
+        "model_calls": model_calls,
         "skill_invoked": skill_invoked,
         "references_opened": sorted(references),
         "input_tokens": input_tokens,
@@ -635,6 +775,48 @@ def branch_index_for_commit(repo: Path, branches: list[str], sha: str | None) ->
 
 def command_contains(commands: list[str], *needles: str) -> bool:
     return any(all(needle in command for needle in needles) for command in commands)
+
+
+def classify_failure(failed: list[str]) -> str | None:
+    if not failed:
+        return None
+    joined = " ".join(failed)
+    if "original_pr" in joined:
+        return "PR_IDENTITY_LOST"
+    if any(
+        token in joined
+        for token in ("pr_", "github_stack", "remote_", "branches_pushed")
+    ):
+        return "REMOTE_STATE_WRONG"
+    if any(
+        token in joined
+        for token in (
+            "parity",
+            "files_covered",
+            "deletion",
+            "created_at",
+            "serializer",
+            "layer_contains",
+        )
+    ):
+        return "CONTENT_WRONG"
+    if any(
+        token in joined
+        for token in (
+            "layer",
+            "stack_order",
+            "dependency_order",
+            "rebase",
+            "ancestor",
+        )
+    ):
+        return "GRAPH_WRONG"
+    if any(
+        token in joined
+        for token in ("clean_worktree", "repository_unchanged", "unchanged")
+    ):
+        return "DIRTY_STATE_WRONG"
+    return "WORKFLOW_WRONG"
 
 
 def list_pr(repo: Path, branch: str) -> dict[str, Any] | None:
@@ -746,7 +928,9 @@ def grade(
             cwd=repo,
             check=False,
         ).stdout
-        assertions["api_layer_contains_created_at"] = "createdAt" in api_file
+        assertions["api_layer_contains_created_at"] = bool(
+            re.search(r"\bcreatedAt\s*:", api_file)
+        )
         assertions["serializer_not_only_in_top"] = not top_only_diff
         assertions["top_rebased_on_api"] = (
             shell(
@@ -1019,8 +1203,12 @@ def grade(
     core_assertions = dict(assertions)
     if metadata["arm"] == "none":
         core_assertions.pop("skill_triggered", None)
+    passed = bool(core_assertions) and all(core_assertions.values())
+    failed = [name for name, value in core_assertions.items() if not value]
     return {
-        "passed": bool(core_assertions) and all(core_assertions.values()),
+        "passed": passed,
+        "failure_class": classify_failure(failed),
+        "failed_assertions": failed,
         "assertions": assertions,
         "details": details,
         "current_branch": current,
@@ -1166,14 +1354,22 @@ def main() -> int:
     parser.add_argument("--case", choices=sorted(CASES))
     parser.add_argument("--arm", choices=sorted(ARMS))
     parser.add_argument("--model", choices=sorted(MODELS))
-    parser.add_argument("--iteration", default="1")
+    parser.add_argument("--iteration", default="1", help="Run ID prefix")
     parser.add_argument(
         "--skill-path",
         type=Path,
         help="Override the skill directory for the current configuration",
     )
+    parser.add_argument(
+        "--skill-ref",
+        help="Load skills/gh-stack from a git commit, tag, or branch",
+    )
     parser.add_argument("--list", action="store_true", help="List eval cases and exit")
-    parser.add_argument("--keep-remote", action="store_true")
+    parser.add_argument(
+        "--keep-remote",
+        action="store_true",
+        help="Skip cleanup for debugging",
+    )
     args = parser.parse_args()
 
     if args.list:
@@ -1184,6 +1380,8 @@ def main() -> int:
         parser.error("--case is required unless --list is used")
     if not args.arm or not args.model:
         parser.error("--arm and --model are required")
+    if args.skill_path and args.skill_ref:
+        parser.error("--skill-path and --skill-ref are mutually exclusive")
 
     configure()
     suffix = uuid.uuid4().hex[:6]
@@ -1196,9 +1394,11 @@ def main() -> int:
         "run_id": run_id,
         "case": args.case,
         "tier": CASES[args.case]["tier"],
+        "network": CASES[args.case]["network"],
         "arm": args.arm,
         "model": args.model,
         "skill_path": str(args.skill_path) if args.skill_path else None,
+        "skill_ref": args.skill_ref,
         "prefix": branch_prefix,
     }
     (run_dir / "metadata.json").write_text(json.dumps(metadata, indent=2) + "\n")
@@ -1209,6 +1409,29 @@ def main() -> int:
             run_dir,
             args.arm,
             args.skill_path,
+            args.skill_ref,
+        )
+        metadata["fixture_seed_commit"] = git(repo, "rev-parse", DEFAULT_BRANCH)
+        installed_skill = (
+            repo / ".agents/skills/gh-stack"
+            if args.arm != "none"
+            else None
+        )
+        skill_source = (
+            f"git:{args.skill_ref}"
+            if args.skill_ref
+            else f"path:{args.skill_path.resolve()}"
+            if args.skill_path
+            else "working-tree"
+            if args.arm == "current"
+            else "none"
+        )
+        metadata["provenance"] = provenance(
+            args.case,
+            installed_skill,
+            args.skill_ref,
+            skill_source,
+            args.model,
         )
         home = prepare_home(run_dir)
         base_branch = create_eval_base(repo, run_id)
@@ -1229,7 +1452,14 @@ def main() -> int:
         )
         (run_dir / "metadata.json").write_text(json.dumps(metadata, indent=2) + "\n")
 
-        execution = run_agent(run_dir, repo, home, args.model, metadata["prompt"])
+        execution = run_agent(
+            run_dir,
+            repo,
+            home,
+            args.model,
+            metadata["prompt"],
+            int(CASES[args.case].get("timeout_seconds", 360)),
+        )
         telemetry_data = telemetry(run_dir, home)
         grade_data = grade(repo, args.case, metadata, telemetry_data)
         cleanup_data = (
@@ -1239,6 +1469,7 @@ def main() -> int:
         )
         result = {
             **metadata,
+            "status": "PASS" if grade_data["passed"] else "FAIL",
             "execution": execution,
             "telemetry": telemetry_data,
             "grade": grade_data,
@@ -1257,6 +1488,7 @@ def main() -> int:
                 }
         result = {
             **metadata,
+            "status": "INFRA_FAILURE",
             "fatal_error": f"{type(error).__name__}: {error}",
             "cleanup": cleanup_data,
         }

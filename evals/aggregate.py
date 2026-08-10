@@ -7,6 +7,7 @@ import argparse
 import csv
 import json
 import statistics
+from collections import Counter
 from pathlib import Path
 
 
@@ -23,16 +24,31 @@ def load_results(results_dir: Path, prefix: str) -> list[dict]:
 
 
 def rate(rows: list[dict]) -> dict:
-    passed = sum(row.get("grade", {}).get("passed", False) for row in rows)
+    scored = [row for row in rows if row.get("status") != "INFRA_FAILURE"]
+    passed = sum(row.get("grade", {}).get("passed", False) for row in scored)
     return {
         "passed": passed,
-        "total": len(rows),
-        "percent": 100 * passed / len(rows) if rows else 0,
+        "total": len(scored),
+        "percent": 100 * passed / len(scored) if scored else 0,
+        "infra_failures": len(rows) - len(scored),
     }
 
 
 def median(rows: list[dict], key: str) -> float:
-    values = [row["telemetry"][key] for row in rows if "telemetry" in row]
+    values = [
+        row["telemetry"].get(key, 0)
+        for row in rows
+        if "telemetry" in row
+    ]
+    return statistics.median(values) if values else 0
+
+
+def median_duration(rows: list[dict]) -> float:
+    values = [
+        row["execution"].get("duration_seconds", 0)
+        for row in rows
+        if "execution" in row
+    ]
     return statistics.median(values) if values else 0
 
 
@@ -47,14 +63,19 @@ def summarize(rows: list[dict]) -> dict:
         "by_model_arm": {},
         "by_tier_arm": {},
         "by_case_arm": {},
+        "failure_classes": {},
     }
 
     for arm in arms:
         selected = [row for row in rows if row["arm"] == arm]
         summary["by_arm"][arm] = {
             **rate(selected),
+            "median_duration_seconds": median_duration(selected),
+            "median_model_calls": median(selected, "model_calls"),
             "median_tool_calls": median(selected, "tool_calls"),
+            "median_vc_shell_calls": median(selected, "vc_shell_calls"),
             "median_input_tokens": median(selected, "input_tokens"),
+            "median_tool_output_bytes": median(selected, "tool_output_bytes"),
             "hangs": sum(
                 row.get("execution", {}).get("timed_out", False)
                 for row in selected
@@ -74,6 +95,8 @@ def summarize(rows: list[dict]) -> dict:
             ]
             summary["by_model_arm"][model][arm] = {
                 **rate(selected),
+                "median_duration_seconds": median_duration(selected),
+                "median_model_calls": median(selected, "model_calls"),
                 "median_tool_calls": median(selected, "tool_calls"),
                 "median_input_tokens": median(selected, "input_tokens"),
             }
@@ -91,6 +114,13 @@ def summarize(rows: list[dict]) -> dict:
             summary["by_case_arm"][case][arm] = rate(
                 [row for row in rows if row["case"] == case and row["arm"] == arm]
             )
+    summary["failure_classes"] = dict(
+        Counter(
+            row.get("grade", {}).get("failure_class")
+            for row in rows
+            if row.get("grade", {}).get("failure_class")
+        )
+    )
     return summary
 
 
@@ -104,10 +134,16 @@ def write_csv(rows: list[dict], path: Path) -> None:
                 "tier",
                 "model",
                 "arm",
+                "status",
                 "passed",
+                "failure_class",
                 "skill_invoked",
                 "tool_calls",
                 "bash_calls",
+                "vc_shell_calls",
+                "failed_tool_calls",
+                "tool_output_bytes",
+                "model_calls",
                 "input_tokens",
                 "output_tokens",
                 "duration_seconds",
@@ -125,10 +161,18 @@ def write_csv(rows: list[dict], path: Path) -> None:
                     "tier": row["tier"],
                     "model": row["model"],
                     "arm": row["arm"],
+                    "status": row.get("status", "unknown"),
                     "passed": row.get("grade", {}).get("passed", False),
+                    "failure_class": row.get("grade", {}).get(
+                        "failure_class"
+                    ),
                     "skill_invoked": telemetry.get("skill_invoked", False),
                     "tool_calls": telemetry.get("tool_calls", 0),
                     "bash_calls": telemetry.get("bash_calls", 0),
+                    "vc_shell_calls": telemetry.get("vc_shell_calls", 0),
+                    "failed_tool_calls": telemetry.get("failed_tool_calls", 0),
+                    "tool_output_bytes": telemetry.get("tool_output_bytes", 0),
+                    "model_calls": telemetry.get("model_calls", 0),
                     "input_tokens": telemetry.get("input_tokens", 0),
                     "output_tokens": telemetry.get("output_tokens", 0),
                     "duration_seconds": row.get("execution", {}).get(
@@ -148,14 +192,16 @@ def markdown(summary: dict) -> str:
         "",
         f"Runs: **{summary['run_count']}**",
         "",
-        "| Configuration | Pass rate | Median tools | Median input tokens | Hangs |",
-        "|---|---:|---:|---:|---:|",
+        "| Configuration | Pass rate | Time | Model calls | Tool calls | Cumulative input tokens | Hangs | Infra |",
+        "|---|---:|---:|---:|---:|---:|---:|---:|",
     ]
     for arm, values in summary["by_arm"].items():
         lines.append(
             f"| {arm} | {values['passed']}/{values['total']} "
-            f"({values['percent']:.1f}%) | {values['median_tool_calls']:g} | "
-            f"{values['median_input_tokens']:g} | {values['hangs']} |"
+            f"({values['percent']:.1f}%) | {values['median_duration_seconds']:g}s | "
+            f"{values['median_model_calls']:g} | {values['median_tool_calls']:g} | "
+            f"{values['median_input_tokens']:g} | {values['hangs']} | "
+            f"{values['infra_failures']} |"
         )
     lines.extend(["", "## By case", ""])
     arms = list(summary["by_arm"])
@@ -167,6 +213,10 @@ def markdown(summary: dict) -> str:
             for arm in arms
         ]
         lines.append(f"| {case} | " + " | ".join(cells) + " |")
+    if summary["failure_classes"]:
+        lines.extend(["", "## Failures", ""])
+        for name, count in sorted(summary["failure_classes"].items()):
+            lines.append(f"- `{name}`: {count}")
     return "\n".join(lines) + "\n"
 
 
@@ -176,12 +226,14 @@ def main() -> None:
         "--results-dir",
         type=Path,
         default=EVAL_ROOT / "results",
+        help="Directory containing per-run result folders",
     )
-    parser.add_argument("--prefix", default="")
+    parser.add_argument("--prefix", default="", help="Only include matching run IDs")
     parser.add_argument(
         "--output-dir",
         type=Path,
         default=EVAL_ROOT / "results",
+        help="Directory for summary/report files",
     )
     args = parser.parse_args()
 

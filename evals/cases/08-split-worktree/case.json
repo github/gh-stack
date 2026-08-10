@@ -1,0 +1,17 @@
+{
+  "name": "split-worktree",
+  "title": "Split uncommitted work",
+  "summary": "Turn one dirty multi-concern worktree into dependency-ordered stack layers.",
+  "tier": "split",
+  "fixture": "split-worktree",
+  "required": true,
+  "network": "local",
+  "timeout_seconds": 600,
+  "assertions": [
+    "The stack has at least three dependent layers.",
+    "The top of the stack reproduces the original work exactly.",
+    "The legacy.js deletion is preserved.",
+    "The model is introduced at or below the API, and the API at or below the page.",
+    "No layer is empty and the worktree is clean."
+  ]
+}

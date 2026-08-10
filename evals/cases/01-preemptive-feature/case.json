@@ -1,0 +1,16 @@
+{
+  "name": "preemptive-feature",
+  "title": "Recognize a multi-part feature",
+  "summary": "Decide to stack dependent model, API, and UI work before implementation.",
+  "tier": "trigger",
+  "fixture": "clean",
+  "required": false,
+  "network": "local",
+  "timeout_seconds": 360,
+  "assertions": [
+    "The skill triggers before implementation.",
+    "A local gh-stack stack is created with at least three layers.",
+    "model.js, api.js, and page.js are introduced in distinct dependency-ordered layers.",
+    "No remote branches or pull requests are created."
+  ]
+}
