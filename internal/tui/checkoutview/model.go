@@ -35,6 +35,8 @@ func (t tab) String() string {
 type keyMap struct {
 	Up      key.Binding
 	Down    key.Binding
+	VimUp   key.Binding
+	VimDown key.Binding
 	Select  key.Binding
 	NextTab key.Binding
 	PrevTab key.Binding
@@ -45,6 +47,8 @@ type keyMap struct {
 var keys = keyMap{
 	Up:      key.NewBinding(key.WithKeys("up", "ctrl+p")),
 	Down:    key.NewBinding(key.WithKeys("down", "ctrl+n")),
+	VimUp:   key.NewBinding(key.WithKeys("k")),
+	VimDown: key.NewBinding(key.WithKeys("j")),
 	Select:  key.NewBinding(key.WithKeys("enter")),
 	NextTab: key.NewBinding(key.WithKeys("tab", "right")),
 	PrevTab: key.NewBinding(key.WithKeys("shift+tab", "left")),
@@ -111,11 +115,11 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.cancelled = true
 		return m, tea.Quit
 
-	case key.Matches(msg, keys.Up):
+	case key.Matches(msg, keys.Up) || (!m.searching && key.Matches(msg, keys.VimUp)):
 		m.moveCursor(-1)
 		return m, nil
 
-	case key.Matches(msg, keys.Down):
+	case key.Matches(msg, keys.Down) || (!m.searching && key.Matches(msg, keys.VimDown)):
 		m.moveCursor(1)
 		return m, nil
 
@@ -563,13 +567,13 @@ func (m Model) renderFooter() string {
 	var pairs [][2]string
 	if m.searching {
 		pairs = [][2]string{
-			{"↑↓", "navigate"},
+			{"↓↑", "navigate"},
 			{"enter", "select"},
 			{"esc", "clear search"},
 		}
 	} else {
 		pairs = [][2]string{
-			{"↑↓", "navigate"},
+			{"↓↑/jk", "navigate"},
 			{"←→", "tabs"},
 			{"/", "search"},
 			{"enter", "select"},
