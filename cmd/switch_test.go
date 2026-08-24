@@ -271,3 +271,21 @@ func TestSwitch_CmdIntegration(t *testing.T) {
 	err := cmd.Execute()
 	assert.NoError(t, err)
 }
+
+func TestNewSwitchSelect_EnablesVimNavigation(t *testing.T) {
+	options := []string{"3. résumé", "2. b2", "1. b1"}
+	prompt := newSwitchSelect("Select a branch:", "2. b2", options)
+
+	assert.True(t, prompt.VimMode)
+	assert.Equal(t, selectPromptPageSize, prompt.PageSize)
+	assert.Equal(t, "2. b2", prompt.Default)
+	assert.Equal(t, options, prompt.Options)
+	require.NotNil(t, prompt.Filter)
+	assert.True(t, prompt.Filter("resume", options[0], 0), "filter should retain diacritic-insensitive matching")
+}
+
+func TestSwitchCmd_DescribesVimNavigation(t *testing.T) {
+	cfg, _, _ := config.NewTestConfig()
+
+	assert.Contains(t, SwitchCmd(cfg).Long, "down/up arrow keys or j/k")
+}

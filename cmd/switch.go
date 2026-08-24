@@ -2,8 +2,10 @@ package cmd
 
 import (
 	"fmt"
+	"strings"
 
-	"github.com/cli/go-gh/v2/pkg/prompter"
+	"github.com/AlecAivazis/survey/v2"
+	"github.com/cli/go-gh/v2/pkg/text"
 	"github.com/github/gh-stack/internal/config"
 	"github.com/github/gh-stack/internal/git"
 	"github.com/spf13/cobra"
@@ -17,11 +19,11 @@ func SwitchCmd(cfg *config.Config) *cobra.Command {
 and switch to the selected one.
 
 Branches are displayed from top (furthest from trunk) to bottom (closest to
-trunk) with their position number. Use the arrow keys to navigate and Enter
-to select.
+trunk) with their position number. Use the down/up arrow keys or j/k to
+navigate and Enter to select.
 
-To move one branch up or down without an interactive picker, use
-'gh stack up' or 'gh stack down' instead.`,
+To move one branch down or up without an interactive picker, use
+'gh stack down' or 'gh stack up' instead.`,
 		Example: `  # Open the branch picker for the current stack
   $ gh stack switch`,
 		Args: cobra.NoArgs,
@@ -61,17 +63,7 @@ func runSwitch(cfg *config.Config) error {
 		}
 	}
 
-	var selectFn func(prompt, def string, opts []string) (int, error)
-	if cfg.SelectFn != nil {
-		selectFn = cfg.SelectFn
-	} else {
-		p := prompter.New(cfg.In, cfg.Out, cfg.Err)
-		selectFn = func(prompt, def string, opts []string) (int, error) {
-			return p.Select(prompt, def, opts)
-		}
-	}
-
-	selected, err := selectFn("Select a branch in the stack to switch to:", defaultOpt, options)
+	selected, err := selectSwitchBranch(cfg, "Select a branch in the stack to switch to:", defaultOpt, options)
 	if err != nil {
 		if isInterruptError(err) {
 			clearSelectPrompt(cfg, len(options))
@@ -102,4 +94,47 @@ func runSwitch(cfg *config.Config) error {
 
 	cfg.Successf("Switched to %s", targetBranch)
 	return nil
+}
+
+func selectSwitchBranch(cfg *config.Config, prompt, defaultValue string, options []string) (int, error) {
+	if cfg.SelectFn != nil {
+		return cfg.SelectFn(prompt, defaultValue, options)
+	}
+
+	var selected int
+	err := survey.AskOne(
+		newSwitchSelect(prompt, defaultValue, options),
+		&selected,
+		survey.WithStdio(cfg.In, cfg.Out, cfg.Err),
+	)
+	if err != nil {
+		return 0, fmt.Errorf("could not prompt: %w", err)
+	}
+	return selected, nil
+}
+
+func newSwitchSelect(prompt, defaultValue string, options []string) *survey.Select {
+	selectPrompt := &survey.Select{
+		Message:  prompt,
+		Options:  options,
+		PageSize: selectPromptPageSize,
+		VimMode:  true,
+		Filter:   switchSelectFilter,
+	}
+	if defaultValue != "" {
+		for _, option := range options {
+			if option == defaultValue {
+				selectPrompt.Default = defaultValue
+				break
+			}
+		}
+	}
+	return selectPrompt
+}
+
+func switchSelectFilter(filter, value string, _ int) bool {
+	filter = strings.ToLower(filter)
+	value = strings.ToLower(value)
+	return strings.Contains(value, filter) ||
+		strings.Contains(text.RemoveDiacritics(value), filter)
 }
