@@ -357,7 +357,7 @@ gh stack modify
 #   u     → fold up (into branch above)
 #   i     → insert below
 #   I     → insert above
-#   Shift+↑/↓ → reorder
+#   Shift+↓/↑ → reorder
 #   r     → rename
 #   z     → undo
 #   Ctrl+S → apply changes
@@ -385,7 +385,7 @@ gh stack submit
 **Reorder branches:**
 1. `gh stack modify`
 2. Navigate to the branch to move
-3. Press `Shift+↑` to move up or `Shift+↓` to move down
+3. Press `Shift+↓` to move down or `Shift+↑` to move up
 4. Press `Ctrl+S` to apply
 5. `gh stack submit`
 

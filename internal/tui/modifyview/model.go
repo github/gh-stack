@@ -35,7 +35,7 @@ type modifyKeyMap struct {
 }
 
 func (k modifyKeyMap) ShortHelp() []key.Binding {
-	return []key.Binding{k.Up, k.Down, k.Drop, k.FoldDown, k.InsertBelow, k.Rename, k.ToggleCommits, k.ToggleFiles, k.Apply, k.Help, k.Quit}
+	return []key.Binding{k.Down, k.Up, k.Drop, k.FoldDown, k.InsertBelow, k.Rename, k.ToggleCommits, k.ToggleFiles, k.Apply, k.Help, k.Quit}
 }
 
 func (k modifyKeyMap) FullHelp() [][]key.Binding {
@@ -1483,11 +1483,11 @@ func (m Model) buildHeaderConfig() shared.HeaderConfig {
 		ShortcutColumns: 2,
 		Shortcuts: []shared.ShortcutEntry{
 			// Left column                          // Right column
-			{Key: "↑↓", Desc: "select branch"}, {Key: "x", Desc: "drop", Disabled: structureDisabled},
+			{Key: "↓↑/jk", Desc: "select branch"}, {Key: "x", Desc: "drop", Disabled: structureDisabled},
 			{Key: "f", Desc: "view files"}, {Key: "r", Desc: "rename", Disabled: structureDisabled},
 			{Key: "c", Desc: "view commits"}, {Key: "i/I", Desc: "insert below/above", Disabled: structureDisabled},
 			{Key: "?", Desc: "help"}, {Key: "d/u", Desc: "fold down/up", Disabled: structureDisabled},
-			{Key: "q/esc", Desc: "quit"}, {Key: "shift+↑↓", Desc: "reorder", Disabled: reorderDisabled},
+			{Key: "q/esc", Desc: "quit"}, {Key: "shift+↓↑", Desc: "reorder", Disabled: reorderDisabled},
 			{Key: "^S", Desc: "apply changes"}, {Key: "z", Desc: "undo"},
 		},
 	}

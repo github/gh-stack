@@ -255,7 +255,7 @@ If the stack of PRs has been created on GitHub, run `gh stack submit` afterwards
 - **Fold down** (`d`): Absorb a branch's commits into the branch below (toward trunk). Folded branch removed from stack.
 - **Fold up** (`u`): Absorb a branch's commits into the branch above (away from trunk). Folded branch removed from stack.
 - **Insert** (`i`/`I`): Insert a new empty branch into the stack. `i` inserts below the cursor; `I` inserts above.
-- **Reorder** (`Shift+↑`/`Shift+↓`): Move a branch up (away from trunk) or down (toward trunk) in the stack.
+- **Reorder** (`Shift+↓`/`Shift+↑`): Move a branch down (toward trunk) or up (away from trunk) in the stack.
 - **Rename** (`r`): Rename a branch locally and in the stack metadata.
 - **Undo** (`z`): Undo the last staged action.
 
@@ -263,14 +263,14 @@ If the stack of PRs has been created on GitHub, run `gh stack submit` afterwards
 
 | Key | Action |
 |-----|--------|
-| `↑`/`↓` | Navigate branch list |
+| `↓`/`↑` or `j`/`k` | Navigate branch list |
 | `f` | View files changed |
 | `c` | View commits |
 | `x` | Drop branch |
 | `r` | Rename branch |
 | `i/I` | Insert branch below/above |
 | `d/u` | Fold branch down/up |
-| `Shift+↑`/`Shift+↓` | Move branch up/down |
+| `Shift+↓`/`Shift+↑` | Move branch down/up |
 | `z` | Undo last action |
 | `Ctrl+S` | Apply all changes |
 | `q`/`Esc` | Cancel and exit |
