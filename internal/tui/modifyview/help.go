@@ -37,8 +37,8 @@ func renderHelpOverlay(width, height int) string {
 			"Rename a branch locally. The new name is pushed on submit.",
 		},
 		{
-			"Reorder (Shift+↑/↓)",
-			"Move a branch up or down in the stack.\nA cascading rebase adjusts all affected branches.",
+			"Reorder (Shift+↓/↑)",
+			"Move a branch down or up in the stack.\nA cascading rebase adjusts all affected branches.",
 		},
 	}
 

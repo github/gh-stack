@@ -29,6 +29,8 @@ func step(m Model, msg tea.Msg) Model {
 
 func keyType(t tea.KeyType) tea.KeyMsg { return tea.KeyMsg{Type: t} }
 
+func keyRune(r rune) tea.KeyMsg { return tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{r}} }
+
 func space() tea.KeyMsg { return tea.KeyMsg{Type: tea.KeySpace} }
 
 func TestNew_DefaultsSelectAll(t *testing.T) {
@@ -124,19 +126,32 @@ func TestSelect_Viewport(t *testing.T) {
 	assert.Contains(t, view, "more")
 }
 
-func TestSelect_ArrowDirection(t *testing.T) {
-	m := New(baseOptions()) // cursor starts at the top of the stack (index 2)
-	assert.Equal(t, 2, m.cursor)
+func TestSelect_NavigationDirection(t *testing.T) {
+	tests := []struct {
+		name string
+		up   tea.KeyMsg
+		down tea.KeyMsg
+	}{
+		{name: "arrow keys", up: keyType(tea.KeyUp), down: keyType(tea.KeyDown)},
+		{name: "vim keys", up: keyRune('k'), down: keyRune('j')},
+	}
 
-	// "up" moves toward the top of the stack and is clamped there.
-	m = step(m, keyType(tea.KeyUp))
-	assert.Equal(t, 2, m.cursor)
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			m := New(baseOptions()) // cursor starts at the top of the stack (index 2)
+			assert.Equal(t, 2, m.cursor)
 
-	// "down" moves toward the bottom of the stack (lower index).
-	m = step(m, keyType(tea.KeyDown))
-	assert.Equal(t, 1, m.cursor)
-	m = step(m, keyType(tea.KeyUp))
-	assert.Equal(t, 2, m.cursor)
+			// Up moves toward the top of the stack and is clamped there.
+			m = step(m, tt.up)
+			assert.Equal(t, 2, m.cursor)
+
+			// Down moves toward the bottom of the stack (lower index).
+			m = step(m, tt.down)
+			assert.Equal(t, 1, m.cursor)
+			m = step(m, tt.up)
+			assert.Equal(t, 2, m.cursor)
+		})
+	}
 }
 
 func TestTruncate_WideRunes(t *testing.T) {
@@ -258,6 +273,18 @@ func TestMethod_SelectAndAdvance(t *testing.T) {
 	m = step(m, keyType(tea.KeyEnter))
 	assert.Equal(t, StepConfirm, m.step)
 	assert.Equal(t, "rebase", m.method)
+}
+
+func TestMethod_VimNavigation(t *testing.T) {
+	m := New(baseOptions())
+	m = step(m, keyType(tea.KeyEnter))
+	require.Equal(t, StepMethod, m.step)
+	require.Equal(t, 1, m.methodCursor)
+
+	m = step(m, keyRune('j'))
+	assert.Equal(t, 2, m.methodCursor)
+	m = step(m, keyRune('k'))
+	assert.Equal(t, 1, m.methodCursor)
 }
 
 func TestMethod_EscCancels(t *testing.T) {
@@ -392,9 +419,12 @@ func TestView_RendersBannerAndSteps(t *testing.T) {
 	assert.Contains(t, sel, "Confirm")
 	assert.Contains(t, sel, "Will merge 3 PRs into main")
 	assert.Contains(t, sel, "feat-a") // branch shown on the item's second line
+	assert.Contains(t, sel, "↓↑/jk")
 
 	m = step(m, keyType(tea.KeyTab))
-	assert.Contains(t, m.View(), "Squash and merge") // method labels, no subheading
+	method := m.View()
+	assert.Contains(t, method, "Squash and merge") // method labels, no subheading
+	assert.Contains(t, method, "↓↑/jk")
 
 	m = step(m, keyType(tea.KeyTab))
 	confirm := m.View()

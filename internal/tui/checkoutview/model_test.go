@@ -144,13 +144,25 @@ func TestSearchMatchesMidStackBranch(t *testing.T) {
 }
 
 func TestCursorNavigationClamps(t *testing.T) {
-	m := sized(New(sampleRows()))
-	// Up at the top stays at 0.
-	m = drive(m, tea.KeyMsg{Type: tea.KeyUp})
-	assert.Equal(t, 0, m.cursor)
-	// Down past the end clamps to the last row.
-	m = drive(m, tea.KeyMsg{Type: tea.KeyDown}, tea.KeyMsg{Type: tea.KeyDown}, tea.KeyMsg{Type: tea.KeyDown})
-	assert.Equal(t, 2, m.cursor)
+	tests := []struct {
+		name string
+		up   tea.KeyMsg
+		down tea.KeyMsg
+	}{
+		{name: "arrow keys", up: tea.KeyMsg{Type: tea.KeyUp}, down: tea.KeyMsg{Type: tea.KeyDown}},
+		{name: "vim keys", up: runeKey("k"), down: runeKey("j")},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			m := sized(New(sampleRows()))
+			m = drive(m, tt.up)
+			assert.Equal(t, 0, m.cursor)
+
+			m = drive(m, tt.down, tt.down, tt.down)
+			assert.Equal(t, 2, m.cursor)
+		})
+	}
 }
 
 func TestEnterSelectsLocalRow(t *testing.T) {
@@ -210,6 +222,14 @@ func TestQTypesIntoSearchInsteadOfQuitting(t *testing.T) {
 	assert.False(t, m.Cancelled())
 }
 
+func TestVimKeysTypeIntoSearchInsteadOfNavigating(t *testing.T) {
+	m := sized(New(sampleRows()))
+	m = drive(m, runeKey("/"), runeKey("j"), runeKey("k"))
+
+	assert.True(t, m.searching)
+	assert.Equal(t, "jk", m.query)
+}
+
 func TestView_RendersColumnsAndRows(t *testing.T) {
 	m := sized(New(sampleRows()))
 	out := stripANSI(m.View())
@@ -222,6 +242,7 @@ func TestView_RendersColumnsAndRows(t *testing.T) {
 	assert.Contains(t, out, "Remote")
 	assert.Contains(t, out, "1h ago")
 	assert.Contains(t, out, "/ search")
+	assert.Contains(t, out, "↓↑/jk")
 }
 
 func TestView_SearchFooterAndPrompt(t *testing.T) {
@@ -230,6 +251,8 @@ func TestView_SearchFooterAndPrompt(t *testing.T) {
 	out := stripANSI(m.View())
 	assert.Contains(t, out, "/ a")
 	assert.Contains(t, out, "clear search")
+	assert.Contains(t, out, "↓↑ navigate")
+	assert.NotContains(t, out, "↓↑/jk")
 }
 
 func TestView_EmptyStateMessage(t *testing.T) {

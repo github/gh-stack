@@ -198,7 +198,7 @@ func (m Model) viewSelect() string {
 	}
 
 	// Reserve the indicator lines at all times (blank when nothing is hidden) so
-	// the list doesn't shift as the ↑/↓ hints appear and disappear while scrolling.
+	// the list doesn't shift as the ↓/↑ hints appear and disappear while scrolling.
 	if start > 0 {
 		b.WriteString(faintStyle.Render(fmt.Sprintf("  ↑ %d more", start)) + "\n")
 	} else {
@@ -251,7 +251,7 @@ func (m Model) viewSelect() string {
 	}
 	b.WriteString("\n\n")
 	b.WriteString(shortcuts(
-		[2]string{"↑/↓", "move"},
+		[2]string{"↓↑/jk", "move"},
 		[2]string{"space", "toggle"},
 		[2]string{"tab/enter", "next"},
 		[2]string{"esc", "cancel"},
@@ -278,7 +278,7 @@ func (m Model) viewMethod() string {
 
 	b.WriteString("\n")
 	b.WriteString(shortcuts(
-		[2]string{"↑/↓", "move"},
+		[2]string{"↓↑/jk", "move"},
 		[2]string{"tab/enter", "next"},
 		[2]string{"shift+tab", "back"},
 		[2]string{"esc", "cancel"},

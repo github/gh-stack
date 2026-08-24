@@ -23,7 +23,7 @@ type keyMap struct {
 }
 
 func (k keyMap) ShortHelp() []key.Binding {
-	return []key.Binding{k.Up, k.Down, k.ToggleCommits, k.ToggleFiles, k.OpenPR, k.Checkout, k.Quit}
+	return []key.Binding{k.Down, k.Up, k.ToggleCommits, k.ToggleFiles, k.OpenPR, k.Checkout, k.Quit}
 }
 
 func (k keyMap) FullHelp() [][]key.Binding {
@@ -32,12 +32,12 @@ func (k keyMap) FullHelp() [][]key.Binding {
 
 var keys = keyMap{
 	Up: key.NewBinding(
-		key.WithKeys("up"),
-		key.WithHelp("↑", "up"),
+		key.WithKeys("up", "k"),
+		key.WithHelp("↑/k", "up"),
 	),
 	Down: key.NewBinding(
-		key.WithKeys("down"),
-		key.WithHelp("↓", "down"),
+		key.WithKeys("down", "j"),
+		key.WithHelp("↓/j", "down"),
 	),
 	ToggleCommits: key.NewBinding(
 		key.WithKeys("c"),
@@ -464,7 +464,7 @@ func (m Model) buildHeaderConfig() shared.HeaderConfig {
 		InfoLines:       infoLines,
 		ShortcutColumns: 1,
 		Shortcuts: []shared.ShortcutEntry{
-			{Key: "↑↓", Desc: "navigate", Disabled: allMerged},
+			{Key: "↓↑/jk", Desc: "navigate", Disabled: allMerged},
 			{Key: "c", Desc: "commits", Disabled: allMerged},
 			{Key: "f", Desc: "files", Disabled: allMerged},
 			{Key: "o", Desc: "open PR", Disabled: allMerged},

@@ -1201,6 +1201,14 @@ func TestBranchCountExcludesInserts(t *testing.T) {
 	assert.Contains(t, cfg.InfoLines[1].Label, "3 branches")
 }
 
+func TestHeaderShowsVimNavigationKeys(t *testing.T) {
+	cfg := New([]ModifyBranchNode{makeNode("a", true, 0)}, testTrunk, "1.0.0").buildHeaderConfig()
+
+	require.NotEmpty(t, cfg.Shortcuts)
+	assert.Equal(t, "↓↑/jk", cfg.Shortcuts[0].Key)
+	assert.Equal(t, "select branch", cfg.Shortcuts[0].Desc)
+}
+
 // --- Bug fix tests: operations blocked on inserted nodes ---
 
 func TestCannotRenameInsertedBranch(t *testing.T) {

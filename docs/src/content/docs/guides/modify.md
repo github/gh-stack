@@ -55,9 +55,9 @@ Inserts a new empty branch into the stack at the cursor position. Lowercase `i` 
 
 Opens an inline prompt to enter a new name for the branch. The branch is renamed locally and in the stack metadata. On the next `submit`, the new branch name is pushed to GitHub.
 
-### Reorder (`Shift+↑`/`Shift+↓`)
+### Reorder (`Shift+↓`/`Shift+↑`)
 
-Moves the selected branch up (away from trunk) or down (toward trunk) in the stack. A cascading rebase adjusts all affected branches. Note: reordering and structural changes (drop/fold/insert/rename) cannot be mixed in the same session.
+Moves the selected branch down (toward trunk) or up (away from trunk) in the stack. A cascading rebase adjusts all affected branches. Note: reordering and structural changes (drop/fold/insert/rename) cannot be mixed in the same session.
 
 ### Undo (`z`)
 
