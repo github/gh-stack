@@ -60,39 +60,45 @@ func TestNew_CursorAtZeroWhenNoCurrent(t *testing.T) {
 }
 
 func TestUpdate_KeyboardNavigation(t *testing.T) {
-	nodes := makeNodes("b1", "b2", "b3")
-	m := New(nodes, testTrunk, "0.0.1", 0)
-	assert.Equal(t, 0, m.cursor)
+	tests := []struct {
+		name string
+		up   string
+		down string
+	}{
+		{name: "arrow keys", up: "up", down: "down"},
+		{name: "vim keys", up: "k", down: "j"},
+	}
 
-	// Down
-	updated, _ := m.Update(keyMsg("down"))
-	m = updated.(Model)
-	assert.Equal(t, 1, m.cursor)
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			m := New(makeNodes("b1", "b2", "b3"), testTrunk, "0.0.1", 0)
+			assert.Equal(t, 0, m.cursor)
 
-	// Down again
-	updated, _ = m.Update(keyMsg("down"))
-	m = updated.(Model)
-	assert.Equal(t, 2, m.cursor)
+			updated, _ := m.Update(keyMsg(tt.down))
+			m = updated.(Model)
+			assert.Equal(t, 1, m.cursor)
 
-	// Down at bottom — should clamp
-	updated, _ = m.Update(keyMsg("down"))
-	m = updated.(Model)
-	assert.Equal(t, 2, m.cursor, "cursor should clamp at bottom")
+			updated, _ = m.Update(keyMsg(tt.down))
+			m = updated.(Model)
+			assert.Equal(t, 2, m.cursor)
 
-	// Up
-	updated, _ = m.Update(keyMsg("up"))
-	m = updated.(Model)
-	assert.Equal(t, 1, m.cursor)
+			updated, _ = m.Update(keyMsg(tt.down))
+			m = updated.(Model)
+			assert.Equal(t, 2, m.cursor, "cursor should clamp at bottom")
 
-	// Up
-	updated, _ = m.Update(keyMsg("up"))
-	m = updated.(Model)
-	assert.Equal(t, 0, m.cursor)
+			updated, _ = m.Update(keyMsg(tt.up))
+			m = updated.(Model)
+			assert.Equal(t, 1, m.cursor)
 
-	// Up at top — should clamp
-	updated, _ = m.Update(keyMsg("up"))
-	m = updated.(Model)
-	assert.Equal(t, 0, m.cursor, "cursor should clamp at top")
+			updated, _ = m.Update(keyMsg(tt.up))
+			m = updated.(Model)
+			assert.Equal(t, 0, m.cursor)
+
+			updated, _ = m.Update(keyMsg(tt.up))
+			m = updated.(Model)
+			assert.Equal(t, 0, m.cursor, "cursor should clamp at top")
+		})
+	}
 }
 
 func TestUpdate_ToggleCommits(t *testing.T) {
@@ -344,20 +350,31 @@ func TestScrollClamp_CannotScrollPastContent(t *testing.T) {
 }
 
 func TestUpdate_CursorSkipsMergedBranches(t *testing.T) {
-	nodes := makeNodes("b1", "b2", "b3")
-	nodes[1].Ref.PullRequest = &stack.PullRequestRef{Number: 2, Merged: true}
-	m := New(nodes, testTrunk, "0.0.1", 0)
-	assert.Equal(t, 0, m.cursor, "cursor should start on first non-merged branch")
+	tests := []struct {
+		name string
+		up   string
+		down string
+	}{
+		{name: "arrow keys", up: "up", down: "down"},
+		{name: "vim keys", up: "k", down: "j"},
+	}
 
-	// Down should skip b2 (merged) and land on b3
-	updated, _ := m.Update(keyMsg("down"))
-	m = updated.(Model)
-	assert.Equal(t, 2, m.cursor, "down should skip merged b2 and land on b3")
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			nodes := makeNodes("b1", "b2", "b3")
+			nodes[1].Ref.PullRequest = &stack.PullRequestRef{Number: 2, Merged: true}
+			m := New(nodes, testTrunk, "0.0.1", 0)
+			assert.Equal(t, 0, m.cursor, "cursor should start on first non-merged branch")
 
-	// Up should skip b2 (merged) and land back on b1
-	updated, _ = m.Update(keyMsg("up"))
-	m = updated.(Model)
-	assert.Equal(t, 0, m.cursor, "up should skip merged b2 and land on b1")
+			updated, _ := m.Update(keyMsg(tt.down))
+			m = updated.(Model)
+			assert.Equal(t, 2, m.cursor, "%s should skip merged b2 and land on b3", tt.down)
+
+			updated, _ = m.Update(keyMsg(tt.up))
+			m = updated.(Model)
+			assert.Equal(t, 0, m.cursor, "%s should skip merged b2 and land on b1", tt.up)
+		})
+	}
 }
 
 func TestNew_CursorSkipsMergedBranch(t *testing.T) {
@@ -405,16 +422,16 @@ func TestNew_CursorHiddenWhenAllMerged(t *testing.T) {
 }
 
 func TestUpdate_AllMergedCursorStaysHidden(t *testing.T) {
+	for _, navigationKey := range []string{"down", "up", "j", "k"} {
+		t.Run(navigationKey, func(t *testing.T) {
+			m := New(makeAllMergedNodes("b1", "b2", "b3"), testTrunk, "0.0.1", 0)
+			updated, _ := m.Update(keyMsg(navigationKey))
+			m = updated.(Model)
+			assert.Equal(t, -1, m.cursor, "%s should not move the hidden cursor", navigationKey)
+		})
+	}
+
 	m := New(makeAllMergedNodes("b1", "b2", "b3"), testTrunk, "0.0.1", 0)
-
-	updated, _ := m.Update(keyMsg("down"))
-	m = updated.(Model)
-	assert.Equal(t, -1, m.cursor, "down should not move the hidden cursor")
-
-	updated, _ = m.Update(keyMsg("up"))
-	m = updated.(Model)
-	assert.Equal(t, -1, m.cursor, "up should not move the hidden cursor")
-
 	updated, cmd := m.Update(keyMsg("enter"))
 	m = updated.(Model)
 	assert.Equal(t, "", m.CheckoutBranch(), "enter should not check out when all merged")
@@ -452,6 +469,14 @@ func TestBuildHeaderConfig_ShortcutsEnabledWithActiveBranches(t *testing.T) {
 	for _, sc := range cfg.Shortcuts {
 		assert.False(t, sc.Disabled, "%q should be enabled when there are active branches", sc.Desc)
 	}
+}
+
+func TestBuildHeaderConfig_ShowsVimNavigationKeys(t *testing.T) {
+	cfg := New(makeNodes("b1", "b2"), testTrunk, "0.0.1", 0).buildHeaderConfig()
+
+	require.NotEmpty(t, cfg.Shortcuts)
+	assert.Equal(t, "↓↑/jk", cfg.Shortcuts[0].Key)
+	assert.Equal(t, "navigate", cfg.Shortcuts[0].Desc)
 }
 
 func TestBuildHeaderConfig_ShowsStackNumber(t *testing.T) {
