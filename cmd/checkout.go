@@ -45,7 +45,7 @@ When a branch name is provided, the command resolves it against
 locally tracked stacks only.
 
 When run without arguments, first checks whether the current branch belongs
-to exactly one stack on GitHub that is not tracked locally and offers to check
+to a stack on remote that is not tracked locally, and offers to check
 it out. Otherwise, it opens an interactive picker listing every stack available
 to you — both the stacks tracked locally and the stacks that exist only on
 GitHub — so you can search, filter, and check one out. Fully merged stacks are
