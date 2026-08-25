@@ -165,8 +165,6 @@ an ancestor of the branch.
 - There is no non-interactive reorder or removal. Errors may suggest `gh stack modify`, but it is
   TUI-only — restructure with `unstack` then `init` instead.
 - PR titles and bodies are auto-generated. Use `gh pr edit` afterwards to change them.
-- `checkout <branch-name>` resolves against local stacks only. Use a stack or PR number to pull a
-  stack down from GitHub.
 
 ## More detail
 

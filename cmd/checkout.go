@@ -41,8 +41,9 @@ GitHub API to discover the stack, fetches the branches, and sets up
 the stack locally. If the stack already exists locally and matches,
 it simply switches to the branch.
 
-When a branch name is provided, the command resolves it against
-locally tracked stacks only.
+When a branch name is provided, the command first checks locally tracked
+stacks. If the branch is not tracked locally, it looks for the branch on
+remote stacks and pulls down the matching stack.
 
 When run without arguments, first checks whether the current branch belongs
 to a stack on remote that is not tracked locally, and offers to check
@@ -79,7 +80,7 @@ omitted.`,
 // runCheckout resolves a stack and checks out the target branch.
 // For numeric targets, it tries local lookup first, then falls back to
 // the GitHub API to discover remote stacks, then tries as a branch name.
-// Non-numeric targets use local resolution only.
+// Branch names resolve locally first and then against stacks on GitHub.
 func runCheckout(cfg *config.Config, opts *checkoutOptions) error {
 	gitDir, err := git.GitDir()
 	if err != nil {
@@ -125,14 +126,23 @@ func runCheckout(cfg *config.Config, opts *checkoutOptions) error {
 			return err
 		}
 	} else {
-		// Non-numeric target — resolve against local stacks only
+		// Non-numeric target — resolve locally before checking GitHub.
 		var br *stack.BranchRef
 		s, br, err = resolvePR(cfg, sf, opts.target)
-		if err != nil {
-			cfg.Errorf("%s", err)
-			return ErrNotInStack
+		if err == nil {
+			targetBranch = br.Branch
+		} else {
+			s, targetBranch, err = checkoutRemoteStackByBranch(cfg, sf, gitDir, opts.target)
+			if errors.Is(err, errRemoteBranchNotFound) {
+				cfg.Errorf("no local or remote stack found for %q", opts.target)
+				cfg.Printf("Try a stack or PR number with `%s`",
+					cfg.ColorCyan("gh stack checkout <number>"))
+				return ErrNotInStack
+			}
+			if err != nil {
+				return err
+			}
 		}
-		targetBranch = br.Branch
 	}
 
 	currentBranch, _ := git.CurrentBranch()
@@ -188,7 +198,7 @@ func resolveNumericTarget(cfg *config.Config, sf *stack.StackFile, gitDir string
 	// attempt — the user might have a numeric branch name.
 	remoteErr := err
 
-	// 4. Fall back to branch name lookup (handles numeric branch names).
+	// 4. Fall back to local branch name lookup (handles numeric branch names).
 	stacks := sf.FindAllStacksForBranch(raw)
 	if len(stacks) > 0 {
 		s := stacks[0]
@@ -202,9 +212,70 @@ func resolveNumericTarget(cfg *config.Config, sf *stack.StackFile, gitDir string
 		}
 	}
 
+	// Only a definitive "not in a stack" result can be reinterpreted as a
+	// remote branch name. Preserve API, conflict, and other actionable errors.
+	if !errors.Is(remoteErr, ErrNotInStack) {
+		return nil, "", remoteErr
+	}
+
+	// Finally, try the numeric input as a branch in a stack on GitHub.
+	s, targetBranch, err = checkoutRemoteStackByBranch(cfg, sf, gitDir, raw)
+	if err == nil {
+		return s, targetBranch, nil
+	}
+	if !errors.Is(err, errRemoteBranchNotFound) {
+		return nil, "", err
+	}
+
 	// Nothing worked — return the remote error which has the most
 	// informative message for a numeric input
 	return nil, "", remoteErr
+}
+
+var errRemoteBranchNotFound = errors.New("remote branch not found in a stack")
+
+// checkoutRemoteStackByBranch finds the unique active stack on GitHub that
+// contains branch, then imports it through the existing PR checkout path.
+func checkoutRemoteStackByBranch(cfg *config.Config, sf *stack.StackFile, gitDir, branch string) (*stack.Stack, string, error) {
+	client, err := cfg.GitHubClient()
+	if err != nil {
+		cfg.Errorf("failed to create GitHub client: %s", err)
+		return nil, "", ErrAPIFailure
+	}
+
+	remoteStacks, err := client.ListStacks()
+	if err != nil {
+		var httpErr *api.HTTPError
+		if errors.As(err, &httpErr) && httpErr.StatusCode == 404 {
+			warnStacksUnavailable(cfg)
+			return nil, "", ErrAPIFailure
+		}
+		cfg.Errorf("failed to list stacks: %v", err)
+		return nil, "", ErrAPIFailure
+	}
+
+	matches := matchingRemoteStacksForBranch(remoteStacks, branch)
+	if len(matches) == 0 {
+		return nil, "", errRemoteBranchNotFound
+	}
+	if len(matches) > 1 {
+		stackNumbers := make([]string, len(matches))
+		for i, match := range matches {
+			stackNumbers[i] = strconv.Itoa(match.Number)
+		}
+		cfg.Errorf("branch %q belongs to multiple stacks on GitHub (%s)",
+			branch, strings.Join(stackNumbers, ", "))
+		cfg.Printf("Use `%s` with a stack or PR number to choose one",
+			cfg.ColorCyan("gh stack checkout <number>"))
+		return nil, "", ErrDisambiguate
+	}
+
+	for _, pr := range matches[0].PRDetails {
+		if pr.Head.Ref == branch && pr.Number > 0 {
+			return checkoutRemoteStack(cfg, sf, gitDir, pr.Number)
+		}
+	}
+	return nil, "", errRemoteBranchNotFound
 }
 
 // checkoutRemoteStack discovers a stack from GitHub for the given PR number,

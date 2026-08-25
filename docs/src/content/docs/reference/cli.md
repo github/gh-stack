@@ -133,7 +133,7 @@ A bare number is interpreted first as a stack or PR number (repo-scoped identifi
 
 When a remote stack is referenced, the command fetches the stack on GitHub, pulls the branches, and sets up the stack locally. If the stack already exists locally and matches, it switches to the branch. If the local and remote stacks have different compositions, you'll be prompted to resolve the conflict.
 
-When a branch name is provided, the command resolves it against locally tracked stacks only.
+When a branch name is provided, the command checks locally tracked stacks first. If the branch is not tracked locally, it looks for the branch on remote stacks and pulls down the matching stack. If more than one stack matches, use a stack or PR number to choose one explicitly.
 
 When run without arguments in an interactive terminal, first checks whether the current branch belongs to a stack on remote that is not tracked locally, and offers to check it out. If there is no unique match or you decline, it opens a searchable picker listing every stack available to you — both the stacks tracked locally and the stacks that exist only on GitHub. Each row shows the stack number, its bottom and top branch, base branch, a status bar summarizing how many of its pull requests are merged, open, closed, or not yet pushed, and whether the stack is available locally or only on the remote. Filter with the All / Local / Remote tabs or type `/` to search; fully merged stacks are omitted. Selecting a remote-only stack clones it locally before switching to it.
 
@@ -149,7 +149,7 @@ gh stack checkout 42
 # Check out a stack by PR URL
 gh stack checkout https://github.com/owner/repo/pull/42
 
-# Check out a stack by branch name (local only)
+# Check out a stack by branch name
 gh stack checkout feature-auth
 
 # Interactive — pick from all available stacks (local and remote)
