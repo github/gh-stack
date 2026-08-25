@@ -229,6 +229,7 @@ func resolveNumericTarget(cfg *config.Config, sf *stack.StackFile, gitDir string
 
 	// Nothing worked — return the remote error which has the most
 	// informative message for a numeric input
+	cfg.Errorf("PR #%d is not part of a stack on GitHub", number)
 	return nil, "", remoteErr
 }
 
@@ -248,7 +249,7 @@ func checkoutRemoteStackByBranch(cfg *config.Config, sf *stack.StackFile, gitDir
 		var httpErr *api.HTTPError
 		if errors.As(err, &httpErr) && httpErr.StatusCode == 404 {
 			warnStacksUnavailable(cfg)
-			return nil, "", ErrAPIFailure
+			return nil, "", ErrStacksUnavailable
 		}
 		cfg.Errorf("failed to list stacks: %v", err)
 		return nil, "", ErrAPIFailure
@@ -272,7 +273,11 @@ func checkoutRemoteStackByBranch(cfg *config.Config, sf *stack.StackFile, gitDir
 
 	for _, pr := range matches[0].PRDetails {
 		if pr.Head.Ref == branch && pr.Number > 0 {
-			return checkoutRemoteStack(cfg, sf, gitDir, pr.Number)
+			s, targetBranch, err := checkoutRemoteStack(cfg, sf, gitDir, pr.Number)
+			if errors.Is(err, ErrNotInStack) {
+				cfg.Errorf("PR #%d is not part of a stack on GitHub", pr.Number)
+			}
+			return s, targetBranch, err
 		}
 	}
 	return nil, "", errRemoteBranchNotFound
@@ -295,13 +300,12 @@ func checkoutRemoteStack(cfg *config.Config, sf *stack.StackFile, gitDir string,
 		var httpErr *api.HTTPError
 		if errors.As(err, &httpErr) && httpErr.StatusCode == 404 {
 			warnStacksUnavailable(cfg)
-			return nil, "", ErrAPIFailure
+			return nil, "", ErrStacksUnavailable
 		}
 		cfg.Errorf("failed to list stacks: %v", err)
 		return nil, "", ErrAPIFailure
 	}
 	if remoteStack == nil {
-		cfg.Errorf("PR #%d is not part of a stack on GitHub", prNumber)
 		return nil, "", ErrNotInStack
 	}
 

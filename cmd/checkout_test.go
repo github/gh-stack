@@ -134,6 +134,7 @@ func TestCheckout_ByRemoteBranchName(t *testing.T) {
 			assert.Equal(t, tt.target, checkedOut, "should check out the requested layer, not the top branch")
 			assert.Contains(t, output, "Imported stack with 3 branches")
 			assert.Contains(t, output, "Switched to "+tt.target)
+			assert.NotContains(t, output, "not part of a stack")
 
 			sf, loadErr := stack.Load(gitDir)
 			require.NoError(t, loadErr)
@@ -322,6 +323,30 @@ func TestCheckout_RemoteBranchName_APIError(t *testing.T) {
 	assert.Contains(t, output, "failed to list stacks: network error")
 }
 
+func TestCheckout_RemoteBranchName_StacksUnavailable(t *testing.T) {
+	gitDir := t.TempDir()
+	restore := git.SetOps(&git.MockOps{
+		GitDirFn:        func() (string, error) { return gitDir, nil },
+		CurrentBranchFn: func() (string, error) { return "main", nil },
+	})
+	defer restore()
+
+	require.NoError(t, stack.Save(gitDir, &stack.StackFile{SchemaVersion: 1, Stacks: []stack.Stack{}}))
+
+	cfg, outR, errR := config.NewTestConfig()
+	cfg.GitHubClientOverride = &github.MockClient{
+		ListStacksFn: func() ([]github.RemoteStack, error) {
+			return nil, &api.HTTPError{StatusCode: 404, Message: "Not Found"}
+		},
+	}
+
+	err := runCheckout(cfg, &checkoutOptions{target: "feature"})
+	output := collectOutput(cfg, outR, errR)
+
+	assert.ErrorIs(t, err, ErrStacksUnavailable)
+	assert.Contains(t, output, "not enabled")
+}
+
 // --- Remote checkout tests (numeric target, local miss → API fallback) ---
 
 func TestCheckout_NumericTarget_StacksNotAvailable(t *testing.T) {
@@ -345,7 +370,7 @@ func TestCheckout_NumericTarget_StacksNotAvailable(t *testing.T) {
 	err := runCheckout(cfg, &checkoutOptions{target: "123"})
 	output := collectOutput(cfg, outR, errR)
 
-	assert.ErrorIs(t, err, ErrAPIFailure)
+	assert.ErrorIs(t, err, ErrStacksUnavailable)
 	assert.Contains(t, output, "not enabled")
 }
 
@@ -790,6 +815,7 @@ func TestCheckout_NumericTarget_FallbackToBranchName(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, "999", checkedOut)
 	assert.Contains(t, output, "Switched to 999")
+	assert.NotContains(t, output, "not part of a stack")
 }
 
 func TestCheckout_NumericTarget_CompositionMismatch_NonInteractive(t *testing.T) {
