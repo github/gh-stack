@@ -135,7 +135,7 @@ When a remote stack is referenced, the command fetches the stack on GitHub, pull
 
 When a branch name is provided, the command resolves it against locally tracked stacks only.
 
-When run without arguments in an interactive terminal, opens a searchable picker listing every stack available to you — both the stacks tracked locally and the stacks that exist only on GitHub. Each row shows the stack number, its bottom and top branch, base branch, a status bar summarizing how many of its pull requests are merged, open, closed, or not yet pushed, and whether the stack is available locally or only on the remote. Filter with the All / Local / Remote tabs or type `/` to search; fully merged stacks are omitted. Selecting a remote-only stack clones it locally before switching to it.
+When run without arguments in an interactive terminal, first checks whether the current branch is untracked locally but belongs to exactly one active stack on GitHub and offers to check it out. If there is no unique match or you decline, it opens a searchable picker listing every stack available to you — both the stacks tracked locally and the stacks that exist only on GitHub. Each row shows the stack number, its bottom and top branch, base branch, a status bar summarizing how many of its pull requests are merged, open, closed, or not yet pushed, and whether the stack is available locally or only on the remote. Filter with the All / Local / Remote tabs or type `/` to search; fully merged stacks are omitted. Selecting a remote-only stack clones it locally before switching to it.
 
 **Examples:**
 
