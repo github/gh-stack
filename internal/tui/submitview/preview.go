@@ -93,12 +93,15 @@ func (m Model) handleEditorFinished(msg editorFinishedMsg) (tea.Model, tea.Cmd) 
 }
 
 // resolveEditor returns the configured editor command, checking GH_EDITOR,
-// VISUAL, then EDITOR. It returns "" when none are set.
+// VISUAL, then EDITOR. If none are set, it falls back to vi when available.
 func resolveEditor() string {
 	for _, key := range []string{"GH_EDITOR", "VISUAL", "EDITOR"} {
 		if v := strings.TrimSpace(os.Getenv(key)); v != "" {
 			return v
 		}
+	}
+	if _, err := exec.LookPath("vi"); err == nil {
+		return "vi"
 	}
 	return ""
 }
