@@ -487,7 +487,7 @@ Shows all branches in the stack, their ordering, PR links, and the most recent c
 
 | Flag | Description |
 |------|-------------|
-| `-s, --short` | Compact output (branch names only) |
+| `-s, --short` | Compact one-line-per-branch output |
 | `--json` | Output stack data as JSON |
 
 **Examples:**
@@ -497,6 +497,10 @@ gh stack view
 gh stack view --short
 gh stack view --json
 ```
+
+`gh stack view --short` uses OSC 8 hyperlinks for PR numbers when the terminal
+supports them. Otherwise, the full URL is shown for copy/paste. Set
+`GH_STACK_HYPERLINKS=1` or `GH_STACK_HYPERLINKS=0` to override terminal detection.
 
 ### `gh stack unstack`
 
