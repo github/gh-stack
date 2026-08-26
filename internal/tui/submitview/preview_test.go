@@ -2,7 +2,9 @@ package submitview
 
 import (
 	"os"
+	"path/filepath"
 	"reflect"
+	"runtime"
 	"testing"
 
 	tea "github.com/charmbracelet/bubbletea"
@@ -29,6 +31,7 @@ func TestResolveEditor(t *testing.T) {
 	t.Setenv("GH_EDITOR", "")
 	t.Setenv("VISUAL", "")
 	t.Setenv("EDITOR", "")
+	t.Setenv("PATH", "")
 	assert.Equal(t, "", resolveEditor())
 
 	t.Setenv("EDITOR", "nano")
@@ -37,12 +40,27 @@ func TestResolveEditor(t *testing.T) {
 	assert.Equal(t, "vim", resolveEditor())
 	t.Setenv("GH_EDITOR", "code --wait")
 	assert.Equal(t, "code --wait", resolveEditor())
+
+	t.Setenv("GH_EDITOR", "")
+	t.Setenv("VISUAL", "")
+	t.Setenv("EDITOR", "")
+	binDir := t.TempDir()
+	viName := "vi"
+	if runtime.GOOS == "windows" {
+		viName += ".exe"
+	}
+	require.NoError(t, os.WriteFile(filepath.Join(binDir, viName), nil, 0o755))
+	t.Setenv("PATH", binDir)
+	assert.Equal(t, "vi", resolveEditor())
+	t.Setenv("EDITOR", "nano")
+	assert.Equal(t, "nano", resolveEditor())
 }
 
 func TestOpenEditor_NoEditorSet(t *testing.T) {
 	t.Setenv("GH_EDITOR", "")
 	t.Setenv("VISUAL", "")
 	t.Setenv("EDITOR", "")
+	t.Setenv("PATH", "")
 
 	m := testModel(t, newNodes())
 	updated, cmd := m.Update(tea.KeyMsg{Type: tea.KeyCtrlE})
