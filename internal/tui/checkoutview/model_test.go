@@ -317,21 +317,49 @@ func manyRows(n int) []StackRow {
 	return rows
 }
 
-func TestView_InlineHeightIsBounded(t *testing.T) {
-	// A long list on a tall terminal must not take over the screen: it shows at
-	// most maxVisibleRows rows plus a little chrome, and offers a scroll hint.
-	m := drive(New(manyRows(30)), tea.WindowSizeMsg{Width: 90, Height: 50})
+func TestBodyHeight_UsesAvailableTerminalSpace(t *testing.T) {
+	tests := []struct {
+		name      string
+		rows      int
+		height    int
+		searching bool
+		want      int
+	}{
+		{name: "unknown terminal size uses fallback", rows: 30, want: initialVisibleRows},
+		{name: "small list stays compact", rows: 3, height: 50, want: 3},
+		{name: "tall terminal expands past fallback", rows: 100, height: 50, want: 44},
+		{name: "short terminal shrinks", rows: 30, height: 12, want: 6},
+		{name: "search reserves another line", rows: 100, height: 50, searching: true, want: 43},
+		{name: "empty list reserves one row", height: 50, want: 1},
+		{name: "tiny terminal reserves one row", rows: 30, height: 3, want: 1},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			m := New(manyRows(tt.rows))
+			m.height = tt.height
+			m.searching = tt.searching
+			assert.Equal(t, tt.want, m.bodyHeight())
+		})
+	}
+}
+
+func TestView_ExpandsToAvailableTerminalHeight(t *testing.T) {
+	const terminalHeight = 50
+	m := drive(New(manyRows(100)), tea.WindowSizeMsg{Width: 90, Height: terminalHeight})
+
+	assert.Greater(t, m.bodyHeight(), initialVisibleRows)
+	assert.Equal(t, terminalHeight-m.chromeHeight(), m.bodyHeight())
 	lines := len(strings.Split(m.View(), "\n"))
-	assert.LessOrEqual(t, lines, maxVisibleRows+6, "picker must not fill a tall terminal")
-	assert.GreaterOrEqual(t, lines, maxVisibleRows, "shows up to maxVisibleRows rows")
-	assert.Contains(t, stripANSI(m.View()), "of 30", "shows a scroll position indicator")
+	assert.Equal(t, terminalHeight-1, lines, "picker keeps one safety row free")
+	assert.Contains(t, stripANSI(m.View()), "of 100", "shows a scroll position indicator")
 }
 
 func TestView_ShrinksToShortTerminal(t *testing.T) {
 	m := drive(New(manyRows(30)), tea.WindowSizeMsg{Width: 90, Height: 12})
 	lines := len(strings.Split(m.View(), "\n"))
+	assert.Equal(t, 12-m.chromeHeight(), m.bodyHeight())
 	assert.LessOrEqual(t, lines, 12, "must fit within a short terminal")
-	assert.Less(t, lines, maxVisibleRows+6)
 }
 
 func TestView_ClearsOnExit(t *testing.T) {

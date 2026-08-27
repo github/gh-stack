@@ -253,23 +253,22 @@ func (m *Model) moveCursor(delta int) {
 	m.ensureVisible()
 }
 
-// maxVisibleRows caps how many stack rows the inline picker shows at once. The
-// rest are reached by scrolling, so the picker never takes over the screen.
-const maxVisibleRows = 10
+// initialVisibleRows caps the picker before the terminal size is known, so the
+// first frame cannot overflow a large stack.
+const initialVisibleRows = 10
 
 // bodyHeight returns the number of table rows shown at once: the row count
-// capped at maxVisibleRows, and further shrunk to fit a short terminal. It never
-// returns less than 1 (a line is reserved for the empty-state message).
+// capped by the available terminal height. Before the terminal size is known,
+// it falls back to initialVisibleRows. It never returns less than 1 (a line is
+// reserved for the empty-state message).
 func (m Model) bodyHeight() int {
 	rows := len(m.filtered)
 	if rows < 1 {
 		rows = 1
 	}
-	limit := maxVisibleRows
+	limit := initialVisibleRows
 	if m.height > 0 {
-		if avail := m.height - m.chromeHeight(); avail < limit {
-			limit = avail
-		}
+		limit = m.height - m.chromeHeight()
 	}
 	if limit < 1 {
 		limit = 1
@@ -281,9 +280,9 @@ func (m Model) bodyHeight() int {
 }
 
 // chromeHeight is the number of lines reserved around the table body when
-// fitting the picker to a short terminal: title, tabs, blank, header, footer
-// (5), plus one line of breathing room so the inline picker never exactly fills
-// the terminal (which would make it scroll). The search line adds one more.
+// fitting the picker to the terminal: title, tabs, blank, header, footer (5),
+// plus one line of breathing room so the inline picker never exactly fills the
+// terminal (which would make it scroll). The search line adds one more.
 func (m Model) chromeHeight() int {
 	chrome := 6
 	if m.searching {
