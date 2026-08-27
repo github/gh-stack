@@ -3,6 +3,7 @@ package cmd
 import (
 	"fmt"
 
+	"github.com/cli/go-gh/v2/pkg/prompter"
 	"github.com/github/gh-stack/internal/branch"
 	"github.com/github/gh-stack/internal/config"
 	"github.com/github/gh-stack/internal/git"
@@ -59,7 +60,7 @@ func runAdd(cfg *config.Config, opts *addOptions, args []string) error {
 		return ErrInvalidArgs
 	}
 
-	result, err := loadStack(cfg, "")
+	result, err := loadStackOptional(cfg, "")
 	if err != nil {
 		return ErrNotInStack
 	}
@@ -68,6 +69,14 @@ func runAdd(cfg *config.Config, opts *addOptions, args []string) error {
 	if err := modify.CheckStateGuard(gitDir); err != nil {
 		cfg.Errorf("%s", err)
 		return ErrModifyRecovery
+	}
+
+	if result.Stack == nil {
+		branchName, err := addBranchNameFromArgs(cfg, opts, args)
+		if err != nil {
+			return err
+		}
+		return initializeStackFromAdd(cfg, opts, branchName, result.CurrentBranch)
 	}
 
 	sf := result.StackFile
@@ -122,21 +131,11 @@ func runAdd(cfg *config.Config, opts *addOptions, args []string) error {
 	//   explicit name    -> used verbatim
 	//   -m without a name -> auto-generated from the commit message
 	//   neither          -> prompt for a name
-	var branchName string
-	var explicitName string
-	if len(args) > 0 {
-		explicitName = args[0]
+	branchName, err := addBranchNameFromArgs(cfg, opts, args)
+	if err != nil {
+		return err
 	}
-
-	if explicitName != "" {
-		branchName = explicitName
-	} else if opts.message != "" {
-		branchName = branch.DateSlug(opts.message)
-		if branchName == "" {
-			cfg.Errorf("could not generate branch name")
-			return ErrSilent
-		}
-	} else {
+	if branchName == "" {
 		// No -m and no explicit name — prompt for one.
 		for {
 			input, err := promptInput(cfg, "Enter a name for the new branch:")
@@ -237,6 +236,80 @@ func runAdd(cfg *config.Config, opts *addOptions, args []string) error {
 		} else {
 			cfg.Successf("Created and checked out branch %q", branchName)
 		}
+	}
+
+	return nil
+}
+
+func addBranchNameFromArgs(cfg *config.Config, opts *addOptions, args []string) (string, error) {
+	if len(args) > 0 && args[0] != "" {
+		return args[0], nil
+	}
+	if opts.message == "" {
+		return "", nil
+	}
+
+	branchName := branch.DateSlug(opts.message)
+	if branchName == "" {
+		cfg.Errorf("could not generate branch name")
+		return "", ErrSilent
+	}
+	return branchName, nil
+}
+
+func initializeStackFromAdd(cfg *config.Config, opts *addOptions, branchName, currentBranch string) error {
+	if !cfg.IsInteractive() {
+		reportBranchNotInStack(cfg, currentBranch, false)
+		return ErrNotInStack
+	}
+
+	prompt := "Would you like to initialize a new stack?"
+	var confirmed bool
+	var err error
+	if cfg.ConfirmFn != nil {
+		confirmed, err = cfg.ConfirmFn(prompt, true)
+	} else {
+		p := prompter.New(cfg.In, cfg.Out, cfg.Err)
+		confirmed, err = p.Confirm(prompt, true)
+	}
+	if err != nil {
+		if isInterruptError(err) {
+			printInterrupt(cfg)
+			return ErrSilent
+		}
+		cfg.Errorf("failed to read confirmation: %s", err)
+		return ErrSilent
+	}
+	if !confirmed {
+		reportBranchNotInStack(cfg, currentBranch, false)
+		return ErrNotInStack
+	}
+
+	wantsCommit := opts.message != "" || opts.stageAll || opts.stageTracked
+	if wantsCommit {
+		if err := stageAndValidate(cfg, opts); err != nil {
+			return ErrSilent
+		}
+	}
+
+	initOpts := &initOptions{}
+	if branchName != "" {
+		initOpts.branches = []string{branchName}
+	}
+	if err := runInit(cfg, initOpts); err != nil {
+		return err
+	}
+
+	if wantsCommit {
+		sha, err := doCommit(opts.message)
+		if err != nil {
+			cfg.Errorf("failed to commit: %s", err)
+			return ErrSilent
+		}
+		if branchName == "" {
+			branchName, _ = git.CurrentBranch()
+		}
+		cfg.Successf("Created commit %s on %s", cfg.ColorBold(sha), branchName)
 	}
 
 	return nil

@@ -69,6 +69,65 @@ func TestInit_CustomTrunk(t *testing.T) {
 	assert.Equal(t, "develop", sf.Stacks[0].Trunk.Branch)
 }
 
+func TestInit_RestoresMissingLocalTrunkWhenTagResolves(t *testing.T) {
+	gitDir := t.TempDir()
+	trunkExists := false
+	var fetchedRemote string
+	var fetchedBranches []string
+	var created [][2]string
+
+	restore := git.SetOps(&git.MockOps{
+		GitDirFn:          func() (string, error) { return gitDir, nil },
+		DefaultBranchFn:   func() (string, error) { return "main", nil },
+		CurrentBranchFn:   func() (string, error) { return "renamed-branch", nil },
+		IsRerereEnabledFn: func() (bool, error) { return true, nil },
+		BranchExistsFn: func(name string) bool {
+			return name == "renamed-branch" || (name == "main" && trunkExists)
+		},
+		ResolveRemoteFn: func(branch string) (string, error) {
+			assert.Equal(t, "renamed-branch", branch)
+			return "origin", nil
+		},
+		FetchBranchesFn: func(remote string, branches []string) error {
+			fetchedRemote = remote
+			fetchedBranches = branches
+			return nil
+		},
+		RevParseFn: func(ref string) (string, error) {
+			// A tag named "main" can resolve even when the local branch is absent.
+			return "sha-" + ref, nil
+		},
+		CreateBranchFn: func(name, base string) error {
+			created = append(created, [2]string{name, base})
+			if name == "main" {
+				trunkExists = true
+			}
+			return nil
+		},
+		CheckoutBranchFn: func(string) error { return nil },
+	})
+	defer restore()
+
+	cfg, outR, errR := config.NewTestConfig()
+	err := runInit(cfg, &initOptions{branches: []string{"first-layer"}})
+	output := collectOutput(cfg, outR, errR)
+
+	require.NoError(t, err)
+	assert.Equal(t, "origin", fetchedRemote)
+	assert.Equal(t, []string{"main"}, fetchedBranches)
+	assert.Equal(t, [][2]string{
+		{"main", "origin/main"},
+		{"first-layer", "refs/heads/main"},
+	}, created)
+	assert.Contains(t, output, "Created local trunk branch main from origin/main")
+
+	sf, loadErr := stack.Load(gitDir)
+	require.NoError(t, loadErr)
+	require.Len(t, sf.Stacks, 1)
+	assert.Equal(t, "main", sf.Stacks[0].Trunk.Branch)
+	assert.Equal(t, []string{"first-layer"}, sf.Stacks[0].BranchNames())
+}
+
 func TestInit_AdoptExistingBranches(t *testing.T) {
 	gitDir := t.TempDir()
 	restore := git.SetOps(&git.MockOps{

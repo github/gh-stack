@@ -106,7 +106,9 @@ Add a new branch on top of the current stack.
 gh stack add [flags] [branch]
 ```
 
-Creates a new branch at the current HEAD, adds it to the top of the stack, and checks it out. Must be run while on the topmost branch of a stack. If no branch name is given, prompts for one.
+For an existing stack, creates a new branch at the current HEAD, adds it to the top of the stack, and checks it out. Must be run while on the topmost branch of a stack. If no branch name is given, prompts for one.
+
+When run interactively from a branch that is not part of a stack, `add` offers to initialize a new stack instead. The supplied or auto-generated branch name becomes the first layer; without one, the standard `init` prompts are used.
 
 You can optionally stage changes and create a commit as part of the `add` flow. When `-m` is provided without an explicit branch name, the branch name is auto-generated in date+slug format (e.g., `03-24-add_login`).
 

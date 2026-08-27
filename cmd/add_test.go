@@ -1,9 +1,11 @@
 package cmd
 
 import (
+	"fmt"
 	"testing"
 	"time"
 
+	"github.com/AlecAivazis/survey/v2/terminal"
 	"github.com/github/gh-stack/internal/config"
 	"github.com/github/gh-stack/internal/git"
 	"github.com/github/gh-stack/internal/stack"
@@ -588,4 +590,266 @@ func TestAdd_AdoptExistingBranchWithoutCommonBaseFails(t *testing.T) {
 	sf, loadErr := stack.Load(gitDir)
 	require.NoError(t, loadErr)
 	assert.Equal(t, []string{"b1"}, sf.Stacks[0].BranchNames())
+}
+
+func TestAdd_InitializesStackWithExplicitBranch(t *testing.T) {
+	gitDir := t.TempDir()
+	trunkExists := false
+	var created [][2]string
+	var checkedOut string
+	restore := git.SetOps(&git.MockOps{
+		GitDirFn:          func() (string, error) { return gitDir, nil },
+		CurrentBranchFn:   func() (string, error) { return "unstacked", nil },
+		DefaultBranchFn:   func() (string, error) { return "main", nil },
+		IsRerereEnabledFn: func() (bool, error) { return true, nil },
+		BranchExistsFn:    func(name string) bool { return name == "main" && trunkExists },
+		RevParseFn: func(ref string) (string, error) {
+			if ref == "main" && !trunkExists {
+				return "", fmt.Errorf("unknown revision %s", ref)
+			}
+			return "sha-" + ref, nil
+		},
+		CreateBranchFn: func(name, base string) error {
+			created = append(created, [2]string{name, base})
+			if name == "main" {
+				trunkExists = true
+			}
+			return nil
+		},
+		CheckoutBranchFn: func(name string) error {
+			checkedOut = name
+			return nil
+		},
+	})
+	defer restore()
+
+	cfg, outR, errR := config.NewTestConfig()
+	cfg.ForceInteractive = true
+	cfg.ConfirmFn = func(prompt string, defaultValue bool) (bool, error) {
+		assert.Equal(t, "Would you like to initialize a new stack?", prompt)
+		assert.True(t, defaultValue)
+		return true, nil
+	}
+
+	err := runAdd(cfg, &addOptions{}, []string{"first-layer"})
+	output := collectOutput(cfg, outR, errR)
+
+	require.NoError(t, err)
+	assert.NotContains(t, output, "not part of a stack")
+	assert.Equal(t, [][2]string{
+		{"main", "origin/main"},
+		{"first-layer", "refs/heads/main"},
+	}, created)
+	assert.Equal(t, "first-layer", checkedOut)
+
+	sf, loadErr := stack.Load(gitDir)
+	require.NoError(t, loadErr)
+	require.Len(t, sf.Stacks, 1)
+	assert.Equal(t, []string{"first-layer"}, sf.Stacks[0].BranchNames())
+}
+
+func TestAdd_InitializesStackWithPromptedBranch(t *testing.T) {
+	gitDir := t.TempDir()
+	var createdBranch string
+	restore := git.SetOps(&git.MockOps{
+		GitDirFn:          func() (string, error) { return gitDir, nil },
+		CurrentBranchFn:   func() (string, error) { return "main", nil },
+		DefaultBranchFn:   func() (string, error) { return "main", nil },
+		IsRerereEnabledFn: func() (bool, error) { return true, nil },
+		CreateBranchFn: func(name, base string) error {
+			createdBranch = name
+			return nil
+		},
+		CheckoutBranchFn: func(string) error { return nil },
+	})
+	defer restore()
+
+	cfg, outR, errR := config.NewTestConfig()
+	cfg.ForceInteractive = true
+	cfg.ConfirmFn = func(string, bool) (bool, error) { return true, nil }
+	cfg.InputFn = func(prompt string) (string, error) {
+		assert.Equal(t, "What's the name of the first branch:", prompt)
+		return "prompted-layer", nil
+	}
+
+	err := runAdd(cfg, &addOptions{}, nil)
+	output := collectOutput(cfg, outR, errR)
+
+	require.NoError(t, err)
+	require.NotContains(t, output, "\u2717", "unexpected error")
+	assert.Equal(t, "prompted-layer", createdBranch)
+
+	sf, loadErr := stack.Load(gitDir)
+	require.NoError(t, loadErr)
+	require.Len(t, sf.Stacks, 1)
+	assert.Equal(t, []string{"prompted-layer"}, sf.Stacks[0].BranchNames())
+}
+
+func TestAdd_InitializesGeneratedBranchAndCommits(t *testing.T) {
+	gitDir := t.TempDir()
+	currentBranch := "unstacked"
+	stageAllCalled := false
+	commitCalled := false
+	expectedBranch := time.Now().Format("01-02") + "-first_layer"
+
+	restore := git.SetOps(&git.MockOps{
+		GitDirFn:          func() (string, error) { return gitDir, nil },
+		CurrentBranchFn:   func() (string, error) { return currentBranch, nil },
+		DefaultBranchFn:   func() (string, error) { return "main", nil },
+		IsRerereEnabledFn: func() (bool, error) { return true, nil },
+		BranchExistsFn:    func(name string) bool { return name == "main" },
+		CreateBranchFn: func(name, base string) error {
+			assert.Equal(t, expectedBranch, name)
+			assert.Equal(t, "refs/heads/main", base)
+			return nil
+		},
+		CheckoutBranchFn: func(name string) error {
+			require.True(t, stageAllCalled, "changes should be staged before initialization")
+			currentBranch = name
+			return nil
+		},
+		StageAllFn: func() error {
+			stageAllCalled = true
+			return nil
+		},
+		HasStagedChangesFn: func() bool { return true },
+		CommitFn: func(message string) (string, error) {
+			assert.Equal(t, "First layer", message)
+			assert.Equal(t, expectedBranch, currentBranch)
+			commitCalled = true
+			return "abc123", nil
+		},
+	})
+	defer restore()
+
+	cfg, outR, errR := config.NewTestConfig()
+	cfg.ForceInteractive = true
+	cfg.ConfirmFn = func(string, bool) (bool, error) { return true, nil }
+
+	err := runAdd(cfg, &addOptions{stageAll: true, message: "First layer"}, nil)
+	output := collectOutput(cfg, outR, errR)
+
+	require.NoError(t, err)
+	require.NotContains(t, output, "\u2717", "unexpected error")
+	assert.True(t, stageAllCalled)
+	assert.True(t, commitCalled)
+
+	sf, loadErr := stack.Load(gitDir)
+	require.NoError(t, loadErr)
+	require.Len(t, sf.Stacks, 1)
+	assert.Equal(t, []string{expectedBranch}, sf.Stacks[0].BranchNames())
+}
+
+func TestAdd_MissingStackWithoutConfirmationReturnsNotInStack(t *testing.T) {
+	tests := []struct {
+		name        string
+		interactive bool
+		confirmed   bool
+	}{
+		{
+			name:        "non-interactive",
+			interactive: false,
+		},
+		{
+			name:        "declined",
+			interactive: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			gitDir := t.TempDir()
+			createCalled := false
+			confirmCalled := false
+			restore := git.SetOps(&git.MockOps{
+				GitDirFn:        func() (string, error) { return gitDir, nil },
+				CurrentBranchFn: func() (string, error) { return "unstacked", nil },
+				CreateBranchFn: func(string, string) error {
+					createCalled = true
+					return nil
+				},
+			})
+			defer restore()
+
+			cfg, outR, errR := config.NewTestConfig()
+			cfg.ForceInteractive = tt.interactive
+			cfg.ConfirmFn = func(string, bool) (bool, error) {
+				confirmCalled = true
+				return tt.confirmed, nil
+			}
+
+			err := runAdd(cfg, &addOptions{}, []string{"first-layer"})
+			output := collectOutput(cfg, outR, errR)
+
+			assert.ErrorIs(t, err, ErrNotInStack)
+			assert.Contains(t, output, `current branch "unstacked" is not part of a stack`)
+			assert.Contains(t, output, "gh stack checkout")
+			assert.Contains(t, output, "gh stack init")
+			assert.False(t, createCalled)
+			assert.Equal(t, tt.interactive, confirmCalled)
+		})
+	}
+}
+
+func TestAdd_InitConfirmationError(t *testing.T) {
+	tests := []struct {
+		name       string
+		confirmErr error
+		wantOutput string
+	}{
+		{
+			name:       "interrupt",
+			confirmErr: terminal.InterruptErr,
+			wantOutput: "Received interrupt, aborting operation",
+		},
+		{
+			name:       "prompt failure",
+			confirmErr: assert.AnError,
+			wantOutput: "failed to read confirmation",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			gitDir := t.TempDir()
+			restore := git.SetOps(&git.MockOps{
+				GitDirFn:        func() (string, error) { return gitDir, nil },
+				CurrentBranchFn: func() (string, error) { return "unstacked", nil },
+			})
+			defer restore()
+
+			cfg, outR, errR := config.NewTestConfig()
+			cfg.ForceInteractive = true
+			cfg.ConfirmFn = func(string, bool) (bool, error) {
+				return false, tt.confirmErr
+			}
+
+			err := runAdd(cfg, &addOptions{}, []string{"first-layer"})
+			output := collectOutput(cfg, outR, errR)
+
+			assert.ErrorIs(t, err, ErrSilent)
+			assert.Contains(t, output, tt.wantOutput)
+		})
+	}
+}
+
+func TestAdd_LoaderFailureDoesNotOfferInitialization(t *testing.T) {
+	restore := git.SetOps(&git.MockOps{
+		GitDirFn: func() (string, error) { return "", assert.AnError },
+	})
+	defer restore()
+
+	cfg, outR, errR := config.NewTestConfig()
+	cfg.ForceInteractive = true
+	cfg.ConfirmFn = func(string, bool) (bool, error) {
+		t.Fatal("confirmation should not be requested for a loader failure")
+		return false, nil
+	}
+
+	err := runAdd(cfg, &addOptions{}, []string{"first-layer"})
+	output := collectOutput(cfg, outR, errR)
+
+	assert.ErrorIs(t, err, ErrNotInStack)
+	assert.Contains(t, output, "not a git repository")
+	assert.NotContains(t, output, "gh stack init")
 }

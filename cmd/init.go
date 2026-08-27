@@ -106,6 +106,23 @@ func runInit(cfg *config.Config, opts *initOptions) error {
 		}
 	}
 
+	// The repository's default branch may only exist on the remote if the
+	// initial local branch was renamed before starting the stack.
+	if currentBranch != trunk && !git.BranchExists(trunk) {
+		remote, err := pickRemote(cfg, currentBranch, "")
+		if err != nil {
+			if !errors.Is(err, errInterrupt) {
+				cfg.Errorf("failed to resolve remote: %s", err)
+			}
+			return ErrSilent
+		}
+		if err := ensureLocalTrunk(cfg, trunk, remote); err != nil {
+			cfg.Errorf("%s", err)
+			return ErrSilent
+		}
+	}
+	trunkRef := "refs/heads/" + trunk
+
 	// --- Flag validation ---
 
 	// --adopt is deprecated; print a notice and continue normally.
@@ -122,7 +139,7 @@ func runInit(cfg *config.Config, opts *initOptions) error {
 
 	if len(opts.branches) > 0 {
 		// === ARGS PATH ===
-		branches, adopted, err = resolveArgBranches(cfg, opts, sf, trunk)
+		branches, adopted, err = resolveArgBranches(cfg, opts, sf, trunkRef)
 		if err != nil {
 			return err
 		}
@@ -135,7 +152,7 @@ func runInit(cfg *config.Config, opts *initOptions) error {
 		}
 
 		var interactiveAdopted bool
-		branches, interactiveAdopted, err = runInteractiveInit(cfg, sf, trunk, currentBranch)
+		branches, interactiveAdopted, err = runInteractiveInit(cfg, sf, trunk, trunkRef, currentBranch)
 		if err != nil {
 			return err
 		}
@@ -146,10 +163,10 @@ func runInit(cfg *config.Config, opts *initOptions) error {
 
 	// --- Build stack ---
 
-	trunkSHA, _ := git.RevParse(trunk)
+	trunkSHA, _ := git.RevParse(trunkRef)
 	branchRefs := make([]stack.BranchRef, len(branches))
 	for i, b := range branches {
-		parent := trunk
+		parent := trunkRef
 		if i > 0 {
 			parent = branches[i-1]
 		}
@@ -211,7 +228,7 @@ func runInit(cfg *config.Config, opts *initOptions) error {
 
 // resolveArgBranches handles the args path: classifies each branch as
 // adopted (exists) or created (missing), validates all before creating any.
-func resolveArgBranches(cfg *config.Config, opts *initOptions, sf *stack.StackFile, trunk string) ([]string, map[string]bool, error) {
+func resolveArgBranches(cfg *config.Config, opts *initOptions, sf *stack.StackFile, trunkRef string) ([]string, map[string]bool, error) {
 	adopted := make(map[string]bool)
 
 	// Phase 1: resolve final names, classify, validate
@@ -244,7 +261,7 @@ func resolveArgBranches(cfg *config.Config, opts *initOptions, sf *stack.StackFi
 		if bi.exists {
 			adopted[bi.name] = true
 		} else {
-			parent := trunk
+			parent := trunkRef
 			if i > 0 {
 				parent = resolved[i-1].name
 			}
@@ -263,7 +280,7 @@ func resolveArgBranches(cfg *config.Config, opts *initOptions, sf *stack.StackFi
 // multi-branch args, then offers to use the current branch or create a new
 // one. Returns the branches and whether the branch was adopted (already
 // existed).
-func runInteractiveInit(cfg *config.Config, sf *stack.StackFile, trunk, currentBranch string) ([]string, bool, error) {
+func runInteractiveInit(cfg *config.Config, sf *stack.StackFile, trunk, trunkRef, currentBranch string) ([]string, bool, error) {
 	p := prompter.New(cfg.In, cfg.Out, cfg.Err)
 
 	cfg.Printf("Initializing a stack from %s.", trunk)
@@ -331,7 +348,7 @@ func runInteractiveInit(cfg *config.Config, sf *stack.StackFile, trunk, currentB
 	if git.BranchExists(branchName) {
 		wasAdopted = true
 	} else {
-		if err := git.CreateBranch(branchName, trunk); err != nil {
+		if err := git.CreateBranch(branchName, trunkRef); err != nil {
 			cfg.Errorf("creating branch %s: %s", branchName, err)
 			return nil, false, ErrSilent
 		}
