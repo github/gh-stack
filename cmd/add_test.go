@@ -1,6 +1,7 @@
 package cmd
 
 import (
+	"fmt"
 	"testing"
 	"time"
 
@@ -593,22 +594,32 @@ func TestAdd_AdoptExistingBranchWithoutCommonBaseFails(t *testing.T) {
 
 func TestAdd_InitializesStackWithExplicitBranch(t *testing.T) {
 	gitDir := t.TempDir()
-	var createdBranch, createdBase, checkedOut string
+	trunkExists := false
+	var created [][2]string
+	var checkedOut string
 	restore := git.SetOps(&git.MockOps{
 		GitDirFn:          func() (string, error) { return gitDir, nil },
 		CurrentBranchFn:   func() (string, error) { return "unstacked", nil },
 		DefaultBranchFn:   func() (string, error) { return "main", nil },
 		IsRerereEnabledFn: func() (bool, error) { return true, nil },
+		BranchExistsFn:    func(name string) bool { return name == "main" && trunkExists },
+		RevParseFn: func(ref string) (string, error) {
+			if ref == "main" && !trunkExists {
+				return "", fmt.Errorf("unknown revision %s", ref)
+			}
+			return "sha-" + ref, nil
+		},
 		CreateBranchFn: func(name, base string) error {
-			createdBranch = name
-			createdBase = base
+			created = append(created, [2]string{name, base})
+			if name == "main" {
+				trunkExists = true
+			}
 			return nil
 		},
 		CheckoutBranchFn: func(name string) error {
 			checkedOut = name
 			return nil
 		},
-		RevParseFn: func(ref string) (string, error) { return "sha-" + ref, nil },
 	})
 	defer restore()
 
@@ -625,8 +636,10 @@ func TestAdd_InitializesStackWithExplicitBranch(t *testing.T) {
 
 	require.NoError(t, err)
 	assert.NotContains(t, output, "not part of a stack")
-	assert.Equal(t, "first-layer", createdBranch)
-	assert.Equal(t, "main", createdBase)
+	assert.Equal(t, [][2]string{
+		{"main", "origin/main"},
+		{"first-layer", "main"},
+	}, created)
 	assert.Equal(t, "first-layer", checkedOut)
 
 	sf, loadErr := stack.Load(gitDir)
@@ -684,6 +697,7 @@ func TestAdd_InitializesGeneratedBranchAndCommits(t *testing.T) {
 		CurrentBranchFn:   func() (string, error) { return currentBranch, nil },
 		DefaultBranchFn:   func() (string, error) { return "main", nil },
 		IsRerereEnabledFn: func() (bool, error) { return true, nil },
+		BranchExistsFn:    func(name string) bool { return name == "main" },
 		CreateBranchFn: func(name, base string) error {
 			assert.Equal(t, expectedBranch, name)
 			assert.Equal(t, "main", base)

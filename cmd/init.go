@@ -106,6 +106,22 @@ func runInit(cfg *config.Config, opts *initOptions) error {
 		}
 	}
 
+	// The repository's default branch may only exist on the remote if the
+	// initial local branch was renamed before starting the stack.
+	if _, err := git.RevParse(trunk); err != nil {
+		remote, err := pickRemote(cfg, currentBranch, "")
+		if err != nil {
+			if !errors.Is(err, errInterrupt) {
+				cfg.Errorf("failed to resolve remote: %s", err)
+			}
+			return ErrSilent
+		}
+		if err := ensureLocalTrunk(cfg, trunk, remote); err != nil {
+			cfg.Errorf("%s", err)
+			return ErrSilent
+		}
+	}
+
 	// --- Flag validation ---
 
 	// --adopt is deprecated; print a notice and continue normally.
