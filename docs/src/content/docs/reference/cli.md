@@ -110,7 +110,7 @@ gh stack view [flags]
 
 | Flag | Description |
 |------|-------------|
-| `-s, --short` | Compact output (branch names only) |
+| `-s, --short` | Compact one-line-per-branch output |
 | `--json` | Output stack data as JSON |
 
 Shows all branches in the stack, their ordering, PR links, and the most recent commit with a relative timestamp. Output is piped through a pager (respects `GIT_PAGER`, `PAGER`, or defaults to `less -R`).
@@ -122,6 +122,10 @@ gh stack view
 gh stack view --short
 gh stack view --json
 ```
+
+`gh stack view --short` uses OSC 8 hyperlinks for PR numbers when the terminal
+supports them. Otherwise, the full URL is shown for copy/paste. Set
+`GH_STACK_HYPERLINKS=1` or `GH_STACK_HYPERLINKS=0` to override terminal detection.
 
 ### `gh stack checkout`
 
@@ -659,6 +663,7 @@ gh stack feedback "Support for reordering branches"
 | Variable | Values | Description |
 |----------|--------|-------------|
 | `GH_STACK_THEME` | `auto` (default), `light`, `dark` | Controls the color palette of the interactive screens (`submit`, `modify`, `view`) and all colored command output. Colors adapt to your terminal background automatically; set this to force the light or dark palette when a terminal doesn't report its background (some SSH or `tmux` setups). |
+| `GH_STACK_HYPERLINKS` | `0`, `1` | Disables or enables OSC 8 hyperlinks when terminal detection is incorrect. Unsupported terminals show the full URL by default. |
 
 ```sh
 # Force the light palette for one command

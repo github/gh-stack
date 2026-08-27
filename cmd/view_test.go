@@ -245,6 +245,27 @@ func TestViewShort_ActiveStack(t *testing.T) {
 	assert.Contains(t, output, "main")
 }
 
+func TestShortPRSuffix_PlainURLFallback(t *testing.T) {
+	t.Setenv("GH_STACK_HYPERLINKS", "0")
+
+	cfg, outR, errR := config.NewTestConfig()
+	defer cfg.Out.Close()
+	defer cfg.Err.Close()
+	defer outR.Close()
+	defer errR.Close()
+
+	b := stack.BranchRef{
+		PullRequest: &stack.PullRequestRef{
+			Number: 42,
+			URL:    "https://github.com/o/r/pull/42",
+		},
+	}
+
+	suffix := shortPRSuffix(cfg, b, "", "", "")
+	assert.Equal(t, " #42 (https://github.com/o/r/pull/42)", suffix)
+	assert.NotContains(t, suffix, "\x1b]8")
+}
+
 // TestViewShort_FullyMergedStack verifies that --short output shows merged
 // branches correctly when all branches in the stack are merged.
 func TestViewShort_FullyMergedStack(t *testing.T) {

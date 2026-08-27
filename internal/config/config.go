@@ -3,6 +3,8 @@ package config
 import (
 	"fmt"
 	"os"
+	"strconv"
+	"strings"
 
 	"github.com/cli/go-gh/v2/pkg/repository"
 	"github.com/cli/go-gh/v2/pkg/term"
@@ -87,6 +89,47 @@ func New() *Config {
 	return cfg
 }
 
+func supportsHyperlinks(isTTY bool) bool {
+	switch strings.ToLower(os.Getenv("GH_STACK_HYPERLINKS")) {
+	case "1", "true", "yes", "on":
+		return true
+	case "0", "false", "no", "off":
+		return false
+	}
+	if !isTTY {
+		return false
+	}
+
+	termName := strings.ToLower(os.Getenv("TERM"))
+	if termName == "dumb" ||
+		os.Getenv("TMUX") != "" ||
+		os.Getenv("STY") != "" ||
+		strings.HasPrefix(termName, "screen") ||
+		strings.HasPrefix(termName, "tmux") {
+		return false
+	}
+
+	switch strings.ToLower(os.Getenv("TERM_PROGRAM")) {
+	case "alacritty", "ghostty", "hyper", "iterm.app", "mintty", "rio", "tabby", "vscode", "warpterminal", "wezterm":
+		return true
+	}
+
+	if version, err := strconv.Atoi(os.Getenv("VTE_VERSION")); err == nil && version >= 5000 {
+		return true
+	}
+	if os.Getenv("WT_SESSION") != "" ||
+		os.Getenv("KITTY_WINDOW_ID") != "" {
+		return true
+	}
+
+	for _, supported := range []string{"alacritty", "contour", "foot", "ghostty", "kitty", "wezterm"} {
+		if strings.Contains(termName, supported) {
+			return true
+		}
+	}
+	return false
+}
+
 func (c *Config) Successf(format string, args ...any) {
 	fmt.Fprintf(c.Err, "%s %s\n", c.ColorSuccess("\u2713"), fmt.Sprintf(format, args...))
 }
@@ -111,16 +154,18 @@ func (c *Config) Outf(format string, args ...any) {
 	fmt.Fprintf(c.Out, format, args...)
 }
 
-// PRLink formats a PR number as a clickable, underlined terminal hyperlink.
-// Falls back to plain "#N" when color is disabled.
+// PRLink formats a PR number as a clickable terminal hyperlink when supported,
+// or includes the full URL as a copyable fallback.
 func (c *Config) PRLink(number int, url string) string {
+	hyperlinksEnabled := supportsHyperlinks(c.Terminal.IsTerminalOutput())
 	label := fmt.Sprintf("#%d", number)
-	if c.Terminal.IsColorEnabled() {
-		if url != "" {
-			// OSC 8 hyperlink
-			label = fmt.Sprintf("\033]8;;%s\033\\%s\033]8;;\033\\", url, label)
+	if url != "" {
+		if !hyperlinksEnabled {
+			return fmt.Sprintf("%s (%s)", label, url)
 		}
-		// Underline
+		label = fmt.Sprintf("\033]8;;%s\033\\%s\033]8;;\033\\", url, label)
+	}
+	if c.Terminal.IsColorEnabled() {
 		label = fmt.Sprintf("\033[4m%s\033[24m", label)
 	}
 	return label
