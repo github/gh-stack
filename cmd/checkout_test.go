@@ -35,12 +35,113 @@ func TestCheckout_ByBranchName(t *testing.T) {
 	})
 
 	cfg, outR, errR := config.NewTestConfig()
+	cfg.GitHubClientOverride = &github.MockClient{
+		ListStacksFn: func() ([]github.RemoteStack, error) {
+			t.Fatal("local branch lookup should not call GitHub")
+			return nil, nil
+		},
+	}
 	err := runCheckout(cfg, &checkoutOptions{target: "b2"})
 	output := collectOutput(cfg, outR, errR)
 
 	require.NoError(t, err)
 	assert.Equal(t, "b2", checkedOut)
 	assert.Contains(t, output, "Switched to b2")
+}
+
+func TestCheckout_ByRemoteBranchName(t *testing.T) {
+	tests := []struct {
+		name   string
+		target string
+	}{
+		{name: "named branch", target: "feature"},
+		{name: "numeric branch", target: "999"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			gitDir := t.TempDir()
+			var checkedOut string
+			var createdBranches []string
+
+			restore := git.SetOps(&git.MockOps{
+				GitDirFn:        func() (string, error) { return gitDir, nil },
+				CurrentBranchFn: func() (string, error) { return "main", nil },
+				BranchExistsFn:  func(name string) bool { return name == "main" },
+				FetchFn:         func(string) error { return nil },
+				CreateBranchFn: func(name, _ string) error {
+					createdBranches = append(createdBranches, name)
+					return nil
+				},
+				SetUpstreamTrackingFn: func(string, string) error { return nil },
+				ResolveRemoteFn:       func(string) (string, error) { return "origin", nil },
+				CheckoutBranchFn: func(name string) error {
+					checkedOut = name
+					return nil
+				},
+				RevParseFn: func(string) (string, error) { return "abc123", nil },
+				RevParseMultiFn: func(refs []string) ([]string, error) {
+					shas := make([]string, len(refs))
+					for i := range refs {
+						shas[i] = "abc123"
+					}
+					return shas, nil
+				},
+			})
+			defer restore()
+
+			require.NoError(t, stack.Save(gitDir, &stack.StackFile{SchemaVersion: 1, Stacks: []stack.Stack{}}))
+
+			remoteStack := &github.RemoteStack{
+				ID:           42,
+				Number:       7,
+				PullRequests: []int{10, 11, 12},
+				PRDetails: []github.RemoteStackPR{
+					{Number: 10, State: "open", Head: github.RemoteStackPRHead{Ref: "base-layer"}},
+					{Number: 11, State: "open", Head: github.RemoteStackPRHead{Ref: tt.target}},
+					{Number: 12, State: "open", Head: github.RemoteStackPRHead{Ref: "top-layer"}},
+				},
+			}
+			var lookedUpPRs []int
+			cfg, outR, errR := config.NewTestConfig()
+			cfg.GitHubClientOverride = &github.MockClient{
+				ListStacksFn: func() ([]github.RemoteStack, error) {
+					return []github.RemoteStack{*remoteStack}, nil
+				},
+				FindStackForPRFn: func(number int) (*github.RemoteStack, error) {
+					lookedUpPRs = append(lookedUpPRs, number)
+					if number == 11 {
+						return remoteStack, nil
+					}
+					return nil, nil
+				},
+				FindPRByNumberFn: func(number int) (*github.PullRequest, error) {
+					prs := map[int]*github.PullRequest{
+						10: {ID: "PR_10", Number: 10, HeadRefName: "base-layer", BaseRefName: "main"},
+						11: {ID: "PR_11", Number: 11, HeadRefName: tt.target, BaseRefName: "base-layer"},
+						12: {ID: "PR_12", Number: 12, HeadRefName: "top-layer", BaseRefName: tt.target},
+					}
+					return prs[number], nil
+				},
+			}
+
+			err := runCheckout(cfg, &checkoutOptions{target: tt.target})
+			output := collectOutput(cfg, outR, errR)
+
+			require.NoError(t, err)
+			assert.Contains(t, lookedUpPRs, 11)
+			assert.Equal(t, []string{"base-layer", tt.target, "top-layer"}, createdBranches)
+			assert.Equal(t, tt.target, checkedOut, "should check out the requested layer, not the top branch")
+			assert.Contains(t, output, "Imported stack with 3 branches")
+			assert.Contains(t, output, "Switched to "+tt.target)
+			assert.NotContains(t, output, "not part of a stack")
+
+			sf, loadErr := stack.Load(gitDir)
+			require.NoError(t, loadErr)
+			require.Len(t, sf.Stacks, 1)
+			assert.Equal(t, []string{"base-layer", tt.target, "top-layer"}, sf.Stacks[0].BranchNames())
+		})
+	}
 }
 
 func TestCheckout_ByPRNumber_Local(t *testing.T) {
@@ -138,11 +239,112 @@ func TestCheckout_BranchNotFound(t *testing.T) {
 	})
 
 	cfg, outR, errR := config.NewTestConfig()
+	cfg.GitHubClientOverride = &github.MockClient{
+		ListStacksFn: func() ([]github.RemoteStack, error) {
+			return nil, nil
+		},
+	}
 	err := runCheckout(cfg, &checkoutOptions{target: "nonexistent"})
 	output := collectOutput(cfg, outR, errR)
 
 	assert.ErrorIs(t, err, ErrNotInStack)
-	assert.Contains(t, output, "no locally tracked stack found")
+	assert.Contains(t, output, `no local or remote stack found for "nonexistent"`)
+}
+
+func TestCheckout_RemoteBranchName_MultipleStacks(t *testing.T) {
+	gitDir := t.TempDir()
+	checkoutCalled := false
+	restore := git.SetOps(&git.MockOps{
+		GitDirFn:        func() (string, error) { return gitDir, nil },
+		CurrentBranchFn: func() (string, error) { return "main", nil },
+		CheckoutBranchFn: func(string) error {
+			checkoutCalled = true
+			return nil
+		},
+	})
+	defer restore()
+
+	require.NoError(t, stack.Save(gitDir, &stack.StackFile{SchemaVersion: 1, Stacks: []stack.Stack{}}))
+
+	cfg, outR, errR := config.NewTestConfig()
+	cfg.GitHubClientOverride = &github.MockClient{
+		ListStacksFn: func() ([]github.RemoteStack, error) {
+			return []github.RemoteStack{
+				{
+					Number: 7,
+					PRDetails: []github.RemoteStackPR{
+						{Number: 10, State: "open", Head: github.RemoteStackPRHead{Ref: "feature"}},
+					},
+				},
+				{
+					Number: 8,
+					PRDetails: []github.RemoteStackPR{
+						{Number: 11, State: "open", Head: github.RemoteStackPRHead{Ref: "feature"}},
+					},
+				},
+			}, nil
+		},
+		FindStackForPRFn: func(int) (*github.RemoteStack, error) {
+			t.Fatal("ambiguous branch should not select a stack")
+			return nil, nil
+		},
+	}
+
+	err := runCheckout(cfg, &checkoutOptions{target: "feature"})
+	output := collectOutput(cfg, outR, errR)
+
+	assert.ErrorIs(t, err, ErrDisambiguate)
+	assert.False(t, checkoutCalled)
+	assert.Contains(t, output, `branch "feature" belongs to multiple stacks on GitHub (7, 8)`)
+	assert.Contains(t, output, "stack or PR number")
+}
+
+func TestCheckout_RemoteBranchName_APIError(t *testing.T) {
+	gitDir := t.TempDir()
+	restore := git.SetOps(&git.MockOps{
+		GitDirFn:        func() (string, error) { return gitDir, nil },
+		CurrentBranchFn: func() (string, error) { return "main", nil },
+	})
+	defer restore()
+
+	require.NoError(t, stack.Save(gitDir, &stack.StackFile{SchemaVersion: 1, Stacks: []stack.Stack{}}))
+
+	cfg, outR, errR := config.NewTestConfig()
+	cfg.GitHubClientOverride = &github.MockClient{
+		ListStacksFn: func() ([]github.RemoteStack, error) {
+			return nil, fmt.Errorf("network error")
+		},
+	}
+
+	err := runCheckout(cfg, &checkoutOptions{target: "feature"})
+	output := collectOutput(cfg, outR, errR)
+
+	assert.ErrorIs(t, err, ErrAPIFailure)
+	assert.Contains(t, output, "failed to list stacks: network error")
+}
+
+func TestCheckout_RemoteBranchName_StacksUnavailable(t *testing.T) {
+	gitDir := t.TempDir()
+	restore := git.SetOps(&git.MockOps{
+		GitDirFn:        func() (string, error) { return gitDir, nil },
+		CurrentBranchFn: func() (string, error) { return "main", nil },
+	})
+	defer restore()
+
+	require.NoError(t, stack.Save(gitDir, &stack.StackFile{SchemaVersion: 1, Stacks: []stack.Stack{}}))
+
+	cfg, outR, errR := config.NewTestConfig()
+	cfg.GitHubClientOverride = &github.MockClient{
+		ListStacksFn: func() ([]github.RemoteStack, error) {
+			return nil, &api.HTTPError{StatusCode: 404, Message: "Not Found"}
+		},
+	}
+
+	err := runCheckout(cfg, &checkoutOptions{target: "feature"})
+	output := collectOutput(cfg, outR, errR)
+
+	assert.ErrorIs(t, err, ErrStacksUnavailable)
+	assert.Contains(t, output, "not enabled")
 }
 
 // --- Remote checkout tests (numeric target, local miss → API fallback) ---
@@ -168,7 +370,7 @@ func TestCheckout_NumericTarget_StacksNotAvailable(t *testing.T) {
 	err := runCheckout(cfg, &checkoutOptions{target: "123"})
 	output := collectOutput(cfg, outR, errR)
 
-	assert.ErrorIs(t, err, ErrAPIFailure)
+	assert.ErrorIs(t, err, ErrStacksUnavailable)
 	assert.Contains(t, output, "not enabled")
 }
 
@@ -613,6 +815,7 @@ func TestCheckout_NumericTarget_FallbackToBranchName(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, "999", checkedOut)
 	assert.Contains(t, output, "Switched to 999")
+	assert.NotContains(t, output, "not part of a stack")
 }
 
 func TestCheckout_NumericTarget_CompositionMismatch_NonInteractive(t *testing.T) {

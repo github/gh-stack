@@ -136,8 +136,6 @@ Accepts a stack number, PR number, PR URL, or branch name.
 - A bare number resolves as a **stack number first**, then a PR number, then a branch name.
 - Stack numbers, PR numbers, and PR URLs fetch from GitHub, pull the branches down, and set the
   stack up locally.
-- A **branch name resolves against locally tracked stacks only** and never contacts GitHub. Use a
-  stack or PR number to pull a stack that is not tracked locally.
 - If a local stack already exists over those branches with a different composition, `checkout`
   cannot be forced past it. Run `gh stack unstack --local` first, then retry.
 - `checkout` has no flags. It relies on `remote.pushDefault` when several remotes exist.
