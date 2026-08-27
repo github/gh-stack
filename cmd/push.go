@@ -12,6 +12,7 @@ import (
 
 type pushOptions struct {
 	remote string
+	atomic bool
 }
 
 func PushCmd(cfg *config.Config) *cobra.Command {
@@ -22,12 +23,15 @@ func PushCmd(cfg *config.Config) *cobra.Command {
 		Short: "Push active branches in the current stack to the remote",
 		Long: `Push active branches in the current stack to the remote.
 
-Uses explicit per-branch --force-with-lease checks. Updates are not atomic: a
-branch may update even if another branch is rejected. Fix the rejected branch
-and run the command again; branches already updated will be unchanged.
+Uses explicit per-branch --force-with-lease checks. By default, updates are not
+atomic: a branch may update even if another branch is rejected. Use --atomic
+to require all branch updates to succeed or fail together.
 Merged and queued branches are automatically skipped.`,
 		Example: `  # Push active stack branches to the default remote
   $ gh stack push
+
+  # Push all active branches atomically
+  $ gh stack push --atomic
 
   # Push to a specific remote
   $ gh stack push --remote upstream`,
@@ -37,6 +41,7 @@ Merged and queued branches are automatically skipped.`,
 	}
 
 	cmd.Flags().StringVar(&opts.remote, "remote", "", "Remote to push to (defaults to auto-detected remote)")
+	cmd.Flags().BoolVar(&opts.atomic, "atomic", false, "Require all branch updates to succeed or fail together (default: disabled)")
 
 	return cmd
 }
@@ -107,7 +112,7 @@ func runPush(cfg *config.Config, opts *pushOptions) error {
 	// remote yet.
 	_ = git.FetchBranches(remote, activeBranches)
 	cfg.Printf("Pushing %d %s to %s...", len(activeBranches), plural(len(activeBranches), "branch", "branches"), remote)
-	if err := git.Push(remote, activeBranches, true, false); err != nil {
+	if err := git.Push(remote, activeBranches, true, opts.atomic); err != nil {
 		cfg.Errorf("failed to push: %s", err)
 		return ErrSilent
 	}

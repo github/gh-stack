@@ -1591,6 +1591,8 @@ func TestLink_UpdateDeletedStack_FallsBackToCreate(t *testing.T) {
 func TestLink_PushesBranchesBeforeResolution(t *testing.T) {
 	var pushedBranches []string
 	var pushedRemote string
+	var pushedForce bool
+	var pushedAtomic bool
 
 	restore := git.SetOps(&git.MockOps{
 		BranchExistsFn:  func(name string) bool { return name == "feat-a" || name == "feat-b" },
@@ -1598,6 +1600,8 @@ func TestLink_PushesBranchesBeforeResolution(t *testing.T) {
 		PushFn: func(remote string, branches []string, force, atomic bool) error {
 			pushedRemote = remote
 			pushedBranches = branches
+			pushedForce = force
+			pushedAtomic = atomic
 			return nil
 		},
 	})
@@ -1633,6 +1637,8 @@ func TestLink_PushesBranchesBeforeResolution(t *testing.T) {
 	assert.NoError(t, err)
 	assert.Equal(t, "origin", pushedRemote)
 	assert.Equal(t, []string{"feat-a", "feat-b"}, pushedBranches)
+	assert.False(t, pushedForce)
+	assert.True(t, pushedAtomic)
 	assert.Contains(t, output, "Pushing 2 branches")
 }
 

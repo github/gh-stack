@@ -107,6 +107,54 @@ func TestSync_TrunkAlreadyUpToDate(t *testing.T) {
 	// Push should happen without force
 	require.Len(t, pushCalls, 1)
 	assert.False(t, pushCalls[0].force, "push should not use force when no rebase occurred")
+	assert.True(t, pushCalls[0].atomic, "sync should push atomically by default")
+}
+
+func TestSync_AtomicFlag(t *testing.T) {
+	tests := []struct {
+		name       string
+		args       []string
+		wantAtomic bool
+	}{
+		{name: "explicit atomic", args: []string{"--atomic"}, wantAtomic: true},
+		{name: "atomic disabled", args: []string{"--atomic=false"}, wantAtomic: false},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			s := stack.Stack{
+				Trunk: stack.BranchRef{Branch: "main"},
+				Branches: []stack.BranchRef{
+					{Branch: "b1"},
+					{Branch: "b2"},
+				},
+			}
+
+			tmpDir := t.TempDir()
+			writeStackFile(t, tmpDir, s)
+
+			var pushCalls []pushCall
+			mock := newSyncMock(tmpDir, "b1")
+			mock.PushFn = func(remote string, branches []string, force, atomic bool) error {
+				pushCalls = append(pushCalls, pushCall{remote, branches, force, atomic})
+				return nil
+			}
+
+			restore := git.SetOps(mock)
+			defer restore()
+
+			cfg, _, _ := config.NewTestConfig()
+			cmd := SyncCmd(cfg)
+			cmd.SetArgs(tt.args)
+			cmd.SetOut(io.Discard)
+			cmd.SetErr(io.Discard)
+
+			require.NoError(t, cmd.Execute())
+			require.Len(t, pushCalls, 1)
+			assert.Equal(t, []string{"b1", "b2"}, pushCalls[0].branches)
+			assert.Equal(t, tt.wantAtomic, pushCalls[0].atomic)
+		})
+	}
 }
 
 // TestSync_TrunkUpToDate_StackStale verifies that when trunk is already up to
@@ -251,6 +299,7 @@ func TestSync_TrunkFastForward_TriggersRebase(t *testing.T) {
 
 	cfg, _, errR := config.NewTestConfig()
 	cmd := SyncCmd(cfg)
+	cmd.SetArgs([]string{"--atomic=false"})
 	cmd.SetOut(io.Discard)
 	cmd.SetErr(io.Discard)
 	err := cmd.Execute()
@@ -273,6 +322,7 @@ func TestSync_TrunkFastForward_TriggersRebase(t *testing.T) {
 
 	// Push should use force-with-lease after rebase
 	require.Len(t, pushCalls, 1)
+	assert.False(t, pushCalls[0].atomic, "atomic option should apply to force pushes")
 	assert.True(t, pushCalls[0].force, "push should use force-with-lease after rebase")
 }
 
