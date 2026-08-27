@@ -194,14 +194,27 @@ type loadStackResult struct {
 }
 
 // loadStack is the standard way to obtain a Stack for the current (or given)
-// branch.  It resolves the git directory, loads the stack file, determines the
-// branch, calls resolveStack (which may prompt for disambiguation), checks for
-// a nil stack, and re-reads the current branch (in case disambiguation caused
-// a checkout).  Errors are printed via cfg and returned.
+// branch. It delegates to loadStackOptional, reports when the branch is not in
+// a stack, and returns an error in that case.
 //
 // loadStack does NOT acquire the stack file lock.  The lock is acquired
 // automatically by stack.Save() when writing.
 func loadStack(cfg *config.Config, branch string) (*loadStackResult, error) {
+	result, err := loadStackOptional(cfg, branch)
+	if err != nil {
+		return nil, err
+	}
+	if result.Stack == nil {
+		reportBranchNotInStack(cfg, result.CurrentBranch, branch != "")
+		return nil, fmt.Errorf("branch %q is not part of a stack", result.CurrentBranch)
+	}
+	return result, nil
+}
+
+// loadStackOptional performs the same lookup as loadStack, but returns a
+// result with a nil Stack when the branch is not tracked instead of reporting
+// an error. Other lookup failures are still reported and returned.
+func loadStackOptional(cfg *config.Config, branch string) (*loadStackResult, error) {
 	gitDir, err := git.GitDir()
 	if err != nil {
 		cfg.Errorf("not a git repository")
@@ -214,7 +227,6 @@ func loadStack(cfg *config.Config, branch string) (*loadStackResult, error) {
 		return nil, fmt.Errorf("failed to load stack state: %w", err)
 	}
 
-	branchFromArg := branch != ""
 	if branch == "" {
 		branch, err = git.CurrentBranch()
 		if err != nil {
@@ -231,22 +243,15 @@ func loadStack(cfg *config.Config, branch string) (*loadStackResult, error) {
 		cfg.Errorf("%s", err)
 		return nil, err
 	}
-	if s == nil {
-		if branchFromArg {
-			cfg.Errorf("branch %q is not part of a stack", branch)
-		} else {
-			cfg.Errorf("current branch %q is not part of a stack", branch)
-		}
-		cfg.Printf("Checkout an existing stack using `%s` or create a new stack using `%s`",
-			cfg.ColorCyan("gh stack checkout"), cfg.ColorCyan("gh stack init"))
-		return nil, fmt.Errorf("branch %q is not part of a stack", branch)
-	}
 
 	// Re-read current branch in case disambiguation caused a checkout.
-	currentBranch, err := git.CurrentBranch()
-	if err != nil {
-		cfg.Errorf("failed to get current branch: %s", err)
-		return nil, fmt.Errorf("failed to get current branch: %w", err)
+	currentBranch := branch
+	if s != nil {
+		currentBranch, err = git.CurrentBranch()
+		if err != nil {
+			cfg.Errorf("failed to get current branch: %s", err)
+			return nil, fmt.Errorf("failed to get current branch: %w", err)
+		}
 	}
 
 	return &loadStackResult{
@@ -255,6 +260,16 @@ func loadStack(cfg *config.Config, branch string) (*loadStackResult, error) {
 		Stack:         s,
 		CurrentBranch: currentBranch,
 	}, nil
+}
+
+func reportBranchNotInStack(cfg *config.Config, branch string, branchFromArg bool) {
+	if branchFromArg {
+		cfg.Errorf("branch %q is not part of a stack", branch)
+	} else {
+		cfg.Errorf("current branch %q is not part of a stack", branch)
+	}
+	cfg.Printf("Checkout an existing stack using `%s` or create a new stack using `%s`",
+		cfg.ColorCyan("gh stack checkout"), cfg.ColorCyan("gh stack init"))
 }
 
 // lookupStackByNumber looks up the locally tracked stack whose stack number
