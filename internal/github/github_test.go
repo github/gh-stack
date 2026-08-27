@@ -1,9 +1,14 @@
 package github
 
 import (
+	"bytes"
 	"encoding/json"
+	"io"
+	"net/http"
+	"strconv"
 	"testing"
 
+	"github.com/cli/go-gh/v2/pkg/api"
 	graphql "github.com/cli/shurcooL-graphql"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -147,4 +152,50 @@ func TestRemoteStack_UnmarshalJSON_EmptyPRs(t *testing.T) {
 	assert.Equal(t, 2, s.Number)
 	assert.Empty(t, s.PullRequests)
 	assert.Empty(t, s.PRDetails)
+}
+
+func TestListStacks_Paginates(t *testing.T) {
+	firstPage := make([]RemoteStack, 100)
+	for i := range firstPage {
+		firstPage[i] = RemoteStack{ID: i + 1, Number: 101 - i}
+	}
+	secondPage := []RemoteStack{{ID: 101, Number: 1}}
+	firstBody, err := json.Marshal(firstPage)
+	require.NoError(t, err)
+	secondBody, err := json.Marshal(secondPage)
+	require.NoError(t, err)
+
+	var requestedPages []int
+	transport := roundTripFunc(func(r *http.Request) (*http.Response, error) {
+		assert.Equal(t, "100", r.URL.Query().Get("per_page"))
+		page, parseErr := strconv.Atoi(r.URL.Query().Get("page"))
+		require.NoError(t, parseErr)
+		requestedPages = append(requestedPages, page)
+
+		body := firstBody
+		if page == 2 {
+			body = secondBody
+		}
+		return &http.Response{
+			StatusCode: http.StatusOK,
+			Body:       io.NopCloser(bytes.NewReader(body)),
+			Header:     http.Header{"Content-Type": []string{"application/json"}},
+			Request:    r,
+		}, nil
+	})
+	rest, err := api.NewRESTClient(api.ClientOptions{
+		Host:      "github.com",
+		AuthToken: "x",
+		Transport: transport,
+	})
+	require.NoError(t, err)
+
+	client := &Client{rest: rest, owner: "o", repo: "r"}
+	stacks, err := client.ListStacks()
+
+	require.NoError(t, err)
+	require.Len(t, stacks, 101)
+	assert.Equal(t, []int{1, 2}, requestedPages)
+	assert.Equal(t, 101, stacks[0].Number)
+	assert.Equal(t, 1, stacks[100].Number)
 }

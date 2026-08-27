@@ -489,10 +489,19 @@ func (s *RemoteStack) PRNumbers() []int {
 // (descending). Returns an empty slice if no stacks exist. A 404 response
 // indicates stacked PRs are not enabled for this repository.
 func (c *Client) ListStacks() ([]RemoteStack, error) {
-	path := fmt.Sprintf("repos/%s/%s/stacks", c.owner, c.repo)
+	const perPage = 100
+
 	var stacks []RemoteStack
-	if err := c.rest.Get(path, &stacks); err != nil {
-		return nil, err
+	for page := 1; ; page++ {
+		path := fmt.Sprintf("repos/%s/%s/stacks?per_page=%d&page=%d", c.owner, c.repo, perPage, page)
+		var batch []RemoteStack
+		if err := c.rest.Get(path, &batch); err != nil {
+			return nil, err
+		}
+		stacks = append(stacks, batch...)
+		if len(batch) < perPage {
+			break
+		}
 	}
 	if stacks == nil {
 		stacks = []RemoteStack{}
