@@ -638,7 +638,7 @@ func TestAdd_InitializesStackWithExplicitBranch(t *testing.T) {
 	assert.NotContains(t, output, "not part of a stack")
 	assert.Equal(t, [][2]string{
 		{"main", "origin/main"},
-		{"first-layer", "main"},
+		{"first-layer", "refs/heads/main"},
 	}, created)
 	assert.Equal(t, "first-layer", checkedOut)
 
@@ -700,7 +700,7 @@ func TestAdd_InitializesGeneratedBranchAndCommits(t *testing.T) {
 		BranchExistsFn:    func(name string) bool { return name == "main" },
 		CreateBranchFn: func(name, base string) error {
 			assert.Equal(t, expectedBranch, name)
-			assert.Equal(t, "main", base)
+			assert.Equal(t, "refs/heads/main", base)
 			return nil
 		},
 		CheckoutBranchFn: func(name string) error {

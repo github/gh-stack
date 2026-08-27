@@ -69,7 +69,7 @@ func TestInit_CustomTrunk(t *testing.T) {
 	assert.Equal(t, "develop", sf.Stacks[0].Trunk.Branch)
 }
 
-func TestInit_RestoresMissingLocalTrunk(t *testing.T) {
+func TestInit_RestoresMissingLocalTrunkWhenTagResolves(t *testing.T) {
 	gitDir := t.TempDir()
 	trunkExists := false
 	var fetchedRemote string
@@ -94,9 +94,7 @@ func TestInit_RestoresMissingLocalTrunk(t *testing.T) {
 			return nil
 		},
 		RevParseFn: func(ref string) (string, error) {
-			if ref == "main" && !trunkExists {
-				return "", fmt.Errorf("unknown revision %s", ref)
-			}
+			// A tag named "main" can resolve even when the local branch is absent.
 			return "sha-" + ref, nil
 		},
 		CreateBranchFn: func(name, base string) error {
@@ -119,7 +117,7 @@ func TestInit_RestoresMissingLocalTrunk(t *testing.T) {
 	assert.Equal(t, []string{"main"}, fetchedBranches)
 	assert.Equal(t, [][2]string{
 		{"main", "origin/main"},
-		{"first-layer", "main"},
+		{"first-layer", "refs/heads/main"},
 	}, created)
 	assert.Contains(t, output, "Created local trunk branch main from origin/main")
 
