@@ -30,6 +30,7 @@ type Ops interface {
 	RootDir() (string, error)
 	CurrentBranch() (string, error)
 	BranchExists(name string) bool
+	RemoteTrackingRefs(branch string) ([]string, error)
 	CheckoutBranch(name string) error
 	Fetch(remote string) error
 	FetchBranch(remote, branch string) error
@@ -121,6 +122,35 @@ func (d *defaultOps) CurrentBranch() (string, error) {
 
 func (d *defaultOps) BranchExists(name string) bool {
 	return client.HasLocalBranch(context.Background(), name)
+}
+
+func (d *defaultOps) RemoteTrackingRefs(branch string) ([]string, error) {
+	remoteOutput, err := run("remote")
+	if err != nil {
+		return nil, fmt.Errorf("listing remotes: %w", err)
+	}
+	remotes := strings.Fields(remoteOutput)
+	if len(remotes) == 0 {
+		return nil, nil
+	}
+
+	refOutput, err := run("for-each-ref", "--format=%(refname)", "refs/remotes/")
+	if err != nil {
+		return nil, fmt.Errorf("listing remote-tracking refs: %w", err)
+	}
+	available := make(map[string]struct{})
+	for _, ref := range strings.Fields(refOutput) {
+		available[ref] = struct{}{}
+	}
+
+	var matches []string
+	for _, remote := range remotes {
+		ref := fmt.Sprintf("refs/remotes/%s/%s", remote, branch)
+		if _, ok := available[ref]; ok {
+			matches = append(matches, ref)
+		}
+	}
+	return matches, nil
 }
 
 func (d *defaultOps) CheckoutBranch(name string) error {

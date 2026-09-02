@@ -448,6 +448,165 @@ func TestInit_ImplicitAdopt_AllMissing(t *testing.T) {
 	assert.Equal(t, []string{"b1", "b2", "b3"}, created)
 }
 
+func TestInit_RemoteTrackingBranch_Accepted(t *testing.T) {
+	gitDir := t.TempDir()
+	var created [][2]string
+	var tracked [][2]string
+	restore := git.SetOps(&git.MockOps{
+		GitDirFn:          func() (string, error) { return gitDir, nil },
+		DefaultBranchFn:   func() (string, error) { return "main", nil },
+		CurrentBranchFn:   func() (string, error) { return "main", nil },
+		IsRerereEnabledFn: func() (bool, error) { return true, nil },
+		RemoteTrackingRefsFn: func(branch string) ([]string, error) {
+			assert.Equal(t, "feature", branch)
+			return []string{"refs/remotes/origin/feature"}, nil
+		},
+		ResolveRemoteFn: func(branch string) (string, error) {
+			assert.Equal(t, "main", branch)
+			return "origin", nil
+		},
+		CreateBranchFn: func(name, base string) error {
+			created = append(created, [2]string{name, base})
+			return nil
+		},
+		SetUpstreamTrackingFn: func(branch, remote string) error {
+			tracked = append(tracked, [2]string{branch, remote})
+			return nil
+		},
+		CheckoutBranchFn: func(string) error { return nil },
+	})
+	defer restore()
+
+	cfg, outR, errR := config.NewTestConfig()
+	cfg.ForceInteractive = true
+	cfg.ConfirmFn = func(prompt string, defaultValue bool) (bool, error) {
+		assert.Equal(t, "Found remote branch origin/feature. Pull it and use it?", prompt)
+		assert.True(t, defaultValue)
+		return true, nil
+	}
+
+	err := runInit(cfg, &initOptions{branches: []string{"feature"}})
+	output := collectOutput(cfg, outR, errR)
+
+	require.NoError(t, err)
+	assert.Equal(t, [][2]string{{"feature", "origin/feature"}}, created)
+	assert.Equal(t, [][2]string{{"feature", "origin"}}, tracked)
+	assert.Contains(t, output, "Adopted 1 branch")
+
+	sf, loadErr := stack.Load(gitDir)
+	require.NoError(t, loadErr)
+	assert.Equal(t, []string{"feature"}, sf.Stacks[0].BranchNames())
+}
+
+func TestInit_RemoteTrackingBranch_Declined(t *testing.T) {
+	gitDir := t.TempDir()
+	var created [][2]string
+	restore := git.SetOps(&git.MockOps{
+		GitDirFn:          func() (string, error) { return gitDir, nil },
+		DefaultBranchFn:   func() (string, error) { return "main", nil },
+		CurrentBranchFn:   func() (string, error) { return "main", nil },
+		IsRerereEnabledFn: func() (bool, error) { return true, nil },
+		RemoteTrackingRefsFn: func(string) ([]string, error) {
+			return []string{"refs/remotes/origin/feature"}, nil
+		},
+		ResolveRemoteFn: func(string) (string, error) { return "origin", nil },
+		CreateBranchFn: func(name, base string) error {
+			created = append(created, [2]string{name, base})
+			return nil
+		},
+		CheckoutBranchFn: func(string) error { return nil },
+	})
+	defer restore()
+
+	cfg, outR, errR := config.NewTestConfig()
+	cfg.ForceInteractive = true
+	cfg.ConfirmFn = func(string, bool) (bool, error) { return false, nil }
+
+	err := runInit(cfg, &initOptions{branches: []string{"feature"}})
+	output := collectOutput(cfg, outR, errR)
+
+	require.NoError(t, err)
+	assert.Equal(t, [][2]string{{"feature", "refs/heads/main"}}, created)
+	assert.Contains(t, output, "unrelated to the existing origin/feature history")
+	assert.Contains(t, output, "replace that remote history")
+	assert.Contains(t, output, "Created stack")
+}
+
+func TestInit_RemoteTrackingBranch_NonInteractiveAbortsBeforeCreation(t *testing.T) {
+	gitDir := t.TempDir()
+	var created []string
+	restore := git.SetOps(&git.MockOps{
+		GitDirFn:        func() (string, error) { return gitDir, nil },
+		DefaultBranchFn: func() (string, error) { return "main", nil },
+		CurrentBranchFn: func() (string, error) { return "main", nil },
+		RemoteTrackingRefsFn: func(branch string) ([]string, error) {
+			if branch == "second" {
+				return []string{"refs/remotes/origin/second"}, nil
+			}
+			return nil, nil
+		},
+		ResolveRemoteFn: func(string) (string, error) { return "origin", nil },
+		CreateBranchFn: func(name, _ string) error {
+			created = append(created, name)
+			return nil
+		},
+	})
+	defer restore()
+
+	cfg, outR, errR := config.NewTestConfig()
+	err := runInit(cfg, &initOptions{branches: []string{"first", "second"}})
+	output := collectOutput(cfg, outR, errR)
+
+	assert.ErrorIs(t, err, ErrInvalidArgs)
+	assert.Empty(t, created)
+	assert.Contains(t, output, `branch "second" exists as origin/second but not locally`)
+
+	sf, loadErr := stack.Load(gitDir)
+	require.NoError(t, loadErr)
+	assert.Empty(t, sf.Stacks)
+}
+
+func TestInit_InteractiveRemoteTrackingBranch_Accepted(t *testing.T) {
+	gitDir := t.TempDir()
+	var created [][2]string
+	restore := git.SetOps(&git.MockOps{
+		GitDirFn:          func() (string, error) { return gitDir, nil },
+		DefaultBranchFn:   func() (string, error) { return "main", nil },
+		CurrentBranchFn:   func() (string, error) { return "main", nil },
+		IsRerereEnabledFn: func() (bool, error) { return true, nil },
+		RemoteTrackingRefsFn: func(string) ([]string, error) {
+			return []string{"refs/remotes/origin/feature"}, nil
+		},
+		ResolveRemoteFn: func(string) (string, error) { return "origin", nil },
+		CreateBranchFn: func(name, base string) error {
+			created = append(created, [2]string{name, base})
+			return nil
+		},
+		SetUpstreamTrackingFn: func(string, string) error { return nil },
+		CheckoutBranchFn:      func(string) error { return nil },
+	})
+	defer restore()
+
+	cfg, outR, errR := config.NewTestConfig()
+	cfg.ForceInteractive = true
+	cfg.InputFn = func(prompt string) (string, error) {
+		assert.Equal(t, "What's the name of the first branch:", prompt)
+		return "feature", nil
+	}
+	cfg.ConfirmFn = func(prompt string, defaultValue bool) (bool, error) {
+		assert.Equal(t, "Found remote branch origin/feature. Pull it and use it?", prompt)
+		assert.True(t, defaultValue)
+		return true, nil
+	}
+
+	err := runInit(cfg, &initOptions{})
+	output := collectOutput(cfg, outR, errR)
+
+	require.NoError(t, err)
+	assert.Equal(t, [][2]string{{"feature", "origin/feature"}}, created)
+	assert.Contains(t, output, "Adopted 1 branch")
+}
+
 func TestInit_ImplicitAdopt_Mixed(t *testing.T) {
 	// Scenario 11: mixed → adopts existing, creates missing
 	gitDir := t.TempDir()
@@ -471,7 +630,7 @@ func TestInit_ImplicitAdopt_Mixed(t *testing.T) {
 
 	require.NoError(t, err)
 	require.NotContains(t, output, "\u2717")
-	assert.Contains(t, output, "Adopted")
+	assert.Contains(t, output, "2 adopted branches and 1 new branch")
 	assert.Equal(t, []string{"new1"}, created)
 
 	sf, _ := stack.Load(gitDir)
@@ -586,7 +745,7 @@ func TestInit_WhatsNext_MixedWithPR(t *testing.T) {
 	runInit(cfg, &initOptions{branches: []string{"existing", "new-branch"}})
 	output := collectOutput(cfg, outR, errR)
 
-	assert.Contains(t, output, "Adopted")
+	assert.Contains(t, output, "1 adopted branch and 1 new branch")
 	assert.Contains(t, output, "Found PRs for 1 of 2")
 }
 

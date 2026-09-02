@@ -162,6 +162,12 @@ func BranchExists(name string) bool {
 	return ops.BranchExists(name)
 }
 
+// RemoteTrackingRefs returns exact local remote-tracking refs whose branch
+// name matches the supplied branch.
+func RemoteTrackingRefs(branch string) ([]string, error) {
+	return ops.RemoteTrackingRefs(branch)
+}
+
 // CheckoutBranch switches to the specified branch.
 func CheckoutBranch(name string) error {
 	return ops.CheckoutBranch(name)

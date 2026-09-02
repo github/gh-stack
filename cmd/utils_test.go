@@ -885,3 +885,166 @@ func TestUpdateBaseSHAsPreservesLastValidBase(t *testing.T) {
 	assert.Equal(t, "old-parent", s.Branches[1].Base)
 	assert.Equal(t, "child-tip", s.Branches[1].Head)
 }
+
+func TestResolveRemoteBranchForCreation_NoTrackingRef(t *testing.T) {
+	resolveCalled := false
+	restore := git.SetOps(&git.MockOps{
+		RemoteTrackingRefsFn: func(branch string) ([]string, error) {
+			assert.Equal(t, "feature", branch)
+			return nil, nil
+		},
+		ResolveRemoteFn: func(string) (string, error) {
+			resolveCalled = true
+			return "origin", nil
+		},
+	})
+	defer restore()
+
+	cfg, _, _ := config.NewTestConfig()
+	remote, err := resolveRemoteBranchForCreation(cfg, "feature", "main")
+
+	require.NoError(t, err)
+	assert.Empty(t, remote)
+	assert.False(t, resolveCalled)
+}
+
+func TestResolveRemoteBranchForCreation_AcceptsSelectedRemote(t *testing.T) {
+	restore := git.SetOps(&git.MockOps{
+		RemoteTrackingRefsFn: func(string) ([]string, error) {
+			return []string{"refs/remotes/origin/feature"}, nil
+		},
+		ResolveRemoteFn: func(branch string) (string, error) {
+			assert.Equal(t, "main", branch)
+			return "origin", nil
+		},
+	})
+	defer restore()
+
+	cfg, _, _ := config.NewTestConfig()
+	cfg.ForceInteractive = true
+	cfg.ConfirmFn = func(prompt string, defaultValue bool) (bool, error) {
+		assert.Equal(t, "Found remote branch origin/feature. Pull it and use it?", prompt)
+		assert.True(t, defaultValue)
+		return true, nil
+	}
+
+	remote, err := resolveRemoteBranchForCreation(cfg, "feature", "main")
+
+	require.NoError(t, err)
+	assert.Equal(t, "origin", remote)
+}
+
+func TestResolveRemoteBranchForCreation_DeclineWarns(t *testing.T) {
+	restore := git.SetOps(&git.MockOps{
+		RemoteTrackingRefsFn: func(string) ([]string, error) {
+			return []string{"refs/remotes/origin/feature"}, nil
+		},
+		ResolveRemoteFn: func(string) (string, error) { return "origin", nil },
+	})
+	defer restore()
+
+	cfg, outR, errR := config.NewTestConfig()
+	cfg.ForceInteractive = true
+	cfg.ConfirmFn = func(string, bool) (bool, error) { return false, nil }
+
+	remote, err := resolveRemoteBranchForCreation(cfg, "feature", "main")
+	output := collectOutput(cfg, outR, errR)
+
+	require.NoError(t, err)
+	assert.Empty(t, remote)
+	assert.Contains(t, output, "unrelated to the existing origin/feature history")
+	assert.Contains(t, output, "gh stack push")
+	assert.Contains(t, output, "gh stack submit")
+	assert.Contains(t, output, "gh stack sync")
+	assert.Contains(t, output, "replace that remote history")
+}
+
+func TestResolveRemoteBranchForCreation_NonInteractiveAborts(t *testing.T) {
+	restore := git.SetOps(&git.MockOps{
+		RemoteTrackingRefsFn: func(string) ([]string, error) {
+			return []string{"refs/remotes/origin/feature"}, nil
+		},
+		ResolveRemoteFn: func(string) (string, error) { return "origin", nil },
+	})
+	defer restore()
+
+	cfg, outR, errR := config.NewTestConfig()
+	cfg.ConfirmFn = func(string, bool) (bool, error) {
+		t.Fatal("confirmation should not be requested non-interactively")
+		return false, nil
+	}
+
+	remote, err := resolveRemoteBranchForCreation(cfg, "feature", "main")
+	output := collectOutput(cfg, outR, errR)
+
+	assert.ErrorIs(t, err, ErrInvalidArgs)
+	assert.Empty(t, remote)
+	assert.Contains(t, output, `branch "feature" exists as origin/feature but not locally`)
+	assert.Contains(t, output, "interactive terminal")
+}
+
+func TestResolveRemoteBranchForCreation_IgnoresOtherRemote(t *testing.T) {
+	restore := git.SetOps(&git.MockOps{
+		RemoteTrackingRefsFn: func(string) ([]string, error) {
+			return []string{"refs/remotes/upstream/feature"}, nil
+		},
+		ResolveRemoteFn: func(string) (string, error) { return "origin", nil },
+	})
+	defer restore()
+
+	cfg, _, _ := config.NewTestConfig()
+	cfg.ForceInteractive = true
+	cfg.ConfirmFn = func(string, bool) (bool, error) {
+		t.Fatal("confirmation should not be requested for a non-selected remote")
+		return false, nil
+	}
+
+	remote, err := resolveRemoteBranchForCreation(cfg, "feature", "main")
+
+	require.NoError(t, err)
+	assert.Empty(t, remote)
+}
+
+func TestResolveRemoteBranchForCreation_PromptErrors(t *testing.T) {
+	tests := []struct {
+		name       string
+		promptErr  error
+		wantOutput string
+	}{
+		{
+			name:       "interrupt",
+			promptErr:  terminal.InterruptErr,
+			wantOutput: "Received interrupt, aborting operation",
+		},
+		{
+			name:       "failure",
+			promptErr:  assert.AnError,
+			wantOutput: "failed to read confirmation",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			restore := git.SetOps(&git.MockOps{
+				RemoteTrackingRefsFn: func(string) ([]string, error) {
+					return []string{"refs/remotes/origin/feature"}, nil
+				},
+				ResolveRemoteFn: func(string) (string, error) { return "origin", nil },
+			})
+			defer restore()
+
+			cfg, outR, errR := config.NewTestConfig()
+			cfg.ForceInteractive = true
+			cfg.ConfirmFn = func(string, bool) (bool, error) {
+				return false, tt.promptErr
+			}
+
+			remote, err := resolveRemoteBranchForCreation(cfg, "feature", "main")
+			output := collectOutput(cfg, outR, errR)
+
+			assert.ErrorIs(t, err, ErrSilent)
+			assert.Empty(t, remote)
+			assert.Contains(t, output, tt.wantOutput)
+		})
+	}
+}

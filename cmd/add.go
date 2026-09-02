@@ -28,7 +28,11 @@ func AddCmd(cfg *config.Config) *cobra.Command {
 
 When -m is omitted but -A or -u is used, your editor opens for the
 commit message. When -m is provided without an explicit branch name,
-the branch name is auto-generated from the commit message.`,
+the branch name is auto-generated from the commit message.
+
+If a missing local branch has a same-named tracking ref on the selected push
+remote, interactive use offers to pull and adopt it. Non-interactive use
+aborts rather than creating an unrelated branch.`,
 		Example: `  # Add a new named branch to the stack
   $ gh stack add my-feature
 
@@ -167,12 +171,25 @@ func runAdd(cfg *config.Config, opts *addOptions, args []string) error {
 
 	// If the branch already exists in git but is not part of any stack,
 	// adopt it instead of erroring. This mirrors the init command's behavior.
-	adopted := git.BranchExists(branchName)
+	localBranchExists := git.BranchExists(branchName)
+	adoptRemote := ""
+	if !localBranchExists {
+		adoptRemote, err = resolveRemoteBranchForCreation(cfg, branchName, currentBranch)
+		if err != nil {
+			return err
+		}
+	}
+
+	adopted := localBranchExists || adoptRemote != ""
 	var adoptedBase string
 	if adopted {
-		adoptedBase, err = git.MergeBase(currentBranch, branchName)
+		adoptedRef := branchName
+		if adoptRemote != "" {
+			adoptedRef = adoptRemote + "/" + branchName
+		}
+		adoptedBase, err = git.MergeBase(currentBranch, adoptedRef)
 		if err != nil {
-			cfg.Errorf("failed to determine the common base of %s and %s: %s", currentBranch, branchName, err)
+			cfg.Errorf("failed to determine the common base of %s and %s: %s", currentBranch, adoptedRef, err)
 			return ErrSilent
 		}
 	}
@@ -185,11 +202,18 @@ func runAdd(cfg *config.Config, opts *addOptions, args []string) error {
 		}
 	}
 
-	if !adopted {
-		// Create the new branch from the current HEAD and check it out
-		if err := git.CreateBranch(branchName, currentBranch); err != nil {
-			cfg.Errorf("failed to create branch: %s", err)
-			return ErrSilent
+	if !localBranchExists {
+		// Create the branch from the chosen source and check it out.
+		if adoptRemote != "" {
+			if err := createLocalBranchFromRemote(cfg, branchName, adoptRemote); err != nil {
+				cfg.Errorf("failed to create branch from %s/%s: %s", adoptRemote, branchName, err)
+				return ErrSilent
+			}
+		} else {
+			if err := git.CreateBranch(branchName, currentBranch); err != nil {
+				cfg.Errorf("failed to create branch: %s", err)
+				return ErrSilent
+			}
 		}
 	}
 

@@ -1493,6 +1493,78 @@ func confirmSaveRemote(cfg *config.Config, remote string) (bool, error) {
 	return ok, nil
 }
 
+// resolveRemoteBranchForCreation checks whether a missing local branch has an
+// exact remote-tracking ref on the selected push remote. It returns the remote
+// name when the user chooses to create the local branch from that ref.
+func resolveRemoteBranchForCreation(cfg *config.Config, branch, remoteContext string) (string, error) {
+	refs, err := git.RemoteTrackingRefs(branch)
+	if err != nil {
+		cfg.Errorf("failed to inspect remote-tracking refs for %q: %s", branch, err)
+		return "", ErrSilent
+	}
+	if len(refs) == 0 {
+		return "", nil
+	}
+
+	remote, err := pickRemote(cfg, remoteContext, "")
+	if err != nil {
+		if !errors.Is(err, errInterrupt) {
+			cfg.Errorf("failed to resolve remote: %s", err)
+		}
+		return "", ErrSilent
+	}
+
+	fullRemoteRef := fmt.Sprintf("refs/remotes/%s/%s", remote, branch)
+	if !slices.Contains(refs, fullRemoteRef) {
+		return "", nil
+	}
+
+	remoteRef := remote + "/" + branch
+	if !cfg.IsInteractive() {
+		cfg.Errorf("branch %q exists as %s but not locally", branch, remoteRef)
+		cfg.Printf("Run this command in an interactive terminal to choose whether to use the remote branch.")
+		return "", ErrInvalidArgs
+	}
+
+	prompt := fmt.Sprintf("Found remote branch %s. Pull it and use it?", remoteRef)
+	var confirmed bool
+	if cfg.ConfirmFn != nil {
+		confirmed, err = cfg.ConfirmFn(prompt, true)
+	} else {
+		p := prompter.New(cfg.In, cfg.Out, cfg.Err)
+		confirmed, err = p.Confirm(prompt, true)
+	}
+	if err != nil {
+		if isInterruptError(err) {
+			printInterrupt(cfg)
+		} else {
+			cfg.Errorf("failed to read confirmation: %s", err)
+		}
+		return "", ErrSilent
+	}
+	if confirmed {
+		return remote, nil
+	}
+
+	cfg.Warningf("Creating a new local branch %q will leave it unrelated to the existing %s history", branch, remoteRef)
+	cfg.Printf("A later %s, %s, or %s will force-push the local branch and replace that remote history.",
+		cfg.ColorCyan("gh stack push"),
+		cfg.ColorCyan("gh stack submit"),
+		cfg.ColorCyan("gh stack sync"))
+	return "", nil
+}
+
+func createLocalBranchFromRemote(cfg *config.Config, branch, remote string) error {
+	remoteRef := remote + "/" + branch
+	if err := git.CreateBranch(branch, remoteRef); err != nil {
+		return err
+	}
+	if err := git.SetUpstreamTracking(branch, remote); err != nil {
+		cfg.Warningf("created branch %s but could not set upstream tracking to %s: %s", branch, remoteRef, err)
+	}
+	return nil
+}
+
 // ensureLocalBranchFromRemote creates a local branch tracking remote/<branch>
 // if it does not already exist. Merged PRs whose remote ref has been deleted
 // are skipped (returns skipped=true, err=nil). A non-merged branch that cannot

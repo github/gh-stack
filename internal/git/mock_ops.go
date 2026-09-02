@@ -10,6 +10,7 @@ type MockOps struct {
 	RootDirFn                func() (string, error)
 	CurrentBranchFn          func() (string, error)
 	BranchExistsFn           func(string) bool
+	RemoteTrackingRefsFn     func(string) ([]string, error)
 	CheckoutBranchFn         func(string) error
 	FetchFn                  func(string) error
 	FetchBranchFn            func(string, string) error
@@ -93,6 +94,13 @@ func (m *MockOps) BranchExists(name string) bool {
 		return m.BranchExistsFn(name)
 	}
 	return false
+}
+
+func (m *MockOps) RemoteTrackingRefs(branch string) ([]string, error) {
+	if m.RemoteTrackingRefsFn != nil {
+		return m.RemoteTrackingRefsFn(branch)
+	}
+	return nil, nil
 }
 
 func (m *MockOps) CheckoutBranch(name string) error {

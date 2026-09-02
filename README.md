@@ -76,6 +76,8 @@ Initializes a new stack locally. In interactive mode (no arguments), prompts for
 
 When explicit branch names are given, existing branches are adopted automatically and any missing branches are created. The trunk defaults to the repository's default branch unless overridden with `--base`.
 
+Before creating a missing branch, `init` checks for an already-fetched remote-tracking ref with the same name on the selected push remote. In an interactive terminal, it offers to pull and use that branch by default. If you decline, the new branch is created from the normal stack parent and a warning explains that a later `push`, `submit`, or `sync` will replace the existing remote history. In a non-interactive terminal, the command aborts instead of choosing for you. This check does not fetch.
+
 Enables `git rerere` automatically so that conflict resolutions are remembered across rebases.
 
 | Flag | Description |
@@ -107,6 +109,8 @@ gh stack add [flags] [branch]
 ```
 
 For an existing stack, creates a new branch at the current HEAD, adds it to the top of the stack, and checks it out. Must be run while on the topmost branch of a stack. If no branch name is given, prompts for one.
+
+Missing branch names use the same remote-tracking-ref safety check as `init`: an interactive terminal offers to use the branch from the selected push remote, while a non-interactive collision aborts.
 
 When run interactively from a branch that is not part of a stack, `add` offers to initialize a new stack instead. The supplied or auto-generated branch name becomes the first layer; without one, the standard `init` prompts are used.
 

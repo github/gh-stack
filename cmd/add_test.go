@@ -483,6 +483,164 @@ func TestAdd_AdoptsExistingBranch(t *testing.T) {
 		"adopted branch should record the actual common ancestor")
 }
 
+func TestAdd_RemoteTrackingBranch_AcceptedWithCommit(t *testing.T) {
+	gitDir := t.TempDir()
+	saveStack(t, gitDir, stack.Stack{
+		Trunk:    stack.BranchRef{Branch: "main"},
+		Branches: []stack.BranchRef{{Branch: "b1"}},
+	})
+
+	var created [2]string
+	var tracked [2]string
+	staged := false
+	checkedOut := false
+	committed := false
+	restore := git.SetOps(&git.MockOps{
+		GitDirFn:        func() (string, error) { return gitDir, nil },
+		CurrentBranchFn: func() (string, error) { return "b1", nil },
+		RevParseMultiFn: func([]string) ([]string, error) {
+			return []string{"parent", "head"}, nil
+		},
+		RemoteTrackingRefsFn: func(branch string) ([]string, error) {
+			assert.Equal(t, "feature", branch)
+			return []string{"refs/remotes/origin/feature"}, nil
+		},
+		ResolveRemoteFn: func(branch string) (string, error) {
+			assert.Equal(t, "b1", branch)
+			return "origin", nil
+		},
+		MergeBaseFn: func(parent, branch string) (string, error) {
+			assert.Equal(t, "b1", parent)
+			assert.Equal(t, "origin/feature", branch)
+			return "remote-base", nil
+		},
+		StageAllFn: func() error {
+			staged = true
+			return nil
+		},
+		HasStagedChangesFn: func() bool { return true },
+		CreateBranchFn: func(name, base string) error {
+			require.True(t, staged, "staging should complete before branch creation")
+			created = [2]string{name, base}
+			return nil
+		},
+		SetUpstreamTrackingFn: func(branch, remote string) error {
+			tracked = [2]string{branch, remote}
+			return nil
+		},
+		CheckoutBranchFn: func(name string) error {
+			assert.Equal(t, "feature", name)
+			checkedOut = true
+			return nil
+		},
+		CommitFn: func(message string) (string, error) {
+			require.True(t, checkedOut, "commit should happen on the adopted branch")
+			assert.Equal(t, "new work", message)
+			committed = true
+			return "abc1234567890", nil
+		},
+	})
+	defer restore()
+
+	cfg, outR, errR := config.NewTestConfig()
+	cfg.ForceInteractive = true
+	cfg.ConfirmFn = func(string, bool) (bool, error) { return true, nil }
+
+	err := runAdd(cfg, &addOptions{stageAll: true, message: "new work"}, []string{"feature"})
+	output := collectOutput(cfg, outR, errR)
+
+	require.NoError(t, err)
+	assert.Equal(t, [2]string{"feature", "origin/feature"}, created)
+	assert.Equal(t, [2]string{"feature", "origin"}, tracked)
+	assert.True(t, committed)
+	assert.Contains(t, output, "Adopted branch feature")
+
+	sf, loadErr := stack.Load(gitDir)
+	require.NoError(t, loadErr)
+	added := sf.Stacks[0].Branches[len(sf.Stacks[0].Branches)-1]
+	assert.Equal(t, "feature", added.Branch)
+	assert.Equal(t, "remote-base", added.Base)
+}
+
+func TestAdd_RemoteTrackingBranch_Declined(t *testing.T) {
+	gitDir := t.TempDir()
+	saveStack(t, gitDir, stack.Stack{
+		Trunk:    stack.BranchRef{Branch: "main"},
+		Branches: []stack.BranchRef{{Branch: "b1"}},
+	})
+
+	var created [2]string
+	restore := git.SetOps(&git.MockOps{
+		GitDirFn:        func() (string, error) { return gitDir, nil },
+		CurrentBranchFn: func() (string, error) { return "b1", nil },
+		RemoteTrackingRefsFn: func(string) ([]string, error) {
+			return []string{"refs/remotes/origin/feature"}, nil
+		},
+		ResolveRemoteFn: func(string) (string, error) { return "origin", nil },
+		CreateBranchFn: func(name, base string) error {
+			created = [2]string{name, base}
+			return nil
+		},
+		CheckoutBranchFn: func(string) error { return nil },
+		RevParseFn:       func(string) (string, error) { return "parent-sha", nil },
+	})
+	defer restore()
+
+	cfg, outR, errR := config.NewTestConfig()
+	cfg.ForceInteractive = true
+	cfg.ConfirmFn = func(string, bool) (bool, error) { return false, nil }
+
+	err := runAdd(cfg, &addOptions{}, []string{"feature"})
+	output := collectOutput(cfg, outR, errR)
+
+	require.NoError(t, err)
+	assert.Equal(t, [2]string{"feature", "b1"}, created)
+	assert.Contains(t, output, "unrelated to the existing origin/feature history")
+	assert.Contains(t, output, "replace that remote history")
+	assert.Contains(t, output, `Created and checked out branch "feature"`)
+}
+
+func TestAdd_RemoteTrackingBranch_NonInteractiveAborts(t *testing.T) {
+	gitDir := t.TempDir()
+	saveStack(t, gitDir, stack.Stack{
+		Trunk:    stack.BranchRef{Branch: "main"},
+		Branches: []stack.BranchRef{{Branch: "b1"}},
+	})
+
+	createCalled := false
+	checkoutCalled := false
+	restore := git.SetOps(&git.MockOps{
+		GitDirFn:        func() (string, error) { return gitDir, nil },
+		CurrentBranchFn: func() (string, error) { return "b1", nil },
+		RemoteTrackingRefsFn: func(string) ([]string, error) {
+			return []string{"refs/remotes/origin/feature"}, nil
+		},
+		ResolveRemoteFn: func(string) (string, error) { return "origin", nil },
+		CreateBranchFn: func(string, string) error {
+			createCalled = true
+			return nil
+		},
+		CheckoutBranchFn: func(string) error {
+			checkoutCalled = true
+			return nil
+		},
+	})
+	defer restore()
+
+	cfg, outR, errR := config.NewTestConfig()
+	err := runAdd(cfg, &addOptions{}, []string{"feature"})
+	output := collectOutput(cfg, outR, errR)
+
+	assert.ErrorIs(t, err, ErrInvalidArgs)
+	assert.False(t, createCalled)
+	assert.False(t, checkoutCalled)
+	assert.Contains(t, output, `branch "feature" exists as origin/feature but not locally`)
+
+	sf, loadErr := stack.Load(gitDir)
+	require.NoError(t, loadErr)
+	assert.Equal(t, []string{"b1"}, sf.Stacks[0].BranchNames())
+}
+
 func TestAdd_RejectsExistingBranchInStack(t *testing.T) {
 	gitDir := t.TempDir()
 	// Two stacks: the current one and another that owns "taken-branch"

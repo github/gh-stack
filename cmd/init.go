@@ -31,6 +31,10 @@ command. Existing branches are adopted automatically; missing branches are
 created. By default, the first branch is based on the default branch, and
 each subsequent branch is based on the previous one.
 
+If a missing local branch has a same-named tracking ref on the selected push
+remote, interactive use offers to pull and adopt it. Non-interactive use
+aborts rather than creating an unrelated branch.
+
 Use --base to specify a different trunk branch.`,
 		Example: `  # Create a stack with a new branch
   $ gh stack init my-feature
@@ -139,7 +143,11 @@ func runInit(cfg *config.Config, opts *initOptions) error {
 
 	if len(opts.branches) > 0 {
 		// === ARGS PATH ===
-		branches, adopted, err = resolveArgBranches(cfg, opts, sf, trunkRef)
+		remoteContext := currentBranch
+		if remoteContext == "" {
+			remoteContext = trunk
+		}
+		branches, adopted, err = resolveArgBranches(cfg, opts, sf, trunkRef, remoteContext)
 		if err != nil {
 			return err
 		}
@@ -219,22 +227,21 @@ func runInit(cfg *config.Config, opts *initOptions) error {
 		}
 	}
 
-	hasAdopted := len(adopted) > 0
-
-	printWhatsNext(cfg, &newStack, branches, hasAdopted, prCount)
+	printWhatsNext(cfg, &newStack, branches, len(adopted), prCount)
 
 	return nil
 }
 
 // resolveArgBranches handles the args path: classifies each branch as
 // adopted (exists) or created (missing), validates all before creating any.
-func resolveArgBranches(cfg *config.Config, opts *initOptions, sf *stack.StackFile, trunkRef string) ([]string, map[string]bool, error) {
+func resolveArgBranches(cfg *config.Config, opts *initOptions, sf *stack.StackFile, trunkRef, remoteContext string) ([]string, map[string]bool, error) {
 	adopted := make(map[string]bool)
 
 	// Phase 1: resolve final names, classify, validate
 	type branchInfo struct {
-		name   string
-		exists bool
+		name        string
+		exists      bool
+		adoptRemote string
 	}
 	resolved := make([]branchInfo, 0, len(opts.branches))
 
@@ -255,10 +262,29 @@ func resolveArgBranches(cfg *config.Config, opts *initOptions, sf *stack.StackFi
 		resolved = append(resolved, branchInfo{name: b, exists: exists})
 	}
 
-	// Phase 2: create missing branches
+	// Phase 2: decide how to handle remote-tracking refs only after every
+	// supplied branch name has passed validation.
+	for i := range resolved {
+		if resolved[i].exists {
+			continue
+		}
+		remote, err := resolveRemoteBranchForCreation(cfg, resolved[i].name, remoteContext)
+		if err != nil {
+			return nil, nil, err
+		}
+		resolved[i].adoptRemote = remote
+	}
+
+	// Phase 3: create missing branches
 	branches := make([]string, 0, len(resolved))
 	for i, bi := range resolved {
 		if bi.exists {
+			adopted[bi.name] = true
+		} else if bi.adoptRemote != "" {
+			if err := createLocalBranchFromRemote(cfg, bi.name, bi.adoptRemote); err != nil {
+				cfg.Errorf("creating branch %s from %s/%s: %s", bi.name, bi.adoptRemote, bi.name, err)
+				return nil, nil, ErrSilent
+			}
 			adopted[bi.name] = true
 		} else {
 			parent := trunkRef
@@ -348,9 +374,25 @@ func runInteractiveInit(cfg *config.Config, sf *stack.StackFile, trunk, trunkRef
 	if git.BranchExists(branchName) {
 		wasAdopted = true
 	} else {
-		if err := git.CreateBranch(branchName, trunkRef); err != nil {
-			cfg.Errorf("creating branch %s: %s", branchName, err)
-			return nil, false, ErrSilent
+		remoteContext := currentBranch
+		if remoteContext == "" {
+			remoteContext = trunk
+		}
+		remote, err := resolveRemoteBranchForCreation(cfg, branchName, remoteContext)
+		if err != nil {
+			return nil, false, err
+		}
+		if remote != "" {
+			if err := createLocalBranchFromRemote(cfg, branchName, remote); err != nil {
+				cfg.Errorf("creating branch %s from %s/%s: %s", branchName, remote, branchName, err)
+				return nil, false, ErrSilent
+			}
+			wasAdopted = true
+		} else {
+			if err := git.CreateBranch(branchName, trunkRef); err != nil {
+				cfg.Errorf("creating branch %s: %s", branchName, err)
+				return nil, false, ErrSilent
+			}
 		}
 	}
 
@@ -377,8 +419,9 @@ func promptBranchName(cfg *config.Config) (string, error) {
 }
 
 // printWhatsNext prints the scenario-aware "What's next" block after init.
-func printWhatsNext(cfg *config.Config, s *stack.Stack, branches []string, hasAdopted bool, prCount int) {
+func printWhatsNext(cfg *config.Config, s *stack.Stack, branches []string, adoptedCount, prCount int) {
 	lastBranch := branches[len(branches)-1]
+	hasAdopted := adoptedCount > 0
 
 	// Build the chain: main ← branch1 ← branch2
 	parts := []string{s.Trunk.Branch}
@@ -388,10 +431,17 @@ func printWhatsNext(cfg *config.Config, s *stack.Stack, branches []string, hasAd
 	chain := strings.Join(parts, " ← ")
 
 	// Success line
-	if hasAdopted {
+	switch {
+	case adoptedCount == len(branches):
 		cfg.Successf("Adopted %d %s: %s",
 			len(branches), plural(len(branches), "branch", "branches"), chain)
-	} else {
+	case adoptedCount > 0:
+		createdCount := len(branches) - adoptedCount
+		cfg.Successf("Created stack with %d adopted %s and %d new %s: %s",
+			adoptedCount, plural(adoptedCount, "branch", "branches"),
+			createdCount, plural(createdCount, "branch", "branches"),
+			chain)
+	default:
 		cfg.Successf("Created stack: %s", chain)
 	}
 

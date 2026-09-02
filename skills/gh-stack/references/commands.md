@@ -28,6 +28,12 @@ branch does not exist, it is created from the trunk; each later new branch is cr
 branch immediately before it. There is no separate adopt mode — existence decides. `--base`
 selects a non-default trunk.
 
+Before creating a missing branch, `init` checks the already-fetched tracking ref on the selected
+push remote. Interactive users can pull and adopt that branch or explicitly decline and accept a
+history-replacement warning. Non-interactive invocations abort on the collision, so agents should
+create the intended local tracking branch first rather than bypassing the safety check. `add` uses
+the same behavior when it would create a new layer.
+
 `init` also enables `git rerere`. Under a TTY the first run in a repo asks for confirmation; set
 `git config rerere.enabled true` beforehand to skip it.
 

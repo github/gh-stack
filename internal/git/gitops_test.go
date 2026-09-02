@@ -96,6 +96,44 @@ func remoteBranchSHA(t *testing.T, bareDir, branch string) string {
 	return strings.TrimSpace(string(out))
 }
 
+func TestIntegration_RemoteTrackingRefs_ExactBranchName(t *testing.T) {
+	bareDir, cloneDir := setupBareAndClone(t)
+	restore := withGitDir(t, cloneDir)
+	defer restore()
+
+	gitExec(t, cloneDir, "checkout", "-b", "feature")
+	writeFile(t, cloneDir, "feature.txt", "feature")
+	gitExec(t, cloneDir, "add", "feature.txt")
+	gitExec(t, cloneDir, "commit", "-m", "feature")
+	gitExec(t, cloneDir, "push", "origin", "feature")
+	gitExec(t, cloneDir, "checkout", "main")
+	gitExec(t, cloneDir, "branch", "-D", "feature")
+
+	gitExec(t, cloneDir, "checkout", "-b", "nested/feature")
+	gitExec(t, cloneDir, "push", "origin", "nested/feature")
+	gitExec(t, cloneDir, "checkout", "main")
+	gitExec(t, cloneDir, "branch", "-D", "nested/feature")
+
+	gitExec(t, cloneDir, "remote", "add", "upstream", bareDir)
+	gitExec(t, cloneDir, "fetch", "upstream",
+		"+refs/heads/feature:refs/remotes/upstream/feature")
+
+	refs, err := RemoteTrackingRefs("feature")
+	require.NoError(t, err)
+	assert.Equal(t, []string{
+		"refs/remotes/origin/feature",
+		"refs/remotes/upstream/feature",
+	}, refs)
+
+	nestedRefs, err := RemoteTrackingRefs("nested/feature")
+	require.NoError(t, err)
+	assert.Equal(t, []string{"refs/remotes/origin/nested/feature"}, nestedRefs)
+
+	missingRefs, err := RemoteTrackingRefs("missing")
+	require.NoError(t, err)
+	assert.Empty(t, missingRefs)
+}
+
 // ---------------------------------------------------------------------------
 // Integration tests for FetchBranches + Push (force-with-lease)
 // ---------------------------------------------------------------------------

@@ -304,6 +304,8 @@ You can also mix existing and new branches in one command:
 gh stack init feat/auth feat/api-v2
 ```
 
+If a missing local branch has an already-fetched tracking ref on the selected push remote, `init` offers to pull and adopt it instead of creating an unrelated branch. Accepting is the default. Declining creates the new branch from the normal stack parent and warns that a later force push can replace the remote history; non-interactive commands abort on this collision.
+
 After organizing branches into a stack, run `gh stack submit` to create a Stack on GitHub and link the PRs together.
 
 ```sh
