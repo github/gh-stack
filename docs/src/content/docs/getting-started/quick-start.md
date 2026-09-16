@@ -99,7 +99,7 @@ Linked worktrees share the same local stack catalog. You can adopt branches alre
 
 `rebase` and `sync` automatically update affected clean owners. gh-stack does not auto-stash or manage worktree creation/removal. To navigate across worktrees, use `--print-path` and a shell wrapper that checks the command's exit status before `cd`; see [Working across Git worktrees](/gh-stack/guides/workflows/#working-across-git-worktrees).
 
-For this core release, `modify` supports a stack within one worktree but temporarily rejects stack branches checked out in other worktrees.
+`modify` can restructure a stack distributed across worktrees. It uses each affected branch's clean owner without switching other worktrees, and preserves the underlying branches/worktrees when dropping or folding layers. Conflict messages identify where to resolve and stage; `modify --continue` and `--abort` can be invoked from any linked worktree.
 
 ## What's Next?
 

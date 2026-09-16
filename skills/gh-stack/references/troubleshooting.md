@@ -151,11 +151,12 @@ target, check the exit status, and change directory to the quoted output. Only a
 owners are updated by rebase/sync; commit or stash manually when those owners are dirty. gh-stack
 does not automatically stash or create/remove worktrees.
 
-For `git init --separate-git-dir` repositories, Git may list the administration directory as the
-main path instead of the actual checkout. Operations from a known main or linked origin remain
-supported, but main-owner discovery from another checkout can be unavailable. Do not navigate to
-an administration directory or guess its associated checkout; run from the actual main worktree
-when its working files are needed. No private registry or Git config changes are used to infer it.
+For `git init --separate-git-dir` repositories, main invocation and existing absolute/relative
+`core.worktree` backlinks are supported, including settings in the main `config.worktree`. The
+discovery caveat is only linked invocation without a main-worktree backlink. A required unresolved
+main owner produces actionable guidance to run from the main worktree or supply the backlink;
+unaffected worktrees continue. Never navigate to an administration directory or guess its checkout.
+Existing backlinks are read without adding a private registry or changing Git configuration.
 
 ## Stack file is locked (exit 8)
 
@@ -176,8 +177,10 @@ gh stack modify --abort
 Related: `submit` also detects a pending modify state, and under a TTY asks before overwriting the
 matching stack on GitHub with local state. An unrelated stack cannot consume or clear that journal.
 
-Core modify temporarily rejects stack branches checked out in other worktrees. It works in a
-linked worktree when every member branch is unoccupied or owned there; a foreign trunk is allowed.
-Shared-journal continue/abort executes in the recorded origin even when invoked elsewhere. Native
-Git markers remain per-worktree. If recovery reports missing owners, externally changed refs, or
-save failures, fix the reported problem and retry; the journal is retained to prevent false success.
+Modify supports stacks distributed across worktrees, but agents must still not launch its TUI.
+Renames, fold-down cherry-picks, and rebases execute in the appropriate clean owners; only the
+origin switches for unoccupied branches. Drop/fold sources and their worktrees remain intact.
+Resolve and stage in the worktree reported by the conflict, then invoke `modify --continue` from
+any linked worktree. A later conflict can be in a different owner. Abort reverses owner-local
+renames, restores only operation-touched refs, and deletes only proven operation-created refs,
+never worktrees. Missing owners, externally changed refs, or save failures retain the journal.

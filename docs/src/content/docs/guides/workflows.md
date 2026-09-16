@@ -17,9 +17,9 @@ On upgrade, gh-stack automatically consolidates nonconflicting legacy catalogs, 
 
 ### Separate Git administration directories
 
-Repositories created with `git init --separate-git-dir` keep the administration directory outside the main working directory. Their shared catalog and operations in an explicitly known main or linked worktree remain supported.
+Repositories created with `git init --separate-git-dir` keep the administration directory outside the main working directory. Shared storage and main-worktree invocation are supported. Linked worktrees can discover the main owner from an existing absolute or relative `core.worktree` backlink, including one stored in the main worktree's `config.worktree`.
 
-There is a discovery limitation: Git's worktree list can report that administration directory as the main path, without a reverse pointer to the real main working directory. Automatic discovery of the main owner from a linked checkout may therefore be unavailable. If an operation needs that owner's working files, start from the actual main worktree instead. Do not `cd` into an administration directory or infer the checkout from its parent directory. gh-stack does not add a private worktree registry or change Git configuration to repair discovery.
+The remaining discovery limitation is **linked invocation without a main-worktree backlink**. In that case, Git may report the administration directory rather than the main working directory. An operation requiring the unresolved main owner fails with actionable guidance to run from the main worktree or supply the backlink; operations on unaffected worktrees continue. Do not `cd` into an administration directory or infer the checkout from its parent directory. gh-stack reads existing backlinks but does not add a private worktree registry or change Git configuration to repair discovery.
 
 ### Adopt existing branches
 
@@ -77,7 +77,7 @@ Legacy recovery remains in its original worktree. Interrupted application or res
 
 gh-stack serializes mutations across the clone, including independent stacks. Read-only views remain available. A paused rebase or modify journal blocks new gh-stack mutations until recovery. These locks coordinate **gh-stack only**, not arbitrary Git commands, editors, or other tools. Keep affected worktrees quiescent while history is being rewritten. During a pause, make only the requested conflict-resolution edits and staging in the reported worktree; avoid unrelated commits or checkout changes on participating branches.
 
-**Core modify limitation:** `modify` works inside a linked worktree only when every stack branch is unoccupied or checked out there. Distributed modify is temporarily rejected before the TUI or apply changes. Trunk ownership alone is allowed. Its `--continue` and `--abort` use the recorded origin even when invoked elsewhere; see [Restructuring stacks](/gh-stack/guides/modify/).
+**Distributed modify:** `modify` supports renaming, inserting, dropping, folding, and reordering branches across worktrees. It preflights affected owners, runs each rename/rewrite in the appropriate worktree, and uses the origin for unoccupied branches. Other worktrees keep their branch choices; dropping/folding a layer preserves its branch and worktree. If the nearest surviving branch is owned elsewhere, the origin keeps its preserved branch and reports the survivor's path. Conflicts are resolved in the reported owner, while `--continue` and `--abort` can be invoked from any linked worktree. See [Restructuring stacks](/gh-stack/guides/modify/).
 
 ## Standard Workflow
 

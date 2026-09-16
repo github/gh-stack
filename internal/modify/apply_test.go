@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -123,7 +124,7 @@ func TestApplyPlan_BranchLookupFailureBeforeMutation(t *testing.T) {
 		if name == "B" {
 			return false, lookupErr
 		}
-		return true, nil
+		return name != "renamed", nil
 	}
 	mock.RenameBranchFn = func(string, string) error {
 		t.Fatal("must not rename after a failed lookup")
@@ -220,11 +221,11 @@ func TestUnwind_StateLookupFailurePreservesJournal(t *testing.T) {
 }
 
 func TestModifyRecovery_CheckedQueriesPreserveJournal(t *testing.T) {
-	for _, recordedOrigin := range []bool{false, true} {
+	for _, location := range []string{"legacy", "origin", "foreign"} {
 		for _, action := range []string{"continue", "abort"} {
 			for _, query := range []string{"factory", "rebase", "cherry-pick", "branch"} {
-				t.Run(fmt.Sprintf("recorded=%t/%s/%s", recordedOrigin, action, query), func(t *testing.T) {
-					dir, origin := t.TempDir(), t.TempDir()
+				t.Run(fmt.Sprintf("%s/%s/%s", location, action, query), func(t *testing.T) {
+					dir, origin, foreign := t.TempDir(), t.TempDir(), t.TempDir()
 					sf := writeTestStackFile(t, dir, stack.Stack{
 						Trunk: stack.BranchRef{Branch: "main"}, Branches: []stack.BranchRef{{Branch: "A"}},
 					})
@@ -237,8 +238,12 @@ func TestModifyRecovery_CheckedQueriesPreserveJournal(t *testing.T) {
 							Branches: []BranchSnapshot{{Name: "A", TipSHA: "original"}}, StackMetadata: metadata,
 						},
 					}
-					if recordedOrigin {
+					if location != "legacy" {
 						state.Worktrees = &worktree.Context{Origin: worktree.Location{Path: origin, ID: "."}}
+					}
+					if location == "foreign" {
+						state.Worktrees.Owners = map[string]*worktree.Location{"A": {Path: foreign, ID: filepath.Join("worktrees", "foreign")}}
+						state.Worktrees.Pending, state.Worktrees.PendingBefore = "A", "original"
 					}
 					require.NoError(t, SaveState(dir, state))
 					before, err := os.ReadFile(StatePath(dir))
@@ -248,20 +253,38 @@ func TestModifyRecovery_CheckedQueriesPreserveJournal(t *testing.T) {
 					lookupErr := errors.New("checked query failed")
 					mock := newApplyMock(dir, map[string]string{"A": "original", "main": "trunk"})
 					mock.RootDirFn = func() (string, error) { return origin, nil }
-					mock.IsRebaseInProgressFn = func() (bool, error) { return true, nil }
-					if query == "factory" {
+					target := mock
+					if location == "foreign" {
+						target = newApplyMock(dir, map[string]string{"A": "original", "main": "trunk"})
+						target.RootDirFn = func() (string, error) { return foreign, nil }
+						target.CommonDirFn = func() (string, error) { return dir, nil }
+						target.GitDirFn = func() (string, error) { return filepath.Join(dir, "worktrees", "foreign"), nil }
+						mock.ForWorktreeFn = func(path string) (git.Ops, error) {
+							if worktree.SamePath(path, foreign) {
+								if query == "factory" {
+									return nil, lookupErr
+								}
+								return target, nil
+							}
+							return mock, nil
+						}
+					}
+					target.IsRebaseInProgressFn = func() (bool, error) { return true, nil }
+					if query == "factory" && location != "foreign" {
 						mock.ForWorktreeFn = func(string) (git.Ops, error) { return nil, lookupErr }
 					} else if query == "rebase" {
-						mock.IsRebaseInProgressFn = func() (bool, error) { return false, lookupErr }
+						target.IsRebaseInProgressFn = func() (bool, error) { return false, lookupErr }
 					} else if query == "cherry-pick" {
-						mock.IsCherryPickInProgressFn = func() (bool, error) { return false, lookupErr }
-					} else {
+						target.IsCherryPickInProgressFn = func() (bool, error) { return false, lookupErr }
+					} else if query == "branch" {
 						mock.BranchExistsFn = func(string) (bool, error) { return false, lookupErr }
 					}
-					mock.RebaseContinueFn = func(git.RebaseOpts) error { t.Fatal("must not continue after query failure"); return nil }
-					mock.RebaseAbortFn = func() error { t.Fatal("must not abort after query failure"); return nil }
-					mock.CheckoutBranchFn = func(string) error { t.Fatal("must not change checkout after query failure"); return nil }
-					mock.ResetHardFn = func(string) error { t.Fatal("must not reset after query failure"); return nil }
+					for _, ops := range []*git.MockOps{mock, target} {
+						ops.RebaseContinueFn = func(git.RebaseOpts) error { t.Fatal("must not continue after query failure"); return nil }
+						ops.RebaseAbortFn = func() error { t.Fatal("must not abort after query failure"); return nil }
+						ops.CheckoutBranchFn = func(string) error { t.Fatal("must not change checkout after query failure"); return nil }
+						ops.ResetHardFn = func(string) error { t.Fatal("must not reset after query failure"); return nil }
+					}
 					restore := git.SetOps(mock)
 					defer restore()
 					cfg, _, _ := config.NewTestConfig()
@@ -288,10 +311,10 @@ func TestModifyRecovery_CheckedQueriesPreserveJournal(t *testing.T) {
 }
 
 func TestContinueApply_MissingNativeOperationPreservesJournal(t *testing.T) {
-	for _, recordedOrigin := range []bool{false, true} {
+	for _, location := range []string{"legacy", "origin", "foreign"} {
 		for _, conflictType := range []string{"", "rebase", "cherry_pick"} {
-			t.Run(fmt.Sprintf("recorded=%t/type=%s", recordedOrigin, conflictType), func(t *testing.T) {
-				dir, origin := t.TempDir(), t.TempDir()
+			t.Run(fmt.Sprintf("%s/type=%s", location, conflictType), func(t *testing.T) {
+				dir, origin, foreign := t.TempDir(), t.TempDir(), t.TempDir()
 				s := stack.Stack{
 					Trunk:    stack.BranchRef{Branch: "main"},
 					Branches: []stack.BranchRef{{Branch: "A"}, {Branch: "B"}},
@@ -309,10 +332,15 @@ func TestContinueApply_MissingNativeOperationPreservesJournal(t *testing.T) {
 						StackMetadata: metadata,
 					},
 				}
-				if recordedOrigin {
+				if location != "legacy" {
 					state.Worktrees = &worktree.Context{
 						Origin:  worktree.Location{Path: origin, ID: "."},
 						Pending: "A", PendingBefore: "original-A",
+					}
+				}
+				if location == "foreign" {
+					state.Worktrees.Owners = map[string]*worktree.Location{
+						"A": {Path: foreign, ID: filepath.Join("worktrees", "foreign")},
 					}
 				}
 				require.NoError(t, SaveState(dir, state))
@@ -324,37 +352,54 @@ func TestContinueApply_MissingNativeOperationPreservesJournal(t *testing.T) {
 				mock := newApplyMock(dir, refs)
 				mock.RootDirFn = func() (string, error) { return origin, nil }
 				mock.CurrentBranchFn = func() (string, error) { return "A", nil }
+				target := mock
+				if location == "foreign" {
+					target = newApplyMock(dir, refs)
+					target.RootDirFn = func() (string, error) { return foreign, nil }
+					target.CommonDirFn = func() (string, error) { return dir, nil }
+					target.GitDirFn = func() (string, error) { return filepath.Join(dir, "worktrees", "foreign"), nil }
+					mock.ForWorktreeFn = func(path string) (git.Ops, error) {
+						if worktree.SamePath(path, foreign) {
+							return target, nil
+						}
+						return mock, nil
+					}
+					mock.IsRebaseInProgressFn = func() (bool, error) { return true, nil }
+					mock.IsCherryPickInProgressFn = func() (bool, error) { return true, nil }
+				}
 				rebasing, picking := conflictType != "cherry_pick", conflictType == "cherry_pick"
-				mock.IsRebaseInProgressFn = func() (bool, error) { return rebasing, nil }
-				mock.IsCherryPickInProgressFn = func() (bool, error) { return picking, nil }
-				mock.RebaseAbortFn = func() error { rebasing = false; return nil }
-				mock.CherryPickAbortFn = func() error { picking = false; return nil }
+				target.IsRebaseInProgressFn = func() (bool, error) { return rebasing, nil }
+				target.IsCherryPickInProgressFn = func() (bool, error) { return picking, nil }
+				target.RebaseAbortFn = func() error { rebasing = false; return nil }
+				target.CherryPickAbortFn = func() error { picking = false; return nil }
 				nativeContinues, refReads, mutations := 0, 0, 0
-				mock.RebaseContinueFn = func(git.RebaseOpts) error {
-					nativeContinues++
-					return errors.New("no native rebase in progress")
+				for _, ops := range []*git.MockOps{mock, target} {
+					ops.RebaseContinueFn = func(git.RebaseOpts) error {
+						nativeContinues++
+						return errors.New("no native rebase in progress")
+					}
+					ops.CherryPickContinueFn = func() error {
+						nativeContinues++
+						return errors.New("no native cherry-pick in progress")
+					}
+					ops.RevParseFn = func(ref string) (string, error) {
+						refReads++
+						return refs[ref], nil
+					}
+					ops.RebaseOntoFn = func(_, _, branch string, _ git.RebaseOpts) error {
+						mutations++
+						refs[branch] = "replayed"
+						return nil
+					}
+					ops.CheckoutBranchFn = func(string) error { mutations++; return nil }
 				}
-				mock.CherryPickContinueFn = func() error {
-					nativeContinues++
-					return errors.New("no native cherry-pick in progress")
-				}
-				mock.RevParseFn = func(ref string) (string, error) {
-					refReads++
-					return refs[ref], nil
-				}
-				mock.RebaseOntoFn = func(_, _, branch string, _ git.RebaseOpts) error {
-					mutations++
-					refs[branch] = "replayed"
-					return nil
-				}
-				mock.CheckoutBranchFn = func(string) error { mutations++; return nil }
 				restore := git.SetOps(mock)
 				defer restore()
 				// An external abort removes Git's marker, then a new commit appears.
 				if picking {
-					require.NoError(t, mock.CherryPickAbort())
+					require.NoError(t, target.CherryPickAbort())
 				} else {
-					require.NoError(t, mock.RebaseAbort())
+					require.NoError(t, target.RebaseAbort())
 				}
 				refs["A"] = "external-commit"
 				cfg, _, _ := config.NewTestConfig()
@@ -364,6 +409,9 @@ func TestContinueApply_MissingNativeOperationPreservesJournal(t *testing.T) {
 				err = ContinueApply(cfg, dir, noopUpdateBaseSHAs)
 
 				assert.ErrorContains(t, err, "gh stack modify --abort")
+				if location == "foreign" {
+					assert.ErrorContains(t, err, foreign)
+				}
 				assert.Zero(t, nativeContinues)
 				assert.Zero(t, refReads, "must not claim the current tip as completed modify work")
 				assert.Zero(t, mutations)
@@ -605,7 +653,7 @@ func TestApplyPlan_FoldDown(t *testing.T) {
 		return nil
 	}
 	mock.LogRangeFn = func(base, head string) ([]git.CommitInfo, error) {
-		if base == "A" && head == "B" {
+		if base == "sha-A" && head == "B" {
 			return []git.CommitInfo{
 				{SHA: "commit-b2"},
 				{SHA: "commit-b1"},
@@ -2951,6 +2999,39 @@ func TestApplyPlan_SeparateGitDirOrigin(t *testing.T) {
 	}
 }
 
+func TestModifyRecovery_MissingSeparateGitDirOriginRetainsOriginalLocation(t *testing.T) {
+	root, linked, caller, common, sf := setupModifyWorktrees(t, false, "--separate-git-dir", t.TempDir())
+	runModifyGit(t, linked, "checkout", "-q", "--detach")
+	runModifyGit(t, root, "checkout", "-q", "B")
+	originOps := requireWorktree(t, git.CurrentOps(), root)
+	callerOps := requireWorktree(t, originOps, caller)
+	restore := git.SetOps(originOps)
+	defer restore()
+	ctx, err := CheckWorktrees(&sf.Stacks[0])
+	require.NoError(t, err)
+	snapshot, err := BuildSnapshot(&sf.Stacks[0])
+	require.NoError(t, err)
+	state := &StateFile{
+		SchemaVersion: 1, Phase: PhaseApplying, OriginalBranch: "B",
+		Worktrees: ctx, Snapshot: snapshot,
+	}
+	state.RecordStack(&sf.Stacks[0])
+	require.NoError(t, SaveState(common, state))
+	before, err := os.ReadFile(StatePath(common))
+	require.NoError(t, err)
+	require.NoError(t, os.Rename(root, root+"-moved"))
+	restoreCaller := git.SetOps(callerOps)
+	defer restoreCaller()
+	cfg, _, _ := config.NewTestConfig()
+	defer cfg.Out.Close()
+	defer cfg.Err.Close()
+	require.Error(t, UnwindFromStateFile(cfg, common))
+	after, err := os.ReadFile(StatePath(common))
+	require.NoError(t, err)
+	assert.Equal(t, before, after, "failed origin discovery must not replace the saved location with the administration directory")
+	assert.Equal(t, "observer", runModifyGit(t, caller, "branch", "--show-current"))
+}
+
 func TestApplyPlan_LinkedWorktreeWithForeignTrunk(t *testing.T) {
 	root, origin, caller, common, sf := setupModifyWorktrees(t, false)
 	require.NoError(t, os.WriteFile(filepath.Join(caller, "note.txt"), []byte("keep"), 0644))
@@ -2974,10 +3055,11 @@ func TestApplyPlan_LinkedWorktreeWithForeignTrunk(t *testing.T) {
 	assert.False(t, StateExists(common))
 }
 
-func TestApplyPlan_DistributedStackRejectedBeforeMutation(t *testing.T) {
+func TestApplyPlan_DirtyDistributedOwnerRejectedBeforeMutation(t *testing.T) {
 	root, origin, _, common, sf := setupModifyWorktrees(t, false)
 	owner := filepath.Join(filepath.Dir(origin), "A owner")
 	runModifyGit(t, root, "worktree", "add", "-q", owner, "A")
+	require.NoError(t, os.WriteFile(filepath.Join(owner, "uncommitted.txt"), []byte("keep"), 0644))
 	before, err := os.ReadFile(filepath.Join(common, "gh-stack"))
 	require.NoError(t, err)
 	original := runModifyGit(t, root, "rev-parse", "B")
@@ -2989,7 +3071,7 @@ func TestApplyPlan_DistributedStackRejectedBeforeMutation(t *testing.T) {
 	nodes := makeNodes(&sf.Stacks[0])
 	nodes[1].PendingAction = &modifyview.PendingAction{Type: modifyview.ActionRename, NewName: "new-B"}
 	_, _, err = ApplyPlan(cfg, common, &sf.Stacks[0], sf, nodes, "B", noopUpdateBaseSHAs)
-	require.ErrorContains(t, err, "distributed modify is not supported yet")
+	require.ErrorContains(t, err, "uncommitted changes")
 	assert.Contains(t, err.Error(), "A owner")
 	after, err := os.ReadFile(filepath.Join(common, "gh-stack"))
 	require.NoError(t, err)
@@ -3208,6 +3290,7 @@ func TestStartRefMutation_UsesRecordedExpectedTip(t *testing.T) {
 				state.Worktrees.Touched = map[string]string{"A": expected}
 			}
 			mock := newApplyMock(dir, map[string]string{"A": expected})
+			mock.RootDirFn = func() (string, error) { return origin, nil }
 			restore := git.SetOps(mock)
 			defer restore()
 			_, err := startRefMutation(dir, state, "A")
@@ -3216,4 +3299,937 @@ func TestStartRefMutation_UsesRecordedExpectedTip(t *testing.T) {
 			assert.Equal(t, expected, state.Worktrees.PendingBefore)
 		})
 	}
+}
+
+type distributedModifyRepo struct {
+	root, origin, caller, common string
+	owners                       map[string]string
+	refs                         map[string]string
+	sf                           *stack.StackFile
+}
+
+func commitModifyFile(t *testing.T, dir, file, content, message string) {
+	t.Helper()
+	require.NoError(t, os.WriteFile(filepath.Join(dir, file), []byte(content), 0644))
+	runModifyGit(t, dir, "add", file)
+	runModifyGit(t, dir, "commit", "-qm", message)
+}
+
+func setupDistributedModify(t *testing.T, conflicting bool) distributedModifyRepo {
+	t.Helper()
+	root, origin, caller, common, sf := setupModifyWorktrees(t, conflicting)
+	runModifyGit(t, origin, "checkout", "-qb", "C")
+	if conflicting {
+		commitModifyFile(t, origin, "base.txt", "C\n", "C")
+	} else {
+		commitModifyFile(t, origin, "c.txt", "C\n", "C")
+	}
+	sf.Stacks[0].Branches = append(sf.Stacks[0].Branches, stack.BranchRef{Branch: "C"})
+	require.NoError(t, stack.Save(common, sf))
+	repo := distributedModifyRepo{
+		root: root, origin: origin, caller: caller, common: common, sf: sf,
+		owners: map[string]string{"C": origin}, refs: make(map[string]string),
+	}
+	for _, branch := range []string{"A", "B"} {
+		path := filepath.Join(filepath.Dir(origin), "owner "+branch)
+		runModifyGit(t, root, "worktree", "add", "-q", path, branch)
+		repo.owners[branch] = path
+	}
+	for _, branch := range []string{"A", "B", "C"} {
+		repo.refs[branch] = runModifyGit(t, root, "rev-parse", branch)
+	}
+	return repo
+}
+
+func insertedModifyNode(name string) modifyview.ModifyBranchNode {
+	return modifyview.ModifyBranchNode{
+		BranchNode:       stackview.BranchNode{Ref: stack.BranchRef{Branch: name}},
+		OriginalPosition: -1,
+		IsInserted:       true,
+		PendingAction:    &modifyview.PendingAction{Type: modifyview.ActionInsertBelow, NewName: name},
+	}
+}
+
+func TestDistributedModify_AllActions(t *testing.T) {
+	tests := []struct {
+		name     string
+		nodes    func([]modifyview.ModifyBranchNode) []modifyview.ModifyBranchNode
+		order    []string
+		files    []string
+		renamedA bool
+		renamedB bool
+	}{
+		{
+			name: "rename",
+			nodes: func(nodes []modifyview.ModifyBranchNode) []modifyview.ModifyBranchNode {
+				nodes[0].PendingAction = &modifyview.PendingAction{Type: modifyview.ActionRename, NewName: "new-A"}
+				return nodes
+			},
+			order: []string{"new-A", "B", "C"}, files: []string{"a.txt", "b.txt", "base.txt", "c.txt"}, renamedA: true,
+		},
+		{
+			name: "insert",
+			nodes: func(nodes []modifyview.ModifyBranchNode) []modifyview.ModifyBranchNode {
+				return []modifyview.ModifyBranchNode{nodes[0], insertedModifyNode("inserted"), nodes[1], nodes[2]}
+			},
+			order: []string{"A", "inserted", "B", "C"}, files: []string{"a.txt", "b.txt", "base.txt", "c.txt"},
+		},
+		{
+			name: "drop",
+			nodes: func(nodes []modifyview.ModifyBranchNode) []modifyview.ModifyBranchNode {
+				nodes[0].PendingAction = &modifyview.PendingAction{Type: modifyview.ActionDrop}
+				nodes[0].Removed = true
+				return nodes
+			},
+			order: []string{"B", "C"}, files: []string{"b.txt", "base.txt", "c.txt"},
+		},
+		{
+			name: "fold down",
+			nodes: func(nodes []modifyview.ModifyBranchNode) []modifyview.ModifyBranchNode {
+				nodes[1].PendingAction = &modifyview.PendingAction{Type: modifyview.ActionFoldDown}
+				nodes[1].Removed = true
+				return nodes
+			},
+			order: []string{"A", "C"}, files: []string{"a.txt", "b.txt", "base.txt", "c.txt"},
+		},
+		{
+			name: "fold up",
+			nodes: func(nodes []modifyview.ModifyBranchNode) []modifyview.ModifyBranchNode {
+				nodes[1].PendingAction = &modifyview.PendingAction{Type: modifyview.ActionFoldUp}
+				nodes[1].Removed = true
+				return nodes
+			},
+			order: []string{"A", "C"}, files: []string{"a.txt", "b.txt", "base.txt", "c.txt"},
+		},
+		{
+			name: "reorder",
+			nodes: func(nodes []modifyview.ModifyBranchNode) []modifyview.ModifyBranchNode {
+				return []modifyview.ModifyBranchNode{nodes[2], nodes[1], nodes[0]}
+			},
+			order: []string{"C", "B", "A"}, files: []string{"a.txt", "b.txt", "base.txt", "c.txt"},
+		},
+		{
+			name: "rename insert and drop",
+			nodes: func(nodes []modifyview.ModifyBranchNode) []modifyview.ModifyBranchNode {
+				nodes[0].PendingAction = &modifyview.PendingAction{Type: modifyview.ActionDrop}
+				nodes[0].Removed = true
+				nodes[1].PendingAction = &modifyview.PendingAction{Type: modifyview.ActionRename, NewName: "new-B"}
+				return []modifyview.ModifyBranchNode{nodes[0], nodes[1], insertedModifyNode("inserted"), nodes[2]}
+			},
+			order: []string{"new-B", "inserted", "C"}, files: []string{"b.txt", "base.txt", "c.txt"}, renamedB: true,
+		},
+	}
+	for _, tt := range tests {
+		for _, unoccupied := range []bool{false, true} {
+			layout := "occupied"
+			if unoccupied {
+				layout = "mixed"
+			}
+			t.Run(tt.name+"/"+layout, func(t *testing.T) {
+				repo := setupDistributedModify(t, false)
+				if unoccupied {
+					runModifyGit(t, repo.owners["B"], "checkout", "-qb", "b-observer", "main")
+					require.NoError(t, os.WriteFile(filepath.Join(repo.owners["B"], "unrelated.txt"), []byte("keep"), 0644))
+				}
+				require.NoError(t, os.WriteFile(filepath.Join(repo.caller, "unrelated.txt"), []byte("keep"), 0644))
+				beforeTrees := runModifyGit(t, repo.root, "worktree", "list", "--porcelain")
+				restore := git.SetOps(requireWorktree(t, git.CurrentOps(), repo.origin))
+				defer restore()
+				cfg, _, _ := config.NewTestConfig()
+				defer cfg.Out.Close()
+				defer cfg.Err.Close()
+				result, conflict, err := ApplyPlan(cfg, repo.common, &repo.sf.Stacks[0], repo.sf,
+					tt.nodes(makeNodes(&repo.sf.Stacks[0])), "C", noopUpdateBaseSHAs)
+				require.NoError(t, err)
+				assert.Nil(t, conflict)
+				require.NotNil(t, result)
+				saved, err := stack.Load(repo.common)
+				require.NoError(t, err)
+				assert.Equal(t, tt.order, saved.Stacks[0].BranchNames())
+				top := tt.order[len(tt.order)-1]
+				assert.Equal(t, tt.files, strings.Fields(runModifyGit(t, repo.root, "ls-tree", "--name-only", top)))
+				for i, branch := range tt.order {
+					parent := "main"
+					if i > 0 {
+						parent = tt.order[i-1]
+					}
+					runModifyGit(t, repo.root, "merge-base", "--is-ancestor", parent, branch)
+				}
+				aName, bName := "A", "B"
+				if tt.renamedA {
+					aName = "new-A"
+				}
+				if tt.renamedB {
+					bName = "new-B"
+				}
+				if unoccupied {
+					bName = "b-observer"
+					assert.Equal(t, "?? unrelated.txt", runModifyGit(t, repo.owners["B"], "status", "--porcelain"))
+				}
+				assert.Equal(t, aName, runModifyGit(t, repo.owners["A"], "branch", "--show-current"))
+				assert.Equal(t, bName, runModifyGit(t, repo.owners["B"], "branch", "--show-current"))
+				assert.Equal(t, "C", runModifyGit(t, repo.origin, "branch", "--show-current"))
+				assert.Equal(t, "observer", runModifyGit(t, repo.caller, "branch", "--show-current"))
+				afterTrees := runModifyGit(t, repo.root, "worktree", "list", "--porcelain")
+				assert.Equal(t, strings.Count(beforeTrees, "worktree "), strings.Count(afterTrees, "worktree "))
+				if tt.name == "drop" {
+					assert.Equal(t, repo.refs["A"], runModifyGit(t, repo.root, "rev-parse", "A"))
+				}
+				if tt.name == "fold down" || tt.name == "fold up" {
+					assert.Equal(t, repo.refs["B"], runModifyGit(t, repo.root, "rev-parse", "B"))
+				}
+				if tt.name == "rename insert and drop" {
+					assert.Equal(t, runModifyGit(t, repo.root, "rev-parse", "new-B"), runModifyGit(t, repo.root, "rev-parse", "inserted"),
+						"an inserted empty layer must not resurrect the dropped parent's commits")
+				}
+				assert.False(t, StateExists(repo.common))
+			})
+		}
+	}
+}
+
+func TestDistributedModify_RetainsOriginForForeignSurvivor(t *testing.T) {
+	for _, action := range []modifyview.ActionType{modifyview.ActionDrop, modifyview.ActionFoldDown} {
+		t.Run(string(action), func(t *testing.T) {
+			repo := setupDistributedModify(t, false)
+			restore := git.SetOps(requireWorktree(t, git.CurrentOps(), repo.origin))
+			defer restore()
+			cfg, _, errR := config.NewTestConfig()
+			nodes := makeNodes(&repo.sf.Stacks[0])
+			nodes[2].PendingAction = &modifyview.PendingAction{Type: action}
+			nodes[2].Removed = true
+			_, _, err := ApplyPlan(cfg, repo.common, &repo.sf.Stacks[0], repo.sf, nodes, "C", noopUpdateBaseSHAs)
+			cfg.Out.Close()
+			cfg.Err.Close()
+			require.NoError(t, err)
+			output, err := io.ReadAll(errR)
+			require.NoError(t, err)
+			assert.Contains(t, string(output), repo.owners["B"])
+			assert.Contains(t, string(output), "Kept C")
+			assert.Equal(t, "C", runModifyGit(t, repo.origin, "branch", "--show-current"))
+			assert.Equal(t, repo.refs["C"], runModifyGit(t, repo.root, "rev-parse", "C"))
+			assert.Equal(t, "B", runModifyGit(t, repo.owners["B"], "branch", "--show-current"))
+			assert.Equal(t, []string{"A", "B"}, repo.sf.Stacks[0].BranchNames())
+		})
+	}
+}
+
+func TestDistributedModify_PreflightsAllTargets(t *testing.T) {
+	for _, condition := range []string{"dirty", "busy"} {
+		t.Run(condition, func(t *testing.T) {
+			repo := setupDistributedModify(t, false)
+			path := filepath.Join(repo.owners["B"], "uncommitted.txt")
+			message := "uncommitted changes"
+			if condition == "busy" {
+				dir := runModifyGit(t, repo.owners["B"], "rev-parse", "--absolute-git-dir")
+				path, message = filepath.Join(dir, "MERGE_HEAD"), "Git operation"
+			}
+			require.NoError(t, os.WriteFile(path, []byte("keep\n"), 0644))
+			before, err := os.ReadFile(filepath.Join(repo.common, "gh-stack"))
+			require.NoError(t, err)
+			restore := git.SetOps(requireWorktree(t, git.CurrentOps(), repo.origin))
+			defer restore()
+			cfg, _, _ := config.NewTestConfig()
+			defer cfg.Out.Close()
+			defer cfg.Err.Close()
+			nodes := makeNodes(&repo.sf.Stacks[0])
+			nodes[0].PendingAction = &modifyview.PendingAction{Type: modifyview.ActionRename, NewName: "new-A"}
+			_, _, err = ApplyPlan(cfg, repo.common, &repo.sf.Stacks[0], repo.sf, nodes, "C", noopUpdateBaseSHAs)
+			require.ErrorContains(t, err, message)
+			assert.Contains(t, err.Error(), repo.owners["B"])
+			for branch, sha := range repo.refs {
+				assert.Equal(t, sha, runModifyGit(t, repo.root, "rev-parse", branch))
+			}
+			after, err := os.ReadFile(filepath.Join(repo.common, "gh-stack"))
+			require.NoError(t, err)
+			assert.Equal(t, before, after)
+			assert.False(t, StateExists(repo.common))
+		})
+	}
+}
+
+func TestDistributedModify_DropLeavesDirtySourceUntouched(t *testing.T) {
+	repo := setupDistributedModify(t, false)
+	require.NoError(t, os.WriteFile(filepath.Join(repo.owners["B"], "uncommitted.txt"), []byte("keep"), 0644))
+	restore := git.SetOps(requireWorktree(t, git.CurrentOps(), repo.origin))
+	defer restore()
+	cfg, _, _ := config.NewTestConfig()
+	defer cfg.Out.Close()
+	defer cfg.Err.Close()
+	nodes := makeNodes(&repo.sf.Stacks[0])
+	nodes[1].PendingAction = &modifyview.PendingAction{Type: modifyview.ActionDrop}
+	nodes[1].Removed = true
+	_, _, err := ApplyPlan(cfg, repo.common, &repo.sf.Stacks[0], repo.sf, nodes, "C", noopUpdateBaseSHAs)
+	require.NoError(t, err)
+	assert.Equal(t, repo.refs["B"], runModifyGit(t, repo.root, "rev-parse", "B"))
+	assert.Equal(t, "?? uncommitted.txt", runModifyGit(t, repo.owners["B"], "status", "--porcelain"))
+	assert.Equal(t, "B", runModifyGit(t, repo.owners["B"], "branch", "--show-current"))
+}
+
+func TestDistributedModify_RebaseRecovery(t *testing.T) {
+	for _, scenario := range []string{"foreign conflicts", "same-tree remaining branch", "moved owner", "abort renamed owner"} {
+		t.Run(scenario, func(t *testing.T) {
+			repo := setupDistributedModify(t, true)
+			if scenario == "same-tree remaining branch" {
+				runModifyGit(t, repo.owners["B"], "checkout", "-qb", "b-observer", "main")
+			}
+			originOps := requireWorktree(t, git.CurrentOps(), repo.origin)
+			restore := git.SetOps(originOps)
+			defer restore()
+			cfg, _, _ := config.NewTestConfig()
+			defer cfg.Out.Close()
+			defer cfg.Err.Close()
+			nodes := makeNodes(&repo.sf.Stacks[0])
+			nodes[0].PendingAction = &modifyview.PendingAction{Type: modifyview.ActionDrop}
+			nodes[0].Removed = true
+			bName := "B"
+			if scenario == "abort renamed owner" {
+				bName = "new-B"
+				nodes[1].PendingAction = &modifyview.PendingAction{Type: modifyview.ActionRename, NewName: bName}
+			}
+			_, conflict, err := ApplyPlan(cfg, repo.common, &repo.sf.Stacks[0], repo.sf, nodes, "C", noopUpdateBaseSHAs)
+			require.Error(t, err)
+			require.NotNil(t, conflict)
+			assert.Equal(t, bName, conflict.Branch)
+			state, err := LoadState(repo.common)
+			require.NoError(t, err)
+			require.NotNil(t, state)
+			bPath := repo.owners["B"]
+			if scenario == "same-tree remaining branch" {
+				bPath = repo.origin
+			}
+			assert.True(t, worktree.SamePath(state.Worktrees.Location(bName).Path, bPath))
+			assert.True(t, requireGitState(t, requireWorktree(t, originOps, bPath).IsRebaseInProgress))
+			if scenario == "moved owner" {
+				moved := bPath + "-moved"
+				runModifyGit(t, repo.root, "worktree", "move", bPath, moved)
+				bPath, repo.owners["B"] = moved, moved
+			}
+			restoreCaller := git.SetOps(requireWorktree(t, originOps, repo.caller))
+			defer restoreCaller()
+			if scenario == "abort renamed owner" {
+				require.NoError(t, UnwindFromStateFile(cfg, repo.common))
+				assert.Equal(t, "B", runModifyGit(t, repo.owners["B"], "branch", "--show-current"))
+				for branch, sha := range repo.refs {
+					assert.Equal(t, sha, runModifyGit(t, repo.root, "rev-parse", branch))
+				}
+			} else {
+				require.NoError(t, os.WriteFile(filepath.Join(bPath, "base.txt"), []byte("resolved B\n"), 0644))
+				runModifyGit(t, bPath, "add", "base.txt")
+				require.ErrorContains(t, ContinueApply(cfg, repo.common, noopUpdateBaseSHAs), "rebase conflict on C")
+				next, err := LoadState(repo.common)
+				require.NoError(t, err)
+				assert.Equal(t, "C", next.Worktrees.Pending)
+				assert.True(t, worktree.SamePath(next.Worktrees.Location("C").Path, repo.origin))
+				require.NoError(t, os.WriteFile(filepath.Join(repo.origin, "base.txt"), []byte("resolved C\n"), 0644))
+				runModifyGit(t, repo.origin, "add", "base.txt")
+				restoreAnother := git.SetOps(requireWorktree(t, originOps, repo.owners["A"]))
+				defer restoreAnother()
+				require.NoError(t, ContinueApply(cfg, repo.common, noopUpdateBaseSHAs))
+				saved, err := stack.Load(repo.common)
+				require.NoError(t, err)
+				assert.Equal(t, []string{"B", "C"}, saved.Stacks[0].BranchNames())
+				runModifyGit(t, repo.root, "merge-base", "--is-ancestor", "B", "C")
+			}
+			assert.Equal(t, "A", runModifyGit(t, repo.owners["A"], "branch", "--show-current"))
+			assert.Equal(t, "C", runModifyGit(t, repo.origin, "branch", "--show-current"))
+			assert.Equal(t, "observer", runModifyGit(t, repo.caller, "branch", "--show-current"))
+			assert.False(t, StateExists(repo.common))
+		})
+	}
+}
+
+func setupDistributedFoldConflict(t *testing.T) distributedModifyRepo {
+	t.Helper()
+	repo := setupDistributedModify(t, true)
+	runModifyGit(t, repo.origin, "checkout", "-qb", "D")
+	commitModifyFile(t, repo.origin, "base.txt", "D\n", "D")
+	path := filepath.Join(filepath.Dir(repo.origin), "owner C")
+	runModifyGit(t, repo.root, "worktree", "add", "-q", path, "C")
+	repo.owners["C"], repo.owners["D"] = path, repo.origin
+	repo.refs["D"] = runModifyGit(t, repo.root, "rev-parse", "D")
+	repo.sf.Stacks[0].Branches = append(repo.sf.Stacks[0].Branches, stack.BranchRef{Branch: "D"})
+	require.NoError(t, stack.Save(repo.common, repo.sf))
+	return repo
+}
+
+func distributedFoldConflictNodes(s *stack.Stack) []modifyview.ModifyBranchNode {
+	nodes := makeNodes(s)
+	nodes[1].PendingAction = &modifyview.PendingAction{Type: modifyview.ActionDrop}
+	nodes[1].Removed = true
+	nodes[2].PendingAction = &modifyview.PendingAction{Type: modifyview.ActionFoldDown}
+	nodes[2].Removed = true
+	nodes[3].PendingAction = &modifyview.PendingAction{Type: modifyview.ActionRename, NewName: "new-D"}
+	return append(nodes, insertedModifyNode("inserted"))
+}
+
+func TestDistributedModify_FoldThenRebaseRecovery(t *testing.T) {
+	for _, outcome := range []string{"continue", "abort"} {
+		t.Run(outcome, func(t *testing.T) {
+			repo := setupDistributedFoldConflict(t)
+			originOps := requireWorktree(t, git.CurrentOps(), repo.origin)
+			restore := git.SetOps(originOps)
+			defer restore()
+			cfg, _, _ := config.NewTestConfig()
+			defer cfg.Out.Close()
+			defer cfg.Err.Close()
+			_, conflict, err := ApplyPlan(cfg, repo.common, &repo.sf.Stacks[0], repo.sf,
+				distributedFoldConflictNodes(&repo.sf.Stacks[0]), "D", noopUpdateBaseSHAs)
+			require.Error(t, err)
+			require.NotNil(t, conflict)
+			assert.Equal(t, "C", conflict.Branch)
+			state, err := LoadState(repo.common)
+			require.NoError(t, err)
+			assert.Equal(t, "cherry_pick", state.ConflictType)
+			assert.Equal(t, "A", state.Worktrees.Pending)
+			assert.Equal(t, 2, state.NextAction, "rename and insertion must already be checkpointed")
+			assert.True(t, worktree.SamePath(state.Worktrees.Location("A").Path, repo.owners["A"]))
+			restoreCaller := git.SetOps(requireWorktree(t, originOps, repo.caller))
+			defer restoreCaller()
+			require.NoError(t, os.WriteFile(filepath.Join(repo.owners["A"], "base.txt"), []byte("resolved C\n"), 0644))
+			runModifyGit(t, repo.owners["A"], "add", "base.txt")
+			dirtyPath := filepath.Join(repo.origin, "unrelated.txt")
+			require.NoError(t, os.WriteFile(dirtyPath, []byte("keep"), 0644))
+			require.ErrorContains(t, ContinueApply(cfg, repo.common, noopUpdateBaseSHAs), "uncommitted changes")
+			assert.True(t, requireGitState(t, requireWorktree(t, originOps, repo.owners["A"]).IsCherryPickInProgress),
+				"other target worktrees must be preflighted before finishing the pending native operation")
+			require.NoError(t, os.Remove(dirtyPath))
+			require.ErrorContains(t, ContinueApply(cfg, repo.common, noopUpdateBaseSHAs), "rebase conflict on new-D")
+			state, err = LoadState(repo.common)
+			require.NoError(t, err)
+			assert.Equal(t, "rebase", state.ConflictType)
+			assert.Equal(t, "new-D", state.Worktrees.Pending)
+			assert.Equal(t, len(state.Execution), state.NextAction)
+			saved, err := stack.Load(repo.common)
+			require.NoError(t, err)
+			assert.Equal(t, []string{"A", "new-D", "inserted"}, saved.Stacks[0].BranchNames(),
+				"continuation must run the drop after the fold, not resurrect its source branches")
+			if outcome == "abort" {
+				require.NoError(t, UnwindFromStateFile(cfg, repo.common))
+				for branch, sha := range repo.refs {
+					assert.Equal(t, sha, runModifyGit(t, repo.root, "rev-parse", branch))
+				}
+				for _, name := range []string{"new-D", "inserted"} {
+					exists, err := originOps.BranchExists(name)
+					require.NoError(t, err)
+					assert.False(t, exists)
+				}
+				assert.Equal(t, "D", runModifyGit(t, repo.origin, "branch", "--show-current"))
+			} else {
+				require.NoError(t, os.WriteFile(filepath.Join(repo.origin, "base.txt"), []byte("resolved D\n"), 0644))
+				runModifyGit(t, repo.origin, "add", "base.txt")
+				restoreSource := git.SetOps(requireWorktree(t, originOps, repo.owners["C"]))
+				defer restoreSource()
+				require.NoError(t, ContinueApply(cfg, repo.common, noopUpdateBaseSHAs))
+				assert.Equal(t, "new-D", runModifyGit(t, repo.origin, "branch", "--show-current"))
+				assert.Equal(t, runModifyGit(t, repo.root, "rev-parse", "new-D"), runModifyGit(t, repo.root, "rev-parse", "inserted"))
+			}
+			for _, branch := range []string{"A", "B", "C"} {
+				assert.Equal(t, branch, runModifyGit(t, repo.owners[branch], "branch", "--show-current"))
+			}
+			for _, branch := range []string{"B", "C"} {
+				assert.Equal(t, repo.refs[branch], runModifyGit(t, repo.root, "rev-parse", branch),
+					"dropped/folded source refs must remain intact")
+			}
+			assert.Equal(t, "observer", runModifyGit(t, repo.caller, "branch", "--show-current"))
+			assert.False(t, StateExists(repo.common))
+		})
+	}
+}
+
+func TestDistributedModify_PreservesNewCommitOnRemainingOwner(t *testing.T) {
+	repo := setupDistributedModify(t, true)
+	originOps := requireWorktree(t, git.CurrentOps(), repo.origin)
+	restore := git.SetOps(originOps)
+	defer restore()
+	cfg, _, _ := config.NewTestConfig()
+	defer cfg.Out.Close()
+	defer cfg.Err.Close()
+	nodes := makeNodes(&repo.sf.Stacks[0])
+	nodes[0].PendingAction = &modifyview.PendingAction{Type: modifyview.ActionDrop}
+	nodes[0].Removed = true
+	_, conflict, err := ApplyPlan(cfg, repo.common, &repo.sf.Stacks[0], repo.sf, nodes, "C", noopUpdateBaseSHAs)
+	require.Error(t, err)
+	require.NotNil(t, conflict)
+	commitModifyFile(t, repo.origin, "external.txt", "keep this\n", "external commit while modify paused")
+	external := runModifyGit(t, repo.root, "rev-parse", "C")
+	restoreCaller := git.SetOps(requireWorktree(t, originOps, repo.caller))
+	defer restoreCaller()
+	require.ErrorContains(t, ContinueApply(cfg, repo.common, noopUpdateBaseSHAs), "C changed since")
+	assert.True(t, requireGitState(t, requireWorktree(t, originOps, repo.owners["B"]).IsRebaseInProgress))
+	saved, err := LoadState(repo.common)
+	require.NoError(t, err)
+	assert.NotContains(t, saved.Worktrees.Touched, "C")
+	require.NoError(t, UnwindFromStateFile(cfg, repo.common))
+	assert.Equal(t, external, runModifyGit(t, repo.root, "rev-parse", "C"))
+	assert.Equal(t, repo.refs["B"], runModifyGit(t, repo.root, "rev-parse", "B"))
+	assert.False(t, StateExists(repo.common))
+}
+
+func TestDistributedModify_MetadataSaveFailureRetainsRecovery(t *testing.T) {
+	repo := setupDistributedModify(t, false)
+	originOps := requireWorktree(t, git.CurrentOps(), repo.origin)
+	restore := git.SetOps(originOps)
+	defer restore()
+	cfg, _, _ := config.NewTestConfig()
+	defer cfg.Out.Close()
+	defer cfg.Err.Close()
+	nodes := makeNodes(&repo.sf.Stacks[0])
+	nodes[0].PendingAction = &modifyview.PendingAction{Type: modifyview.ActionRename, NewName: "new-A"}
+	_, _, err := ApplyPlan(cfg, repo.common, &repo.sf.Stacks[0], repo.sf, nodes, "C", func(*stack.Stack) {
+		external, err := stack.Load(repo.common)
+		require.NoError(t, err)
+		external.Stacks = append(external.Stacks, stack.Stack{
+			Trunk: stack.BranchRef{Branch: "main"}, Branches: []stack.BranchRef{{Branch: "observer"}},
+		})
+		require.NoError(t, stack.Save(repo.common, external))
+	})
+	var stale *stack.StaleError
+	require.ErrorAs(t, err, &stale)
+	saved, err := LoadState(repo.common)
+	require.NoError(t, err)
+	require.NotNil(t, saved)
+	assert.Equal(t, PhaseApplying, saved.Phase)
+	assert.Equal(t, "new-A", runModifyGit(t, repo.owners["A"], "branch", "--show-current"))
+	restoreCaller := git.SetOps(requireWorktree(t, originOps, repo.caller))
+	defer restoreCaller()
+	require.NoError(t, UnwindFromStateFile(cfg, repo.common))
+	assert.Equal(t, "A", runModifyGit(t, repo.owners["A"], "branch", "--show-current"))
+	assert.Equal(t, "C", runModifyGit(t, repo.origin, "branch", "--show-current"))
+	final, err := stack.Load(repo.common)
+	require.NoError(t, err)
+	require.Len(t, final.Stacks, 2)
+	assert.Equal(t, []string{"A", "B", "C"}, final.Stacks[0].BranchNames())
+	assert.Equal(t, []string{"observer"}, final.Stacks[1].BranchNames())
+	assert.False(t, StateExists(repo.common))
+}
+
+func TestDistributedModify_AbortPreservesChangedPendingRef(t *testing.T) {
+	repo := setupDistributedModify(t, true)
+	originOps := requireWorktree(t, git.CurrentOps(), repo.origin)
+	restore := git.SetOps(originOps)
+	defer restore()
+	cfg, _, _ := config.NewTestConfig()
+	defer cfg.Out.Close()
+	defer cfg.Err.Close()
+	nodes := makeNodes(&repo.sf.Stacks[0])
+	nodes[0].PendingAction = &modifyview.PendingAction{Type: modifyview.ActionDrop}
+	nodes[0].Removed = true
+	_, conflict, err := ApplyPlan(cfg, repo.common, &repo.sf.Stacks[0], repo.sf, nodes, "C", noopUpdateBaseSHAs)
+	require.Error(t, err)
+	require.NotNil(t, conflict)
+	tree := runModifyGit(t, repo.root, "rev-parse", "B^{tree}")
+	external := runModifyGit(t, repo.root, "commit-tree", tree, "-p", "B", "-m", "external commit")
+	runModifyGit(t, repo.root, "update-ref", "refs/heads/B", external)
+	restoreCaller := git.SetOps(requireWorktree(t, originOps, repo.caller))
+	defer restoreCaller()
+	require.ErrorContains(t, ContinueApply(cfg, repo.common, noopUpdateBaseSHAs), "changed after modify paused")
+	require.ErrorContains(t, UnwindFromStateFile(cfg, repo.common), "changed after modify paused")
+	assert.Equal(t, external, runModifyGit(t, repo.root, "rev-parse", "B"))
+	assert.True(t, requireGitState(t, requireWorktree(t, originOps, repo.owners["B"]).IsRebaseInProgress),
+		"abort must reject the changed branch ref before native Git can reset it")
+	assert.True(t, StateExists(repo.common))
+}
+
+func TestDistributedModify_MultipleFoldsKeepOriginalCutoffs(t *testing.T) {
+	for _, direction := range []modifyview.ActionType{modifyview.ActionFoldDown, modifyview.ActionFoldUp} {
+		t.Run(string(direction), func(t *testing.T) {
+			repo := setupDistributedModify(t, false)
+			original := "C"
+			nodes := makeNodes(&repo.sf.Stacks[0])
+			if direction == modifyview.ActionFoldDown {
+				nodes[1].PendingAction = &modifyview.PendingAction{Type: direction}
+				nodes[1].Removed = true
+				nodes[2].PendingAction = &modifyview.PendingAction{Type: direction}
+				nodes[2].Removed = true
+			} else {
+				nodes[0].PendingAction = &modifyview.PendingAction{Type: direction}
+				nodes[0].Removed = true
+				nodes[1].PendingAction = &modifyview.PendingAction{Type: direction}
+				nodes[1].Removed = true
+			}
+			restore := git.SetOps(requireWorktree(t, git.CurrentOps(), repo.origin))
+			defer restore()
+			cfg, _, _ := config.NewTestConfig()
+			defer cfg.Out.Close()
+			defer cfg.Err.Close()
+			_, _, err := ApplyPlan(cfg, repo.common, &repo.sf.Stacks[0], repo.sf, nodes, original, noopUpdateBaseSHAs)
+			require.NoError(t, err)
+			receiver := "C"
+			if direction == modifyview.ActionFoldDown {
+				receiver = "A"
+			}
+			assert.Equal(t, []string{receiver}, repo.sf.Stacks[0].BranchNames())
+			assert.Equal(t, []string{"a.txt", "b.txt", "base.txt", "c.txt"},
+				strings.Fields(runModifyGit(t, repo.root, "ls-tree", "--name-only", receiver)))
+			assert.Equal(t, "C", runModifyGit(t, repo.origin, "branch", "--show-current"))
+			assert.Equal(t, "A", runModifyGit(t, repo.owners["A"], "branch", "--show-current"))
+			assert.Equal(t, "B", runModifyGit(t, repo.owners["B"], "branch", "--show-current"))
+		})
+	}
+}
+
+func TestDistributedModify_MergedOwnerIsNotTouched(t *testing.T) {
+	repo := setupDistributedModify(t, false)
+	repo.sf.Stacks[0].Branches[0].PullRequest = &stack.PullRequestRef{Number: 1, Merged: true}
+	require.NoError(t, stack.Save(repo.common, repo.sf))
+	require.NoError(t, os.WriteFile(filepath.Join(repo.owners["A"], "uncommitted.txt"), []byte("keep"), 0644))
+	restore := git.SetOps(requireWorktree(t, git.CurrentOps(), repo.origin))
+	defer restore()
+	cfg, _, _ := config.NewTestConfig()
+	defer cfg.Out.Close()
+	defer cfg.Err.Close()
+	nodes := makeNodes(&repo.sf.Stacks[0])
+	nodes[2].PendingAction = &modifyview.PendingAction{Type: modifyview.ActionRename, NewName: "new-C"}
+	_, _, err := ApplyPlan(cfg, repo.common, &repo.sf.Stacks[0], repo.sf, nodes, "C", noopUpdateBaseSHAs)
+	require.NoError(t, err)
+	assert.Equal(t, repo.refs["A"], runModifyGit(t, repo.root, "rev-parse", "A"))
+	assert.Equal(t, "?? uncommitted.txt", runModifyGit(t, repo.owners["A"], "status", "--porcelain"))
+	assert.Equal(t, "A", runModifyGit(t, repo.owners["A"], "branch", "--show-current"))
+}
+
+func TestUnwind_RetryAfterCreatedRefCleanupSaveFailure(t *testing.T) {
+	dir, origin := t.TempDir(), t.TempDir()
+	original := stack.Stack{Trunk: stack.BranchRef{Branch: "main"}, Branches: []stack.BranchRef{{Branch: "A"}}}
+	modified := original
+	modified.Branches = append([]stack.BranchRef{}, original.Branches...)
+	modified.Branches = append(modified.Branches, stack.BranchRef{Branch: "inserted"})
+	writeTestStackFile(t, dir, modified)
+	metadata, err := json.Marshal(original)
+	require.NoError(t, err)
+	state := &StateFile{
+		SchemaVersion: 1, Phase: PhaseApplying, OriginalBranch: "A",
+		Snapshot: Snapshot{StackMetadata: metadata, Branches: []BranchSnapshot{{Name: "A", TipSHA: "sha-A"}}},
+		Worktrees: &worktree.Context{
+			Origin: worktree.Location{Path: origin}, Touched: map[string]string{"inserted": "sha-created"},
+		},
+		CreatedBranches: map[string]string{"inserted": "sha-created"},
+	}
+	state.RecordStack(&modified)
+	require.NoError(t, SaveState(dir, state))
+	refs := map[string]string{"A": "sha-A", "inserted": "sha-created"}
+	mock := newApplyMock(dir, refs)
+	mock.RootDirFn = func() (string, error) { return origin, nil }
+	mock.CurrentBranchFn = func() (string, error) { return "A", nil }
+	backup := StatePath(dir) + ".before-failure"
+	mock.DeleteBranchFn = func(name string, _ bool) error {
+		delete(refs, name)
+		require.NoError(t, os.Rename(StatePath(dir), backup))
+		require.NoError(t, os.Mkdir(StatePath(dir), 0755))
+		return nil
+	}
+	restore := git.SetOps(mock)
+	defer restore()
+	cfg, _, _ := config.NewTestConfig()
+	defer cfg.Out.Close()
+	defer cfg.Err.Close()
+	require.Error(t, UnwindFromStateFile(cfg, dir))
+	require.NoError(t, os.Remove(StatePath(dir)))
+	require.NoError(t, os.Rename(backup, StatePath(dir)))
+	saved, err := LoadState(dir)
+	require.NoError(t, err)
+	assert.Empty(t, saved.Worktrees.Touched, "ref restoration must be durable before created refs are deleted")
+	mock.DeleteBranchFn = func(string, bool) error {
+		t.Fatal("already deleted operation-created ref must not be deleted again")
+		return nil
+	}
+	require.NoError(t, UnwindFromStateFile(cfg, dir))
+	assert.False(t, StateExists(dir))
+	final, err := stack.Load(dir)
+	require.NoError(t, err)
+	assert.Equal(t, []string{"A"}, final.Stacks[0].BranchNames())
+}
+
+func TestContinueApply_RejectsMergedPendingBranch(t *testing.T) {
+	dir := t.TempDir()
+	s := stack.Stack{
+		Trunk:    stack.BranchRef{Branch: "main"},
+		Branches: []stack.BranchRef{{Branch: "A", PullRequest: &stack.PullRequestRef{Number: 1, Merged: true}}},
+	}
+	writeTestStackFile(t, dir, s)
+	state := &StateFile{SchemaVersion: 1, Phase: PhaseConflict, ConflictType: "rebase", ConflictBranch: "A"}
+	state.RecordStack(&s)
+	require.NoError(t, SaveState(dir, state))
+	called := false
+	restore := git.SetOps(&git.MockOps{
+		RebaseContinueFn: func(git.RebaseOpts) error { called = true; return nil },
+	})
+	defer restore()
+	cfg, _, _ := config.NewTestConfig()
+	defer cfg.Out.Close()
+	defer cfg.Err.Close()
+	require.ErrorContains(t, ContinueApply(cfg, dir, noopUpdateBaseSHAs), "merged or queued branch A")
+	assert.False(t, called)
+	assert.True(t, StateExists(dir))
+}
+
+func TestModifyState_RejectsInvalidActionProgress(t *testing.T) {
+	for _, next := range []int{-1, 2} {
+		t.Run(fmt.Sprint(next), func(t *testing.T) {
+			dir := t.TempDir()
+			state := &StateFile{
+				SchemaVersion: 1, Phase: PhaseConflict, ConflictType: "actions",
+				Execution: []Action{{Type: "drop", Branch: "A"}}, NextAction: next, DesiredOrder: []string{"B"},
+			}
+			require.NoError(t, SaveState(dir, state))
+			_, err := LoadState(dir)
+			require.ErrorContains(t, err, "invalid action progress")
+			assert.True(t, StateExists(dir))
+		})
+	}
+}
+
+func TestContinueApply_RejectsChangedPendingBase(t *testing.T) {
+	dir, origin := t.TempDir(), t.TempDir()
+	s := stack.Stack{Trunk: stack.BranchRef{Branch: "main"}, Branches: []stack.BranchRef{{Branch: "A"}, {Branch: "B"}}}
+	writeTestStackFile(t, dir, s)
+	state := &StateFile{
+		SchemaVersion: 1, Phase: PhaseConflict, ConflictType: "rebase", ConflictBranch: "B",
+		Snapshot: Snapshot{Branches: []BranchSnapshot{{Name: "A", TipSHA: "original-A"}, {Name: "B", TipSHA: "original-B"}}},
+		Worktrees: &worktree.Context{
+			Origin: worktree.Location{Path: origin}, Touched: map[string]string{"A": "rewritten-A"},
+			Pending: "B", PendingBefore: "original-B",
+		},
+	}
+	state.RecordStack(&s)
+	require.NoError(t, SaveState(dir, state))
+	mock := newApplyMock(dir, map[string]string{"A": "external-A", "B": "original-B"})
+	mock.RootDirFn = func() (string, error) { return origin, nil }
+	mock.IsRebaseInProgressFn = func() (bool, error) { return true, nil }
+	continued := false
+	mock.RebaseContinueFn = func(git.RebaseOpts) error { continued = true; return nil }
+	restore := git.SetOps(mock)
+	defer restore()
+	cfg, _, _ := config.NewTestConfig()
+	defer cfg.Out.Close()
+	defer cfg.Err.Close()
+	require.ErrorContains(t, ContinueApply(cfg, dir, noopUpdateBaseSHAs), "A changed since")
+	assert.False(t, continued)
+	assert.True(t, StateExists(dir))
+}
+
+func TestApplyPlan_RejectsReorderedFoldBeforeMutation(t *testing.T) {
+	repo := setupDistributedModify(t, false)
+	before, err := os.ReadFile(filepath.Join(repo.common, "gh-stack"))
+	require.NoError(t, err)
+	restore := git.SetOps(requireWorktree(t, git.CurrentOps(), repo.origin))
+	defer restore()
+	cfg, _, _ := config.NewTestConfig()
+	defer cfg.Out.Close()
+	defer cfg.Err.Close()
+	nodes := makeNodes(&repo.sf.Stacks[0])
+	nodes = []modifyview.ModifyBranchNode{nodes[1], nodes[0], nodes[2]}
+	nodes[0].PendingAction = &modifyview.PendingAction{Type: modifyview.ActionFoldUp}
+	nodes[0].Removed = true
+
+	result, conflict, err := ApplyPlan(cfg, repo.common, &repo.sf.Stacks[0], repo.sf, nodes, "C", noopUpdateBaseSHAs)
+	if err == nil {
+		t.Logf("unchecked mixed plan left A=%s, main=%s, C files=%q",
+			runModifyGit(t, repo.root, "rev-parse", "A"),
+			runModifyGit(t, repo.root, "rev-parse", "main"),
+			runModifyGit(t, repo.root, "ls-tree", "--name-only", "C"))
+	}
+	assert.ErrorContains(t, err, "cannot mix reordering")
+	assert.Nil(t, result)
+	assert.Nil(t, conflict)
+	for branch, sha := range repo.refs {
+		assert.Equal(t, sha, runModifyGit(t, repo.root, "rev-parse", branch), branch+" must not move")
+		assert.Equal(t, branch, runModifyGit(t, repo.owners[branch], "branch", "--show-current"))
+	}
+	assert.Equal(t, []string{"a.txt", "b.txt", "base.txt", "c.txt"},
+		strings.Fields(runModifyGit(t, repo.root, "ls-tree", "--name-only", "C")))
+	after, err := os.ReadFile(filepath.Join(repo.common, "gh-stack"))
+	require.NoError(t, err)
+	assert.Equal(t, before, after, "an invalid mixed plan must not change the catalog")
+	assert.False(t, StateExists(repo.common), "an invalid mixed plan must not leave a modify journal")
+}
+
+func TestCompileActions_ReorderStructureExclusivity(t *testing.T) {
+	s := stack.Stack{
+		Trunk:    stack.BranchRef{Branch: "main"},
+		Branches: []stack.BranchRef{{Branch: "A"}, {Branch: "B"}, {Branch: "C"}},
+	}
+	restore := git.SetOps(&git.MockOps{})
+	defer restore()
+	for _, action := range []modifyview.ActionType{
+		modifyview.ActionDrop, modifyview.ActionFoldDown, modifyview.ActionFoldUp,
+		modifyview.ActionRename, modifyview.ActionInsertBelow, modifyview.ActionInsertAbove,
+	} {
+		t.Run("reject "+string(action), func(t *testing.T) {
+			nodes := makeNodes(&s)
+			nodes = []modifyview.ModifyBranchNode{nodes[1], nodes[0], nodes[2]}
+			switch action {
+			case modifyview.ActionInsertBelow, modifyview.ActionInsertAbove:
+				inserted := insertedModifyNode("inserted")
+				inserted.PendingAction.Type = action
+				nodes = append(nodes[:2], inserted, nodes[2])
+			case modifyview.ActionRename:
+				nodes[0].PendingAction = &modifyview.PendingAction{Type: action, NewName: "renamed"}
+			default:
+				nodes[0].PendingAction = &modifyview.PendingAction{Type: action}
+				nodes[0].Removed = true
+			}
+			_, _, err := compileActions(&s, nodes)
+			require.ErrorContains(t, err, "cannot mix reordering")
+		})
+	}
+
+	t.Run("pure reorder", func(t *testing.T) {
+		nodes := makeNodes(&s)
+		nodes[0], nodes[1] = nodes[1], nodes[0]
+		execution, desired, err := compileActions(&s, nodes)
+		require.NoError(t, err)
+		assert.Empty(t, execution)
+		assert.Equal(t, []string{"B", "A", "C"}, desired)
+	})
+	t.Run("insertion shifts positions without reordering", func(t *testing.T) {
+		nodes := makeNodes(&s)
+		for i := range nodes {
+			nodes[i].OriginalPosition = len(nodes) - 1 - i
+		}
+		nodes = []modifyview.ModifyBranchNode{nodes[0], insertedModifyNode("inserted"), nodes[1], nodes[2]}
+		_, desired, err := compileActions(&s, nodes)
+		require.NoError(t, err)
+		assert.Equal(t, []string{"A", "inserted", "B", "C"}, desired)
+	})
+	t.Run("fold with original TUI display positions", func(t *testing.T) {
+		nodes := makeNodes(&s)
+		for i := range nodes {
+			nodes[i].OriginalPosition = len(nodes) - 1 - i
+		}
+		nodes[1].PendingAction = &modifyview.PendingAction{Type: modifyview.ActionFoldUp}
+		nodes[1].Removed = true
+		execution, desired, err := compileActions(&s, nodes)
+		require.NoError(t, err)
+		require.Len(t, execution, 1)
+		assert.Equal(t, "C", execution[0].Target)
+		assert.Equal(t, []string{"A", "C"}, desired)
+	})
+}
+
+func TestDistributedModify_FoldUpAcrossDropExcludesDroppedHistory(t *testing.T) {
+	repo := setupDistributedModify(t, false)
+	restore := git.SetOps(requireWorktree(t, git.CurrentOps(), repo.origin))
+	defer restore()
+	cfg, _, _ := config.NewTestConfig()
+	defer cfg.Out.Close()
+	defer cfg.Err.Close()
+	nodes := makeNodes(&repo.sf.Stacks[0])
+	nodes[1].PendingAction = &modifyview.PendingAction{Type: modifyview.ActionDrop}
+	nodes[1].Removed = true
+	nodes[0].PendingAction = &modifyview.PendingAction{Type: modifyview.ActionFoldUp}
+	nodes[0].Removed = true
+	_, conflict, err := ApplyPlan(cfg, repo.common, &repo.sf.Stacks[0], repo.sf, nodes, "C", noopUpdateBaseSHAs)
+	require.NoError(t, err)
+	assert.Nil(t, conflict)
+	assert.Equal(t, []string{"C"}, repo.sf.Stacks[0].BranchNames())
+	assert.Equal(t, []string{"a.txt", "base.txt", "c.txt"},
+		strings.Fields(runModifyGit(t, repo.root, "ls-tree", "--name-only", "C")))
+	assert.Equal(t, []string{"A", "C"},
+		strings.Split(runModifyGit(t, repo.root, "log", "--reverse", "--format=%s", "main..C"), "\n"))
+	for _, source := range []string{"A", "B"} {
+		assert.Equal(t, repo.refs[source], runModifyGit(t, repo.root, "rev-parse", source))
+		assert.Equal(t, source, runModifyGit(t, repo.owners[source], "branch", "--show-current"))
+		assert.Equal(t, "", runModifyGit(t, repo.owners[source], "status", "--porcelain"))
+	}
+	assert.Equal(t, "C", runModifyGit(t, repo.origin, "branch", "--show-current"))
+	assert.False(t, StateExists(repo.common))
+}
+
+func TestDistributedModify_FoldUpDropNormalizationRecovery(t *testing.T) {
+	for _, outcome := range []string{"continue", "abort"} {
+		t.Run(outcome, func(t *testing.T) {
+			repo := setupDistributedModify(t, true)
+			invoker := requireWorktree(t, git.CurrentOps(), repo.owners["A"])
+			restore := git.SetOps(invoker)
+			defer restore()
+			cfg, _, _ := config.NewTestConfig()
+			defer cfg.Out.Close()
+			defer cfg.Err.Close()
+			nodes := makeNodes(&repo.sf.Stacks[0])
+			nodes[1].PendingAction = &modifyview.PendingAction{Type: modifyview.ActionDrop}
+			nodes[1].Removed = true
+			nodes[0].PendingAction = &modifyview.PendingAction{Type: modifyview.ActionFoldUp}
+			nodes[0].Removed = true
+			_, conflict, err := ApplyPlan(cfg, repo.common, &repo.sf.Stacks[0], repo.sf, nodes, "A", noopUpdateBaseSHAs)
+			require.Error(t, err)
+			require.NotNil(t, conflict)
+			assert.Equal(t, "C", conflict.Branch)
+			state, err := LoadState(repo.common)
+			require.NoError(t, err)
+			require.NotNil(t, state.PendingAction)
+			assert.Equal(t, "fold_rebase", state.PendingAction.Type)
+			assert.Equal(t, 0, state.NextAction)
+			assert.Equal(t, repo.refs["B"], state.OriginalRefs["C"], "do not widen the cutoff before normalization completes")
+			assert.True(t, worktree.SamePath(state.Worktrees.Location("C").Path, repo.origin))
+			assert.True(t, requireGitState(t, requireWorktree(t, invoker, repo.origin).IsRebaseInProgress))
+			saved, err := stack.Load(repo.common)
+			require.NoError(t, err)
+			assert.Equal(t, []string{"A", "B", "C"}, saved.Stacks[0].BranchNames())
+			restoreCaller := git.SetOps(requireWorktree(t, invoker, repo.caller))
+			defer restoreCaller()
+			if outcome == "abort" {
+				require.NoError(t, UnwindFromStateFile(cfg, repo.common))
+				for branch, sha := range repo.refs {
+					assert.Equal(t, sha, runModifyGit(t, repo.root, "rev-parse", branch))
+				}
+				assert.Equal(t, "A\nB\nC", runModifyGit(t, repo.root, "log", "--reverse", "--format=%s", "main..C"))
+			} else {
+				require.NoError(t, os.WriteFile(filepath.Join(repo.origin, "base.txt"), []byte("C\n"), 0644))
+				runModifyGit(t, repo.origin, "add", "base.txt")
+				require.NoError(t, ContinueApply(cfg, repo.common, noopUpdateBaseSHAs))
+				assert.Equal(t, "C", runModifyGit(t, repo.root, "show", "C:base.txt"))
+				assert.Equal(t, "A\nC", runModifyGit(t, repo.root, "log", "--reverse", "--format=%s", "main..C"))
+				saved, err = stack.Load(repo.common)
+				require.NoError(t, err)
+				assert.Equal(t, []string{"C"}, saved.Stacks[0].BranchNames())
+			}
+			for _, source := range []string{"A", "B"} {
+				assert.Equal(t, repo.refs[source], runModifyGit(t, repo.root, "rev-parse", source))
+				assert.Equal(t, source, runModifyGit(t, repo.owners[source], "branch", "--show-current"))
+			}
+			assert.Equal(t, "C", runModifyGit(t, repo.origin, "branch", "--show-current"))
+			assert.False(t, requireGitState(t, requireWorktree(t, invoker, repo.origin).IsRebaseInProgress))
+			assert.False(t, StateExists(repo.common))
+		})
+	}
+}
+
+func TestDistributedModify_FoldUpAcrossMultipleDroppedRanges(t *testing.T) {
+	repo := setupDistributedModify(t, false)
+	runModifyGit(t, repo.origin, "checkout", "-qb", "D")
+	commitModifyFile(t, repo.origin, "d.txt", "D\n", "D")
+	runModifyGit(t, repo.origin, "checkout", "-qb", "E")
+	commitModifyFile(t, repo.origin, "e.txt", "E\n", "E")
+	repo.sf.Stacks[0].Branches = append(repo.sf.Stacks[0].Branches, stack.BranchRef{Branch: "D"}, stack.BranchRef{Branch: "E"})
+	require.NoError(t, stack.Save(repo.common, repo.sf))
+	nodes := makeNodes(&repo.sf.Stacks[0])
+	for _, index := range []int{1, 3} {
+		nodes[index].PendingAction = &modifyview.PendingAction{Type: modifyview.ActionDrop}
+		nodes[index].Removed = true
+	}
+	for _, index := range []int{0, 2} {
+		nodes[index].PendingAction = &modifyview.PendingAction{Type: modifyview.ActionFoldUp}
+		nodes[index].Removed = true
+	}
+	restore := git.SetOps(requireWorktree(t, git.CurrentOps(), repo.origin))
+	defer restore()
+	execution, _, err := compileActions(&repo.sf.Stacks[0], nodes)
+	require.NoError(t, err)
+	var excluded []string
+	for _, action := range execution {
+		if action.Type == "fold_rebase" {
+			excluded = append(excluded, action.Target)
+		}
+	}
+	assert.Equal(t, []string{"D", "B"}, excluded, "normalize each dropped range once, from top to bottom")
+	cfg, _, _ := config.NewTestConfig()
+	defer cfg.Out.Close()
+	defer cfg.Err.Close()
+	_, _, err = ApplyPlan(cfg, repo.common, &repo.sf.Stacks[0], repo.sf, nodes, "E", noopUpdateBaseSHAs)
+	require.NoError(t, err)
+	assert.Equal(t, []string{"E"}, repo.sf.Stacks[0].BranchNames())
+	assert.Equal(t, []string{"a.txt", "base.txt", "c.txt", "e.txt"},
+		strings.Fields(runModifyGit(t, repo.root, "ls-tree", "--name-only", "E")))
+	assert.Equal(t, "A\nC\nE", runModifyGit(t, repo.root, "log", "--reverse", "--format=%s", "main..E"))
 }

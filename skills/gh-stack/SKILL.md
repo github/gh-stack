@@ -171,9 +171,10 @@ an ancestor of the branch.
 - `rebase` and `sync` automatically update affected clean worktrees; they never auto-stash or
   create/remove worktrees. Mutations serialize across the clone, and paused operations require
   recovery in their recorded owners.
-- Core `modify` temporarily rejects distributed stack branches before TUI/apply. Linked-worktree
-  use is allowed when all member branches are unoccupied or owned here; trunk ownership alone is
-  not a blocker. Its recovery flags still use the recorded origin from any linked worktree.
+- `modify` supports distributed stack branches, but its editor remains TUI-only. Actions run in
+  affected clean owners; unoccupied branches use the origin. Drop/fold source branches and
+  worktrees are preserved. Recovery flags may run from any worktree and use recorded native
+  operation owners; never resolve/stage in the caller's tree unless the diagnostic names it.
 - There is no non-interactive reorder or removal. Errors may suggest `gh stack modify`, but it is
   TUI-only — restructure with `unstack` then `init` instead.
 - PR titles and bodies are auto-generated. Use `gh pr edit` afterwards to change them.

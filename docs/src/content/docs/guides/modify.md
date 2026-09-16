@@ -25,11 +25,11 @@ Before running `modify`, ensure:
 - No PR in the stack is queued for merge
 - Commit history is linear (run `gh stack rebase` first if needed)
 - Git 2.36 or later
-- Every stack branch is unoccupied or checked out in the invoking worktree
+- Worktrees needed by the staged actions and surviving cascade are clean and have no other Git operation in progress
 
-Linked worktrees are supported, but **distributed modify is temporarily rejected** before the TUI opens and rechecked before applying. A trunk checked out elsewhere does not block modify: trunk is only read. No worktrees are created, removed, detached, or automatically stashed.
+Branches may be distributed across worktrees. Before applying, modify checks the owners needed by the selected actions and the surviving cascade. It checks again immediately before a mutation; it never auto-stashes. Unrelated worktrees, merged branches, and dropped/folded sources that are only read are left untouched. Trunk is only read, so its ownership alone does not block modify.
 
-This also applies when using a separate Git administration directory: modify can use its known main or linked origin, but discovering another main worktree's location may be unavailable. See [Separate Git administration directories](/gh-stack/guides/workflows/#separate-git-administration-directories).
+Separate Git administration directories support a known main or linked modify origin. Main-owner discovery also supports existing absolute/relative `core.worktree` backlinks, including the main `config.worktree`. The discovery caveat is only linked invocation without a main-worktree backlink; unaffected worktrees remain usable. See [Separate Git administration directories](/gh-stack/guides/workflows/#separate-git-administration-directories).
 
 ## Opening the TUI
 
@@ -43,27 +43,27 @@ The TUI shows your stack as a vertical list of branches with PR information, com
 
 ### Drop (`x`)
 
-Removes a branch and its commits from the stack. The local branch and any associated PR are preserved. Upstream branches are rebased to exclude the dropped branch's unique commits.
+Removes a branch and its commits from the stack. The local branch, its worktree, and any associated PR are preserved. Branches above it are rebased in their owning worktrees to exclude the dropped branch's unique commits.
 
 ### Fold down (`d`)
 
-Absorbs the selected branch's commits into the branch below it (toward trunk) via cherry-pick. The folded branch is removed from the stack.
+Absorbs the selected branch's commits into the surviving branch below it (toward trunk) via cherry-pick in that receiver's worktree. The folded branch is removed from the stack, but its underlying ref and worktree remain intact.
 
 ### Fold up (`u`)
 
-Absorbs the selected branch's commits into the branch above it (away from trunk). Since the branch above already contains the folded branch's commits in its history, this is handled by adjusting what is considered the first unique commit for the branch. The folded branch is removed from the stack.
+Absorbs the selected branch's commits into the surviving branch above it (away from trunk). Since that branch already contains the source's commits, modify adjusts its original-parent cutoff so its rebase includes both layers. The source is removed from stack membership only; its ref and worktree are preserved.
 
 ### Insert below / above (`i` / `I`)
 
-Inserts a new empty branch into the stack at the cursor position. Lowercase `i` inserts below the cursor (toward trunk); uppercase `I` inserts above the cursor (away from trunk). An inline prompt appears to enter the new branch name. The branch is created at apply time, pointing at the parent branch's tip.
+Inserts a new empty branch into the stack at the cursor position. Lowercase `i` inserts below the cursor (toward trunk); uppercase `I` inserts above the cursor (away from trunk). An inline prompt appears to enter the new branch name. The branch ref is created at apply time, pointing at its parent's tip; no worktree is created.
 
 ### Rename (`r`)
 
-Opens an inline prompt to enter a new name for the branch. The branch is renamed locally and in the stack metadata. On the next `submit`, the new branch name is pushed to GitHub.
+Opens an inline prompt to enter a new name for the branch. The branch is renamed in its owning worktree and in stack metadata, without moving the worktree directory or switching it to unrelated history. On the next `submit`, the new branch name is pushed to GitHub.
 
 ### Reorder (`Shift+↓`/`Shift+↑`)
 
-Moves the selected branch down (toward trunk) or up (away from trunk) in the stack. A cascading rebase adjusts all affected branches. Note: reordering and structural changes (drop/fold/insert/rename) cannot be mixed in the same session.
+Moves the selected branch down (toward trunk) or up (away from trunk) in the stack. A cascading rebase adjusts branches in their existing owners; unoccupied branches are processed in the initiating worktree. Note: reordering and structural changes (drop/fold/insert/rename) cannot be mixed in the same session.
 
 ### Undo (`z`)
 
@@ -73,6 +73,8 @@ Reverses the most recent staged action. You can undo multiple times to step back
 
 Press `Ctrl+S` to apply all staged changes. Nothing is modified until you save. The apply phase renames branches, inserts new branches, folds/drops branches, and runs a cascading rebase to create a linear commit history with the desired stack state.
 
+Other worktrees retain their branch choices throughout the operation. The initiating worktree returns to its original branch, using the new name if renamed. When that layer was dropped or folded, modify chooses the nearest surviving branch only if it is available here. If it is checked out elsewhere, the initiating worktree keeps the preserved original branch and reports the survivor's owning path instead. No worktrees are created, removed, or detached.
+
 ### Handling conflicts
 
 If a rebase conflict occurs during the apply phase, you have two options:
@@ -80,9 +82,9 @@ If a rebase conflict occurs during the apply phase, you have two options:
 1. **Resolve and continue**: Fix the conflicts in your editor, stage with `git add`, then run `gh stack modify --continue` (you may need to do this multiple times)
 2. **Abort**: Run `gh stack modify --abort` to abort the operation and restore the stack to the pre-modify state
 
-If a second conflict occurs after continuing, the same options are available.
+If a second conflict occurs after continuing, the same options are available. A fold-down cherry-pick can be followed by a rebase conflict in a different worktree; follow the newly reported path each time. Remaining structural actions are checkpointed and resumed, not skipped or repeated.
 
-The conflict message identifies the originating worktree. Edit and stage the files **there**. You can invoke `--continue` or `--abort` from any linked worktree; Git operations still execute in the recorded origin without changing the invoking worktree's checkout.
+The conflict message identifies the **worktree with the active Git operation**, which may differ from the origin or the fold source. Edit and stage files there. You can invoke `--continue` or `--abort` from any linked worktree; native operations use their recorded owners rather than the caller's checkout. Other target worktrees are checked before continuing; remaining branches in the intentionally busy conflict worktree are checked after the native operation finishes.
 
 If Git's recorded rebase or cherry-pick is no longer in progress, for example after an external `git rebase --abort`, `modify --continue` refuses and preserves the journal. Use `gh stack modify --abort` to recover through the saved state; continuation will not claim a new branch tip as completed modify work.
 
@@ -106,9 +108,9 @@ If you want to discard all changes and restore the stack to its pre-modify state
 gh stack modify --abort
 ```
 
-This also works if `modify` was interrupted (e.g., terminal crash). The shared `<common-dir>/gh-stack-modify-state` journal records the origin, original checkout, stack identity, and pre-modify snapshot before mutations. Git's native rebase/cherry-pick state stays in the origin's own Git directory.
+This also works if `modify` was interrupted (e.g., terminal crash). The shared `<common-dir>/gh-stack-modify-state` journal records the origin, participating owners, original checkout, stack identity, action progress, and expected refs before/after mutations. Native rebase/cherry-pick state remains in the worktree running that Git operation.
 
-Recovery restores changes made by this operation and the original checkout. If the owner is missing, refs were changed externally, or a restore/save fails, recovery stops and retains its journal instead of reporting success. Address the reported problem and retry `--abort`; do not delete the journal to bypass recovery. After a successful modify has reached pending-submit, `--abort` does not undo it and instead directs you to `submit`.
+Recovery reverses renames in their owners, restores only operation-touched refs, removes only branch refs proven to have been created by this modify, and restores the origin's original checkout. It never deletes a worktree or resets a preserved drop/fold source just because that source is in the snapshot. If an owner is missing, refs or ownership changed externally, or a restore/save fails, recovery stops and retains its journal instead of reporting success. Address the reported problem and retry `--abort`; do not delete the journal to bypass recovery. After a successful modify has reached pending-submit, `--abort` does not undo it and instead directs you to `submit`.
 
 Clone-wide mutation serialization prevents another gh-stack mutation while modify is applying or paused; read-only views remain available. Pending-submit state is consumed only when submitting its matching stack, never an unrelated stack.
 
@@ -123,4 +125,3 @@ Legacy journals must be continued or aborted in their original worktree before c
 - Cannot move branches between different stacks
 - Requires an interactive terminal
 - Reordering and structural changes (drop/fold/insert/rename) cannot be mixed in the same session
-- Distributed rename/fold/reorder support is deferred to separate work; all member branches must currently be available in one worktree

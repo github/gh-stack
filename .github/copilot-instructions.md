@@ -39,6 +39,6 @@ No Makefile, no code generation, no external linter config. Standard Go toolchai
 - Recovery must match stack identity, execute in the recorded worktree, and retain journals on partial failures. Native Git markers stay per-worktree.
 - Finish paused operations before switching preview stages or versions. Reject origin-only and unknown rebase execution modes before routing recovery; use the matching layer3 build in the recorded origin for origin-only journals.
 - Mutation locks coordinate gh-stack only, not Git commands/editors. Keep affected worktrees quiescent during rewrites. Pass the snapshot SHA (or prior `Context.Touched` SHA) to `Context.Start` before ref mutations; never claim an external commit as this operation's work during continuation.
-- Core modify rejects distributed stack branches before TUI/apply; foreign trunk ownership alone is allowed. Do not enable distributed modify until its dependent layer is implemented.
+- Distributed modify preflights action/cascade targets and executes in recorded owners; only the origin may switch for unoccupied branches. Preserve dropped/folded source worktrees and refs. Before native continuation, preflight other worktrees, not remaining branches in the intentionally busy pending worktree.
 
 For full architecture details, see [AGENTS.md](../AGENTS.md) in the repository root.

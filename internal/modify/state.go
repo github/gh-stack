@@ -38,6 +38,11 @@ type StateFile struct {
 	RenamedBranches       map[string]string `json:"renamed_branches,omitempty"`
 	CreatedBranches       map[string]string `json:"created_branches,omitempty"`
 	PendingAction         *Action           `json:"pending_action,omitempty"`
+	Execution             []Action          `json:"execution,omitempty"`
+	NextAction            int               `json:"next_action,omitempty"`
+	DesiredOrder          []string          `json:"desired_order"`
+	TrunkSHA              string            `json:"trunk_sha,omitempty"`
+	PendingHead           string            `json:"pending_head,omitempty"`
 
 	// Conflict state — populated when phase is "conflict"
 	ConflictBranch    string            `json:"conflict_branch,omitempty"`
@@ -75,6 +80,7 @@ type Action struct {
 	Branch      string `json:"branch"`
 	NewPosition int    `json:"new_position,omitempty"` // for "move"
 	NewName     string `json:"new_name,omitempty"`     // for "rename"
+	Target      string `json:"target,omitempty"`       // fold receiver, insertion parent, or normalization drop
 }
 
 // StatePath returns the full path to the modify state file.
@@ -99,6 +105,9 @@ func LoadState(gitDir string) (*StateFile, error) {
 	}
 	if state.SchemaVersion > 1 {
 		return nil, fmt.Errorf("modify state uses unsupported schema version %d; upgrade gh-stack before recovery", state.SchemaVersion)
+	}
+	if state.DesiredOrder != nil && (state.NextAction < 0 || state.NextAction > len(state.Execution)) {
+		return nil, fmt.Errorf("modify state has invalid action progress; recovery state was retained")
 	}
 	return &state, nil
 }

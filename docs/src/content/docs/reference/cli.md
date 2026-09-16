@@ -21,7 +21,7 @@ All linked worktrees share `<common-dir>/gh-stack` and gh-stack recovery journal
 
 `rebase` and `sync` automatically update affected clean owners; dirty, busy, missing, or changed owners block unsafe updates. Neither command auto-stashes or manages worktree creation/removal. Shared-journal `--continue` and `--abort` use the recorded worktree, not the caller's checkout. Partial recovery failures retain state. See [Working across Git worktrees](/gh-stack/guides/workflows/#working-across-git-worktrees) for adoption, migration, and recovery details.
 
-For repositories created with `git init --separate-git-dir`, operations from a known worktree remain supported, but automatic discovery of the main working directory from another checkout may be unavailable. Git's reported main path can be the administration directory rather than a usable checkout; do not use it as a working-directory navigation target.
+For repositories created with `git init --separate-git-dir`, main-worktree invocation and existing absolute/relative `core.worktree` backlinks are supported, including settings in the main `config.worktree`. The discovery limitation is only linked invocation without a main-worktree backlink. If the operation requires that main owner, it fails with actionable guidance; unaffected worktrees continue. Administration directories are never used as checkout destinations.
 
 ---
 
@@ -204,9 +204,9 @@ The command checks these conditions before opening the TUI:
 3. No rebase in progress
 4. No PR in the stack is queued for merge
 5. Commit history must be linear (no merge commits, no diverged branches)
-6. All stack branches must be unoccupied or checked out in the invoking worktree
+6. Before applying, worktrees needed by the staged actions and surviving cascade must be clean and free of other Git operations
 
-**Core limitation:** distributed modify is temporarily rejected before the TUI and rechecked before applying. A trunk checked out elsewhere is allowed because modify only reads it.
+Stack branches may be distributed across worktrees. Renames run in the branch's owner; fold-down cherry-picks run in the receiver's owner; cascades rebase each branch in its owner. Unoccupied branches use the initiating worktree, and inserted branches are created as refs without new worktrees. Dropped/folded branches and their worktrees are preserved. Trunk is only read, and unrelated or untouched source worktrees do not need to be clean.
 
 **Operations:**
 
@@ -230,7 +230,9 @@ If a rebase conflict occurs, you can:
 - Resolve conflicts, stage files, and run `gh stack modify --continue`
 - Or run `gh stack modify --abort` to abort the operation and restore the stack to the pre-modify state
 
-Resolve and stage in the worktree named by the conflict message. Both recovery flags may be invoked from another linked worktree, but execute in the recorded origin and leave the caller's checkout alone. Failed restore or journal/catalog saves retain recovery state. Pending-submit state is consumed only for the matching stack.
+Resolve and stage in the worktree named by the conflict message, which may be a foreign fold receiver or rebase owner. Both recovery flags may be invoked from any linked worktree; they use recorded owners rather than the caller's checkout. Continuation resumes remaining structural actions as well as rebases. Abort reverses renames in their owners, restores only operation-touched refs, and deletes only refs proven to have been created by this modify. Failed restore or journal/catalog saves retain recovery state. Pending-submit state is consumed only for the matching stack.
+
+Other worktrees are never switched to different branches. The origin returns to its original branch (including its new name after a rename), or the nearest surviving branch if available. If that survivor is owned elsewhere, the origin keeps the preserved original branch and reports the survivor's path instead.
 
 **After modifying:**
 

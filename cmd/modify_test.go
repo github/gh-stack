@@ -12,6 +12,7 @@ import (
 	"testing"
 	"time"
 
+	tea "github.com/charmbracelet/bubbletea"
 	"github.com/github/gh-stack/internal/config"
 	"github.com/github/gh-stack/internal/git"
 	"github.com/github/gh-stack/internal/github"
@@ -993,6 +994,12 @@ func TestCheckModifyPreconditions_Worktrees(t *testing.T) {
 					}, nil
 				},
 			}
+			mock.ForWorktreeFn = func(path string) (git.Ops, error) {
+				if worktree.SamePath(path, foreign) {
+					return &git.MockOps{RootDirFn: func() (string, error) { return foreign, nil }}, nil
+				}
+				return mock, nil
+			}
 			restore := git.SetOps(mock)
 			defer restore()
 			cfg, _, errR := config.NewTestConfig()
@@ -1009,14 +1016,9 @@ func TestCheckModifyPreconditions_Worktrees(t *testing.T) {
 			cfg.Err.Close()
 			output, readErr := io.ReadAll(errR)
 			require.NoError(t, readErr)
-			if ownerBranch == "b2" {
-				require.Error(t, err)
-				assert.Contains(t, string(output), "distributed modify is not supported yet")
-				assert.Contains(t, string(output), foreign)
-				assert.Zero(t, prQueries.Load(), "distributed guard must run before PR refresh or TUI")
-			} else {
-				require.NoError(t, err)
-			}
+			require.NoError(t, err)
+			assert.NotContains(t, string(output), "distributed modify is not supported")
+			assert.Positive(t, prQueries.Load(), "action-specific owner checks happen after the TUI produces its plan")
 			assert.False(t, modify.StateExists(dir))
 		})
 	}
@@ -1060,12 +1062,18 @@ func TestRunModifyRecovery_UsesRecordedOrigin(t *testing.T) {
 			require.NoError(t, modify.SaveState(common, state))
 			inProgress, continued, aborted := true, false, false
 			sha := "original"
+			revParse := func(ref string) (string, error) {
+				if ref == "B" {
+					return "source", nil
+				}
+				return sha, nil
+			}
 			originOps := &git.MockOps{
 				GitDirFn:             func() (string, error) { return originDir, nil },
 				CommonDirFn:          func() (string, error) { return common, nil },
 				RootDirFn:            func() (string, error) { return origin, nil },
 				CurrentBranchFn:      func() (string, error) { return "A", nil },
-				RevParseFn:           func(string) (string, error) { return sha, nil },
+				RevParseFn:           revParse,
 				IsRebaseInProgressFn: func() (bool, error) { return inProgress && tc.conflictType == "rebase", nil },
 				RebaseContinueFn: func(git.RebaseOpts) error {
 					require.Equal(t, "rebase", tc.conflictType)
@@ -1095,7 +1103,7 @@ func TestRunModifyRecovery_UsesRecordedOrigin(t *testing.T) {
 				CommonDirFn:     func() (string, error) { return common, nil },
 				RootDirFn:       func() (string, error) { return caller, nil },
 				CurrentBranchFn: func() (string, error) { return "observer", nil },
-				RevParseFn:      func(string) (string, error) { return sha, nil },
+				RevParseFn:      revParse,
 				CheckoutBranchFn: func(string) error {
 					callerSensitiveCalls++
 					return nil
@@ -1166,6 +1174,49 @@ func TestModifyStateIOFailures(t *testing.T) {
 	_, err := os.Stat(filepath.Join(path, "keep"))
 	require.NoError(t, err)
 	require.Error(t, modify.CheckStateGuard(dir))
+}
+
+func TestModifyApply_DoesNotReportAdministrationDirectoryAsOwner(t *testing.T) {
+	dir, origin := t.TempDir(), t.TempDir()
+	s := stack.Stack{Trunk: stack.BranchRef{Branch: "main"}, Branches: []stack.BranchRef{{Branch: "A"}, {Branch: "B"}}}
+	writeStackFile(t, dir, s)
+	mock := &git.MockOps{
+		GitDirFn:        func() (string, error) { return filepath.Join(dir, "worktrees", "origin"), nil },
+		CommonDirFn:     func() (string, error) { return dir, nil },
+		RootDirFn:       func() (string, error) { return origin, nil },
+		CurrentBranchFn: func() (string, error) { return "B", nil },
+		BranchExistsFn:  func(string) (bool, error) { return true, nil },
+		RevParseFn:      func(ref string) (string, error) { return "sha-" + ref, nil },
+		WorktreesFn: func() ([]git.Worktree, error) {
+			return []git.Worktree{{Path: dir, Branch: "A"}, {Path: origin, Branch: "B"}}, nil
+		},
+	}
+	mock.ForWorktreeFn = func(path string) (git.Ops, error) {
+		if worktree.SamePath(path, dir) {
+			return &git.MockOps{
+				GitDirFn:    func() (string, error) { return dir, nil },
+				CommonDirFn: func() (string, error) { return dir, nil },
+				RootDirFn:   func() (string, error) { return "", assert.AnError },
+			}, nil
+		}
+		return mock, nil
+	}
+	restore := git.SetOps(mock)
+	defer restore()
+	cfg, _, _ := config.NewTestConfig()
+	defer cfg.Out.Close()
+	defer cfg.Err.Close()
+	sf, err := stack.Load(dir)
+	require.NoError(t, err)
+	nodes := []modifyview.ModifyBranchNode{
+		{BranchNode: stackview.BranchNode{Ref: s.Branches[1]}, OriginalPosition: 1},
+		{BranchNode: stackview.BranchNode{Ref: s.Branches[0]}, OriginalPosition: 0},
+	}
+	_, _, err = modify.ApplyPlan(cfg, dir, &sf.Stacks[0], sf, nodes, "B", func(*stack.Stack) {})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "working-tree root")
+	assert.NotContains(t, err.Error(), "checked out in worktree "+dir)
+	assert.False(t, modify.StateExists(dir))
 }
 
 func TestRunModifyContinue_LegacyPrivateJournalKeepsOriginalCatalog(t *testing.T) {
@@ -1240,4 +1291,136 @@ func TestRunModifyContinue_LegacyPrivateJournalKeepsOriginalCatalog(t *testing.T
 	privateCatalog, err := stack.Load(private)
 	require.NoError(t, err)
 	assert.Equal(t, []string{"A", "B", "C"}, privateCatalog.Stacks[0].BranchNames())
+}
+
+func TestRunModifyContinue_UsesForeignPendingOwner(t *testing.T) {
+	common, origin, target, caller := t.TempDir(), t.TempDir(), t.TempDir(), t.TempDir()
+	refs := map[string]string{"main": "sha-main", "A": "sha-A", "C": "sha-C"}
+	s := stack.Stack{Trunk: stack.BranchRef{Branch: "main"}, Branches: []stack.BranchRef{{Branch: "A"}, {Branch: "C"}}}
+	writeStackFile(t, common, s)
+	metadata, err := json.Marshal(s)
+	require.NoError(t, err)
+	state := &modify.StateFile{
+		SchemaVersion: 1, Phase: modify.PhaseConflict, ConflictType: "rebase", ConflictBranch: "A",
+		OriginalBranch: "C", RemainingBranches: []string{"C"}, OriginalRefs: map[string]string{"C": "sha-A"},
+		Snapshot: modify.Snapshot{
+			StackMetadata: metadata,
+			Branches:      []modify.BranchSnapshot{{Name: "A", TipSHA: "sha-A"}, {Name: "C", TipSHA: "sha-C"}},
+		},
+		Worktrees: &worktree.Context{
+			Origin:        worktree.Location{Path: origin},
+			Owners:        map[string]*worktree.Location{"A": {Path: target}},
+			Pending:       "A",
+			PendingBefore: "sha-A",
+		},
+	}
+	state.RecordStack(&s)
+	require.NoError(t, modify.SaveState(common, state))
+	scoped := func(path, name string) *git.MockOps {
+		return &git.MockOps{
+			RootDirFn:       func() (string, error) { return path, nil },
+			CommonDirFn:     func() (string, error) { return common, nil },
+			GitDirFn:        func() (string, error) { return filepath.Join(common, "worktrees", name), nil },
+			CurrentBranchFn: func() (string, error) { return name, nil },
+			RevParseFn:      func(ref string) (string, error) { return refs[ref], nil },
+			IsAncestorFn:    func(string, string) (bool, error) { return true, nil },
+			MergeBaseFn:     func(string, string) (string, error) { return "sha-A", nil },
+			RebaseContinueFn: func(git.RebaseOpts) error {
+				t.Fatal("native continuation must run only in the pending owner's worktree")
+				return nil
+			},
+		}
+	}
+	originOps, targetOps, callerOps := scoped(origin, "C"), scoped(target, "A"), scoped(caller, "observer")
+	inProgress, continued := true, false
+	targetOps.IsRebaseInProgressFn = func() (bool, error) { return inProgress, nil }
+	targetOps.RebaseContinueFn = func(git.RebaseOpts) error { inProgress, continued = false, true; return nil }
+	callerOps.WorktreesFn = func() ([]git.Worktree, error) {
+		return []git.Worktree{{Path: origin, Branch: "C"}, {Path: target, Branch: "A"}, {Path: caller, Branch: "observer"}}, nil
+	}
+	callerOps.ForWorktreeFn = func(path string) (git.Ops, error) {
+		if worktree.SamePath(path, target) {
+			return targetOps, nil
+		}
+		if worktree.SamePath(path, origin) {
+			return originOps, nil
+		}
+		return callerOps, nil
+	}
+	restore := git.SetOps(callerOps)
+	defer restore()
+	nativeOps, path, err := modify.ConflictOps(state)
+	require.NoError(t, err)
+	assert.Same(t, targetOps, nativeOps)
+	assert.Equal(t, target, path)
+	cfg, _, _ := config.NewTestConfig()
+	defer cfg.Out.Close()
+	defer cfg.Err.Close()
+	require.NoError(t, runModifyContinue(cfg))
+	assert.True(t, continued)
+	assert.False(t, modify.StateExists(common))
+	assert.Nil(t, cfg.StackMutation)
+}
+
+func TestModifyTUI_RejectsMixedReorderFold(t *testing.T) {
+	for _, scenario := range []struct {
+		name  string
+		keys  []rune
+		order []string
+		kind  modifyview.ActionType
+	}{
+		{"move B below A then fold up", []rune{'J', 'u'}, []string{"C", "A", "B"}, modifyview.ActionMove},
+		{"fold B up then move", []rune{'u', 'J'}, []string{"C", "B", "A"}, modifyview.ActionFoldUp},
+	} {
+		t.Run(scenario.name, func(t *testing.T) {
+			nodes := []modifyview.ModifyBranchNode{
+				{BranchNode: stackview.BranchNode{Ref: stack.BranchRef{Branch: "C"}}, OriginalPosition: 0},
+				{BranchNode: stackview.BranchNode{Ref: stack.BranchRef{Branch: "B"}, IsCurrent: true}, OriginalPosition: 1},
+				{BranchNode: stackview.BranchNode{Ref: stack.BranchRef{Branch: "A"}}, OriginalPosition: 2},
+			}
+			model := modifyview.New(nodes, stack.BranchRef{Branch: "main"}, "test")
+			for _, key := range scenario.keys {
+				updated, _ := model.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{key}})
+				var ok bool
+				model, ok = updated.(modifyview.Model)
+				require.True(t, ok)
+			}
+			var order []string
+			for _, node := range model.Nodes() {
+				order = append(order, node.Ref.Branch)
+				if scenario.kind == modifyview.ActionMove {
+					assert.Nil(t, node.PendingAction, "fold must be rejected after reordering")
+					assert.False(t, node.Removed)
+				}
+			}
+
+			assert.Equal(t, scenario.order, order)
+			require.Len(t, model.StagedActions(), 1, "only the first operation may be staged")
+			assert.Equal(t, scenario.kind, model.StagedActions()[0].Type)
+		})
+	}
+}
+
+func TestModifyTUI_DropThenFoldUpSkipsDroppedNeighbor(t *testing.T) {
+	nodes := []modifyview.ModifyBranchNode{
+		{BranchNode: stackview.BranchNode{Ref: stack.BranchRef{Branch: "C"}}, OriginalPosition: 0},
+		{BranchNode: stackview.BranchNode{Ref: stack.BranchRef{Branch: "B"}, IsCurrent: true}, OriginalPosition: 1},
+		{BranchNode: stackview.BranchNode{Ref: stack.BranchRef{Branch: "A"}}, OriginalPosition: 2},
+	}
+	model := modifyview.New(nodes, stack.BranchRef{Branch: "main"}, "test")
+	for _, key := range []rune{'x', 'j', 'u'} {
+		updated, _ := model.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{key}})
+		var ok bool
+		model, ok = updated.(modifyview.Model)
+		require.True(t, ok)
+	}
+	actions := model.StagedActions()
+	require.Len(t, actions, 2)
+	assert.Equal(t, modifyview.ActionDrop, actions[0].Type)
+	assert.Equal(t, "B", actions[0].BranchName)
+	assert.Equal(t, modifyview.ActionFoldUp, actions[1].Type)
+	assert.Equal(t, "A", actions[1].BranchName)
+	assert.Equal(t, "C", actions[1].FoldTarget)
+	assert.True(t, model.Nodes()[1].Removed)
+	assert.True(t, model.Nodes()[2].Removed)
 }

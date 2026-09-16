@@ -35,6 +35,10 @@ Operations available:
   • Rename branches
 
 All changes are staged in the TUI and applied together when you press Ctrl+S.
+Branches may be checked out in different worktrees. Changes run in their clean
+owning worktrees; unoccupied branches use the initiating worktree. Foreign
+worktrees are never switched to different branches. Changes are never autostashed,
+and no worktrees are created or removed.
 If your changes affect branches with pull requests, run 'gh stack submit'
 afterward to push changes, update PRs, and recreate the stack on GitHub.`,
 		Example: `  # Open the interactive TUI to restructure the stack
@@ -168,11 +172,11 @@ func runModify(cfg *config.Config) error {
 		if state == nil || state.Worktrees == nil {
 			return fmt.Errorf("modify conflict has no recorded worktree; recovery state was retained")
 		}
-		ops, err := state.Worktrees.OriginOps()
+		ops, path, err := modify.ConflictOps(state)
 		if err != nil {
 			return err
 		}
-		printConflictDetailsAt(cfg, ops, state.Worktrees.Origin.Path, conflict.Branch, "gh stack modify --continue")
+		printConflictDetailsAt(cfg, ops, path, conflict.Branch, "gh stack modify --continue")
 		cfg.Printf("")
 
 		cfg.Printf("Or restore the stack to its pre-modify state with `%s`",
