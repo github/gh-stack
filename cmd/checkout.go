@@ -18,7 +18,8 @@ import (
 )
 
 type checkoutOptions struct {
-	target string
+	target    string
+	printPath bool
 }
 
 func CheckoutCmd(cfg *config.Config) *cobra.Command {
@@ -67,12 +68,14 @@ omitted.`,
   $ gh stack checkout`,
 		Args: cobra.MaximumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
+			opts.target = ""
 			if len(args) > 0 {
 				opts.target = args[0]
 			}
 			return runCheckout(cfg, opts)
 		},
 	}
+	cmd.Flags().BoolVar(&opts.printPath, "print-path", false, "Print the target worktree path (requires an explicit target)")
 
 	return cmd
 }
@@ -82,10 +85,17 @@ omitted.`,
 // the GitHub API to discover remote stacks, then tries as a branch name.
 // Branch names resolve locally first and then against stacks on GitHub.
 func runCheckout(cfg *config.Config, opts *checkoutOptions) error {
-	gitDir, err := git.GitDir()
+	if opts.printPath {
+		if opts.target == "" {
+			cfg.Errorf("--print-path requires an explicit branch, stack number, PR number, or PR URL")
+			return ErrInvalidArgs
+		}
+		cfg = noninteractiveConfig(cfg)
+		cfg.WorktreePathOnly = true
+	}
+	gitDir, err := stackStateDir(cfg)
 	if err != nil {
-		cfg.Errorf("not a git repository")
-		return ErrNotInStack
+		return err
 	}
 
 	sf, err := stack.Load(gitDir)
@@ -127,6 +137,10 @@ func runCheckout(cfg *config.Config, opts *checkoutOptions) error {
 		}
 	} else {
 		// Non-numeric target — resolve locally before checking GitHub.
+		if len(sf.FindAllStacksForBranch(opts.target)) > 1 {
+			cfg.Errorf("branch %q belongs to multiple stacks; use a stack or PR number to choose one", opts.target)
+			return ErrDisambiguate
+		}
 		var br *stack.BranchRef
 		s, br, err = resolvePR(cfg, sf, opts.target)
 		if err == nil {
@@ -145,6 +159,9 @@ func runCheckout(cfg *config.Config, opts *checkoutOptions) error {
 		}
 	}
 
+	if opts.printPath {
+		return checkoutWorktreeBranch(cfg, targetBranch, true)
+	}
 	currentBranch, _ := git.CurrentBranch()
 	if targetBranch == currentBranch {
 		cfg.Infof("Already on %s", targetBranch)
@@ -152,7 +169,11 @@ func runCheckout(cfg *config.Config, opts *checkoutOptions) error {
 		return nil
 	}
 
-	if err := git.CheckoutBranch(targetBranch); err != nil {
+	if err := checkoutWorktreeBranch(cfg, targetBranch, false); err != nil {
+		var exitErr *ExitError
+		if errors.As(err, &exitErr) {
+			return err
+		}
 		cfg.Errorf("failed to checkout %s: %v", targetBranch, err)
 		return ErrSilent
 	}
@@ -175,6 +196,11 @@ func runCheckout(cfg *config.Config, opts *checkoutOptions) error {
 // so a given number is only ever one object type; a number that is not a stack
 // simply misses at step 1 and resolves at a later step.
 func resolveNumericTarget(cfg *config.Config, sf *stack.StackFile, gitDir string, number int, raw string) (*stack.Stack, string, error) {
+	if cfg.WorktreePathOnly {
+		if local := stackResultByNumber(sf, gitDir, number); local != nil {
+			return local.Stack, topUnmergedBranch(local.Stack), nil
+		}
+	}
 	// 1. Try as a stack number (the primary identifier).
 	if s, targetBranch, err := checkoutStackByNumber(cfg, sf, gitDir, number); err == nil {
 		return s, targetBranch, nil
@@ -200,6 +226,10 @@ func resolveNumericTarget(cfg *config.Config, sf *stack.StackFile, gitDir string
 
 	// 4. Fall back to local branch name lookup (handles numeric branch names).
 	stacks := sf.FindAllStacksForBranch(raw)
+	if len(stacks) > 1 {
+		cfg.Errorf("branch %q belongs to multiple stacks; use a stack or PR number to choose one", raw)
+		return nil, "", ErrDisambiguate
+	}
 	if len(stacks) > 0 {
 		s := stacks[0]
 		idx := s.IndexOf(raw)
@@ -397,6 +427,31 @@ func reconcileAndImportRemoteStack(cfg *config.Config, client github.ClientOps, 
 		return nil, "", ErrSilent
 	}
 
+	if cfg.WorktreePathOnly {
+		owner, err := foreignWorktreePath(targetBranch)
+		if err != nil {
+			cfg.Errorf("%s", err)
+			return nil, "", ErrSilent
+		}
+		if owner != "" {
+			// Resolving the owner needs no import, fetch, or catalog write.
+			return &stack.Stack{Trunk: stack.BranchRef{Branch: trunk}}, targetBranch, nil
+		}
+	}
+	release, err := beginStackMutation(cfg, "checkout")
+	if err != nil {
+		return nil, "", err
+	}
+	defer release()
+	// The remote lookup or picker may have taken time. Reload after acquiring
+	// the clone-wide lock instead of applying an import to a stale snapshot.
+	fresh, err := stack.Load(gitDir)
+	if err != nil {
+		cfg.Errorf("loading stack state: %s", err)
+		return nil, "", ErrNotInStack
+	}
+	*sf = *fresh
+
 	remoteStackID := strconv.Itoa(remoteStack.ID)
 
 	// Check if the target branch is already in a local stack.
@@ -417,9 +472,9 @@ func reconcileAndImportRemoteStack(cfg *config.Config, client github.ClientOps, 
 			localStack.ID = remoteStackID
 			localStack.Number = remoteStack.Number
 			if err := stack.Save(gitDir, sf); err != nil {
-				return nil, "", handleSaveError(cfg, err)
+				return nil, "", stackSaveError(cfg, err)
 			}
-			cfg.Successf("Local stack matches remote — switching to branch%s", stackLabel(remoteStack.Number))
+			cfg.Successf("Local stack matches remote%s", stackLabel(remoteStack.Number))
 			return localStack, targetBranch, nil
 		}
 
@@ -446,7 +501,7 @@ func reconcileAndImportRemoteStack(cfg *config.Config, client github.ClientOps, 
 	}
 
 	if err := stack.Save(gitDir, sf); err != nil {
-		return nil, "", handleSaveError(cfg, err)
+		return nil, "", stackSaveError(cfg, err)
 	}
 
 	return s, targetBranch, nil
@@ -572,7 +627,7 @@ func handleCompositionConflict(
 			return nil, importErr
 		}
 		if err := stack.Save(gitDir, sf); err != nil {
-			return nil, handleSaveError(cfg, err)
+			return nil, stackSaveError(cfg, err)
 		}
 		cfg.Successf("Local stack replaced with remote version")
 		return s, nil
@@ -599,7 +654,7 @@ func handleCompositionConflict(
 		localStack.ID = ""
 		localStack.Number = 0
 		if err := stack.Save(gitDir, sf); err != nil {
-			return nil, handleSaveError(cfg, err)
+			return nil, stackSaveError(cfg, err)
 		}
 		return localStack, nil
 

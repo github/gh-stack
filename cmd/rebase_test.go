@@ -15,6 +15,7 @@ import (
 	"github.com/github/gh-stack/internal/git"
 	"github.com/github/gh-stack/internal/github"
 	"github.com/github/gh-stack/internal/stack"
+	"github.com/github/gh-stack/internal/worktree"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -103,7 +104,7 @@ func TestRebase_CascadeRebase(t *testing.T) {
 
 	// All branches should be rebased in order: b1 onto main, b2 onto b1, b3 onto b2
 	require.Len(t, allRebaseCalls, 3)
-	assert.Equal(t, "main", allRebaseCalls[0].newBase, "b1 should be rebased onto trunk")
+	assert.Equal(t, "sha-main", allRebaseCalls[0].newBase, "b1 should be rebased onto the pinned trunk")
 	assert.Equal(t, "b1", allRebaseCalls[1].newBase, "b2 should be rebased onto b1")
 	assert.Equal(t, "b2", allRebaseCalls[2].newBase, "b3 should be rebased onto b2")
 
@@ -168,7 +169,7 @@ func TestRebase_MergedBranch_UsesOnto(t *testing.T) {
 	// b2: onto trunk, oldBase = b1's original SHA
 	// b3: onto b2, oldBase = b2's original SHA (propagation)
 	require.Len(t, rebaseCalls, 2)
-	assert.Equal(t, rebaseCall{"main", "b1-orig-sha", "b2"}, rebaseCalls[0],
+	assert.Equal(t, rebaseCall{"default-sha", "b1-orig-sha", "b2"}, rebaseCalls[0],
 		"b2 should rebase --onto main using b1's original SHA as oldBase")
 	assert.Equal(t, rebaseCall{"b2", "b2-orig-sha", "b3"}, rebaseCalls[1],
 		"b3 should propagate --onto mode with b2's original SHA as oldBase")
@@ -238,7 +239,7 @@ func TestRebase_OntoPropagatesToSubsequentBranches(t *testing.T) {
 	// b4: first non-merged ancestor = b3 → newBase = b3
 	//   RebaseOnto("b3", "b3-orig-sha", "b4")
 	require.Len(t, rebaseCalls, 2)
-	assert.Equal(t, rebaseCall{"main", "b2-orig-sha", "b3"}, rebaseCalls[0],
+	assert.Equal(t, rebaseCall{"default-sha", "b2-orig-sha", "b3"}, rebaseCalls[0],
 		"b3 should rebase --onto main with b2's SHA as oldBase")
 	assert.Equal(t, rebaseCall{"b3", "b3-orig-sha", "b4"}, rebaseCalls[1],
 		"b4 should rebase --onto b3 with b3's original SHA as oldBase")
@@ -315,7 +316,7 @@ func TestRebase_StaleOntoOldBase_UsesForkPoint(t *testing.T) {
 	require.Len(t, rebaseCalls, 2)
 
 	// b2: stale ontoOldBase detected → uses fork-point(main, b2)
-	assert.Equal(t, rebaseCall{"main", "main-b2-forkpoint", "b2"}, rebaseCalls[0],
+	assert.Equal(t, rebaseCall{"default-sha", "main-b2-forkpoint", "b2"}, rebaseCalls[0],
 		"b2 should use the reflog fork-point when ontoOldBase is stale")
 
 	// b3: b2's SHA is a valid ancestor → uses it directly
@@ -522,7 +523,7 @@ func TestRebase_DownstackOnly(t *testing.T) {
 	assert.NoError(t, err)
 	// b2 is at index 1, so downstack = [b1, b2] (indices 0..1)
 	require.Len(t, allRebaseCalls, 2, "downstack should rebase b1 and b2 only")
-	assert.Equal(t, "main", allRebaseCalls[0].newBase, "b1 should be rebased onto trunk")
+	assert.Equal(t, "sha-main", allRebaseCalls[0].newBase, "b1 should be rebased onto the pinned trunk")
 	assert.Equal(t, "b1", allRebaseCalls[1].newBase, "b2 should be rebased onto b1")
 }
 
@@ -630,7 +631,7 @@ func TestRebase_UpstackWithMergedBranchBelow(t *testing.T) {
 	require.Len(t, allRebaseCalls, 2, "upstack should rebase b2 and b3")
 
 	// b2: --onto rebase with b1's old SHA as old base
-	assert.Equal(t, "main", allRebaseCalls[0].newBase, "b2 should be rebased onto main (first non-merged ancestor)")
+	assert.Equal(t, "sha-main", allRebaseCalls[0].newBase, "b2 should be rebased onto the pinned main (first non-merged ancestor)")
 	assert.Equal(t, "sha-b1", allRebaseCalls[0].oldBase, "b2 should use b1's original SHA as old base")
 	assert.Equal(t, "b2", allRebaseCalls[0].branch, "b2 should be the branch being rebased")
 
@@ -1500,7 +1501,7 @@ func TestRebase_SkipsMergedBranchesNotExistingLocally(t *testing.T) {
 	// Head SHA as oldBase so `git rebase --onto` receives valid arguments.
 	require.Len(t, rebaseCalls, 1)
 	assert.Equal(t, "b2", rebaseCalls[0].branch)
-	assert.Equal(t, "main", rebaseCalls[0].newBase)
+	assert.Equal(t, "sha-main", rebaseCalls[0].newBase)
 	assert.Equal(t, "b1-stored-head-sha", rebaseCalls[0].oldBase)
 }
 
@@ -2257,4 +2258,224 @@ func TestIntegration_AdoptedBranchRebasesFromCommonAncestor(t *testing.T) {
 	subjects := strings.Split(issue250Git(t, cloneDir, "log", "--format=%s", "main..imported"), "\n")
 	assert.Equal(t, []string{"imported two", "imported one", "parent commit"}, subjects)
 	require.NoError(t, issue250GitMayFail(t, cloneDir, "merge-base", "--is-ancestor", "parent", "imported"))
+}
+
+type worktreeRebaseRepo struct {
+	amendedParentRepo
+	parentDir string
+	childDir  string
+}
+
+func setupWorktreeRebaseRepo(t *testing.T, conflict bool) worktreeRebaseRepo {
+	t.Helper()
+	repo := setupAmendedParentRepo(t, false)
+	issue250Git(t, repo.dir, "config", "commit.gpgSign", "false")
+	issue250Git(t, repo.dir, "config", "core.hooksPath", os.DevNull)
+	issue250Git(t, repo.dir, "checkout", "main")
+	parentDir := filepath.Join(t.TempDir(), "parent worktree")
+	childDir := filepath.Join(t.TempDir(), "child worktree")
+	issue250Git(t, repo.dir, "worktree", "add", parentDir, "parent")
+	issue250Git(t, repo.dir, "worktree", "add", childDir, "child")
+	if conflict {
+		issue250Git(t, repo.dir, "commit", "--allow-empty", "-m", "advance trunk")
+		issue250Git(t, repo.dir, "push", "origin", "main")
+		issue250WriteFile(t, parentDir, "base.txt", "parent change\n")
+		issue250Git(t, parentDir, "add", "base.txt")
+		issue250Git(t, parentDir, "commit", "--amend", "--no-edit")
+		issue250WriteFile(t, childDir, "base.txt", "child change\n")
+		issue250Git(t, childDir, "add", "base.txt")
+		issue250Git(t, childDir, "commit", "-m", "child conflict")
+	}
+	return worktreeRebaseRepo{repo, parentDir, childDir}
+}
+
+func TestRebase_WorktreesPreserveCheckouts(t *testing.T) {
+	repo := setupWorktreeRebaseRepo(t, false)
+	issue250WriteFile(t, repo.dir, "unrelated.txt", "leave main alone\n")
+	nested := filepath.Join(repo.childDir, "nested")
+	require.NoError(t, os.MkdirAll(nested, 0755))
+	withIssue250Repo(t, nested)
+	cfg := issue250TestConfig(t)
+
+	require.NoError(t, runRebase(cfg, &rebaseOptions{remote: "origin"}))
+
+	assert.Equal(t, "main", issue250Git(t, repo.dir, "branch", "--show-current"))
+	assert.Equal(t, "parent", issue250Git(t, repo.parentDir, "branch", "--show-current"))
+	assert.Equal(t, "child", issue250Git(t, repo.childDir, "branch", "--show-current"))
+	require.NoError(t, issue250GitMayFail(t, repo.dir, "merge-base", "--is-ancestor", "parent", "child"))
+	assert.Error(t, issue250GitMayFail(t, repo.dir, "merge-base", "--is-ancestor", repo.oldParent, "child"))
+	data, err := os.ReadFile(filepath.Join(repo.dir, "unrelated.txt"))
+	require.NoError(t, err)
+	assert.Equal(t, "leave main alone\n", string(data))
+	sf, err := stack.Load(repo.gitDir)
+	require.NoError(t, err)
+	assert.Equal(t, issue250Git(t, repo.dir, "rev-parse", "parent"), sf.Stacks[0].Branches[1].Base)
+	_, err = os.Stat(filepath.Join(repo.gitDir, rebaseStateFile))
+	assert.ErrorIs(t, err, os.ErrNotExist)
+}
+
+func TestRebase_WorktreesDirtyTargetFailsBeforeMutation(t *testing.T) {
+	repo := setupWorktreeRebaseRepo(t, false)
+	issue250WriteFile(t, repo.parentDir, "uncommitted.txt", "preserve me\n")
+	parentBefore := issue250Git(t, repo.dir, "rev-parse", "parent")
+	childBefore := issue250Git(t, repo.dir, "rev-parse", "child")
+	withIssue250Repo(t, repo.childDir)
+	cfg := issue250TestConfig(t)
+
+	assert.ErrorIs(t, runRebase(cfg, &rebaseOptions{remote: "origin"}), ErrSilent)
+
+	assert.Equal(t, parentBefore, issue250Git(t, repo.dir, "rev-parse", "parent"))
+	assert.Equal(t, childBefore, issue250Git(t, repo.dir, "rev-parse", "child"))
+	assert.FileExists(t, filepath.Join(repo.parentDir, "uncommitted.txt"))
+	_, err := os.Stat(filepath.Join(repo.gitDir, rebaseStateFile))
+	assert.ErrorIs(t, err, os.ErrNotExist)
+}
+
+func TestRebase_WorktreesConflictContinueFromDifferentWorktree(t *testing.T) {
+	repo := setupWorktreeRebaseRepo(t, true)
+	withIssue250Repo(t, repo.dir)
+	cfg := issue250TestConfig(t)
+	require.ErrorIs(t, runRebase(cfg, &rebaseOptions{remote: "origin"}), ErrConflict)
+
+	state, err := loadRebaseState(repo.gitDir)
+	require.NoError(t, err)
+	require.NotNil(t, state.Worktrees)
+	assert.True(t, worktree.SamePath(repo.childDir, state.Worktrees.Location("child").Path))
+	assert.False(t, git.IsRebaseInProgress(), "the initiating main worktree must remain usable")
+	assert.True(t, git.ForWorktree(repo.childDir).IsRebaseInProgress())
+
+	issue250WriteFile(t, repo.childDir, "base.txt", "resolved\n")
+	issue250Git(t, repo.childDir, "add", "base.txt")
+	withIssue250Repo(t, repo.parentDir)
+	require.NoError(t, runRebase(cfg, &rebaseOptions{cont: true}))
+
+	assert.Equal(t, "main", issue250Git(t, repo.dir, "branch", "--show-current"))
+	assert.Equal(t, "parent", issue250Git(t, repo.parentDir, "branch", "--show-current"))
+	assert.Equal(t, "child", issue250Git(t, repo.childDir, "branch", "--show-current"))
+	require.NoError(t, issue250GitMayFail(t, repo.dir, "merge-base", "--is-ancestor", "parent", "child"))
+	_, err = os.Stat(filepath.Join(repo.gitDir, rebaseStateFile))
+	assert.ErrorIs(t, err, os.ErrNotExist)
+}
+
+func TestRebase_WorktreesAbortRetainsRecoveryForNewEdits(t *testing.T) {
+	repo := setupWorktreeRebaseRepo(t, true)
+	parentBefore := issue250Git(t, repo.dir, "rev-parse", "parent")
+	childBefore := issue250Git(t, repo.dir, "rev-parse", "child")
+	withIssue250Repo(t, repo.dir)
+	cfg := issue250TestConfig(t)
+	require.ErrorIs(t, runRebase(cfg, &rebaseOptions{remote: "origin"}), ErrConflict)
+	parentRebased := issue250Git(t, repo.dir, "rev-parse", "parent")
+	require.NotEqual(t, parentBefore, parentRebased)
+	issue250WriteFile(t, repo.parentDir, "new-work.txt", "new work after conflict\n")
+
+	withIssue250Repo(t, repo.childDir)
+	require.ErrorIs(t, runRebase(cfg, &rebaseOptions{abort: true}), ErrSilent)
+	assert.Equal(t, parentRebased, issue250Git(t, repo.dir, "rev-parse", "parent"))
+	assert.Equal(t, childBefore, issue250Git(t, repo.dir, "rev-parse", "child"))
+	assert.FileExists(t, filepath.Join(repo.parentDir, "new-work.txt"))
+	assert.FileExists(t, filepath.Join(repo.gitDir, rebaseStateFile))
+
+	require.NoError(t, os.Remove(filepath.Join(repo.parentDir, "new-work.txt")))
+	require.NoError(t, runRebase(cfg, &rebaseOptions{abort: true}))
+	assert.Equal(t, parentBefore, issue250Git(t, repo.dir, "rev-parse", "parent"))
+	assert.Equal(t, childBefore, issue250Git(t, repo.dir, "rev-parse", "child"))
+	assert.Equal(t, "main", issue250Git(t, repo.dir, "branch", "--show-current"))
+	_, err := os.Stat(filepath.Join(repo.gitDir, rebaseStateFile))
+	assert.ErrorIs(t, err, os.ErrNotExist)
+}
+
+func TestRebase_WorktreesUpstackDoesNotRequireDirtyLowerWorktree(t *testing.T) {
+	repo := setupWorktreeRebaseRepo(t, false)
+	parentBefore := issue250Git(t, repo.dir, "rev-parse", "parent")
+	issue250WriteFile(t, repo.parentDir, "unfinished.txt", "keep working\n")
+	withIssue250Repo(t, repo.dir)
+	cfg := issue250TestConfig(t)
+
+	require.NoError(t, runRebase(cfg, &rebaseOptions{branch: "child", upstack: true, noTrunk: true}))
+
+	assert.Equal(t, parentBefore, issue250Git(t, repo.dir, "rev-parse", "parent"))
+	assert.FileExists(t, filepath.Join(repo.parentDir, "unfinished.txt"))
+	assert.Equal(t, "main", issue250Git(t, repo.dir, "branch", "--show-current"))
+	require.NoError(t, issue250GitMayFail(t, repo.dir, "merge-base", "--is-ancestor", "parent", "child"))
+}
+
+func TestRebase_WorktreesExplicitTargetRecoverySelectsCorrectStack(t *testing.T) {
+	repo := setupWorktreeRebaseRepo(t, true)
+	issue250Git(t, repo.dir, "checkout", "-b", "independent", "main")
+	sf, err := stack.Load(repo.gitDir)
+	require.NoError(t, err)
+	sf.AddStack(stack.Stack{Trunk: stack.BranchRef{Branch: "main"}, Branches: []stack.BranchRef{{Branch: "independent"}}})
+	require.NoError(t, stack.Save(repo.gitDir, sf))
+	withIssue250Repo(t, repo.dir)
+	cfg := issue250TestConfig(t)
+
+	require.ErrorIs(t, runRebase(cfg, &rebaseOptions{branch: "child", upstack: true, remote: "origin"}), ErrConflict)
+	issue250WriteFile(t, repo.childDir, "base.txt", "resolved\n")
+	issue250Git(t, repo.childDir, "add", "base.txt")
+	require.NoError(t, runRebase(cfg, &rebaseOptions{cont: true}))
+
+	assert.Equal(t, "independent", issue250Git(t, repo.dir, "branch", "--show-current"))
+	sf, err = stack.Load(repo.gitDir)
+	require.NoError(t, err)
+	require.Len(t, sf.Stacks, 2)
+	assert.Equal(t, []string{"parent", "child"}, sf.Stacks[0].BranchNames())
+	assert.Equal(t, []string{"independent"}, sf.Stacks[1].BranchNames())
+	require.NoError(t, issue250GitMayFail(t, repo.dir, "merge-base", "--is-ancestor", "parent", "child"))
+}
+
+func TestRebase_ContinueWithRemainingBranchInConflictWorktree(t *testing.T) {
+	repo := setupWorktreeRebaseRepo(t, true)
+	issue250Git(t, repo.dir, "worktree", "remove", repo.parentDir)
+	issue250Git(t, repo.dir, "worktree", "remove", repo.childDir)
+	issue250Git(t, repo.dir, "branch", "grandchild", "child")
+	sf, err := stack.Load(repo.gitDir)
+	require.NoError(t, err)
+	child := issue250Git(t, repo.dir, "rev-parse", "child")
+	sf.Stacks[0].Branches = append(sf.Stacks[0].Branches, stack.BranchRef{Branch: "grandchild", Head: child, Base: child})
+	require.NoError(t, stack.Save(repo.gitDir, sf))
+	withIssue250Repo(t, repo.dir)
+	cfg := issue250TestConfig(t)
+
+	require.ErrorIs(t, runRebase(cfg, &rebaseOptions{remote: "origin"}), ErrConflict)
+	issue250WriteFile(t, repo.dir, "base.txt", "resolved\n")
+	issue250Git(t, repo.dir, "add", "base.txt")
+	require.NoError(t, runRebase(cfg, &rebaseOptions{cont: true}))
+
+	require.NoError(t, issue250GitMayFail(t, repo.dir, "merge-base", "--is-ancestor", "child", "grandchild"))
+	assert.Equal(t, "main", issue250Git(t, repo.dir, "branch", "--show-current"))
+	assert.False(t, git.IsRebaseInProgress())
+	_, err = os.Stat(filepath.Join(repo.gitDir, rebaseStateFile))
+	assert.ErrorIs(t, err, os.ErrNotExist)
+}
+
+func TestRebase_LegacyContinuePersistsCatalogUnderOperationLock(t *testing.T) {
+	dir := t.TempDir()
+	writeStackFile(t, dir, stack.Stack{
+		Trunk:    stack.BranchRef{Branch: "main"},
+		Branches: []stack.BranchRef{{Branch: "b1", Head: "old-b1", Base: "old-base"}},
+	})
+	require.NoError(t, saveRebaseState(dir, &rebaseState{
+		OriginalBranch: "b1", ConflictBranch: "b1", OriginalRefs: map[string]string{"b1": "old-b1"},
+		TrunkRef: "main", TrunkSHA: "sha-main", EndIndex: 1,
+	}))
+	mock := newRebaseMock(dir, "b1")
+	mock.RevParseFn = func(ref string) (string, error) {
+		if ref == "b1" {
+			return "new-b1", nil
+		}
+		return "sha-main", nil
+	}
+	mock.IsAncestorFn = func(a, d string) (bool, error) { return a == "sha-main" && d == "b1", nil }
+	restore := git.SetOps(mock)
+	defer restore()
+	cfg := issue250TestConfig(t)
+
+	require.NoError(t, runRebase(cfg, &rebaseOptions{cont: true}))
+
+	sf, err := stack.Load(dir)
+	require.NoError(t, err)
+	assert.Equal(t, "new-b1", sf.Stacks[0].Branches[0].Head)
+	assert.Equal(t, "sha-main", sf.Stacks[0].Branches[0].Base)
+	_, err = os.Stat(filepath.Join(dir, rebaseStateFile))
+	assert.ErrorIs(t, err, os.ErrNotExist)
 }

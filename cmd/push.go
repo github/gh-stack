@@ -5,7 +5,6 @@ import (
 
 	"github.com/github/gh-stack/internal/config"
 	"github.com/github/gh-stack/internal/git"
-	"github.com/github/gh-stack/internal/modify"
 	"github.com/github/gh-stack/internal/stack"
 	"github.com/spf13/cobra"
 )
@@ -42,15 +41,14 @@ Merged and queued branches are automatically skipped.`,
 }
 
 func runPush(cfg *config.Config, opts *pushOptions) error {
-	gitDir, err := git.GitDir()
+	release, err := beginStackMutation(cfg, "push")
 	if err != nil {
-		cfg.Errorf("not a git repository")
-		return ErrNotInStack
+		return err
 	}
-
-	if err := modify.CheckStateGuard(gitDir); err != nil {
-		cfg.Errorf("%s", err)
-		return ErrModifyRecovery
+	defer release()
+	gitDir, err := stackStateDir(cfg)
+	if err != nil {
+		return err
 	}
 
 	sf, err := stack.Load(gitDir)
@@ -116,7 +114,7 @@ func runPush(cfg *config.Config, opts *pushOptions) error {
 	updateBaseSHAs(s)
 
 	if err := stack.Save(gitDir, sf); err != nil {
-		return handleSaveError(cfg, err)
+		return stackSaveError(cfg, err)
 	}
 
 	cfg.Successf("Pushed %d branches", len(activeBranches))

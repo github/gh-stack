@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"path/filepath"
 	"testing"
 
 	"github.com/github/gh-stack/internal/config"
@@ -13,6 +14,55 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
+
+func TestInit_AdoptsForeignBranchInSharedCatalog(t *testing.T) {
+	common, local, root, owner := t.TempDir(), t.TempDir(), t.TempDir(), t.TempDir()
+	writeStackFile(t, common, stack.Stack{Trunk: stack.BranchRef{Branch: "main"}, Branches: []stack.BranchRef{{Branch: "independent"}}})
+	restore := git.SetOps(&git.MockOps{
+		GitDirFn:       func() (string, error) { return local, nil },
+		CommonDirFn:    func() (string, error) { return common, nil },
+		RootDirFn:      func() (string, error) { return root, nil },
+		BranchExistsFn: func(string) bool { return true },
+		WorktreesFn:    func() ([]git.Worktree, error) { return []git.Worktree{{Path: owner, Branch: "foreign"}}, nil },
+		CheckoutBranchFn: func(string) error {
+			t.Fatal("adoption must not move either checkout")
+			return nil
+		},
+	})
+	defer restore()
+	cfg, outR, errR := config.NewTestConfig()
+	cfg.GitHubClientOverride = &github.MockClient{}
+	require.NoError(t, runInit(cfg, &initOptions{base: "main", branches: []string{"foreign"}}))
+	out, diagnostics := commandOutput(t, cfg, outR, errR)
+	assert.Empty(t, out)
+	assert.Contains(t, diagnostics, owner)
+	assert.Contains(t, diagnostics, "left unchanged")
+	assert.NotContains(t, diagnostics, "You're on foreign")
+	sf, err := stack.Load(common)
+	require.NoError(t, err)
+	require.Len(t, sf.Stacks, 2)
+	assert.Equal(t, []string{"foreign"}, sf.Stacks[1].BranchNames())
+	assert.NoFileExists(t, filepath.Join(local, "gh-stack"))
+}
+
+func TestInit_CheckoutFailureDoesNotPublishStack(t *testing.T) {
+	common := t.TempDir()
+	restore := git.SetOps(&git.MockOps{
+		GitDirFn:         func() (string, error) { return common, nil },
+		BranchExistsFn:   func(string) bool { return true },
+		CheckoutBranchFn: func(string) error { return assert.AnError },
+	})
+	defer restore()
+	cfg, outR, errR := config.NewTestConfig()
+	cfg.GitHubClientOverride = &github.MockClient{}
+	require.Error(t, runInit(cfg, &initOptions{base: "main", branches: []string{"branch"}}))
+	out, diagnostics := commandOutput(t, cfg, outR, errR)
+	assert.Empty(t, out)
+	assert.NotContains(t, diagnostics, "Created stack")
+	sf, err := stack.Load(common)
+	require.NoError(t, err)
+	assert.Empty(t, sf.Stacks)
+}
 
 // collectOutput closes the write ends of the test config pipes and returns
 // the captured stderr content. Shared across cmd test files.

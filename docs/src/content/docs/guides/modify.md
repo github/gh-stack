@@ -24,6 +24,12 @@ Before running `modify`, ensure:
 - No rebase is in progress
 - No PR in the stack is queued for merge
 - Commit history is linear (run `gh stack rebase` first if needed)
+- Git 2.36 or later
+- Every stack branch is unoccupied or checked out in the invoking worktree
+
+Linked worktrees are supported, but **distributed modify is temporarily rejected** before the TUI opens and rechecked before applying. A trunk checked out elsewhere does not block modify: trunk is only read. No worktrees are created, removed, detached, or automatically stashed.
+
+This also applies when using a separate Git administration directory: modify can use its known main or linked origin, but discovering another main worktree's location may be unavailable. See [Separate Git administration directories](/gh-stack/guides/workflows/#separate-git-administration-directories).
 
 ## Opening the TUI
 
@@ -76,6 +82,8 @@ If a rebase conflict occurs during the apply phase, you have two options:
 
 If a second conflict occurs after continuing, the same options are available.
 
+The conflict message identifies the originating worktree. Edit and stage the files **there**. You can invoke `--continue` or `--abort` from any linked worktree; Git operations still execute in the recorded origin without changing the invoking worktree's checkout.
+
 ## After modifying
 
 If a stack of PRs has been created on GitHub, run:
@@ -94,7 +102,15 @@ If you want to discard all changes and restore the stack to its pre-modify state
 gh stack modify --abort
 ```
 
-This also works if `modify` was interrupted (e.g., terminal crash). A pre-modify snapshot is cached locally for state recovery.
+This also works if `modify` was interrupted (e.g., terminal crash). The shared `<common-dir>/gh-stack-modify-state` journal records the origin, original checkout, stack identity, and pre-modify snapshot before mutations. Git's native rebase/cherry-pick state stays in the origin's own Git directory.
+
+Recovery restores changes made by this operation and the original checkout. If the owner is missing, refs were changed externally, or a restore/save fails, recovery stops and retains its journal instead of reporting success. Address the reported problem and retry `--abort`; do not delete the journal to bypass recovery. After a successful modify has reached pending-submit, `--abort` does not undo it and instead directs you to `submit`.
+
+Clone-wide mutation serialization prevents another gh-stack mutation while modify is applying or paused; read-only views remain available. Pending-submit state is consumed only when submitting its matching stack, never an unrelated stack.
+
+The mutation lock coordinates gh-stack processes only: arbitrary Git commands, editors, and other tools can still change refs or files. Keep affected worktrees idle during history rewrites. While paused, make only the requested conflict-resolution edits and staging in the reported worktree; do not add unrelated commits to branches that have not yet been processed.
+
+Legacy journals must be continued or aborted in their original worktree before catalog migration. Nonconflicting legacy catalogs are consolidated with originals preserved; conflicts require reconciliation rather than choosing a definition automatically.
 
 ## Limitations
 
@@ -103,3 +119,4 @@ This also works if `modify` was interrupted (e.g., terminal crash). A pre-modify
 - Cannot move branches between different stacks
 - Requires an interactive terminal
 - Reordering and structural changes (drop/fold/insert/rename) cannot be mixed in the same session
+- Distributed rename/fold/reorder support is deferred to the second layer; all member branches must currently be available in one worktree

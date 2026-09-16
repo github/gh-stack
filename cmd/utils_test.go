@@ -4,6 +4,8 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -12,10 +14,755 @@ import (
 	"github.com/github/gh-stack/internal/config"
 	"github.com/github/gh-stack/internal/git"
 	"github.com/github/gh-stack/internal/github"
+	"github.com/github/gh-stack/internal/modify"
 	"github.com/github/gh-stack/internal/stack"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
+
+func commandOutput(t *testing.T, cfg *config.Config, outR, errR *os.File) (string, string) {
+	t.Helper()
+	require.NoError(t, cfg.Out.Close())
+	require.NoError(t, cfg.Err.Close())
+	defer outR.Close()
+	defer errR.Close()
+	out, err := io.ReadAll(outR)
+	require.NoError(t, err)
+	diagnostics, err := io.ReadAll(errR)
+	require.NoError(t, err)
+	return string(out), string(diagnostics)
+}
+
+func mockRemoteOnlyGit() func() {
+	return git.SetOps(&git.MockOps{
+		GitDirFn: func() (string, error) { return "", errors.New("not a git repository") },
+	})
+}
+
+func TestResolveStack_ReadOnlySelectionDoesNotCheckout(t *testing.T) {
+	sf := &stack.StackFile{Stacks: []stack.Stack{
+		{Trunk: stack.BranchRef{Branch: "main"}, Branches: []stack.BranchRef{{Branch: "one"}}},
+		{Trunk: stack.BranchRef{Branch: "main"}, Branches: []stack.BranchRef{{Branch: "two"}}},
+	}}
+	restore := git.SetOps(&git.MockOps{CheckoutBranchFn: func(string) error {
+		t.Fatal("read-only stack selection must not acquire a mutation or change checkout")
+		return nil
+	}})
+	defer restore()
+	cfg, outR, errR := config.NewTestConfig()
+	cfg.ForceInteractive = true
+	cfg.SelectFn = func(_, _ string, options []string) (int, error) {
+		require.Len(t, options, 2)
+		return 1, nil
+	}
+
+	selected, err := resolveStack(sf, "main", cfg)
+
+	require.NoError(t, err)
+	assert.Same(t, &sf.Stacks[1], selected)
+	commandOutput(t, cfg, outR, errR)
+}
+
+func TestStackMutation_NestedAndReadOnly(t *testing.T) {
+	common := t.TempDir()
+	restore := git.SetOps(&git.MockOps{GitDirFn: func() (string, error) { return common, nil }})
+	defer restore()
+	cfg, outR, errR := config.NewTestConfig()
+
+	release, err := beginStackMutation(cfg, "add")
+	require.NoError(t, err)
+	defer release()
+	state := cfg.StackMutation
+	nested, err := beginStackMutation(cfg, "init")
+	require.NoError(t, err)
+	nested()
+	assert.Same(t, state, cfg.StackMutation)
+	dir, err := stackStateDir(cfg)
+	require.NoError(t, err)
+	assert.Equal(t, common, dir)
+
+	lock, acquired, err := stack.TryLockOperation(common)
+	require.NoError(t, err)
+	if lock != nil {
+		defer lock.Unlock()
+	}
+	assert.False(t, acquired)
+
+	reader := *cfg
+	reader.StackMutation = nil
+	dir, err = stackStateDir(&reader)
+	require.NoError(t, err, "a reader must not wait on the active operation lock")
+	assert.Equal(t, common, dir)
+
+	release()
+	assert.Nil(t, cfg.StackMutation)
+	lock, acquired, err = stack.TryLockOperation(common)
+	require.NoError(t, err)
+	require.True(t, acquired)
+	lock.Unlock()
+	out, _ := commandOutput(t, cfg, outR, errR)
+	assert.Empty(t, out)
+}
+
+func TestStackMutation_RecoveryGuards(t *testing.T) {
+	tests := []struct {
+		name, file, data, kind string
+		want                   error
+	}{
+		{"common rebase", "gh-stack-rebase-state", `{"worktrees":{}}`, "submit", ErrRebaseActive},
+		{"common rebase continue", "gh-stack-rebase-state", `{"worktrees":{}}`, "rebase-continue", nil},
+		{"common rebase abort", "gh-stack-rebase-state", `{"worktrees":{}}`, "rebase-abort", nil},
+		{"modify applying", "gh-stack-modify-state", `{"worktrees":{},"phase":"applying"}`, "push", ErrModifyRecovery},
+		{"modify conflict", "gh-stack-modify-state", `{"worktrees":{},"phase":"conflict"}`, "link", ErrModifyRecovery},
+		{"modify recovery", "gh-stack-modify-state", `{"worktrees":{},"phase":"conflict"}`, "modify-continue", nil},
+		{"pending does not block", "gh-stack-modify-state", `{"worktrees":{},"phase":"pending_submit"}`, "init", nil},
+		{"corrupt rebase", "gh-stack-rebase-state", `{`, "rebase-abort", ErrRebaseActive},
+		{"corrupt modify", "gh-stack-modify-state", `{`, "submit", ErrModifyRecovery},
+		{"invalid pending snapshot", "gh-stack-modify-state", `{"phase":"pending_submit","snapshot":"invalid"}`, "push", ErrModifyRecovery},
+		{"unknown modify phase", "gh-stack-modify-state", `{"phase":"unknown"}`, "push", ErrModifyRecovery},
+		{"null rebase", "gh-stack-rebase-state", `null`, "push", ErrRebaseActive},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			common, local := t.TempDir(), t.TempDir()
+			require.NoError(t, os.WriteFile(filepath.Join(common, tt.file), []byte(tt.data), 0600))
+			restore := git.SetOps(&git.MockOps{
+				GitDirFn:    func() (string, error) { return local, nil },
+				CommonDirFn: func() (string, error) { return common, nil },
+			})
+			defer restore()
+			cfg, outR, errR := config.NewTestConfig()
+			release, err := beginStackMutation(cfg, tt.kind)
+			if tt.want != nil {
+				require.ErrorIs(t, err, tt.want)
+				assert.Nil(t, cfg.StackMutation)
+			} else {
+				require.NoError(t, err)
+				assert.Equal(t, common, cfg.StackMutation.StateDir)
+				release()
+			}
+			out, _ := commandOutput(t, cfg, outR, errR)
+			assert.Empty(t, out)
+		})
+	}
+}
+
+func TestStackMutation_LegacyRecoveryUsesOriginalCatalog(t *testing.T) {
+	for _, original := range []bool{true, false} {
+		t.Run(fmt.Sprintf("original=%t", original), func(t *testing.T) {
+			common := t.TempDir()
+			legacy := filepath.Join(common, "worktrees", "original")
+			require.NoError(t, os.MkdirAll(legacy, 0700))
+			writeStackFile(t, common, stack.Stack{Trunk: stack.BranchRef{Branch: "main"}, Branches: []stack.BranchRef{{Branch: "shared"}}})
+			writeStackFile(t, legacy, stack.Stack{Trunk: stack.BranchRef{Branch: "main"}, Branches: []stack.BranchRef{{Branch: "original"}}})
+			require.NoError(t, os.WriteFile(filepath.Join(legacy, rebaseStateFile), []byte(`{"originalBranch":"original"}`), 0600))
+			local := common
+			if original {
+				local = legacy
+			}
+			restore := git.SetOps(&git.MockOps{
+				GitDirFn:    func() (string, error) { return local, nil },
+				CommonDirFn: func() (string, error) { return common, nil },
+			})
+			defer restore()
+			cfg, outR, errR := config.NewTestConfig()
+			release, err := beginStackMutation(cfg, "rebase-abort")
+			if original {
+				require.NoError(t, err)
+				defer release()
+				dir, err := stackStateDir(cfg)
+				require.NoError(t, err)
+				assert.Equal(t, legacy, dir)
+				sf, err := stack.Load(dir)
+				require.NoError(t, err)
+				assert.Equal(t, []string{"original"}, sf.Stacks[0].BranchNames())
+			} else {
+				require.ErrorIs(t, err, ErrRebaseActive)
+			}
+			out, diagnostics := commandOutput(t, cfg, outR, errR)
+			assert.Empty(t, out)
+			if !original {
+				assert.Contains(t, diagnostics, "original worktree")
+				assert.Contains(t, diagnostics, legacy)
+			}
+		})
+	}
+}
+
+func TestStackMutation_UpgradedPrivateJournalUsesOriginalCatalog(t *testing.T) {
+	for _, operation := range []string{"rebase", "modify"} {
+		for _, action := range []string{"continue", "abort"} {
+			for _, original := range []bool{true, false} {
+				t.Run(fmt.Sprintf("%s-%s/original=%t", operation, action, original), func(t *testing.T) {
+					common := t.TempDir()
+					private := filepath.Join(common, "worktrees", "original")
+					require.NoError(t, os.MkdirAll(private, 0700))
+					writeStackFile(t, common, stack.Stack{Trunk: stack.BranchRef{Branch: "main"}, Branches: []stack.BranchRef{{Branch: "shared"}}})
+					writeStackFile(t, private, stack.Stack{Trunk: stack.BranchRef{Branch: "main"}, Branches: []stack.BranchRef{{Branch: "original"}}})
+					journal := filepath.Join(private, "gh-stack-"+operation+"-state")
+					require.NoError(t, os.WriteFile(journal, []byte(`{"phase":"conflict","worktrees":{}}`), 0600))
+					local := common
+					if original {
+						local = private
+					}
+					restore := git.SetOps(&git.MockOps{
+						GitDirFn:    func() (string, error) { return local, nil },
+						CommonDirFn: func() (string, error) { return common, nil },
+					})
+					defer restore()
+					cfg, outR, errR := config.NewTestConfig()
+					release, err := beginStackMutation(cfg, operation+"-"+action)
+					if original {
+						require.NoError(t, err)
+						defer release()
+						dir, err := stackStateDir(cfg)
+						require.NoError(t, err)
+						assert.Equal(t, private, dir)
+						sf, err := stack.Load(dir)
+						require.NoError(t, err)
+						assert.Equal(t, []string{"original"}, sf.Stacks[0].BranchNames())
+					} else if operation == "rebase" {
+						assert.ErrorIs(t, err, ErrRebaseActive)
+					} else {
+						assert.ErrorIs(t, err, ErrModifyRecovery)
+					}
+					shared, err := stack.Load(common)
+					require.NoError(t, err)
+					require.Len(t, shared.Stacks, 1)
+					assert.Equal(t, []string{"shared"}, shared.Stacks[0].BranchNames())
+					assert.FileExists(t, filepath.Join(private, "gh-stack"))
+					assert.FileExists(t, journal)
+					out, _ := commandOutput(t, cfg, outR, errR)
+					assert.Empty(t, out)
+				})
+			}
+		}
+	}
+}
+
+func TestStackMutation_NullWorktreeContextIsLegacy(t *testing.T) {
+	for _, operation := range []string{"rebase", "modify"} {
+		for _, original := range []bool{true, false} {
+			t.Run(fmt.Sprintf("%s/original=%t", operation, original), func(t *testing.T) {
+				common, local := t.TempDir(), t.TempDir()
+				if original {
+					local = common
+				}
+				writeStackFile(t, common, stack.Stack{Trunk: stack.BranchRef{Branch: "main"}, Branches: []stack.BranchRef{{Branch: "original"}}})
+				journal := filepath.Join(common, "gh-stack-"+operation+"-state")
+				data := []byte(`{"phase":"conflict","worktrees":null}`)
+				require.NoError(t, os.WriteFile(journal, data, 0600))
+				legacyCatalogs, err := stack.HasLegacyState(common)
+				require.NoError(t, err)
+				assert.False(t, legacyCatalogs, "journal detection is independent of catalog migration")
+				restore := git.SetOps(&git.MockOps{
+					GitDirFn:    func() (string, error) { return local, nil },
+					CommonDirFn: func() (string, error) { return common, nil },
+				})
+				defer restore()
+				cfg, outR, errR := config.NewTestConfig()
+				release, err := beginStackMutation(cfg, operation+"-continue")
+				if original {
+					require.NoError(t, err)
+					assert.Equal(t, common, cfg.StackMutation.StateDir)
+					release()
+				} else if operation == "rebase" {
+					assert.ErrorIs(t, err, ErrRebaseActive)
+				} else {
+					assert.ErrorIs(t, err, ErrModifyRecovery)
+				}
+				after, err := os.ReadFile(journal)
+				require.NoError(t, err)
+				assert.Equal(t, data, after)
+				out, diagnostics := commandOutput(t, cfg, outR, errR)
+				assert.Empty(t, out)
+				if !original {
+					assert.Contains(t, diagnostics, "original worktree")
+				}
+			})
+		}
+	}
+}
+
+func TestStackMutation_CommonRecoveryDefersLegacyMigration(t *testing.T) {
+	common := t.TempDir()
+	private := filepath.Join(common, "worktrees", "other")
+	require.NoError(t, os.MkdirAll(private, 0700))
+	writeStackFile(t, common, stack.Stack{Trunk: stack.BranchRef{Branch: "main"}, Branches: []stack.BranchRef{{Branch: "original"}}})
+	writeStackFile(t, private, stack.Stack{Trunk: stack.BranchRef{Branch: "main"}, Branches: []stack.BranchRef{{Branch: "other"}}})
+	require.NoError(t, os.WriteFile(filepath.Join(common, rebaseStateFile), []byte(`{"phase":"conflict","worktrees":{}}`), 0600))
+	restore := git.SetOps(&git.MockOps{GitDirFn: func() (string, error) { return common, nil }})
+	defer restore()
+	cfg, outR, errR := config.NewTestConfig()
+	release, err := beginStackMutation(cfg, "rebase-continue")
+	require.NoError(t, err)
+	defer release()
+	dir, err := stackStateDir(cfg)
+	require.NoError(t, err)
+	assert.Equal(t, common, dir)
+	sf, err := stack.Load(common)
+	require.NoError(t, err)
+	require.Len(t, sf.Stacks, 1)
+	assert.Equal(t, []string{"original"}, sf.Stacks[0].BranchNames())
+	assert.FileExists(t, filepath.Join(private, "gh-stack"))
+	commandOutput(t, cfg, outR, errR)
+}
+
+func TestStackMutation_PrivateAndCommonRecoveryAreAmbiguous(t *testing.T) {
+	common := t.TempDir()
+	private := filepath.Join(common, "worktrees", "original")
+	require.NoError(t, os.MkdirAll(private, 0700))
+	for _, dir := range []string{common, private} {
+		require.NoError(t, os.WriteFile(filepath.Join(dir, rebaseStateFile), []byte(`{"phase":"conflict","worktrees":{}}`), 0600))
+	}
+	restore := git.SetOps(&git.MockOps{
+		GitDirFn:    func() (string, error) { return private, nil },
+		CommonDirFn: func() (string, error) { return common, nil },
+	})
+	defer restore()
+	cfg, outR, errR := config.NewTestConfig()
+	release, err := beginStackMutation(cfg, "rebase-continue")
+	assert.ErrorIs(t, err, ErrRebaseActive)
+	assert.Nil(t, release)
+	assert.Nil(t, cfg.StackMutation)
+	out, diagnostics := commandOutput(t, cfg, outR, errR)
+	assert.Empty(t, out)
+	assert.Contains(t, diagnostics, "multiple rebase recovery journals")
+	assert.Contains(t, diagnostics, common)
+	assert.Contains(t, diagnostics, private)
+}
+
+func TestStackMutation_MigrationErrorsLeaveCatalogsIntact(t *testing.T) {
+	common := t.TempDir()
+	legacy := filepath.Join(common, "worktrees", "other")
+	require.NoError(t, os.MkdirAll(legacy, 0700))
+	writeStackFile(t, common, stack.Stack{Trunk: stack.BranchRef{Branch: "main"}, Branches: []stack.BranchRef{{Branch: "same", Base: "one"}}})
+	writeStackFile(t, legacy, stack.Stack{Trunk: stack.BranchRef{Branch: "main"}, Branches: []stack.BranchRef{{Branch: "same", Base: "two"}}})
+	before, err := os.ReadFile(filepath.Join(common, "gh-stack"))
+	require.NoError(t, err)
+	restore := git.SetOps(&git.MockOps{GitDirFn: func() (string, error) { return common, nil }})
+	defer restore()
+	cfg, outR, errR := config.NewTestConfig()
+	_, err = stackStateDir(cfg)
+	require.Error(t, err)
+	var migrationErr *stack.MigrationConflictError
+	require.ErrorAs(t, err, &migrationErr)
+	assert.NotEmpty(t, migrationErr.Sources)
+	assert.NotEmpty(t, migrationErr.Reason)
+	release, err := beginStackMutation(cfg, "push")
+	require.Error(t, err)
+	migrationErr = nil
+	require.ErrorAs(t, err, &migrationErr)
+	assert.Nil(t, release)
+	after, err := os.ReadFile(filepath.Join(common, "gh-stack"))
+	require.NoError(t, err)
+	assert.Equal(t, before, after)
+	assert.FileExists(t, filepath.Join(legacy, "gh-stack"))
+	out, diagnostics := commandOutput(t, cfg, outR, errR)
+	assert.Empty(t, out)
+	assert.Contains(t, diagnostics, "migrat")
+}
+
+func TestStackStateDir_PreservesMigrationBlockedError(t *testing.T) {
+	common := t.TempDir()
+	private := filepath.Join(common, "worktrees", "original")
+	require.NoError(t, os.MkdirAll(private, 0700))
+	writeStackFile(t, private, stack.Stack{Trunk: stack.BranchRef{Branch: "main"}, Branches: []stack.BranchRef{{Branch: "original"}}})
+	journal := filepath.Join(private, rebaseStateFile)
+	require.NoError(t, os.WriteFile(journal, []byte(`{"originalBranch":"original"}`), 0600))
+	restore := git.SetOps(&git.MockOps{GitDirFn: func() (string, error) { return common, nil }})
+	defer restore()
+	cfg, outR, errR := config.NewTestConfig()
+	_, err := stackStateDir(cfg)
+	assert.ErrorIs(t, err, ErrSilent)
+	var blocked *stack.MigrationBlockedError
+	require.ErrorAs(t, err, &blocked)
+	assert.Contains(t, blocked.RecoveryPaths, journal)
+	out, diagnostics := commandOutput(t, cfg, outR, errR)
+	assert.Empty(t, out)
+	assert.Contains(t, diagnostics, journal)
+}
+
+func TestStackStateHelpers_PreserveLockError(t *testing.T) {
+	for _, operationLock := range []bool{true, false} {
+		t.Run(fmt.Sprintf("operationLock=%t", operationLock), func(t *testing.T) {
+			common := t.TempDir()
+			private := filepath.Join(common, "worktrees", "other")
+			require.NoError(t, os.MkdirAll(private, 0700))
+			writeStackFile(t, private, stack.Stack{Trunk: stack.BranchRef{Branch: "main"}, Branches: []stack.BranchRef{{Branch: "other"}}})
+			restore := git.SetOps(&git.MockOps{GitDirFn: func() (string, error) { return common, nil }})
+			defer restore()
+			lockFn := stack.Lock
+			if operationLock {
+				lockFn = stack.LockOperation
+			}
+			lock, err := lockFn(common)
+			require.NoError(t, err)
+			defer lock.Unlock()
+			timeout := stack.LockTimeout
+			stack.LockTimeout = 0
+			defer func() { stack.LockTimeout = timeout }()
+			cfg, outR, errR := config.NewTestConfig()
+			_, err = stackStateDir(cfg)
+			assert.ErrorIs(t, err, ErrLockFailed)
+			var lockErr *stack.LockError
+			require.ErrorAs(t, err, &lockErr)
+			release, err := beginStackMutation(cfg, "push")
+			assert.ErrorIs(t, err, ErrLockFailed)
+			assert.Nil(t, release)
+			lockErr = nil
+			require.ErrorAs(t, err, &lockErr)
+			assert.Nil(t, cfg.StackMutation)
+			out, _ := commandOutput(t, cfg, outR, errR)
+			assert.Empty(t, out)
+		})
+	}
+}
+
+func TestStackSaveError_PreservesTypedCause(t *testing.T) {
+	for _, tt := range []struct {
+		name  string
+		cause error
+		exit  error
+	}{
+		{"lock", &stack.LockError{Err: assert.AnError}, ErrLockFailed},
+		{"stale", &stack.StaleError{Err: assert.AnError}, ErrLockFailed},
+		{"migration conflict", &stack.MigrationConflictError{Sources: []string{"original"}, Reason: "different definitions"}, ErrSilent},
+		{"migration blocked", &stack.MigrationBlockedError{RecoveryPaths: []string{"journal"}}, ErrSilent},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			cfg, outR, errR := config.NewTestConfig()
+			err := stackSaveError(cfg, tt.cause)
+			assert.ErrorIs(t, err, tt.exit)
+			assert.ErrorIs(t, err, tt.cause)
+			var exitErr *ExitError
+			require.ErrorAs(t, err, &exitErr)
+			out, diagnostics := commandOutput(t, cfg, outR, errR)
+			assert.Empty(t, out)
+			assert.NotEmpty(t, diagnostics)
+		})
+	}
+}
+
+func TestStackLookupError_CommandCallerMapping(t *testing.T) {
+	storageErr := &stack.LockError{Err: assert.AnError}
+	for _, tt := range []struct {
+		name   string
+		input  error
+		want   error
+		retain bool
+	}{
+		{"typed exit", ErrRebaseActive, ErrRebaseActive, true},
+		{"wrapped typed exit", errors.Join(ErrLockFailed, storageErr), ErrLockFailed, true},
+		{"interrupt", errInterrupt, ErrSilent, false},
+		{"wrapped interrupt", fmt.Errorf("selection: %w", errInterrupt), ErrSilent, false},
+		{"untyped lookup failure", assert.AnError, ErrNotInStack, false},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			mapped := stackLookupError(tt.input)
+			assert.ErrorIs(t, mapped, tt.want)
+			if tt.retain {
+				assert.Same(t, tt.input, mapped)
+			}
+		})
+	}
+}
+
+func TestCheckoutWorktreeBranch_OutputContract(t *testing.T) {
+	tests := []struct {
+		name, current     string
+		foreign, pathMode bool
+		checkoutError     bool
+		rootError         bool
+		wantError         bool
+	}{
+		{"foreign path", "b1", true, true, false, false, false},
+		{"foreign normal", "b1", true, false, false, false, true},
+		{"unoccupied path", "b1", false, true, false, false, false},
+		{"current path", "b2", false, true, false, false, false},
+		{"failed checkout", "b1", false, true, true, false, true},
+		{"failed root", "b1", false, true, false, true, true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			common, root := t.TempDir(), t.TempDir()
+			owner := filepath.Join(t.TempDir(), "owner's worktree")
+			var checkedOut []string
+			restore := git.SetOps(&git.MockOps{
+				GitDirFn:        func() (string, error) { return common, nil },
+				CurrentBranchFn: func() (string, error) { return tt.current, nil },
+				RootDirFn: func() (string, error) {
+					if tt.rootError {
+						return "", assert.AnError
+					}
+					return root, nil
+				},
+				WorktreesFn: func() ([]git.Worktree, error) {
+					if tt.foreign {
+						return []git.Worktree{{Path: owner, Branch: "b2"}}, nil
+					}
+					return nil, nil
+				},
+				CheckoutBranchFn: func(branch string) error {
+					checkedOut = append(checkedOut, branch)
+					if tt.checkoutError {
+						return assert.AnError
+					}
+					return nil
+				},
+			})
+			defer restore()
+			cfg, outR, errR := config.NewTestConfig()
+			err := checkoutWorktreeBranch(cfg, "b2", tt.pathMode)
+			out, diagnostics := commandOutput(t, cfg, outR, errR)
+			if tt.wantError {
+				require.Error(t, err)
+				assert.Empty(t, out)
+			} else {
+				require.NoError(t, err)
+				want := root
+				if tt.foreign {
+					want = owner
+				}
+				assert.Equal(t, want+"\n", out)
+			}
+			if tt.foreign || tt.current == "b2" || tt.rootError {
+				assert.Empty(t, checkedOut)
+			} else {
+				assert.Equal(t, []string{"b2"}, checkedOut)
+			}
+			if tt.foreign && !tt.pathMode {
+				assert.ErrorIs(t, err, ErrInvalidArgs)
+				assert.Contains(t, diagnostics, owner)
+				assert.Contains(t, diagnostics, "cd -- '")
+				assert.Contains(t, diagnostics, "'\\''")
+				assert.NotContains(t, diagnostics, "Switched")
+			}
+		})
+	}
+}
+
+func TestCheckoutWorktreeBranch_ForeignLookupDuringPausedOperation(t *testing.T) {
+	common, root, owner := t.TempDir(), t.TempDir(), t.TempDir()
+	require.NoError(t, os.WriteFile(filepath.Join(common, rebaseStateFile), []byte(`{"worktrees":{}}`), 0600))
+	restore := git.SetOps(&git.MockOps{
+		GitDirFn:    func() (string, error) { return common, nil },
+		RootDirFn:   func() (string, error) { return root, nil },
+		WorktreesFn: func() ([]git.Worktree, error) { return []git.Worktree{{Path: owner, Branch: "b1"}}, nil },
+		CheckoutBranchFn: func(string) error {
+			t.Fatal("foreign lookup must not change a checkout")
+			return nil
+		},
+	})
+	defer restore()
+	cfg, outR, errR := config.NewTestConfig()
+	lock, err := stack.LockOperation(common)
+	require.NoError(t, err)
+	require.NoError(t, checkoutWorktreeBranch(cfg, "b1", true))
+	lock.Unlock()
+	out, _ := commandOutput(t, cfg, outR, errR)
+	assert.Equal(t, owner+"\n", out)
+
+	cfg, outR, errR = config.NewTestConfig()
+	assert.ErrorIs(t, checkoutWorktreeBranch(cfg, "b2", true), ErrRebaseActive)
+	out, _ = commandOutput(t, cfg, outR, errR)
+	assert.Empty(t, out)
+}
+
+func TestCheckoutWorktreeBranch_OwnershipErrors(t *testing.T) {
+	for _, reason := range []string{"list", "duplicate", "prunable", "different repository", "relative path"} {
+		t.Run(reason, func(t *testing.T) {
+			common, root, owner := t.TempDir(), t.TempDir(), t.TempDir()
+			mock := &git.MockOps{
+				GitDirFn:  func() (string, error) { return common, nil },
+				RootDirFn: func() (string, error) { return root, nil },
+				WorktreesFn: func() ([]git.Worktree, error) {
+					switch reason {
+					case "list":
+						return nil, assert.AnError
+					case "duplicate":
+						return []git.Worktree{{Path: owner, Branch: "b1"}, {Path: root, Branch: "b1"}}, nil
+					case "prunable":
+						return []git.Worktree{{Path: owner, Branch: "b1", Prunable: true}}, nil
+					case "relative path":
+						return []git.Worktree{{Path: "relative", Branch: "b1"}}, nil
+					default:
+						return []git.Worktree{{Path: owner, Branch: "b1"}}, nil
+					}
+				},
+				CheckoutBranchFn: func(string) error {
+					t.Fatal("ownership errors must not fall back to checkout")
+					return nil
+				},
+			}
+			if reason == "different repository" {
+				mock.ForWorktreeFn = func(string) git.Ops {
+					return &git.MockOps{CommonDirFn: func() (string, error) { return root, nil }}
+				}
+			}
+			restore := git.SetOps(mock)
+			defer restore()
+			cfg, outR, errR := config.NewTestConfig()
+			require.Error(t, checkoutWorktreeBranch(cfg, "b1", true))
+			out, diagnostics := commandOutput(t, cfg, outR, errR)
+			assert.Empty(t, out)
+			assert.NotEmpty(t, diagnostics)
+		})
+	}
+}
+
+func TestStackMutation_ReadErrorsFailClosed(t *testing.T) {
+	common := t.TempDir()
+	require.NoError(t, os.Mkdir(modify.StatePath(common), 0700))
+	restore := git.SetOps(&git.MockOps{GitDirFn: func() (string, error) { return common, nil }})
+	defer restore()
+	cfg, outR, errR := config.NewTestConfig()
+	release, err := beginStackMutation(cfg, "submit")
+	assert.ErrorIs(t, err, ErrModifyRecovery)
+	assert.Nil(t, release)
+	out, _ := commandOutput(t, cfg, outR, errR)
+	assert.Empty(t, out)
+}
+
+func TestStackMutation_ReportsJournalOrigin(t *testing.T) {
+	common, origin := t.TempDir(), t.TempDir()
+	journal := fmt.Sprintf(`{"worktrees":{"origin":{"path":%q,"id":"worktrees/origin"}}}`, origin)
+	require.NoError(t, os.WriteFile(filepath.Join(common, rebaseStateFile), []byte(journal), 0600))
+	restore := git.SetOps(&git.MockOps{GitDirFn: func() (string, error) { return common, nil }})
+	defer restore()
+	cfg, outR, errR := config.NewTestConfig()
+	release, err := beginStackMutation(cfg, "push")
+	assert.ErrorIs(t, err, ErrRebaseActive)
+	assert.Nil(t, release)
+	out, diagnostics := commandOutput(t, cfg, outR, errR)
+	assert.Empty(t, out)
+	assert.Contains(t, diagnostics, origin)
+	assert.Contains(t, diagnostics, "gh stack rebase --continue")
+}
+
+func TestStackMutation_RebaseJournalPhasesBlockOtherMutations(t *testing.T) {
+	for _, phase := range []string{"applying", "conflict", "complete", "restoring"} {
+		t.Run(phase, func(t *testing.T) {
+			common, local := t.TempDir(), t.TempDir()
+			data := fmt.Sprintf(`{"phase":%q,"worktrees":{},"originalBranch":"b1"}`, phase)
+			require.NoError(t, os.WriteFile(filepath.Join(common, rebaseStateFile), []byte(data), 0600))
+			restore := git.SetOps(&git.MockOps{
+				GitDirFn:    func() (string, error) { return local, nil },
+				CommonDirFn: func() (string, error) { return common, nil },
+			})
+			defer restore()
+			for _, kind := range []string{"init", "add", "checkout", "push", "submit", "link", "merge", "unstack", "rebase", "sync", "modify", "modify-abort"} {
+				t.Run(kind, func(t *testing.T) {
+					cfg, outR, errR := config.NewTestConfig()
+					release, err := beginStackMutation(cfg, kind)
+					assert.ErrorIs(t, err, ErrRebaseActive)
+					assert.Nil(t, release)
+					assert.Nil(t, cfg.StackMutation)
+					out, _ := commandOutput(t, cfg, outR, errR)
+					assert.Empty(t, out)
+				})
+			}
+			for _, kind := range []string{"rebase-continue", "rebase-abort"} {
+				t.Run(kind, func(t *testing.T) {
+					cfg, outR, errR := config.NewTestConfig()
+					release, err := beginStackMutation(cfg, kind)
+					require.NoError(t, err)
+					release()
+					commandOutput(t, cfg, outR, errR)
+				})
+			}
+		})
+	}
+}
+
+func TestStackMutatingCommands_RecoveryBeforeSideEffects(t *testing.T) {
+	commands := []struct {
+		name string
+		run  func(*config.Config) error
+	}{
+		{"init", func(cfg *config.Config) error {
+			return runInit(cfg, &initOptions{base: "main", branches: []string{"new"}})
+		}},
+		{"add", func(cfg *config.Config) error {
+			return runAdd(cfg, &addOptions{stageAll: true, message: "commit"}, []string{"new"})
+		}},
+		{"push", func(cfg *config.Config) error { return runPush(cfg, &pushOptions{}) }},
+		{"submit", func(cfg *config.Config) error { return runSubmit(cfg, &submitOptions{auto: true}) }},
+		{"link", func(cfg *config.Config) error { return runLink(cfg, &linkOptions{}, []string{"1", "2"}) }},
+		{"merge", func(cfg *config.Config) error { return runMerge(cfg, &mergeOptions{}, []string{"7"}) }},
+		{"unstack", func(cfg *config.Config) error { return runUnstack(cfg, &unstackOptions{stackNumber: 7}) }},
+	}
+	for _, command := range commands {
+		t.Run(command.name, func(t *testing.T) {
+			for _, journal := range []struct {
+				file, data string
+				want       error
+			}{
+				{rebaseStateFile, `{"worktrees":{}}`, ErrRebaseActive},
+				{"gh-stack-modify-state", `{"worktrees":{},"phase":"applying"}`, ErrModifyRecovery},
+				{"gh-stack-modify-state", `{"worktrees":{},"phase":"conflict"}`, ErrModifyRecovery},
+			} {
+				t.Run(journal.file+journal.data, func(t *testing.T) {
+					common, local := t.TempDir(), t.TempDir()
+					require.NoError(t, os.WriteFile(filepath.Join(common, journal.file), []byte(journal.data), 0600))
+					restore := git.SetOps(&git.MockOps{
+						GitDirFn:    func() (string, error) { return local, nil },
+						CommonDirFn: func() (string, error) { return common, nil },
+						PushFn: func(string, []string, bool, bool) error {
+							t.Fatal("recovery guard must run before any push")
+							return nil
+						},
+						StageAllFn: func() error {
+							t.Fatal("recovery guard must run before staging")
+							return nil
+						},
+						CreateBranchFn: func(string, string) error {
+							t.Fatal("recovery guard must run before branch creation")
+							return nil
+						},
+					})
+					defer restore()
+					cfg, outR, errR := config.NewTestConfig()
+					cfg.GitHubClientOverride = &github.MockClient{
+						ListStacksFn: func() ([]github.RemoteStack, error) {
+							t.Fatal("guard must run before remote operations")
+							return nil, nil
+						},
+					}
+					assert.ErrorIs(t, command.run(cfg), journal.want)
+					out, _ := commandOutput(t, cfg, outR, errR)
+					assert.Empty(t, out)
+				})
+			}
+		})
+	}
+}
+
+func TestStackStateDir_VersionAndCommonDirFailures(t *testing.T) {
+	for _, oldVersion := range []bool{true, false} {
+		t.Run(fmt.Sprintf("oldVersion=%t", oldVersion), func(t *testing.T) {
+			common := t.TempDir()
+			mock := &git.MockOps{GitDirFn: func() (string, error) { return common, nil }}
+			if oldVersion {
+				mock.CheckVersionFn = func() error { return fmt.Errorf("Git 2.36 or newer is required; upgrade Git") }
+			} else {
+				mock.CommonDirFn = func() (string, error) { return "", assert.AnError }
+			}
+			restore := git.SetOps(mock)
+			defer restore()
+			cfg, outR, errR := config.NewTestConfig()
+			release, err := beginOptionalStackMutation(cfg, "link")
+			require.Error(t, err)
+			assert.Nil(t, release)
+			assert.NoFileExists(t, filepath.Join(common, "gh-stack-operation.lock"))
+			out, diagnostics := commandOutput(t, cfg, outR, errR)
+			assert.Empty(t, out)
+			if oldVersion {
+				assert.Contains(t, diagnostics, "upgrade Git")
+			}
+		})
+	}
+}
 
 func TestIsInterruptError_DirectMatch(t *testing.T) {
 	if !isInterruptError(terminal.InterruptErr) {

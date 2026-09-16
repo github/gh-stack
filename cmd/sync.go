@@ -10,6 +10,7 @@ import (
 	"github.com/github/gh-stack/internal/git"
 	"github.com/github/gh-stack/internal/modify"
 	"github.com/github/gh-stack/internal/stack"
+	"github.com/github/gh-stack/internal/worktree"
 	"github.com/spf13/cobra"
 )
 
@@ -75,9 +76,14 @@ the first active branch in the stack, or the trunk if all are merged.`,
 }
 
 func runSync(cfg *config.Config, opts *syncOptions) error {
+	release, err := beginStackMutation(cfg, "sync")
+	if err != nil {
+		return err
+	}
+	defer release()
 	result, err := loadStack(cfg, "")
 	if err != nil {
-		return ErrNotInStack
+		return stackLookupError(err)
 	}
 	gitDir := result.GitDir
 
@@ -89,6 +95,7 @@ func runSync(cfg *config.Config, opts *syncOptions) error {
 	sf := result.StackFile
 	s := result.Stack
 	currentBranch := result.CurrentBranch
+	originalTrunk := s.Trunk.Branch
 
 	// Resolve remote once for fetch and push
 	remote, err := pickRemote(cfg, currentBranch, opts.remote)
@@ -140,31 +147,67 @@ func runSync(cfg *config.Config, opts *syncOptions) error {
 	if cb, cbErr := git.CurrentBranch(); cbErr == nil {
 		currentBranch = cb
 	}
+	_ = syncStackPRs(cfg, s)
+	ctx, err := worktree.New()
+	if err != nil {
+		cfg.Errorf("%s", err)
+		return ErrSilent
+	}
+	planned := planFastForwardBranches(s, remote)
 
 	// --- Step 2: Resolve trunk ---
-	trunk, err := resolveTrunkTarget(cfg, s, remote, currentBranch)
+	trunk, err := resolveTrunkTarget(cfg, s, remote, currentBranch, trunkResolveOptions{
+		Worktrees: ctx,
+		Preflight: func(sha string, moved bool) error {
+			var required []string
+			for _, forward := range planned {
+				required = append(required, forward.Branch)
+			}
+			if moved || len(planned) > 0 || stackNeedsRebase(s, sha) {
+				required = append(required, activeBranchNames(s)...)
+			}
+			if err := ctx.Preflight(required); err != nil {
+				cfg.Errorf("%s", err)
+				return ErrSilent
+			}
+			return nil
+		},
+	})
 	if err != nil {
 		return err
 	}
 
 	// --- Step 2b: Fast-forward stack branches behind their remote tracking branch ---
-	updatedBranches := fastForwardBranches(cfg, s, remote, currentBranch)
+	updatedBranches, err := fastForwardBranches(cfg, planned, ctx)
+	if err != nil {
+		cfg.Errorf("%s", err)
+		return ErrSilent
+	}
 
 	// --- Step 3: Cascade rebase ---
 	needsRebase := trunk.Moved || len(updatedBranches) > 0 || stackNeedsRebase(s, trunk.Ref)
 	rebased := false
 	var originalRefs map[string]string
+	var state *rebaseState
 	if needsRebase {
 		cfg.Printf("")
 		cfg.Printf("Rebasing stack ...")
 
-		// Sync PR state to detect merged PRs before rebasing.
-		_ = syncStackPRs(cfg, s)
-
 		originalRefs, err = resolveOriginalRefs(s)
 		if err != nil {
-			cfg.Warningf("Could not resolve branch SHAs — skipping rebase: %v", err)
+			cfg.Errorf("Could not resolve branch SHAs: %v", err)
+			return ErrSilent
 		} else {
+			state = newWorktreeRebaseState(s, ctx, currentBranch, originalRefs, trunk, 0, len(s.Branches))
+			if s.Trunk.Branch != originalTrunk {
+				if err := stack.Save(gitDir, sf); err != nil {
+					return handleSaveError(cfg, err)
+				}
+			}
+			if err := saveRebaseState(gitDir, state); err != nil {
+				cfg.Errorf("%s", err)
+				return ErrSilent
+			}
 			result := cascadeRebase(cascadeRebaseOpts{
 				Cfg:          cfg,
 				Stack:        s,
@@ -172,35 +215,33 @@ func runSync(cfg *config.Config, opts *syncOptions) error {
 				StartAbsIdx:  0,
 				OriginalRefs: originalRefs,
 				TrunkRef:     trunk.Ref,
+				TrunkSHA:     trunk.SHA,
+				Worktrees:    ctx,
+				State:        state,
+				StateDir:     gitDir,
 			})
 
 			if result.Err != nil {
 				cfg.Errorf("%v", result.Err)
-				if result.Rebased {
-					restoreRebaseRefs(cfg, currentBranch, originalRefs)
-				} else {
-					_ = git.CheckoutBranch(currentBranch)
-				}
-				stack.SaveNonBlocking(gitDir, sf)
+				_ = rollbackWorktreeRebase(cfg, gitDir, state)
 				return ErrSilent
 			}
 
 			if result.Conflicted {
 				// Abort and restore everything — sync is non-interactive.
-				if git.IsRebaseInProgress() {
-					_ = git.RebaseAbort()
-				}
-				restoreErrors := restoreBranches(originalRefs)
-				_ = git.CheckoutBranch(currentBranch)
-
 				cfg.Errorf("Conflict detected rebasing %s onto %s", result.ConflictBranch, result.ConflictBase)
-				reportRestoreStatus(cfg, restoreErrors)
+				if err := rollbackWorktreeRebase(cfg, gitDir, state); err != nil {
+					return ErrSilent
+				}
+				cfg.Printf("Branches restored to their pre-rebase state")
 				cfg.Printf("  Run `%s` to resolve conflicts interactively.",
 					cfg.ColorCyan("gh stack rebase"))
 
 				// Persist refreshed PR state even on conflict, then bail out
 				// before pushing or reporting success.
-				stack.SaveNonBlocking(gitDir, sf)
+				if err := stack.Save(gitDir, sf); err != nil {
+					cfg.Warningf("Could not save refreshed PR metadata: %v", err)
+				}
 				return ErrConflict
 			}
 
@@ -208,17 +249,23 @@ func runSync(cfg *config.Config, opts *syncOptions) error {
 				rebased = true
 			}
 		}
-		_ = git.CheckoutBranch(currentBranch)
+		if err := ctx.RestoreOrigin(currentBranch); err != nil {
+			cfg.Errorf("%s", err)
+			return ErrSilent
+		}
 	}
 
-	if unstacked := verifyStacked(s, trunk.Ref, 0, len(s.Branches)); len(unstacked) > 0 {
-		_ = git.CheckoutBranch(currentBranch)
+	if unstacked := verifyStacked(s, trunk.SHA, 0, len(s.Branches)); len(unstacked) > 0 {
 		reportUnstacked(cfg, trunk.Ref, unstacked)
-		if rebased && originalRefs != nil {
-			restoreRebaseRefs(cfg, currentBranch, originalRefs)
+		if state != nil {
+			_ = rollbackWorktreeRebase(cfg, gitDir, state)
 		}
-		stack.SaveNonBlocking(gitDir, sf)
 		return ErrSilent
+	}
+	if state != nil {
+		if err := publishCompletedRebase(cfg, gitDir, state, sf, s); err != nil {
+			return err
+		}
 	}
 
 	// --- Step 4: Push ---
@@ -346,14 +393,24 @@ func runSync(cfg *config.Config, opts *syncOptions) error {
 				}
 			}
 			if needsSwitch {
-				switchTarget := trunk.Branch
+				switchTarget := ""
 				for _, b := range s.Branches {
 					if !b.IsSkipped() {
+						if owner := ctx.Owners[b.Branch]; owner != nil && !worktree.SamePath(owner.Path, ctx.Origin.Path) {
+							continue
+						}
 						switchTarget = b.Branch
 						break
 					}
 				}
-				if err := git.CheckoutBranch(switchTarget); err != nil {
+				if switchTarget == "" {
+					if owner := ctx.Owners[trunk.Branch]; owner == nil || worktree.SamePath(owner.Path, ctx.Origin.Path) {
+						switchTarget = trunk.Branch
+					}
+				}
+				if switchTarget == "" {
+					cfg.Infof("Keeping %s: no available checkout destination", currentBranch)
+				} else if err := git.CheckoutBranch(switchTarget); err != nil {
 					cfg.Warningf("Failed to switch from %s to %s: %v", currentBranch, switchTarget, err)
 				} else {
 					currentBranch = switchTarget
@@ -363,6 +420,14 @@ func runSync(cfg *config.Config, opts *syncOptions) error {
 			cfg.Printf("")
 			pruned := 0
 			for _, name := range prunable {
+				if owner := ctx.Owners[name]; owner != nil && !worktree.SamePath(owner.Path, ctx.Origin.Path) {
+					cfg.Infof("Keeping %s: checked out in worktree %s", name, owner.Path)
+					continue
+				}
+				if name == currentBranch {
+					cfg.Infof("Keeping %s: still checked out", name)
+					continue
+				}
 				if err := git.DeleteBranch(name, true); err != nil {
 					cfg.Warningf("Failed to delete %s: %v", name, err)
 				} else {
@@ -382,12 +447,15 @@ func runSync(cfg *config.Config, opts *syncOptions) error {
 		// the local branch was already deleted. This prevents
 		// `git checkout <name>` from resurrecting the branch.
 		for _, b := range merged {
+			if owner := ctx.Owners[b.Branch]; owner != nil && !worktree.SamePath(owner.Path, ctx.Origin.Path) {
+				continue
+			}
 			_ = git.DeleteTrackingRef(remote, b.Branch)
 		}
 	}
 
 	// --- Step 7: Update base SHAs and save ---
-	updateBaseSHAs(s)
+	updateBaseSHAsWithTrunk(s, trunk.SHA)
 
 	if err := stack.Save(gitDir, sf); err != nil {
 		return handleSaveError(cfg, err)

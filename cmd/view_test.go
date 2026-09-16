@@ -551,3 +551,38 @@ func TestRunViewJSON_SingleStack(t *testing.T) {
 	assert.Equal(t, "feat/01", got.Branches[0].Name)
 	assert.True(t, got.Branches[0].IsCurrent)
 }
+
+func TestRunViewJSON_SharedCatalogDuringMutation(t *testing.T) {
+	common, local := t.TempDir(), t.TempDir()
+	writeStackFile(t, common, stack.Stack{
+		Trunk:    stack.BranchRef{Branch: "main"},
+		Branches: []stack.BranchRef{{Branch: "b1", PullRequest: &stack.PullRequestRef{Number: 1}}},
+	})
+	before, err := os.ReadFile(filepath.Join(common, "gh-stack"))
+	require.NoError(t, err)
+	lock, err := stack.LockOperation(common)
+	require.NoError(t, err)
+	defer lock.Unlock()
+	restore := git.SetOps(&git.MockOps{
+		GitDirFn:        func() (string, error) { return local, nil },
+		CommonDirFn:     func() (string, error) { return common, nil },
+		CurrentBranchFn: func() (string, error) { return "b1", nil },
+	})
+	defer restore()
+	cfg, outR, errR := config.NewTestConfig()
+	cfg.GitHubClientOverride = &github.MockClient{
+		FindPRByNumberFn: func(int) (*github.PullRequest, error) {
+			return &github.PullRequest{Number: 1, State: "OPEN", URL: "https://github.com/o/r/pull/1"}, nil
+		},
+	}
+	require.NoError(t, runViewJSON(cfg))
+	out, _ := commandOutput(t, cfg, outR, errR)
+	var result viewJSONOutput
+	require.NoError(t, json.Unmarshal([]byte(out), &result))
+	assert.Equal(t, "b1", result.CurrentBranch)
+	require.Len(t, result.Branches, 1)
+	after, err := os.ReadFile(filepath.Join(common, "gh-stack"))
+	require.NoError(t, err)
+	assert.Equal(t, before, after, "read-only metadata refresh cannot overwrite a mutation's catalog")
+	assert.NoFileExists(t, filepath.Join(local, "gh-stack"))
+}

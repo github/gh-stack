@@ -5,7 +5,10 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"runtime"
+	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -241,4 +244,343 @@ func TestSave_DoubleSaveSucceeds(t *testing.T) {
 	final, err := Load(dir)
 	require.NoError(t, err)
 	assert.Len(t, final.Stacks, 2)
+}
+
+func TestLockOperation_IndependentCatalogLock(t *testing.T) {
+	dir := t.TempDir()
+	operation, err := LockOperation(dir)
+	require.NoError(t, err)
+	defer operation.Unlock()
+
+	sf, err := Load(dir)
+	require.NoError(t, err)
+	sf.AddStack(makeStack("main", "feature"))
+	require.NoError(t, Save(dir, sf), "Save must not retake the operation lock")
+
+	catalog, err := Lock(dir)
+	require.NoError(t, err)
+	defer catalog.Unlock()
+	sf.AddStack(makeStack("main", "other"))
+	require.NoError(t, SaveWithLock(dir, sf, catalog))
+
+	start := time.Now()
+	contender, acquired, err := TryLockOperation(dir)
+	require.NoError(t, err)
+	assert.False(t, acquired)
+	assert.Nil(t, contender)
+	assert.Less(t, time.Since(start), time.Second)
+
+	operation.Unlock()
+	operation.Unlock()
+	contender, acquired, err = TryLockOperation(dir)
+	require.NoError(t, err)
+	require.True(t, acquired, "catalog lock must not prevent an operation lock")
+	contender.Unlock()
+
+	assert.FileExists(t, filepath.Join(dir, operationLockFileName))
+	assert.FileExists(t, filepath.Join(dir, lockFileName))
+}
+
+func TestTryLockOperation_Errors(t *testing.T) {
+	for _, kind := range []string{"missing directory", "directory at lock path"} {
+		t.Run(kind, func(t *testing.T) {
+			dir := t.TempDir()
+			if kind == "missing directory" {
+				dir = filepath.Join(dir, "missing")
+			} else {
+				require.NoError(t, os.Mkdir(filepath.Join(dir, operationLockFileName), 0755))
+			}
+			lock, acquired, err := TryLockOperation(dir)
+			require.Error(t, err)
+			assert.Nil(t, lock)
+			assert.False(t, acquired)
+			var lockErr *LockError
+			assert.False(t, errors.As(err, &lockErr), "real I/O failure is not contention")
+		})
+	}
+
+	t.Run("invalid descriptor is not contention", func(t *testing.T) {
+		f, err := os.CreateTemp(t.TempDir(), "lock")
+		require.NoError(t, err)
+		require.NoError(t, f.Close())
+		err = tryLockFile(f)
+		require.Error(t, err)
+		assert.False(t, isLockBusy(err))
+	})
+}
+
+func TestLockOperation_TimesOut(t *testing.T) {
+	dir := t.TempDir()
+	lock, err := LockOperation(dir)
+	require.NoError(t, err)
+	defer lock.Unlock()
+	originalTimeout := LockTimeout
+	LockTimeout = 100 * time.Millisecond
+	defer func() { LockTimeout = originalTimeout }()
+
+	other, err := LockOperation(dir)
+	require.Error(t, err)
+	assert.Nil(t, other)
+	var lockErr *LockError
+	require.ErrorAs(t, err, &lockErr)
+	assert.Contains(t, err.Error(), "stack operation lock")
+}
+
+func TestLockOperation_SerializesMutationSnapshots(t *testing.T) {
+	dir := t.TempDir()
+	errs := make(chan error, 4)
+	var wg sync.WaitGroup
+	for i := range 4 {
+		wg.Go(func() {
+			lock, err := LockOperation(dir)
+			if err != nil {
+				errs <- err
+				return
+			}
+			defer lock.Unlock()
+			sf, err := Load(dir)
+			if err != nil {
+				errs <- err
+				return
+			}
+			sf.AddStack(makeStack("main", fmt.Sprintf("branch-%d", i)))
+			errs <- Save(dir, sf)
+		})
+	}
+	wg.Wait()
+	close(errs)
+	for err := range errs {
+		require.NoError(t, err)
+	}
+	sf, err := Load(dir)
+	require.NoError(t, err)
+	assert.Len(t, sf.Stacks, 4)
+}
+
+func TestSaveNonBlocking_OperationAndCatalogGuards(t *testing.T) {
+	for _, kind := range []string{"uncontended", "operation lock", "catalog lock", "stale", "pending migration"} {
+		t.Run(kind, func(t *testing.T) {
+			dir := t.TempDir()
+			sf := &StackFile{Stacks: []Stack{makeStack("main", "original")}}
+			require.NoError(t, Save(dir, sf))
+			refresh, err := Load(dir)
+			require.NoError(t, err)
+			refresh.Stacks[0].Branches[0].Head = "metadata-refresh"
+			checksum := append([]byte(nil), refresh.loadChecksum...)
+
+			var held *FileLock
+			switch kind {
+			case "operation lock":
+				held, err = LockOperation(dir)
+			case "catalog lock":
+				held, err = Lock(dir)
+			case "stale":
+				sf.Stacks[0].Branches[0].Head = "critical-write"
+				err = Save(dir, sf)
+			case "pending migration":
+				err = os.WriteFile(filepath.Join(dir, migrationFileName), []byte("{}"), 0600)
+			}
+			require.NoError(t, err)
+			defer held.Unlock()
+
+			start := time.Now()
+			SaveNonBlocking(dir, refresh)
+			assert.Less(t, time.Since(start), time.Second)
+			held.Unlock()
+			got, err := Load(dir)
+			require.NoError(t, err)
+			if kind == "uncontended" {
+				assert.Equal(t, "metadata-refresh", got.Stacks[0].Branches[0].Head)
+				assert.NotEqual(t, checksum, refresh.loadChecksum)
+			} else {
+				assert.NotEqual(t, "metadata-refresh", got.Stacks[0].Branches[0].Head)
+				assert.Equal(t, checksum, refresh.loadChecksum)
+			}
+			lock, acquired, err := TryLockOperation(dir)
+			require.NoError(t, err)
+			require.True(t, acquired, "a skipped refresh must release the operation lock")
+			lock.Unlock()
+		})
+	}
+}
+
+func TestSave_AtomicReaderVisibility(t *testing.T) {
+	dir := t.TempDir()
+	sf := &StackFile{Stacks: []Stack{makeStack("main", "feature")}}
+	require.NoError(t, Save(dir, sf))
+	stop := make(chan struct{})
+	errs := make(chan error, 2)
+	var reads atomic.Int64
+	var readers sync.WaitGroup
+	for range 2 {
+		readers.Go(func() {
+			for {
+				select {
+				case <-stop:
+					return
+				default:
+				}
+				got, err := Load(dir)
+				if err != nil {
+					errs <- err
+					return
+				}
+				if len(got.Stacks) != 1 || len(got.Stacks[0].Branches) != 1 ||
+					got.Stacks[0].Trunk.Head != got.Stacks[0].Branches[0].Base {
+					errs <- fmt.Errorf("reader observed an incomplete catalog: %#v", got)
+					return
+				}
+				reads.Add(1)
+			}
+		})
+	}
+	var writeErr error
+	for i := range 50 {
+		head := strings.Repeat(fmt.Sprintf("%04d", i), 1024)
+		sf.Stacks[0].Trunk.Head = head
+		sf.Stacks[0].Branches[0].Base = head
+		if writeErr = Save(dir, sf); writeErr != nil {
+			break
+		}
+	}
+	close(stop)
+	readers.Wait()
+	close(errs)
+	require.NoError(t, writeErr)
+	for err := range errs {
+		require.NoError(t, err)
+	}
+	assert.Positive(t, reads.Load())
+	temps, err := filepath.Glob(filepath.Join(dir, "."+stackFileName+"-*"))
+	require.NoError(t, err)
+	assert.Empty(t, temps)
+}
+
+func TestAtomicPublication_PreservesExistingFiles(t *testing.T) {
+	t.Run("no overwrite on exclusive publication", func(t *testing.T) {
+		path := filepath.Join(t.TempDir(), "backup")
+		require.NoError(t, writeFileAtomic(path, []byte("original"), 0600, false))
+		err := writeFileAtomic(path, []byte("replacement"), 0600, false)
+		require.ErrorIs(t, err, os.ErrExist)
+		data, err := os.ReadFile(path)
+		require.NoError(t, err)
+		assert.Equal(t, "original", string(data))
+		temps, err := filepath.Glob(filepath.Join(filepath.Dir(path), ".backup-*"))
+		require.NoError(t, err)
+		assert.Empty(t, temps)
+	})
+
+	t.Run("failed replace keeps destination", func(t *testing.T) {
+		dir := t.TempDir()
+		path := filepath.Join(dir, "destination")
+		require.NoError(t, os.WriteFile(path, []byte("original"), 0600))
+		require.Error(t, publishFile(filepath.Join(dir, "missing"), path, true))
+		data, err := os.ReadFile(path)
+		require.NoError(t, err)
+		assert.Equal(t, "original", string(data))
+	})
+
+	t.Run("non-regular destination is not replaced", func(t *testing.T) {
+		dir := t.TempDir()
+		path := filepath.Join(dir, "destination")
+		require.NoError(t, os.Mkdir(path, 0755))
+		require.Error(t, writeFileAtomic(path, []byte("replacement"), 0600, true))
+		assert.DirExists(t, path)
+	})
+
+	t.Run("mode survives replacement", func(t *testing.T) {
+		if runtime.GOOS == "windows" {
+			t.Skip("Unix permission bits")
+		}
+		dir := t.TempDir()
+		sf := &StackFile{Stacks: []Stack{makeStack("main", "feature")}}
+		require.NoError(t, Save(dir, sf))
+		require.NoError(t, os.Chmod(stackFilePath(dir), 0640))
+		sf.AddStack(makeStack("main", "other"))
+		require.NoError(t, Save(dir, sf))
+		info, err := os.Stat(stackFilePath(dir))
+		require.NoError(t, err)
+		assert.Equal(t, os.FileMode(0640), info.Mode().Perm())
+	})
+}
+
+func TestWriteAtomic(t *testing.T) {
+	t.Run("creates and replaces exact bytes", func(t *testing.T) {
+		path := filepath.Join(t.TempDir(), "gh-stack-rebase-state")
+		for _, data := range [][]byte{
+			[]byte(`{"phase":"rebasing","branch":"feature"}`),
+			[]byte(`{"phase":"done"}`),
+			{0x00, 0xff, 0x0a},
+			{},
+		} {
+			require.NoError(t, WriteAtomic(path, data))
+			got, err := os.ReadFile(path)
+			require.NoError(t, err)
+			assert.Equal(t, data, got)
+		}
+		temps, err := filepath.Glob(filepath.Join(filepath.Dir(path), ".gh-stack-rebase-state-*"))
+		require.NoError(t, err)
+		assert.Empty(t, temps)
+	})
+
+	t.Run("missing parent is reported", func(t *testing.T) {
+		parent := filepath.Join(t.TempDir(), "missing")
+		require.ErrorIs(t, WriteAtomic(filepath.Join(parent, "state"), []byte("{}")), os.ErrNotExist)
+		assert.NoDirExists(t, parent)
+	})
+
+	t.Run("non-regular target is preserved", func(t *testing.T) {
+		path := filepath.Join(t.TempDir(), "state")
+		require.NoError(t, os.Mkdir(path, 0755))
+		require.Error(t, WriteAtomic(path, []byte("{}")))
+		assert.DirExists(t, path)
+	})
+}
+
+func TestSave_FailedPublicationPreservesChecksum(t *testing.T) {
+	if runtime.GOOS == "windows" || os.Geteuid() == 0 {
+		t.Skip("requires Unix directory permission enforcement")
+	}
+	dir := t.TempDir()
+	sf := &StackFile{Stacks: []Stack{makeStack("main", "original")}}
+	require.NoError(t, Save(dir, sf))
+	checksum := append([]byte(nil), sf.loadChecksum...)
+	before, err := os.ReadFile(stackFilePath(dir))
+	require.NoError(t, err)
+	info, err := os.Stat(dir)
+	require.NoError(t, err)
+	require.NoError(t, os.Chmod(dir, 0500))
+	t.Cleanup(func() { assert.NoError(t, os.Chmod(dir, info.Mode().Perm())) })
+
+	sf.AddStack(makeStack("main", "unsaved"))
+	require.Error(t, Save(dir, sf))
+	assert.Equal(t, checksum, sf.loadChecksum)
+	after, err := os.ReadFile(stackFilePath(dir))
+	require.NoError(t, err)
+	assert.Equal(t, before, after)
+	require.NoError(t, os.Chmod(dir, info.Mode().Perm()))
+	require.NoError(t, Save(dir, sf), "a failed publication must remain retryable")
+}
+
+func TestMigrateLegacyState_TakesCatalogLock(t *testing.T) {
+	dir := t.TempDir()
+	catalogs := []migrationCatalog{
+		writeMigrationTestCatalog(t, dir, "worktrees/linked/gh-stack", migrationTestFile(makeStack("main", "linked"))),
+	}
+	operation, err := LockOperation(dir)
+	require.NoError(t, err)
+	defer operation.Unlock()
+	catalog, err := Lock(dir)
+	require.NoError(t, err)
+	defer catalog.Unlock()
+	originalTimeout := LockTimeout
+	LockTimeout = 0
+	defer func() { LockTimeout = originalTimeout }()
+
+	var lockErr *LockError
+	require.ErrorAs(t, MigrateLegacyState(dir), &lockErr)
+	assertMigrationOriginals(t, dir, catalogs, false)
+	catalog.Unlock()
+	require.NoError(t, MigrateLegacyState(dir))
+	assertMigrationOriginals(t, dir, catalogs, true)
 }

@@ -3,6 +3,8 @@ package cmd
 import (
 	"fmt"
 	"io"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -482,6 +484,7 @@ func TestSync_RebaseConflict_RestoresAll(t *testing.T) {
 	}
 
 	mock := newSyncMock(tmpDir, "b1")
+	mock.CurrentBranchFn = func() (string, error) { return currentBranch, nil }
 	mock.RevParseFn = func(ref string) (string, error) {
 		if ref == "main" {
 			return "local-sha", nil
@@ -492,12 +495,21 @@ func TestSync_RebaseConflict_RestoresAll(t *testing.T) {
 		if sha, ok := branchSHAs[ref]; ok {
 			return sha, nil
 		}
+		if sha, ok := branchSHAs[strings.TrimPrefix(ref, "origin/")]; ok {
+			return sha, nil
+		}
 		return "sha-" + ref, nil
 	}
 	mock.IsAncestorFn = func(a, d string) (bool, error) {
 		return true, nil
 	}
-	mock.UpdateBranchRefFn = func(string, string) error { return nil }
+	mock.UpdateBranchRefFn = func(branch, sha string) error {
+		if _, ok := branchSHAs[branch]; ok {
+			resets = append(resets, resetCall{branch, sha})
+			branchSHAs[branch] = sha
+		}
+		return nil
+	}
 	mock.CheckoutBranchFn = func(name string) error {
 		checkouts = append(checkouts, name)
 		currentBranch = name
@@ -755,7 +767,7 @@ func TestSync_MergedBranch_UsesOnto(t *testing.T) {
 	// b2: first active branch after merged → RebaseOnto(main, b1-orig-sha, b2)
 	// b3: normal --onto → RebaseOnto(b2, b2-orig-sha, b3)
 	require.Len(t, rebaseOntoCalls, 2)
-	assert.Equal(t, rebaseCall{"main", "b1-orig-sha", "b2"}, rebaseOntoCalls[0])
+	assert.Equal(t, rebaseCall{"remote-sha", "b1-orig-sha", "b2"}, rebaseOntoCalls[0])
 	assert.Equal(t, rebaseCall{"b2", "b2-orig-sha", "b3"}, rebaseOntoCalls[1])
 
 	// Push should use force (rebase happened)
@@ -919,7 +931,7 @@ func TestSync_StaleOntoOldBase_UsesForkPoint(t *testing.T) {
 	require.Len(t, rebaseOntoCalls, 2)
 
 	// b2: stale ontoOldBase → uses fork-point(main, b2)
-	assert.Equal(t, rebaseCall{"main", "main-b2-forkpoint", "b2"}, rebaseOntoCalls[0],
+	assert.Equal(t, rebaseCall{"remote-sha", "main-b2-forkpoint", "b2"}, rebaseOntoCalls[0],
 		"b2 should use the reflog fork-point when ontoOldBase is stale")
 
 	// b3: b2's SHA is a valid ancestor → uses it directly
@@ -1061,7 +1073,7 @@ func TestSync_BranchFastForward_TriggersRebase(t *testing.T) {
 
 	// b1 should be fast-forwarded via MergeFF (since we're on b1)
 	require.Len(t, mergeFFCalls, 1, "should fast-forward b1 via MergeFF")
-	assert.Equal(t, "origin/b1", mergeFFCalls[0])
+	assert.Equal(t, "b1-remote-sha", mergeFFCalls[0])
 	assert.Contains(t, output, "Fast-forwarded b1")
 
 	// Cascade rebase should be triggered (even though trunk didn't move)
@@ -1239,7 +1251,7 @@ func TestSync_MergedBranchDeletedFromRemote(t *testing.T) {
 	// Head SHA as oldBase so `git rebase --onto` receives valid arguments.
 	require.Len(t, rebaseOntoCalls, 1)
 	assert.Equal(t, "b2", rebaseOntoCalls[0].branch)
-	assert.Equal(t, "main", rebaseOntoCalls[0].newBase)
+	assert.Equal(t, "remote-sha", rebaseOntoCalls[0].newBase)
 	assert.Equal(t, "b1-stored-head-sha", rebaseOntoCalls[0].oldBase)
 }
 
@@ -2579,4 +2591,57 @@ func TestSync_MergedBranchPruned_NoFalseDivergence(t *testing.T) {
 
 	assert.Empty(t, created)
 	assert.NotContains(t, output, "diverged")
+}
+
+func TestSync_WorktreesPublishesFromLinkedWorktree(t *testing.T) {
+	repo := setupWorktreeRebaseRepo(t, false)
+	withIssue250Repo(t, repo.childDir)
+	cfg := issue250TestConfig(t)
+
+	require.NoError(t, runSync(cfg, &syncOptions{remote: "origin"}))
+
+	assert.Equal(t, "main", issue250Git(t, repo.dir, "branch", "--show-current"))
+	assert.Equal(t, "parent", issue250Git(t, repo.parentDir, "branch", "--show-current"))
+	assert.Equal(t, "child", issue250Git(t, repo.childDir, "branch", "--show-current"))
+	for _, branch := range []string{"parent", "child"} {
+		assert.Equal(t, issue250Git(t, repo.dir, "rev-parse", branch), issue250Git(t, repo.dir, "rev-parse", "origin/"+branch))
+	}
+	require.NoError(t, issue250GitMayFail(t, repo.dir, "merge-base", "--is-ancestor", "parent", "child"))
+}
+
+func TestSync_WorktreesConflictRestoresWithoutPush(t *testing.T) {
+	repo := setupWorktreeRebaseRepo(t, true)
+	beforeParent := issue250Git(t, repo.dir, "rev-parse", "parent")
+	beforeChild := issue250Git(t, repo.dir, "rev-parse", "child")
+	remoteParent := issue250Git(t, repo.dir, "rev-parse", "origin/parent")
+	remoteChild := issue250Git(t, repo.dir, "rev-parse", "origin/child")
+	withIssue250Repo(t, repo.dir)
+	cfg := issue250TestConfig(t)
+
+	require.ErrorIs(t, runSync(cfg, &syncOptions{remote: "origin"}), ErrConflict)
+
+	assert.Equal(t, beforeParent, issue250Git(t, repo.dir, "rev-parse", "parent"))
+	assert.Equal(t, beforeChild, issue250Git(t, repo.dir, "rev-parse", "child"))
+	assert.Equal(t, remoteParent, issue250Git(t, repo.dir, "rev-parse", "origin/parent"))
+	assert.Equal(t, remoteChild, issue250Git(t, repo.dir, "rev-parse", "origin/child"))
+	assert.False(t, git.ForWorktree(repo.childDir).IsRebaseInProgress())
+	assert.Equal(t, "main", issue250Git(t, repo.dir, "branch", "--show-current"))
+	_, err := os.Stat(filepath.Join(repo.gitDir, rebaseStateFile))
+	assert.ErrorIs(t, err, os.ErrNotExist)
+}
+
+func TestSync_WorktreesPruneKeepsOccupiedMergedBranch(t *testing.T) {
+	repo := setupWorktreeRebaseRepo(t, false)
+	sf, err := stack.Load(repo.gitDir)
+	require.NoError(t, err)
+	sf.Stacks[0].Branches[0].PullRequest = &stack.PullRequestRef{Number: 101, Merged: true}
+	require.NoError(t, stack.Save(repo.gitDir, sf))
+	withIssue250Repo(t, repo.childDir)
+	cfg := issue250TestConfig(t)
+
+	require.NoError(t, runSync(cfg, &syncOptions{remote: "origin", prune: true}))
+
+	assert.Equal(t, "parent", issue250Git(t, repo.parentDir, "branch", "--show-current"))
+	require.NoError(t, issue250GitMayFail(t, repo.dir, "show-ref", "--verify", "refs/heads/parent"))
+	assert.DirExists(t, repo.parentDir)
 }

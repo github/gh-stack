@@ -4,12 +4,12 @@ import (
 	"strconv"
 
 	"github.com/github/gh-stack/internal/config"
-	"github.com/github/gh-stack/internal/git"
 	"github.com/spf13/cobra"
 )
 
 func UpCmd(cfg *config.Config) *cobra.Command {
-	return &cobra.Command{
+	var printPath bool
+	cmd := &cobra.Command{
 		Use:   "up [n]",
 		Short: "Check out a branch further up in the stack (further from the trunk)",
 		Long: `Check out a branch further up in the stack (further from the trunk).
@@ -30,13 +30,16 @@ Merged branches are automatically skipped.`,
 					return ErrInvalidArgs
 				}
 			}
-			return runNavigate(cfg, n)
+			return runNavigateWithPath(cfg, n, printPath)
 		},
 	}
+	cmd.Flags().BoolVar(&printPath, "print-path", false, "Print the target worktree path without switching a branch held elsewhere")
+	return cmd
 }
 
 func DownCmd(cfg *config.Config) *cobra.Command {
-	return &cobra.Command{
+	var printPath bool
+	cmd := &cobra.Command{
 		Use:   "down [n]",
 		Short: "Check out a branch further down in the stack (closer to the trunk)",
 		Long: `Check out a branch further down in the stack (closer to the trunk).
@@ -57,43 +60,60 @@ Merged branches are automatically skipped.`,
 					return ErrInvalidArgs
 				}
 			}
-			return runNavigate(cfg, -n)
+			return runNavigateWithPath(cfg, -n, printPath)
 		},
 	}
+	cmd.Flags().BoolVar(&printPath, "print-path", false, "Print the target worktree path without switching a branch held elsewhere")
+	return cmd
 }
 
 func TopCmd(cfg *config.Config) *cobra.Command {
-	return &cobra.Command{
+	var printPath bool
+	cmd := &cobra.Command{
 		Use:   "top",
 		Short: "Check out the top branch of the stack (furthest from the trunk)",
 		Long: `Check out the top branch of the stack (furthest from the trunk).
 Merged branches are automatically skipped.`,
 		Example: `  # Jump to the top of the stack
   $ gh stack top`,
+		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
-			return runNavigateToEnd(cfg, true)
+			return runNavigateToEndWithPath(cfg, true, printPath)
 		},
 	}
+	cmd.Flags().BoolVar(&printPath, "print-path", false, "Print the target worktree path without switching a branch held elsewhere")
+	return cmd
 }
 
 func BottomCmd(cfg *config.Config) *cobra.Command {
-	return &cobra.Command{
+	var printPath bool
+	cmd := &cobra.Command{
 		Use:   "bottom",
 		Short: "Check out the bottom branch of the stack (closest to the trunk)",
 		Long: `Check out the bottom branch of the stack (closest to the trunk).
 Merged branches are automatically skipped.`,
 		Example: `  # Jump to the bottom of the stack
   $ gh stack bottom`,
+		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
-			return runNavigateToEnd(cfg, false)
+			return runNavigateToEndWithPath(cfg, false, printPath)
 		},
 	}
+	cmd.Flags().BoolVar(&printPath, "print-path", false, "Print the target worktree path without switching a branch held elsewhere")
+	return cmd
 }
 
 func runNavigate(cfg *config.Config, delta int) error {
-	result, err := loadStack(cfg, "")
+	return runNavigateWithPath(cfg, delta, false)
+}
+
+func runNavigateWithPath(cfg *config.Config, delta int, printPath bool) error {
+	if printPath {
+		cfg = noninteractiveConfig(cfg)
+	}
+	result, err := loadNavigationStack(cfg, printPath)
 	if err != nil {
-		return ErrNotInStack
+		return stackLookupError(err)
 	}
 	s := result.Stack
 	currentBranch := result.CurrentBranch
@@ -109,13 +129,19 @@ func runNavigate(cfg *config.Config, delta int) error {
 				cfg.Warningf("Warning: all branches in this stack have been merged")
 			}
 			target := s.Branches[targetIdx].Branch
-			if err := git.CheckoutBranch(target); err != nil {
+			if err := checkoutWorktreeBranch(cfg, target, printPath); err != nil {
 				return err
+			}
+			if printPath {
+				return nil
 			}
 			cfg.Successf("Switched to %s", target)
 			return nil
 		}
 		cfg.Printf("Already at the bottom of the stack")
+		if printPath {
+			return checkoutWorktreeBranch(cfg, currentBranch, true)
+		}
 		return nil
 	}
 
@@ -181,12 +207,18 @@ func runNavigate(cfg *config.Config, delta int) error {
 		} else {
 			cfg.Printf("Already at the bottom of the stack")
 		}
+		if printPath {
+			return checkoutWorktreeBranch(cfg, currentBranch, true)
+		}
 		return nil
 	}
 
 	target := s.Branches[newIdx].Branch
-	if err := git.CheckoutBranch(target); err != nil {
+	if err := checkoutWorktreeBranch(cfg, target, printPath); err != nil {
 		return err
+	}
+	if printPath {
+		return nil
 	}
 
 	if skipped > 0 {
@@ -205,9 +237,16 @@ func runNavigate(cfg *config.Config, delta int) error {
 }
 
 func runNavigateToEnd(cfg *config.Config, top bool) error {
-	result, err := loadStack(cfg, "")
+	return runNavigateToEndWithPath(cfg, top, false)
+}
+
+func runNavigateToEndWithPath(cfg *config.Config, top, printPath bool) error {
+	if printPath {
+		cfg = noninteractiveConfig(cfg)
+	}
+	result, err := loadNavigationStack(cfg, printPath)
 	if err != nil {
-		return ErrNotInStack
+		return stackLookupError(err)
 	}
 	s := result.Stack
 	currentBranch := result.CurrentBranch
@@ -236,11 +275,17 @@ func runNavigateToEnd(cfg *config.Config, top bool) error {
 		} else {
 			cfg.Printf("Already at the bottom of the stack")
 		}
+		if printPath {
+			return checkoutWorktreeBranch(cfg, target, true)
+		}
 		return nil
 	}
 
-	if err := git.CheckoutBranch(target); err != nil {
+	if err := checkoutWorktreeBranch(cfg, target, printPath); err != nil {
 		return err
+	}
+	if printPath {
+		return nil
 	}
 
 	if s.Branches[targetIdx].IsMerged() {

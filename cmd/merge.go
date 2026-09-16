@@ -100,6 +100,17 @@ func runMerge(cfg *config.Config, opts *mergeOptions, args []string) error {
 		cfg.Errorf("%s", err)
 		return ErrInvalidArgs
 	}
+	if len(args) > 0 {
+		if n, err := strconv.Atoi(strings.TrimSpace(args[0])); err != nil || n <= 0 {
+			cfg.Errorf("invalid argument %q: expected a stack number or pull request number", args[0])
+			return ErrInvalidArgs
+		}
+	}
+	release, err := beginOptionalStackMutation(cfg, "merge")
+	if err != nil {
+		return err
+	}
+	defer release()
 
 	client, err := cfg.GitHubClient()
 	if err != nil {
@@ -235,10 +246,9 @@ func resolveMergeStack(cfg *config.Config, client github.ClientOps, args []strin
 // resolveActiveRemoteStack reads only the local stack number for the current
 // branch, then fetches the full stack (and its PR states) from GitHub.
 func resolveActiveRemoteStack(cfg *config.Config, client github.ClientOps) (*github.RemoteStack, error) {
-	gitDir, err := git.GitDir()
+	gitDir, err := stackStateDir(cfg)
 	if err != nil {
-		cfg.Errorf("not a git repository")
-		return nil, ErrNotInStack
+		return nil, err
 	}
 	sf, err := stack.Load(gitDir)
 	if err != nil {

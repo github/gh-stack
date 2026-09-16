@@ -99,6 +99,12 @@ func runLink(cfg *config.Config, opts *linkOptions, args []string) error {
 		return ErrInvalidArgs
 	}
 
+	release, err := beginOptionalStackMutation(cfg, "link")
+	if err != nil {
+		return err
+	}
+	defer release()
+
 	client, err := cfg.GitHubClient()
 	if err != nil {
 		cfg.Errorf("failed to create GitHub client: %s", err)

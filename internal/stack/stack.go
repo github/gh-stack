@@ -225,7 +225,7 @@ func NearestSurvivingBranch(order []string, target string, survives func(string)
 	return ""
 }
 
-// StackFile represents the JSON file stored in .git/gh-stack.
+// StackFile represents the JSON catalog stored in Git's common directory.
 type StackFile struct {
 	SchemaVersion int     `json:"schemaVersion"`
 	Repository    string  `json:"repository"`
@@ -310,13 +310,14 @@ func stackFilePath(gitDir string) string {
 	return filepath.Join(gitDir, stackFileName)
 }
 
-// Load reads the stack file from the given git directory.
+// Load reads the catalog from the given directory, normally Git's common
+// directory. Legacy recovery may explicitly use a worktree's original directory.
 // Returns an empty StackFile if the file does not exist.
 // The returned StackFile records a checksum of the on-disk content so that
 // Save can detect concurrent modifications.
 func Load(gitDir string) (*StackFile, error) {
 	path := stackFilePath(gitDir)
-	data, err := os.ReadFile(path)
+	data, err := readStateFile(path)
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
 			// loadChecksum stays nil — sentinel for "file absent at load time".
@@ -328,6 +329,10 @@ func Load(gitDir string) (*StackFile, error) {
 		return nil, fmt.Errorf("reading stack file: %w", err)
 	}
 
+	return parseStackFile(data)
+}
+
+func parseStackFile(data []byte) (*StackFile, error) {
 	var sf StackFile
 	if err := json.Unmarshal(data, &sf); err != nil {
 		return nil, fmt.Errorf("parsing stack file: %w", err)
@@ -345,6 +350,8 @@ func Load(gitDir string) (*StackFile, error) {
 // Save acquires an exclusive lock on the stack file, verifies the file hasn't
 // been modified since Load (optimistic concurrency), writes sf as JSON, and
 // releases the lock.  The lock is held only for the read-compare-write window.
+// Mutation callers must separately hold the operation lock across their
+// Load/preflight/Save sequence; read-only refreshes should use SaveNonBlocking.
 // Returns *LockError if the lock times out, or *StaleError if another process
 // modified the file since it was loaded.
 func Save(gitDir string, sf *StackFile) error {
@@ -360,7 +367,8 @@ func Save(gitDir string, sf *StackFile) error {
 	return writeStackFile(gitDir, sf)
 }
 
-// SaveWithLock writes the stack file while the caller already holds the lock.
+// SaveWithLock writes the stack file while the caller already holds the catalog
+// lock (not merely the operation lock).
 // The caller is responsible for acquiring and releasing the lock.
 // Panics if lock is nil to catch programming errors.
 func SaveWithLock(gitDir string, sf *StackFile, lock *FileLock) error {
@@ -370,22 +378,27 @@ func SaveWithLock(gitDir string, sf *StackFile, lock *FileLock) error {
 	return writeStackFile(gitDir, sf)
 }
 
-// SaveNonBlocking attempts to save without blocking.  If another process holds
-// the lock or the file was modified since Load, the save is silently skipped.
-// Use this for best-effort metadata persistence (e.g. syncing PR state in view).
+// SaveNonBlocking attempts a best-effort metadata refresh without waiting for
+// either the operation or catalog lock. Contention, stale data and I/O errors
+// skip the refresh. Use Save for critical writes, including callers already
+// holding the operation lock.
 func SaveNonBlocking(gitDir string, sf *StackFile) {
-	path := filepath.Join(gitDir, lockFileName)
-	f, err := os.OpenFile(path, os.O_CREATE|os.O_RDWR, 0644)
-	if err != nil {
+	operation, acquired, err := TryLockOperation(gitDir)
+	if err != nil || !acquired {
 		return
 	}
-	if tryLockFile(f) != nil {
-		f.Close()
+	defer operation.Unlock()
+
+	lock, acquired, err := acquireLock(filepath.Join(gitDir, lockFileName), "stack", false)
+	if err != nil || !acquired {
 		return
 	}
-	lock := &FileLock{f: f}
 	defer lock.Unlock()
 
+	// Do not change a published migration snapshot before its backups finish.
+	if _, err := os.Lstat(filepath.Join(gitDir, migrationFileName)); !errors.Is(err, os.ErrNotExist) {
+		return
+	}
 	if checkStale(gitDir, sf) != nil {
 		return
 	}
@@ -397,7 +410,7 @@ func SaveNonBlocking(gitDir string, sf *StackFile) {
 // by another process.  The caller must hold the lock.
 func checkStale(gitDir string, sf *StackFile) error {
 	path := stackFilePath(gitDir)
-	data, err := os.ReadFile(path)
+	data, err := readStateFile(path)
 
 	if errors.Is(err, os.ErrNotExist) {
 		// File absent on disk.
@@ -428,16 +441,11 @@ func checkStale(gitDir string, sf *StackFile) error {
 }
 
 func writeStackFile(gitDir string, sf *StackFile) error {
-	sf.SchemaVersion = schemaVersion
-	if sf.Stacks == nil {
-		sf.Stacks = []Stack{}
-	}
-	data, err := json.MarshalIndent(sf, "", "  ")
+	data, err := marshalStackFile(sf)
 	if err != nil {
-		return fmt.Errorf("marshaling stack file: %w", err)
+		return err
 	}
-	path := stackFilePath(gitDir)
-	if err := os.WriteFile(path, data, 0644); err != nil {
+	if err := WriteAtomic(stackFilePath(gitDir), data); err != nil {
 		return fmt.Errorf("writing stack file: %w", err)
 	}
 	// Refresh checksum so a second Save on the same StackFile doesn't
@@ -445,4 +453,16 @@ func writeStackFile(gitDir string, sf *StackFile) error {
 	sum := sha256.Sum256(data)
 	sf.loadChecksum = sum[:]
 	return nil
+}
+
+func marshalStackFile(sf *StackFile) ([]byte, error) {
+	sf.SchemaVersion = schemaVersion
+	if sf.Stacks == nil {
+		sf.Stacks = []Stack{}
+	}
+	data, err := json.MarshalIndent(sf, "", "  ")
+	if err != nil {
+		return nil, fmt.Errorf("marshaling stack file: %w", err)
+	}
+	return data, nil
 }

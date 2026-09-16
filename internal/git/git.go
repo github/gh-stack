@@ -5,14 +5,14 @@ import (
 	"errors"
 	"fmt"
 	"os"
-	"os/exec"
+	"path/filepath"
 	"strings"
 	"time"
 
 	cligit "github.com/cli/cli/v2/git"
 )
 
-// client is a shared git client used by all package-level functions.
+// client is used by unscoped operations. Scoped operations keep their own copy.
 var client = &cligit.Client{}
 
 // ErrMultipleRemotes is returned by ResolveRemote when multiple remotes
@@ -33,22 +33,58 @@ type CommitInfo struct {
 	Time    time.Time
 }
 
-// run executes an arbitrary git command via the client and returns trimmed stdout.
-func run(args ...string) (string, error) {
-	cmd, err := client.Command(context.Background(), args...)
+func (d *defaultOps) command(args ...string) (*cligit.Command, error) {
+	c, err := d.gitClient()
+	if err != nil {
+		return nil, err
+	}
+	cmd, err := c.Command(context.Background(), args...)
+	if err != nil {
+		return nil, err
+	}
+	d.configureCommand(cmd)
+	return cmd, nil
+}
+
+func (d *defaultOps) configureCommand(cmd *cligit.Command) {
+	if !d.scoped {
+		return
+	}
+	env := cmd.Environ()
+	cmd.Env = make([]string, 0, len(env))
+	for _, entry := range env {
+		key, _, _ := strings.Cut(entry, "=")
+		switch strings.ToUpper(key) {
+		case "GIT_DIR", "GIT_COMMON_DIR", "GIT_WORK_TREE", "GIT_INDEX_FILE",
+			"GIT_OBJECT_DIRECTORY", "GIT_ALTERNATE_OBJECT_DIRECTORIES",
+			"GIT_PREFIX", "GIT_GRAFT_FILE", "GIT_SHALLOW_FILE",
+			"GIT_IMPLICIT_WORK_TREE", "GIT_NAMESPACE", "GIT_CONFIG":
+			// An explicit target must not inherit another checkout's index,
+			// object database, or working directory from the caller.
+			continue
+		}
+		cmd.Env = append(cmd.Env, entry)
+	}
+}
+
+// runRaw preserves path whitespace, NUL delimiters, and output on nonzero exits.
+func (d *defaultOps) runRaw(args ...string) (string, error) {
+	cmd, err := d.command(args...)
 	if err != nil {
 		return "", err
 	}
 	out, err := cmd.Output()
-	if err != nil {
-		return "", err
-	}
-	return strings.TrimSpace(string(out)), nil
+	return string(out), err
+}
+
+func (d *defaultOps) run(args ...string) (string, error) {
+	out, err := d.runRaw(args...)
+	return strings.TrimSpace(out), err
 }
 
 // runSilent executes a git command via the client and only returns an error.
-func runSilent(args ...string) error {
-	cmd, err := client.Command(context.Background(), args...)
+func (d *defaultOps) runSilent(args ...string) error {
+	cmd, err := d.command(args...)
 	if err != nil {
 		return err
 	}
@@ -57,8 +93,11 @@ func runSilent(args ...string) error {
 
 // runInteractive runs a git command with stdin/stdout/stderr connected to
 // the terminal, allowing interactive programs like editors to work.
-func runInteractive(args ...string) error {
-	cmd := exec.Command("git", args...)
+func (d *defaultOps) runInteractive(args ...string) error {
+	cmd, err := d.command(args...)
+	if err != nil {
+		return err
+	}
 	cmd.Stdin = os.Stdin
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
@@ -84,30 +123,53 @@ func IsRebaseStartError(err error) bool {
 	return errors.As(err, &startErr)
 }
 
-func runRebaseCommand(args []string, opts RebaseOpts) error {
-	if IsRebaseInProgress() {
+func (d *defaultOps) runRebaseCommand(args []string, opts RebaseOpts) error {
+	inProgress, err := d.rebaseInProgress()
+	if err != nil {
+		return &RebaseStartError{Err: err}
+	}
+	if inProgress {
 		return &RebaseStartError{Err: errors.New("a rebase is already in progress")}
 	}
-	err := runSilent(args...)
+	err = d.runSilent(args...)
 	if err == nil {
 		return nil
 	}
-	err = tryAutoResolveRebase(err, opts)
-	if err != nil && !IsRebaseInProgress() {
+	err = d.tryAutoResolveRebase(err, opts)
+	if err == nil {
+		return nil
+	}
+	inProgress, stateErr := d.rebaseInProgress()
+	if stateErr != nil {
+		return errors.Join(err, stateErr)
+	}
+	if !inProgress {
 		return &RebaseStartError{Err: err}
 	}
 	return err
 }
 
-// rebaseContinueOnce runs a single git rebase --continue without auto-resolve.
-func rebaseContinueOnce(opts RebaseOpts) error {
-	args := []string{"rebase"}
+func rebaseArgs(opts RebaseOpts) []string {
+	// The cascade owns its ref range and must never stash another worktree.
+	// Use configuration overrides rather than flags unavailable in Git 2.36.
+	args := []string{"-c", "rebase.updateRefs=false", "-c", "rebase.autoStash=false", "rebase"}
 	if opts.CommitterDateIsAuthorDate {
-		args = append(args, "--committer-date-is-author-date")
+		// The apply backend loses this option after a conflict. The merge
+		// backend persists it for continuation and rerere auto-continuation.
+		args = append(args, "--merge", "--committer-date-is-author-date")
 	}
-	args = append(args, "--continue")
-	cmd := exec.Command("git", args...)
-	cmd.Env = append(os.Environ(), "GIT_EDITOR=true")
+	return args
+}
+
+// rebaseContinueOnce runs a single git rebase --continue without auto-resolve.
+func (d *defaultOps) rebaseContinueOnce(_ RebaseOpts) error {
+	// The merge backend persists date options at rebase start. Repeating
+	// start-only options with --continue does not change that saved state.
+	cmd, err := d.command(append(rebaseArgs(RebaseOpts{}), "--continue")...)
+	if err != nil {
+		return err
+	}
+	cmd.Env = append(cmd.Environ(), "GIT_EDITOR=true")
 	return cmd.Run()
 }
 
@@ -115,24 +177,36 @@ func rebaseContinueOnce(opts RebaseOpts) error {
 // from a failed rebase. If so, it auto-continues the rebase (potentially
 // multiple times for multi-commit rebases). Returns originalErr if any
 // conflicts remain that need manual resolution.
-func tryAutoResolveRebase(originalErr error, opts RebaseOpts) error {
+func (d *defaultOps) tryAutoResolveRebase(originalErr error, opts RebaseOpts) error {
+	previousStep := ""
 	for i := 0; i < 1000; i++ {
-		if !IsRebaseInProgress() {
-			if i == 0 {
-				return originalErr
-			}
-			return nil
-		}
-		conflicts, err := ConflictedFiles()
+		inProgress, err := d.rebaseInProgress()
 		if err != nil {
+			return errors.Join(originalErr, err)
+		}
+		if !inProgress {
 			return originalErr
+		}
+		conflicts, err := d.ConflictedFiles()
+		if err != nil {
+			return errors.Join(originalErr, err)
 		}
 		if len(conflicts) > 0 {
 			return originalErr
 		}
+		step, err := d.rebaseStep()
+		if err != nil {
+			return errors.Join(originalErr, err)
+		}
+		if step == previousStep {
+			return originalErr
+		}
+		previousStep = step
 		// Rerere resolved all conflicts — auto-continue.
-		if rebaseContinueOnce(opts) == nil {
+		if err := d.rebaseContinueOnce(opts); err == nil {
 			return nil
+		} else {
+			originalErr = err
 		}
 		// Continue hit another conflicting commit; loop to check
 		// if rerere resolved that one too.
@@ -140,11 +214,50 @@ func tryAutoResolveRebase(originalErr error, opts RebaseOpts) error {
 	return originalErr
 }
 
+func (d *defaultOps) rebaseStep() (string, error) {
+	gitDir, err := d.GitDir()
+	if err != nil {
+		return "", err
+	}
+	for _, file := range []string{"rebase-merge/msgnum", "rebase-apply/next"} {
+		data, err := os.ReadFile(filepath.Join(gitDir, filepath.FromSlash(file)))
+		if errors.Is(err, os.ErrNotExist) {
+			continue
+		}
+		if err != nil {
+			return "", err
+		}
+		return file + ":" + string(data), nil
+	}
+	return "", fmt.Errorf("cannot find rebase progress in %q", gitDir)
+}
+
 // --- Public functions delegate through the ops interface ---
 
-// GitDir returns the path to the .git directory.
+// GitDir returns the absolute path to the current worktree's Git directory.
 func GitDir() (string, error) {
 	return ops.GitDir()
+}
+
+// CommonDir returns the absolute Git directory shared by all linked worktrees.
+func CommonDir() (string, error) {
+	return ops.CommonDir()
+}
+
+// Worktrees lists all registered worktrees, including the main worktree.
+func Worktrees() ([]Worktree, error) {
+	return ops.Worktrees()
+}
+
+// ForWorktree returns operations scoped to a worktree in the same repository.
+// Invalid contexts return errors from the resulting operations.
+func ForWorktree(path string) Ops {
+	return ops.ForWorktree(path)
+}
+
+// CheckVersion requires Git 2.36 or newer.
+func CheckVersion() error {
+	return ops.CheckVersion()
 }
 
 // RootDir returns the repository's root directory.

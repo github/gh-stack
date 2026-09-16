@@ -16,6 +16,23 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+func TestUnstack_NumberWithoutLocalRepository(t *testing.T) {
+	defer mockRemoteOnlyGit()()
+	cfg, outR, errR := config.NewTestConfig()
+	unstacked := 0
+	cfg.GitHubClientOverride = &github.MockClient{
+		UnstackFn: func(number int) (*github.RemoteStack, bool, error) {
+			unstacked = number
+			return nil, true, nil
+		},
+	}
+	require.NoError(t, runUnstack(cfg, &unstackOptions{stackNumber: 7}))
+	out, diagnostics := commandOutput(t, cfg, outR, errR)
+	assert.Empty(t, out)
+	assert.Equal(t, 7, unstacked)
+	assert.NotContains(t, diagnostics, "not a git repository")
+}
+
 func writeTwoStacks(t *testing.T, dir string, s1, s2 stack.Stack) {
 	t.Helper()
 	sf := &stack.StackFile{

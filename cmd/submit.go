@@ -74,10 +74,14 @@ In the editor, new PRs default to ready for review; switch any to draft with the
 }
 
 func runSubmit(cfg *config.Config, opts *submitOptions) error {
-	gitDir, err := git.GitDir()
+	release, err := beginStackMutation(cfg, "submit")
 	if err != nil {
-		cfg.Errorf("not a git repository")
-		return ErrNotInStack
+		return err
+	}
+	defer release()
+	gitDir, err := stackStateDir(cfg)
+	if err != nil {
+		return err
 	}
 
 	sf, err := stack.Load(gitDir)
@@ -179,6 +183,10 @@ func runSubmit(cfg *config.Config, opts *submitOptions) error {
 				return ErrSilent
 			}
 			// DeleteStack or other failure — don't continue with stale state
+			var exitErr *ExitError
+			if errors.As(err, &exitErr) {
+				return err
+			}
 			return ErrSilent
 		}
 	}
@@ -241,9 +249,9 @@ func runSubmit(cfg *config.Config, opts *submitOptions) error {
 	}
 
 	// Create or update the stack on GitHub
+	stackSynced := false
 	if stacksAvailable {
-		syncStack(cfg, client, s)
-		clearPendingModifyState(cfg, gitDir)
+		stackSynced = syncStack(cfg, client, s)
 	}
 
 	// Update base commit hashes and sync PR state
@@ -251,7 +259,12 @@ func runSubmit(cfg *config.Config, opts *submitOptions) error {
 	_ = syncStackPRs(cfg, s)
 
 	if err := stack.Save(gitDir, sf); err != nil {
-		return handleSaveError(cfg, err)
+		return stackSaveError(cfg, err)
+	}
+	if stackSynced {
+		if err := clearPendingModifyState(cfg, s, gitDir); err != nil {
+			return err
+		}
 	}
 
 	cfg.Successf("Pushed and synced %d branches", len(s.ActiveBranches()))
@@ -626,11 +639,19 @@ func mergedPRNumbers(s *stack.Stack) map[int]bool {
 // succeeds, ensuring retry safety.
 func handlePendingModify(cfg *config.Config, client github.ClientOps, s *stack.Stack, gitDir string) error {
 	state, err := modify.LoadState(gitDir)
-	if err != nil || state == nil {
+	if err != nil {
+		cfg.Errorf("reading modify recovery state: %s", err)
+		return ErrModifyRecovery
+	}
+	if state == nil {
 		return nil // No modify state — nothing to do
 	}
 	if state.Phase != modify.PhasePendingSubmit {
-		return nil // Not in pending_submit phase
+		cfg.Errorf("a modify session needs recovery; run `gh stack modify --continue` or `gh stack modify --abort`")
+		return ErrModifyRecovery
+	}
+	if !modify.MatchesStack(state, s) {
+		return nil
 	}
 
 	// Prompt for confirmation before overwriting the remote stack
@@ -661,7 +682,7 @@ func handlePendingModify(cfg *config.Config, client github.ClientOps, s *stack.S
 		}
 		if !found {
 			cfg.Printf("Previous stack already deleted on GitHub")
-		} else if _, _, err := client.Unstack(number); err != nil {
+		} else if _, dissolved, err := client.Unstack(number); err != nil {
 			var httpErr *api.HTTPError
 			if errors.As(err, &httpErr) && httpErr.StatusCode == 404 {
 				cfg.Printf("Previous stack already deleted on GitHub")
@@ -670,25 +691,44 @@ func handlePendingModify(cfg *config.Config, client github.ClientOps, s *stack.S
 				cfg.Printf("Run `%s` again to retry", cfg.ColorCyan("gh stack submit"))
 				return err
 			}
+		} else if !dissolved {
+			cfg.Errorf("the previous stack still has pull requests queued for merge or with auto-merge enabled; it cannot be recreated yet")
+			return ErrConflict
 		} else {
 			cfg.Successf("Cleared existing stack on GitHub")
 		}
-		// Clear the old stack ID so syncStack creates a new one
-		s.ID = ""
-		s.Number = 0
 	}
+	// Record branch identity before the replacement receives a different ID.
+	// A retry may still load the old catalog ID after the old stack was deleted.
+	state.RecordStack(s)
+	state.PriorRemoteStackID = ""
+	if err := modify.SaveState(gitDir, state); err != nil {
+		cfg.Errorf("saving modify recovery state: %s", err)
+		return ErrModifyRecovery
+	}
+	s.ID = ""
+	s.Number = 0
 
 	return nil
 }
 
 // clearPendingModifyState clears the modify state file after a successful submit.
 // Called after syncStack succeeds to ensure retry safety.
-func clearPendingModifyState(cfg *config.Config, gitDir string) {
-	if !modify.StateExists(gitDir) {
-		return
+func clearPendingModifyState(cfg *config.Config, s *stack.Stack, gitDir string) error {
+	state, err := modify.LoadState(gitDir)
+	if err != nil {
+		cfg.Errorf("reading modify recovery state: %s", err)
+		return ErrModifyRecovery
 	}
-	modify.ClearState(gitDir)
+	if state == nil || state.Phase != modify.PhasePendingSubmit || !modify.MatchesStack(state, s) {
+		return nil
+	}
+	if err := modify.ClearState(gitDir); err != nil {
+		cfg.Errorf("clearing modify recovery state: %s", err)
+		return ErrModifyRecovery
+	}
 	cfg.Successf("Stack recreated on GitHub to match local state")
+	return nil
 }
 
 // syncStack creates or updates a stack on GitHub from the active PRs.

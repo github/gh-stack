@@ -24,6 +24,7 @@ func newLinkGitMock(branches ...string) *git.MockOps {
 		branchSet[b] = true
 	}
 	return &git.MockOps{
+		GitDirFn:        func() (string, error) { return "", fmt.Errorf("not a git repository") },
 		BranchExistsFn:  func(name string) bool { return branchSet[name] },
 		PushFn:          func(string, []string, bool, bool) error { return nil },
 		ResolveRemoteFn: func(string) (string, error) { return "origin", nil },
@@ -155,6 +156,7 @@ func TestLink_PRNumbers_ExactMatch_NoOp(t *testing.T) {
 }
 
 func TestLink_PRNumbers_WouldRemovePRs(t *testing.T) {
+	defer mockRemoteOnlyGit()()
 	cfg, _, errR := config.NewTestConfig()
 	cfg.GitHubClientOverride = &github.MockClient{
 		FindPRByNumberFn: func(n int) (*github.PullRequest, error) {
@@ -188,6 +190,7 @@ func TestLink_PRNumbers_WouldRemovePRs(t *testing.T) {
 }
 
 func TestLink_PRNumbers_MultipleStacks(t *testing.T) {
+	defer mockRemoteOnlyGit()()
 	cfg, _, errR := config.NewTestConfig()
 	cfg.GitHubClientOverride = &github.MockClient{
 		FindPRByNumberFn: func(n int) (*github.PullRequest, error) {
@@ -220,6 +223,7 @@ func TestLink_PRNumbers_MultipleStacks(t *testing.T) {
 }
 
 func TestLink_TooFewArgs(t *testing.T) {
+	defer mockRemoteOnlyGit()()
 	cfg, _, _ := config.NewTestConfig()
 	cfg.GitHubClientOverride = &github.MockClient{}
 
@@ -234,6 +238,7 @@ func TestLink_TooFewArgs(t *testing.T) {
 }
 
 func TestLink_DuplicateArgs(t *testing.T) {
+	defer mockRemoteOnlyGit()()
 	cfg, _, errR := config.NewTestConfig()
 	cfg.GitHubClientOverride = &github.MockClient{}
 
@@ -252,6 +257,7 @@ func TestLink_DuplicateArgs(t *testing.T) {
 }
 
 func TestLink_StacksUnavailable(t *testing.T) {
+	defer mockRemoteOnlyGit()()
 	cfg, _, errR := config.NewTestConfig()
 	setTestRepo(cfg)
 	cfg.GitHubClientOverride = &github.MockClient{
@@ -314,6 +320,7 @@ func TestLink_Create422(t *testing.T) {
 // --- PR eligibility tests ---
 
 func TestLink_RejectsMergedPR(t *testing.T) {
+	defer mockRemoteOnlyGit()()
 	cfg, _, errR := config.NewTestConfig()
 	cfg.GitHubClientOverride = &github.MockClient{
 		FindPRByNumberFn: func(n int) (*github.PullRequest, error) {
@@ -344,6 +351,7 @@ func TestLink_RejectsMergedPR(t *testing.T) {
 }
 
 func TestLink_RejectsClosedPR(t *testing.T) {
+	defer mockRemoteOnlyGit()()
 	cfg, _, errR := config.NewTestConfig()
 	cfg.GitHubClientOverride = &github.MockClient{
 		FindPRByNumberFn: func(n int) (*github.PullRequest, error) {
@@ -373,6 +381,7 @@ func TestLink_RejectsClosedPR(t *testing.T) {
 }
 
 func TestLink_RejectsQueuedPR(t *testing.T) {
+	defer mockRemoteOnlyGit()()
 	cfg, _, errR := config.NewTestConfig()
 	cfg.GitHubClientOverride = &github.MockClient{
 		FindPRByNumberFn: func(n int) (*github.PullRequest, error) {
@@ -413,6 +422,7 @@ func TestLink_RejectsQueuedPR(t *testing.T) {
 }
 
 func TestLink_RejectsAutoMergeEnabledPR(t *testing.T) {
+	defer mockRemoteOnlyGit()()
 	cfg, _, errR := config.NewTestConfig()
 	cfg.GitHubClientOverride = &github.MockClient{
 		FindPRByNumberFn: func(n int) (*github.PullRequest, error) {
@@ -530,6 +540,7 @@ func TestLink_RejectsAutoMergePR_ByBranch(t *testing.T) {
 }
 
 func TestLink_ReportsMultipleIneligiblePRs(t *testing.T) {
+	defer mockRemoteOnlyGit()()
 	cfg, _, errR := config.NewTestConfig()
 	cfg.GitHubClientOverride = &github.MockClient{
 		FindPRByNumberFn: func(n int) (*github.PullRequest, error) {
@@ -727,6 +738,7 @@ func TestLink_AllowsAutoMergePRAlreadyInStack(t *testing.T) {
 // exemption is scoped correctly: a queued PR that is NOT already a member of the
 // matched stack is still rejected, even when the command targets that stack.
 func TestLink_RejectsQueuedPRNotInStack_WhenAddingToExistingStack(t *testing.T) {
+	defer mockRemoteOnlyGit()()
 	cfg, _, errR := config.NewTestConfig()
 	cfg.GitHubClientOverride = &github.MockClient{
 		FindPRByNumberFn: func(n int) (*github.PullRequest, error) {
@@ -1322,6 +1334,7 @@ func TestLink_FixesBaseBranches(t *testing.T) {
 func TestLink_DefaultBase_RetargetsBottomPRToDefaultBranch(t *testing.T) {
 	defaultBranchCalled := false
 	restore := git.SetOps(&git.MockOps{
+		GitDirFn:       func() (string, error) { return "", fmt.Errorf("not a git repository") },
 		BranchExistsFn: func(string) bool { return false },
 		DefaultBranchFn: func() (string, error) {
 			defaultBranchCalled = true
@@ -1387,6 +1400,7 @@ func TestLink_DefaultBase_RetargetsBottomPRToDefaultBranch(t *testing.T) {
 // omitted, rather than a hardcoded "main".
 func TestLink_DefaultBase_CreatesBottomPROnDefaultBranch(t *testing.T) {
 	restore := git.SetOps(&git.MockOps{
+		GitDirFn:        func() (string, error) { return "", fmt.Errorf("not a git repository") },
 		BranchExistsFn:  func(name string) bool { return name == "feat-a" || name == "feat-b" },
 		PushFn:          func(string, []string, bool, bool) error { return nil },
 		ResolveRemoteFn: func(string) (string, error) { return "origin", nil },
@@ -1432,6 +1446,7 @@ func TestLink_DefaultBase_CreatesBottomPROnDefaultBranch(t *testing.T) {
 // determined.
 func TestLink_DefaultBase_ErrorWhenUnresolvable(t *testing.T) {
 	restore := git.SetOps(&git.MockOps{
+		GitDirFn:        func() (string, error) { return "", fmt.Errorf("not a git repository") },
 		BranchExistsFn:  func(string) bool { return false },
 		DefaultBranchFn: func() (string, error) { return "", fmt.Errorf("no default branch") },
 	})
@@ -1466,6 +1481,7 @@ func TestLink_DefaultBase_ErrorWhenUnresolvable(t *testing.T) {
 func TestLink_ExplicitBase_SkipsDefaultBranchResolution(t *testing.T) {
 	defaultBranchCalled := false
 	restore := git.SetOps(&git.MockOps{
+		GitDirFn:       func() (string, error) { return "", fmt.Errorf("not a git repository") },
 		BranchExistsFn: func(string) bool { return false },
 		DefaultBranchFn: func() (string, error) {
 			defaultBranchCalled = true
@@ -1525,6 +1541,7 @@ func TestLink_ExplicitBase_SkipsDefaultBranchResolution(t *testing.T) {
 }
 
 func TestLink_DuplicateBranchResolvesToSamePR(t *testing.T) {
+	defer mockRemoteOnlyGit()()
 	cfg, _, errR := config.NewTestConfig()
 	cfg.GitHubClientOverride = &github.MockClient{
 		FindPRForBranchFn: func(branch string) (*github.PullRequest, error) {
@@ -1593,6 +1610,7 @@ func TestLink_PushesBranchesBeforeResolution(t *testing.T) {
 	var pushedRemote string
 
 	restore := git.SetOps(&git.MockOps{
+		GitDirFn:        func() (string, error) { return "", fmt.Errorf("not a git repository") },
 		BranchExistsFn:  func(name string) bool { return name == "feat-a" || name == "feat-b" },
 		ResolveRemoteFn: func(string) (string, error) { return "origin", nil },
 		PushFn: func(remote string, branches []string, force, atomic bool) error {
@@ -1640,6 +1658,7 @@ func TestLink_RemoteFlag(t *testing.T) {
 	var pushedRemote string
 
 	restore := git.SetOps(&git.MockOps{
+		GitDirFn:       func() (string, error) { return "", fmt.Errorf("not a git repository") },
 		BranchExistsFn: func(string) bool { return true },
 		PushFn: func(remote string, branches []string, force, atomic bool) error {
 			pushedRemote = remote
@@ -1679,6 +1698,7 @@ func TestLink_SkipsPushForPRNumbersOnly(t *testing.T) {
 	pushCalled := false
 
 	restore := git.SetOps(&git.MockOps{
+		GitDirFn:       func() (string, error) { return "", fmt.Errorf("not a git repository") },
 		BranchExistsFn: func(string) bool { return false }, // PR numbers aren't local branches
 		PushFn: func(string, []string, bool, bool) error {
 			pushCalled = true
@@ -1865,6 +1885,7 @@ func TestFormatAPIError(t *testing.T) {
 }
 
 func TestLink_FindPRByNumber_ErrorIsFatal(t *testing.T) {
+	defer mockRemoteOnlyGit()()
 	// When FindPRByNumber returns an error (not just nil), it should NOT
 	// silently fall through to branch-name lookup.
 	cfg, _, errR := config.NewTestConfig()
@@ -2042,6 +2063,7 @@ func TestLink_PRNumbers_NoTemplateUsesFooter(t *testing.T) {
 	// When using PR numbers (no local repo context), no template is found
 	// and the footer should be present for newly created PRs.
 	mock := &git.MockOps{
+		GitDirFn: func() (string, error) { return "", fmt.Errorf("not a git repository") },
 		RootDirFn: func() (string, error) {
 			return "", fmt.Errorf("not in a git repo")
 		},
@@ -2136,6 +2158,7 @@ func TestLink_PRURLs_CreateNewStack(t *testing.T) {
 }
 
 func TestLink_PRURLs_NotFound(t *testing.T) {
+	defer mockRemoteOnlyGit()()
 	cfg, _, errR := config.NewTestConfig()
 	cfg.GitHubClientOverride = &github.MockClient{
 		FindPRByNumberFn: func(n int) (*github.PullRequest, error) {
@@ -2222,6 +2245,7 @@ func linkRemoteStack(number int, details ...github.RemoteStackPR) github.RemoteS
 }
 
 func TestLink_AddMode_AppendsPRNumberToStack(t *testing.T) {
+	defer mockRemoteOnlyGit()()
 	var addNumber int
 	var addPRs []int
 	cfg, _, errR := config.NewTestConfig()
@@ -2312,6 +2336,7 @@ func TestLink_AddMode_CreatesPRForBranchOnTopOfStack(t *testing.T) {
 }
 
 func TestLink_AddMode_IdempotentWhenAllPresent(t *testing.T) {
+	defer mockRemoteOnlyGit()()
 	cfg, _, errR := config.NewTestConfig()
 	cfg.GitHubClientOverride = &github.MockClient{
 		FindPRByNumberFn: func(n int) (*github.PullRequest, error) {
@@ -2348,6 +2373,7 @@ func TestLink_AddMode_IdempotentWhenAllPresent(t *testing.T) {
 }
 
 func TestLink_AddMode_SkipsPresentAppendsNew(t *testing.T) {
+	defer mockRemoteOnlyGit()()
 	var addPRs []int
 	cfg, _, errR := config.NewTestConfig()
 	cfg.GitHubClientOverride = &github.MockClient{
@@ -2390,6 +2416,7 @@ func TestLink_AddMode_SkipsPresentAppendsNew(t *testing.T) {
 }
 
 func TestLink_AddMode_RejectsPRFromAnotherStack(t *testing.T) {
+	defer mockRemoteOnlyGit()()
 	cfg, _, errR := config.NewTestConfig()
 	cfg.GitHubClientOverride = &github.MockClient{
 		FindPRByNumberFn: func(n int) (*github.PullRequest, error) {
@@ -2426,6 +2453,7 @@ func TestLink_AddMode_RejectsPRFromAnotherStack(t *testing.T) {
 }
 
 func TestLink_AddMode_RejectsIneligibleNewPR(t *testing.T) {
+	defer mockRemoteOnlyGit()()
 	cfg, _, errR := config.NewTestConfig()
 	cfg.GitHubClientOverride = &github.MockClient{
 		FindPRByNumberFn: func(n int) (*github.PullRequest, error) {
@@ -2466,6 +2494,7 @@ func TestLink_AddMode_RejectsIneligibleNewPR(t *testing.T) {
 }
 
 func TestLink_AddMode_ExemptsIneligibleExistingMember(t *testing.T) {
+	defer mockRemoteOnlyGit()()
 	var addPRs []int
 	cfg, _, errR := config.NewTestConfig()
 	cfg.GitHubClientOverride = &github.MockClient{
@@ -2555,6 +2584,7 @@ func TestLink_NumericFirstArgNotAStack_UsesCreateMode(t *testing.T) {
 }
 
 func TestLink_AddMode_WarnsWhenBaseFlagSet(t *testing.T) {
+	defer mockRemoteOnlyGit()()
 	var addPRs []int
 	cfg, _, errR := config.NewTestConfig()
 	cfg.GitHubClientOverride = &github.MockClient{
@@ -2641,6 +2671,7 @@ func TestLink_AddMode_ChainsMultipleCreatedPRs(t *testing.T) {
 }
 
 func TestLink_AddMode_AddToStack422(t *testing.T) {
+	defer mockRemoteOnlyGit()()
 	cfg, _, errR := config.NewTestConfig()
 	cfg.GitHubClientOverride = &github.MockClient{
 		FindPRByNumberFn: func(n int) (*github.PullRequest, error) {
@@ -2676,6 +2707,7 @@ func TestLink_AddMode_AddToStack422(t *testing.T) {
 }
 
 func TestLink_AddMode_AddToStack404_StackGone(t *testing.T) {
+	defer mockRemoteOnlyGit()()
 	cfg, _, errR := config.NewTestConfig()
 	cfg.GitHubClientOverride = &github.MockClient{
 		FindPRByNumberFn: func(n int) (*github.PullRequest, error) {
@@ -2710,6 +2742,7 @@ func TestLink_AddMode_AddToStack404_StackGone(t *testing.T) {
 }
 
 func TestLink_AddMode_FetchesFullStackWhenListLacksHeadRefs(t *testing.T) {
+	defer mockRemoteOnlyGit()()
 	var addPRs []int
 	var getStackCalls int
 	cfg, _, errR := config.NewTestConfig()

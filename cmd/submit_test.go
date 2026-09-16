@@ -1824,6 +1824,136 @@ func newPendingSubmitState(priorStackID string) *modify.StateFile {
 	}
 }
 
+func TestPendingModify_UnrelatedStackRemainsUntouched(t *testing.T) {
+	dir := t.TempDir()
+	pending := newPendingSubmitState("123")
+	saveModifyState(t, dir, pending)
+	s := &stack.Stack{ID: "456", Trunk: stack.BranchRef{Branch: "main"}, Branches: []stack.BranchRef{{Branch: "other"}}}
+	cfg, outR, errR := config.NewTestConfig()
+	client := &github.MockClient{
+		UnstackFn: func(int) (*github.RemoteStack, bool, error) {
+			t.Fatal("must never unstack another stack's pending modification")
+			return nil, false, nil
+		},
+	}
+	require.NoError(t, handlePendingModify(cfg, client, s, dir))
+	require.NoError(t, clearPendingModifyState(cfg, s, dir))
+	after, err := modify.LoadState(dir)
+	require.NoError(t, err)
+	assert.Equal(t, pending, after)
+	assert.Equal(t, "456", s.ID)
+	out, diagnostics := commandOutput(t, cfg, outR, errR)
+	assert.Empty(t, out)
+	assert.NotContains(t, diagnostics, "recreated")
+}
+
+func TestPendingModify_CorruptStateFailsClosed(t *testing.T) {
+	dir := t.TempDir()
+	require.NoError(t, os.WriteFile(modify.StatePath(dir), []byte("{"), 0600))
+	s := &stack.Stack{ID: "123"}
+	cfg, outR, errR := config.NewTestConfig()
+	assert.ErrorIs(t, handlePendingModify(cfg, &github.MockClient{}, s, dir), ErrModifyRecovery)
+	assert.ErrorIs(t, clearPendingModifyState(cfg, s, dir), ErrModifyRecovery)
+	assert.FileExists(t, modify.StatePath(dir))
+	out, _ := commandOutput(t, cfg, outR, errR)
+	assert.Empty(t, out)
+}
+
+func TestPendingModify_RetryAfterOldStackDeletion(t *testing.T) {
+	dir := t.TempDir()
+	s := &stack.Stack{ID: "123", Number: 7, Trunk: stack.BranchRef{Branch: "main"}, Branches: []stack.BranchRef{{Branch: "b1"}}}
+	state := newPendingSubmitState("")
+	state.RecordStack(s)
+	saveModifyState(t, dir, state)
+	cfg, outR, errR := config.NewTestConfig()
+	client := &github.MockClient{
+		UnstackFn: func(int) (*github.RemoteStack, bool, error) {
+			t.Fatal("the old stack was already deleted")
+			return nil, false, nil
+		},
+	}
+	require.NoError(t, handlePendingModify(cfg, client, s, dir))
+	assert.Empty(t, s.ID, "the catalog can still hold the old ID on a retry")
+	assert.Zero(t, s.Number)
+	s.ID, s.Number = "456", 8
+	require.NoError(t, clearPendingModifyState(cfg, s, dir))
+	assert.NoFileExists(t, modify.StatePath(dir))
+	commandOutput(t, cfg, outR, errR)
+}
+
+func TestPendingModify_PartialUnstackPreservesState(t *testing.T) {
+	dir := t.TempDir()
+	saveModifyState(t, dir, newPendingSubmitState("123"))
+	s := &stack.Stack{ID: "123", Number: 7}
+	cfg, outR, errR := config.NewTestConfig()
+	client := &github.MockClient{
+		ListStacksFn: func() ([]github.RemoteStack, error) {
+			return []github.RemoteStack{{ID: 123, Number: 7}}, nil
+		},
+		UnstackFn: func(int) (*github.RemoteStack, bool, error) { return nil, false, nil },
+	}
+	assert.ErrorIs(t, handlePendingModify(cfg, client, s, dir), ErrConflict)
+	assert.Equal(t, "123", s.ID)
+	assert.Equal(t, 7, s.Number)
+	state, err := modify.LoadState(dir)
+	require.NoError(t, err)
+	require.NotNil(t, state)
+	assert.Equal(t, "123", state.PriorRemoteStackID)
+	commandOutput(t, cfg, outR, errR)
+}
+
+func TestSubmit_UnrelatedPendingModifyIsPreserved(t *testing.T) {
+	dir := t.TempDir()
+	s := stack.Stack{
+		ID: "456", Number: 8, Trunk: stack.BranchRef{Branch: "main"},
+		Branches: []stack.BranchRef{
+			{Branch: "b1", PullRequest: &stack.PullRequestRef{Number: 10}},
+			{Branch: "b2", PullRequest: &stack.PullRequestRef{Number: 11}},
+		},
+	}
+	writeStackFile(t, dir, s)
+	saveModifyState(t, dir, newPendingSubmitState("123"))
+	before, err := os.ReadFile(modify.StatePath(dir))
+	require.NoError(t, err)
+	restore := git.SetOps(newSubmitMock(dir, "b1"))
+	defer restore()
+	cfg, outR, errR := config.NewTestConfig()
+	prs := map[int]*github.PullRequest{
+		10: {Number: 10, State: "OPEN", HeadRefName: "b1", BaseRefName: "main"},
+		11: {Number: 11, State: "OPEN", HeadRefName: "b2", BaseRefName: "b1"},
+	}
+	cfg.GitHubClientOverride = &github.MockClient{
+		ListStacksFn: func() ([]github.RemoteStack, error) {
+			return []github.RemoteStack{{ID: 456, Number: 8, PullRequests: []int{10, 11}}}, nil
+		},
+		GetStackFn: func(int) (*github.RemoteStack, error) {
+			return &github.RemoteStack{ID: 456, Number: 8, PullRequests: []int{10, 11}}, nil
+		},
+		FindPRByNumberFn: func(number int) (*github.PullRequest, error) {
+			return prs[number], nil
+		},
+		FindPRForBranchFn: func(branch string) (*github.PullRequest, error) {
+			for _, pr := range prs {
+				if pr.HeadRefName == branch {
+					return pr, nil
+				}
+			}
+			return nil, nil
+		},
+		UnstackFn: func(int) (*github.RemoteStack, bool, error) {
+			t.Fatal("submitting another stack must not consume pending modification")
+			return nil, false, nil
+		},
+	}
+	require.NoError(t, runSubmit(cfg, &submitOptions{auto: true}))
+	after, err := os.ReadFile(modify.StatePath(dir))
+	require.NoError(t, err)
+	assert.Equal(t, before, after)
+	out, diagnostics := commandOutput(t, cfg, outR, errR)
+	assert.Empty(t, out)
+	assert.NotContains(t, diagnostics, "recreated")
+}
+
 func TestHandlePendingModify_DeletesOldStack(t *testing.T) {
 	gitDir := t.TempDir()
 
@@ -1901,7 +2031,7 @@ func TestHandlePendingModify_WrongPhase(t *testing.T) {
 	defer cfg.Err.Close()
 
 	err := handlePendingModify(cfg, client, s, gitDir)
-	assert.NoError(t, err)
+	assert.ErrorIs(t, err, ErrModifyRecovery)
 	assert.False(t, deleteCalled, "Unstack should not be called for non-pending_submit phase")
 	assert.Equal(t, "stack-99", s.ID, "stack ID should remain unchanged")
 }
@@ -1970,7 +2100,7 @@ func TestClearPendingModifyState_ClearsFile(t *testing.T) {
 	defer cfg.Out.Close()
 	defer cfg.Err.Close()
 
-	clearPendingModifyState(cfg, gitDir)
+	require.NoError(t, clearPendingModifyState(cfg, &stack.Stack{ID: "stack-789"}, gitDir))
 	assert.False(t, modify.StateExists(gitDir), "state file should be removed")
 }
 
@@ -1983,7 +2113,7 @@ func TestClearPendingModifyState_NoFile(t *testing.T) {
 	defer cfg.Err.Close()
 
 	// Should not panic or error.
-	clearPendingModifyState(cfg, gitDir)
+	require.NoError(t, clearPendingModifyState(cfg, &stack.Stack{}, gitDir))
 	assert.False(t, modify.StateExists(gitDir))
 }
 
