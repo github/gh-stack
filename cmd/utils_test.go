@@ -395,7 +395,24 @@ func TestStackStateDir_PreservesMigrationBlockedError(t *testing.T) {
 	assert.Contains(t, blocked.RecoveryPaths, journal)
 	out, diagnostics := commandOutput(t, cfg, outR, errR)
 	assert.Empty(t, out)
-	assert.Contains(t, diagnostics, journal)
+	assert.Contains(t, diagnostics, fmt.Sprintf("%q", journal))
+}
+
+func TestStackStateError_PreservesWindowsRecoveryPath(t *testing.T) {
+	journal := `C:\Users\Example Worktree\.git\worktrees\original\gh-stack-rebase-state`
+	cause := &stack.MigrationBlockedError{RecoveryPaths: []string{journal}}
+	cfg, outR, errR := config.NewTestConfig()
+
+	err := stackStateError(cfg, "migrating stack state", cause)
+
+	assert.ErrorIs(t, err, ErrSilent)
+	var blocked *stack.MigrationBlockedError
+	require.ErrorAs(t, err, &blocked)
+	assert.Same(t, cause, blocked)
+	assert.Equal(t, []string{journal}, blocked.RecoveryPaths)
+	out, diagnostics := commandOutput(t, cfg, outR, errR)
+	assert.Empty(t, out)
+	assert.Contains(t, diagnostics, `"C:\\Users\\Example Worktree\\.git\\worktrees\\original\\gh-stack-rebase-state"`)
 }
 
 func TestStackStateHelpers_PreserveLockError(t *testing.T) {
