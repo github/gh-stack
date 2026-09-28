@@ -1435,7 +1435,23 @@ func TestIntegration_WorktreeRerereAutoContinuesMultipleCommits(t *testing.T) {
 	require.Error(t, linked.Rebase("main", RebaseOpts{}))
 	writeFile(t, path, "one.txt", "resolved one\n")
 	require.NoError(t, linked.StageAll())
-	require.Error(t, linked.RebaseContinue(RebaseOpts{}), "the second commit has an unseen conflict")
+	continueErr := linked.RebaseContinue(RebaseOpts{})
+	t.Cleanup(func() {
+		if !t.Failed() {
+			return
+		}
+		t.Logf("first continuation: %v", continueErr)
+		stateDir, err := linked.GitDir()
+		require.NoError(t, err)
+		for _, name := range []string{"message", "author-script", "amend", "stopped-sha", "msgnum"} {
+			data, readErr := os.ReadFile(filepath.Join(stateDir, "rebase-merge", name))
+			t.Logf("rebase-merge/%s: %q (read error: %v)", name, data, readErr)
+		}
+	})
+	require.Error(t, continueErr, "the second commit has an unseen conflict")
+	conflicts, err := linked.ConflictedFiles()
+	require.NoError(t, err)
+	require.Equal(t, []string{"two.txt"}, conflicts, "unexpected second stop: %v", continueErr)
 	writeFile(t, path, "two.txt", "resolved two\n")
 	require.NoError(t, linked.StageAll())
 	require.NoError(t, linked.RebaseContinue(RebaseOpts{}))
