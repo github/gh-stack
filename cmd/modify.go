@@ -63,6 +63,16 @@ afterward to push changes, update PRs, and recreate the stack on GitHub.`,
 }
 
 func runModify(cfg *config.Config) error {
+	if !cfg.IsInteractive() {
+		cfg.Errorf("modify requires an interactive terminal")
+		return ErrSilent
+	}
+	cleanup, err := beginStackMutation(cfg, "modify")
+	if err != nil {
+		return err
+	}
+	defer cleanup()
+
 	// Run all precondition checks
 	result, err := checkModifyPreconditions(cfg)
 	if err != nil {
@@ -135,6 +145,11 @@ func runModify(cfg *config.Config) error {
 	for i, n := range applyNodes {
 		reordered[len(applyNodes)-1-i] = n
 	}
+	if branch, err := git.CurrentBranch(); err != nil {
+		return fmt.Errorf("rechecking modify checkout: %w", err)
+	} else if branch != currentBranch {
+		return fmt.Errorf("the current branch changed while modify was open; reopen modify before applying")
+	}
 
 	applyResult, conflict, applyErr := modify.ApplyPlan(cfg, gitDir, s, sf, reordered, currentBranch, updateBaseSHAs)
 
@@ -146,7 +161,18 @@ func runModify(cfg *config.Config) error {
 			cfg.Warningf("Rebasing %s — conflict", conflict.Branch)
 		}
 
-		printConflictDetailsWithContinue(cfg, conflict.Branch, "gh stack modify --continue")
+		state, err := modify.LoadState(gitDir)
+		if err != nil {
+			return fmt.Errorf("reading modify conflict location: %w", err)
+		}
+		if state == nil || state.Worktrees == nil {
+			return fmt.Errorf("modify conflict has no recorded worktree; recovery state was retained")
+		}
+		ops, err := state.Worktrees.OriginOps()
+		if err != nil {
+			return err
+		}
+		printConflictDetailsAt(cfg, ops, state.Worktrees.Origin.Path, conflict.Branch, "gh stack modify --continue")
 		cfg.Printf("")
 
 		cfg.Printf("Or restore the stack to its pre-modify state with `%s`",
@@ -201,12 +227,16 @@ func printModifySuccess(cfg *config.Config, result *modifyview.ApplyResult) {
 
 // runModifyAbort handles recovery to a pre-modify state.
 func runModifyAbort(cfg *config.Config) error {
-	gitDir, err := git.GitDir()
+	cleanup, err := beginStackMutation(cfg, "modify-abort")
 	if err != nil {
-		cfg.Errorf("not a git repository")
-		return ErrNotInStack
+		return err
 	}
+	defer cleanup()
 
+	gitDir, err := stackStateDir(cfg)
+	if err != nil {
+		return err
+	}
 	state, err := modify.LoadState(gitDir)
 	if err != nil {
 		cfg.Errorf("failed to read modify state: %s", err)
@@ -228,10 +258,8 @@ func runModifyAbort(cfg *config.Config) error {
 		cfg.Printf("Restoring stack to pre-modify state...")
 		if err := modify.UnwindFromStateFile(cfg, gitDir); err != nil {
 			cfg.Errorf("recovery failed: %s", err)
-			cfg.Printf("The stack may be in an inconsistent state.")
-			cfg.Printf("Try `%s` to fix, or `%s` + `%s` to recreate.",
-				cfg.ColorCyan("gh stack rebase"), cfg.ColorCyan("gh stack unstack --local"),
-				cfg.ColorCyan("gh stack init"))
+			cfg.Printf("Recovery state was retained. Resolve the reported problem and retry `%s`.",
+				cfg.ColorCyan("gh stack modify --abort"))
 			return ErrSilent
 		}
 		cfg.Successf("Stack restored successfully")
@@ -245,18 +273,22 @@ func runModifyAbort(cfg *config.Config) error {
 
 	default:
 		cfg.Errorf("unexpected modify state phase: %s", state.Phase)
-		cfg.Printf("Clearing invalid state file...")
-		modify.ClearState(gitDir)
-		return nil
+		cfg.Printf("Recovery state was retained")
+		return ErrModifyRecovery
 	}
 }
 
 // runModifyContinue continues applying after the user resolves a rebase conflict.
 func runModifyContinue(cfg *config.Config) error {
-	gitDir, err := git.GitDir()
+	cleanup, err := beginStackMutation(cfg, "modify-continue")
 	if err != nil {
-		cfg.Errorf("not a git repository")
-		return ErrNotInStack
+		return err
+	}
+	defer cleanup()
+
+	gitDir, err := stackStateDir(cfg)
+	if err != nil {
+		return err
 	}
 
 	if err := modify.ContinueApply(cfg, gitDir, updateBaseSHAs); err != nil {
@@ -280,7 +312,7 @@ func checkModifyPreconditions(cfg *config.Config) (*loadStackResult, error) {
 
 	result, err := loadStack(cfg, "")
 	if err != nil {
-		return nil, ErrNotInStack
+		return nil, err
 	}
 
 	gitDir := result.GitDir
@@ -312,6 +344,10 @@ func checkModifyPreconditions(cfg *config.Config) (*loadStackResult, error) {
 	} else if dirty {
 		cfg.Errorf("uncommitted changes in working tree")
 		cfg.Printf("Commit or stash your changes before running modify")
+		return nil, ErrSilent
+	}
+	if _, err := modify.CheckWorktrees(s); err != nil {
+		cfg.Errorf("%s", err)
 		return nil, ErrSilent
 	}
 
@@ -361,8 +397,8 @@ func checkModifyPreconditions(cfg *config.Config) (*loadStackResult, error) {
 func checkNoModifyInProgress(cfg *config.Config, gitDir string) error {
 	state, err := modify.LoadState(gitDir)
 	if err != nil {
-		cfg.Warningf("failed to read modify state: %v", err)
-		return nil
+		cfg.Errorf("failed to read modify state: %v", err)
+		return ErrModifyRecovery
 	}
 	if state == nil {
 		return nil

@@ -9,7 +9,8 @@ import (
 )
 
 func TrunkCmd(cfg *config.Config) *cobra.Command {
-	return &cobra.Command{
+	var printPath bool
+	cmd := &cobra.Command{
 		Use:   "trunk",
 		Short: "Check out the trunk branch of the stack",
 		Long: `Check out the trunk branch of the current stack.
@@ -20,18 +21,27 @@ You must be on a branch that is part of a stack.`,
   $ gh stack trunk`,
 		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
-			return runTrunk(cfg)
+			return runTrunkWithPath(cfg, printPath)
 		},
 	}
+	cmd.Flags().BoolVar(&printPath, "print-path", false, "Print the trunk worktree path without switching a branch held elsewhere")
+	return cmd
 }
 
 func runTrunk(cfg *config.Config) error {
-	result, err := loadStack(cfg, "")
+	return runTrunkWithPath(cfg, false)
+}
+
+func runTrunkWithPath(cfg *config.Config, printPath bool) error {
+	if printPath {
+		cfg = noninteractiveConfig(cfg)
+	}
+	result, err := loadNavigationStack(cfg, printPath)
 	if err != nil {
 		if errors.Is(err, errInterrupt) {
 			return ErrSilent
 		}
-		return ErrNotInStack
+		return stackLookupError(err)
 	}
 	s := result.Stack
 	currentBranch := result.CurrentBranch
@@ -39,9 +49,20 @@ func runTrunk(cfg *config.Config) error {
 
 	if currentBranch == trunk {
 		cfg.Printf("Already on trunk branch %s", trunk)
+		if printPath {
+			return checkoutWorktreeBranch(cfg, trunk, true)
+		}
 		return nil
 	}
 
+	owner, err := foreignWorktreePath(trunk)
+	if err != nil {
+		cfg.Errorf("%s", err)
+		return ErrSilent
+	}
+	if owner != "" {
+		return checkoutWorktreeBranch(cfg, trunk, printPath)
+	}
 	// Ensure trunk exists locally before checkout.
 	exists, err := git.BranchExists(trunk)
 	if err != nil {
@@ -49,6 +70,11 @@ func runTrunk(cfg *config.Config) error {
 		return ErrSilent
 	}
 	if !exists {
+		release, err := beginStackMutation(cfg, "trunk")
+		if err != nil {
+			return err
+		}
+		defer release()
 		remote, err := pickRemote(cfg, currentBranch, "")
 		if err != nil {
 			if !errors.Is(err, errInterrupt) {
@@ -62,8 +88,11 @@ func runTrunk(cfg *config.Config) error {
 		}
 	}
 
-	if err := git.CheckoutBranch(trunk); err != nil {
+	if err := checkoutWorktreeBranch(cfg, trunk, printPath); err != nil {
 		return err
+	}
+	if printPath {
+		return nil
 	}
 
 	cfg.Successf("Switched to %s", trunk)

@@ -12,11 +12,13 @@ import (
 	"sync"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/github/gh-stack/internal/config"
 	"github.com/github/gh-stack/internal/git"
 	"github.com/github/gh-stack/internal/github"
 	"github.com/github/gh-stack/internal/stack"
+	"github.com/github/gh-stack/internal/worktree"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -1338,14 +1340,16 @@ func TestRebase_Abort_WithActiveRebase(t *testing.T) {
 	require.NoError(t, os.WriteFile(filepath.Join(tmpDir, "gh-stack-rebase-state"), stateData, 0644))
 
 	var rebaseAbortCalled bool
+	inProgress := true
 	var resets []resetCall
 	var checkouts []string
 	currentBranch := "b2"
 
 	mock := newRebaseMock(tmpDir, currentBranch)
-	mock.IsRebaseInProgressFn = func() (bool, error) { return true, nil }
+	mock.IsRebaseInProgressFn = func() (bool, error) { return inProgress, nil }
 	mock.RebaseAbortFn = func() error {
 		rebaseAbortCalled = true
+		inProgress = false
 		return nil
 	}
 	mock.CheckoutBranchFn = func(name string) error {
@@ -2391,4 +2395,506 @@ func TestIntegration_AdoptedBranchRebasesFromCommonAncestor(t *testing.T) {
 	subjects := strings.Split(issue250Git(t, cloneDir, "log", "--format=%s", "main..imported"), "\n")
 	assert.Equal(t, []string{"imported two", "imported one", "parent commit"}, subjects)
 	require.NoError(t, issue250GitMayFail(t, cloneDir, "merge-base", "--is-ancestor", "parent", "imported"))
+}
+
+func mockForeignOwner(t *testing.T, mock *git.MockOps, common, current, branch string) string {
+	t.Helper()
+	root, owner := t.TempDir(), t.TempDir()
+	mock.RootDirFn = func() (string, error) { return root, nil }
+	mock.CommonDirFn = func() (string, error) { return common, nil }
+	mock.WorktreesFn = func() ([]git.Worktree, error) {
+		return []git.Worktree{{Path: root, Branch: current}, {Path: owner, Branch: branch}}, nil
+	}
+	mock.ForWorktreeFn = func(path string) (git.Ops, error) {
+		if worktree.SamePath(path, root) {
+			return mock, nil
+		}
+		require.True(t, worktree.SamePath(path, owner))
+		return &git.MockOps{
+			CommonDirFn: func() (string, error) { return common, nil },
+			GitDirFn:    func() (string, error) { return filepath.Join(common, "worktrees", "owner"), nil },
+		}, nil
+	}
+	return owner
+}
+
+func forbidRewriteMutations(t *testing.T, mock *git.MockOps) {
+	t.Helper()
+	mock.CheckoutBranchFn = func(string) error { t.Fatal("unexpected checkout"); return nil }
+	mock.CreateBranchFn = func(string, string) error { t.Fatal("unexpected branch creation"); return nil }
+	mock.UpdateBranchRefFn = func(string, string) error { t.Fatal("unexpected ref update"); return nil }
+	mock.ResetHardFn = func(string) error { t.Fatal("unexpected reset"); return nil }
+	mock.MergeFFFn = func(string) error { t.Fatal("unexpected fast-forward"); return nil }
+	mock.RebaseFn = func(string, git.RebaseOpts) error { t.Fatal("unexpected rebase"); return nil }
+	mock.RebaseOntoFn = func(string, string, string, git.RebaseOpts) error {
+		t.Fatal("unexpected rebase onto")
+		return nil
+	}
+	mock.PushFn = func(string, []string, bool, bool) error { t.Fatal("unexpected push"); return nil }
+	mock.DeleteBranchFn = func(string, bool) error { t.Fatal("unexpected branch deletion"); return nil }
+	mock.DeleteTrackingRefFn = func(string, string) error { t.Fatal("unexpected tracking ref deletion"); return nil }
+}
+
+func TestRebase_ForeignTargetsRefusedBeforeMutation(t *testing.T) {
+	for _, tc := range []struct {
+		name, owner, trunk string
+		opts               rebaseOptions
+		merged             bool
+	}{
+		{name: "whole stack", owner: "b1"},
+		{name: "fast-forward outside downstack range", owner: "b3", opts: rebaseOptions{downstack: true}},
+		{name: "rollback outside upstack range", owner: "b1", opts: rebaseOptions{upstack: true, noTrunk: true}},
+		{name: "merged rollback target", owner: "b1", merged: true},
+		{name: "foreign trunk", owner: "main"},
+		{name: "normalized foreign trunk", owner: "main", trunk: "origin/main"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			dir := t.TempDir()
+			trunk := tc.trunk
+			if trunk == "" {
+				trunk = "main"
+			}
+			s := stack.Stack{
+				Trunk:    stack.BranchRef{Branch: trunk},
+				Branches: []stack.BranchRef{{Branch: "b1"}, {Branch: "b2"}, {Branch: "b3"}},
+			}
+			if tc.merged {
+				s.Branches[0].PullRequest = &stack.PullRequestRef{Number: 1, Merged: true}
+			}
+			writeStackFile(t, dir, s)
+			before, err := os.ReadFile(filepath.Join(dir, "gh-stack"))
+			require.NoError(t, err)
+			mock := newRebaseMock(dir, "b2")
+			mock.BranchExistsFn = func(name string) (bool, error) { return name != "origin/main", nil }
+			owner := mockForeignOwner(t, mock, dir, "b2", tc.owner)
+			forbidRewriteMutations(t, mock)
+			restore := git.SetOps(mock)
+			defer restore()
+			cfg, outR, errR := config.NewTestConfig()
+			cfg.GitHubClientOverride = &github.MockClient{}
+
+			require.ErrorIs(t, runRebase(cfg, &tc.opts), ErrInvalidArgs)
+
+			_, output := commandOutput(t, cfg, outR, errR)
+			assert.Contains(t, output, owner)
+			assert.Contains(t, output, "cross-worktree rebase and sync are not supported yet")
+			after, err := os.ReadFile(filepath.Join(dir, "gh-stack"))
+			require.NoError(t, err)
+			assert.Equal(t, before, after)
+			assert.NoFileExists(t, filepath.Join(dir, rebaseStateFile))
+		})
+	}
+}
+
+func TestRebase_InteractiveSelectionDoesNotCheckoutBeforeRefusal(t *testing.T) {
+	dir := t.TempDir()
+	require.NoError(t, stack.Save(dir, &stack.StackFile{
+		SchemaVersion: 1,
+		Stacks: []stack.Stack{
+			{Trunk: stack.BranchRef{Branch: "main"}, Branches: []stack.BranchRef{{Branch: "foreign"}, {Branch: "available"}}},
+			{Trunk: stack.BranchRef{Branch: "main"}, Branches: []stack.BranchRef{{Branch: "independent"}}},
+		},
+	}))
+	mock := newRebaseMock(dir, "main")
+	mockForeignOwner(t, mock, dir, "main", "foreign")
+	forbidRewriteMutations(t, mock)
+	restore := git.SetOps(mock)
+	defer restore()
+	cfg := issue250TestConfig(t)
+	cfg.ForceInteractive = true
+	cfg.SelectFn = func(string, string, []string) (int, error) { return 0, nil }
+
+	require.ErrorIs(t, runRebase(cfg, &rebaseOptions{noTrunk: true}), ErrInvalidArgs)
+}
+
+func TestRebase_MigrationPrecedesOwnershipRefusal(t *testing.T) {
+	common := t.TempDir()
+	private := filepath.Join(common, "worktrees", "legacy")
+	require.NoError(t, os.MkdirAll(private, 0755))
+	writeStackFile(t, common, stack.Stack{Trunk: stack.BranchRef{Branch: "main"}, Branches: []stack.BranchRef{{Branch: "b1"}, {Branch: "b2"}}})
+	writeStackFile(t, private, stack.Stack{Trunk: stack.BranchRef{Branch: "main"}, Branches: []stack.BranchRef{{Branch: "independent"}}})
+	mock := newRebaseMock(common, "b2")
+	mockForeignOwner(t, mock, common, "b2", "b1")
+	forbidRewriteMutations(t, mock)
+	restore := git.SetOps(mock)
+	defer restore()
+
+	require.ErrorIs(t, runRebase(issue250TestConfig(t), &rebaseOptions{}), ErrInvalidArgs)
+
+	sf, err := stack.Load(common)
+	require.NoError(t, err)
+	require.Len(t, sf.Stacks, 2)
+	assert.FileExists(t, filepath.Join(common, "gh-stack.pre-worktree-migration"))
+	assert.FileExists(t, filepath.Join(private, "gh-stack.pre-worktree-migration"))
+	assert.NoFileExists(t, filepath.Join(private, "gh-stack"))
+	assert.NoFileExists(t, filepath.Join(common, rebaseStateFile))
+}
+
+type worktreeRebaseRepo struct {
+	amendedParentRepo
+	parentDir string
+	childDir  string
+}
+
+func setupWorktreeRebaseRepo(t *testing.T, conflict bool) worktreeRebaseRepo {
+	t.Helper()
+	repo := setupAmendedParentRepo(t, false)
+	issue250Git(t, repo.dir, "config", "commit.gpgSign", "false")
+	issue250Git(t, repo.dir, "config", "core.hooksPath", os.DevNull)
+	issue250Git(t, repo.dir, "checkout", "main")
+	parentDir := filepath.Join(t.TempDir(), "parent worktree")
+	childDir := filepath.Join(t.TempDir(), "child worktree")
+	issue250Git(t, repo.dir, "worktree", "add", parentDir, "parent")
+	issue250Git(t, repo.dir, "worktree", "add", childDir, "child")
+	if conflict {
+		issue250Git(t, repo.dir, "commit", "--allow-empty", "-m", "advance trunk")
+		issue250Git(t, repo.dir, "push", "origin", "main")
+		issue250WriteFile(t, parentDir, "base.txt", "parent change\n")
+		issue250Git(t, parentDir, "add", "base.txt")
+		issue250Git(t, parentDir, "commit", "--amend", "--no-edit")
+		issue250WriteFile(t, childDir, "base.txt", "child change\n")
+		issue250Git(t, childDir, "add", "base.txt")
+		issue250Git(t, childDir, "commit", "-m", "child conflict")
+	}
+	return worktreeRebaseRepo{repo, parentDir, childDir}
+}
+
+func TestRebase_DistributedRefusalPreservesRefsAndWorktrees(t *testing.T) {
+	repo := setupWorktreeRebaseRepo(t, false)
+	issue250WriteFile(t, repo.parentDir, "unfinished.txt", "keep working\n")
+	beforeRefs := issue250Git(t, repo.dir, "show-ref")
+	beforeCatalog, err := os.ReadFile(filepath.Join(repo.gitDir, "gh-stack"))
+	require.NoError(t, err)
+	withIssue250Repo(t, repo.childDir)
+
+	require.ErrorIs(t, runRebase(issue250TestConfig(t), &rebaseOptions{upstack: true, noTrunk: true}), ErrInvalidArgs)
+
+	assert.Equal(t, beforeRefs, issue250Git(t, repo.dir, "show-ref"))
+	afterCatalog, err := os.ReadFile(filepath.Join(repo.gitDir, "gh-stack"))
+	require.NoError(t, err)
+	assert.Equal(t, beforeCatalog, afterCatalog)
+	assert.Equal(t, "main", issue250Git(t, repo.dir, "branch", "--show-current"))
+	assert.Equal(t, "parent", issue250Git(t, repo.parentDir, "branch", "--show-current"))
+	assert.Equal(t, "child", issue250Git(t, repo.childDir, "branch", "--show-current"))
+	assert.FileExists(t, filepath.Join(repo.parentDir, "unfinished.txt"))
+	assert.NoFileExists(t, filepath.Join(repo.gitDir, rebaseStateFile))
+}
+
+func TestRebase_SingleOwnerLinkedWorktreeWithForeignTrunk(t *testing.T) {
+	repo := setupWorktreeRebaseRepo(t, false)
+	issue250Git(t, repo.parentDir, "checkout", "--detach")
+	issue250WriteFile(t, repo.dir, "unfinished.txt", "leave trunk alone\n")
+	trunkBefore := issue250Git(t, repo.dir, "rev-parse", "main")
+	withIssue250Repo(t, repo.childDir)
+
+	require.NoError(t, runRebase(issue250TestConfig(t), &rebaseOptions{noTrunk: true}))
+
+	assert.Equal(t, trunkBefore, issue250Git(t, repo.dir, "rev-parse", "main"))
+	assert.Equal(t, "main", issue250Git(t, repo.dir, "branch", "--show-current"))
+	assert.Equal(t, "child", issue250Git(t, repo.childDir, "branch", "--show-current"))
+	assert.FileExists(t, filepath.Join(repo.dir, "unfinished.txt"))
+	require.NoError(t, issue250GitMayFail(t, repo.dir, "merge-base", "--is-ancestor", "parent", "child"))
+	assert.Error(t, issue250GitMayFail(t, repo.dir, "merge-base", "--is-ancestor", repo.oldParent, "child"))
+	assert.NoFileExists(t, filepath.Join(repo.gitDir, rebaseStateFile))
+}
+
+func TestRebase_SharedRecoveryRequiresOrigin(t *testing.T) {
+	for _, action := range []string{"continue", "abort"} {
+		t.Run(action, func(t *testing.T) {
+			repo := setupWorktreeRebaseRepo(t, true)
+			issue250Git(t, repo.parentDir, "checkout", "--detach")
+			childBefore := issue250Git(t, repo.dir, "rev-parse", "child")
+			withIssue250Repo(t, repo.childDir)
+			cfg := issue250TestConfig(t)
+			require.ErrorIs(t, runRebase(cfg, &rebaseOptions{noTrunk: true}), ErrConflict)
+			state, err := loadRebaseState(repo.gitDir)
+			require.NoError(t, err)
+			require.NotNil(t, state.Worktrees)
+			assert.Equal(t, originOnlyRebaseMode, state.ExecutionMode)
+			assert.True(t, worktree.SamePath(repo.childDir, state.Worktrees.Origin.Path))
+			assert.Equal(t, []string{"parent", "child"}, state.StackBranches)
+			before, err := os.ReadFile(filepath.Join(repo.gitDir, rebaseStateFile))
+			require.NoError(t, err)
+			beforeRefs := issue250Git(t, repo.dir, "show-ref")
+
+			withIssue250Repo(t, repo.dir)
+			opts := &rebaseOptions{cont: action == "continue", abort: action == "abort"}
+			require.ErrorIs(t, runRebase(cfg, opts), ErrRebaseActive)
+			after, err := os.ReadFile(filepath.Join(repo.gitDir, rebaseStateFile))
+			require.NoError(t, err)
+			assert.Equal(t, before, after)
+			assert.Equal(t, beforeRefs, issue250Git(t, repo.dir, "show-ref"))
+			assert.True(t, requireGitState(t, requireWorktree(t, git.CurrentOps(), repo.childDir).IsRebaseInProgress))
+			assert.False(t, requireGitState(t, git.IsRebaseInProgress))
+			assert.Equal(t, "main", issue250Git(t, repo.dir, "branch", "--show-current"))
+
+			if opts.cont {
+				issue250WriteFile(t, repo.childDir, "base.txt", "resolved\n")
+				issue250Git(t, repo.childDir, "add", "base.txt")
+			}
+			withIssue250Repo(t, repo.childDir)
+			require.NoError(t, runRebase(cfg, opts))
+			assert.False(t, requireGitState(t, git.IsRebaseInProgress))
+			assert.Equal(t, "child", issue250Git(t, repo.childDir, "branch", "--show-current"))
+			assert.NoFileExists(t, filepath.Join(repo.gitDir, rebaseStateFile))
+			if opts.abort {
+				assert.Equal(t, childBefore, issue250Git(t, repo.dir, "rev-parse", "child"))
+			} else {
+				require.NoError(t, issue250GitMayFail(t, repo.dir, "merge-base", "--is-ancestor", "parent", "child"))
+			}
+		})
+	}
+}
+
+func TestRebase_RecoveryFindsMovedOrigin(t *testing.T) {
+	repo := setupWorktreeRebaseRepo(t, true)
+	issue250Git(t, repo.parentDir, "checkout", "--detach")
+	childBefore := issue250Git(t, repo.dir, "rev-parse", "child")
+	withIssue250Repo(t, repo.childDir)
+	cfg := issue250TestConfig(t)
+	require.ErrorIs(t, runRebase(cfg, &rebaseOptions{noTrunk: true}), ErrConflict)
+
+	withIssue250Repo(t, repo.dir)
+	moved := filepath.Join(t.TempDir(), "moved child")
+	issue250Git(t, repo.dir, "worktree", "move", repo.childDir, moved)
+	require.ErrorIs(t, runRebase(cfg, &rebaseOptions{abort: true}), ErrRebaseActive)
+	assert.True(t, requireGitState(t, requireWorktree(t, git.CurrentOps(), moved).IsRebaseInProgress))
+
+	withIssue250Repo(t, moved)
+	require.NoError(t, runRebase(cfg, &rebaseOptions{abort: true}))
+	assert.False(t, requireGitState(t, git.IsRebaseInProgress))
+	assert.Equal(t, childBefore, issue250Git(t, moved, "rev-parse", "child"))
+	assert.Equal(t, "child", issue250Git(t, moved, "branch", "--show-current"))
+	assert.NoFileExists(t, filepath.Join(repo.gitDir, rebaseStateFile))
+}
+
+func TestRebase_RecoveryMatchesIdentityNotOriginalCheckout(t *testing.T) {
+	dir := t.TempDir()
+	target := stack.Stack{ID: "42", Trunk: stack.BranchRef{Branch: "main"}, Branches: []stack.BranchRef{{Branch: "b1"}}}
+	unrelated := stack.Stack{ID: "99", Trunk: stack.BranchRef{Branch: "main"}, Branches: []stack.BranchRef{{Branch: "independent", Head: "keep"}}}
+	require.NoError(t, stack.Save(dir, &stack.StackFile{SchemaVersion: 1, Stacks: []stack.Stack{unrelated, target}}))
+	mock := newRebaseMock(dir, "independent")
+	restore := git.SetOps(mock)
+	defer restore()
+	ctx, err := worktree.New()
+	require.NoError(t, err)
+	state := newWorktreeRebaseState(&target, ctx, "independent", map[string]string{"b1": "old-b1"}, trunkTarget{Ref: "main", SHA: "sha-main"}, 0, 1)
+	state.Phase, state.ConflictBranch = "conflict", "b1"
+	require.NoError(t, saveRebaseState(dir, state))
+
+	require.NoError(t, runRebase(issue250TestConfig(t), &rebaseOptions{cont: true}))
+
+	sf, err := stack.Load(dir)
+	require.NoError(t, err)
+	assert.Equal(t, unrelated, sf.Stacks[0])
+	assert.Equal(t, "sha-b1", sf.Stacks[1].Branches[0].Head)
+	assert.NoFileExists(t, filepath.Join(dir, rebaseStateFile))
+}
+
+func TestRebase_LegacyPrivateRecoveryKeepsOriginalCatalog(t *testing.T) {
+	common := t.TempDir()
+	private := filepath.Join(common, "worktrees", "legacy")
+	require.NoError(t, os.MkdirAll(private, 0755))
+	writeStackFile(t, common, stack.Stack{Trunk: stack.BranchRef{Branch: "main"}, Branches: []stack.BranchRef{{Branch: "unrelated"}}})
+	writeStackFile(t, private, stack.Stack{Trunk: stack.BranchRef{Branch: "main"}, Branches: []stack.BranchRef{{Branch: "b1", Head: "old-b1"}}})
+	before, err := os.ReadFile(filepath.Join(common, "gh-stack"))
+	require.NoError(t, err)
+	require.NoError(t, saveRebaseState(private, &rebaseState{
+		OriginalBranch: "b1", ConflictBranch: "b1", OriginalRefs: map[string]string{"b1": "old-b1"},
+		TrunkRef: "main", TrunkSHA: "sha-main", EndIndex: 1,
+	}))
+	mock := newRebaseMock(private, "b1")
+	mock.CommonDirFn = func() (string, error) { return common, nil }
+	restore := git.SetOps(mock)
+	defer restore()
+
+	require.NoError(t, runRebase(issue250TestConfig(t), &rebaseOptions{cont: true}))
+
+	after, err := os.ReadFile(filepath.Join(common, "gh-stack"))
+	require.NoError(t, err)
+	assert.Equal(t, before, after)
+	sf, err := stack.Load(private)
+	require.NoError(t, err)
+	assert.Equal(t, "sha-b1", sf.Stacks[0].Branches[0].Head)
+	assert.FileExists(t, filepath.Join(private, "gh-stack"))
+	assert.NoFileExists(t, filepath.Join(private, rebaseStateFile))
+	assert.NoFileExists(t, filepath.Join(common, "gh-stack-migration"))
+}
+
+func TestRebase_AbortRetainsPartialRestore(t *testing.T) {
+	dir := t.TempDir()
+	s := stack.Stack{Trunk: stack.BranchRef{Branch: "main"}, Branches: []stack.BranchRef{{Branch: "b1"}, {Branch: "b2"}}}
+	writeStackFile(t, dir, s)
+	current := "b1"
+	refs := map[string]string{"b1": "rebased-b1", "b2": "rebased-b2"}
+	fail := true
+	mock := newRebaseMock(dir, current)
+	mock.CurrentBranchFn = func() (string, error) { return current, nil }
+	mock.RevParseFn = func(ref string) (string, error) { return refs[ref], nil }
+	mock.CheckoutBranchFn = func(branch string) error { current = branch; return nil }
+	mock.ResetHardFn = func(sha string) error {
+		if current == "b2" && fail {
+			return errors.New("reset failed")
+		}
+		refs[current] = sha
+		return nil
+	}
+	restore := git.SetOps(mock)
+	defer restore()
+	ctx, err := worktree.New()
+	require.NoError(t, err)
+	state := newWorktreeRebaseState(&s, ctx, "b1", map[string]string{"b1": "old-b1", "b2": "old-b2"}, trunkTarget{}, 0, 2)
+	require.NoError(t, saveRebaseState(dir, state))
+	cfg := issue250TestConfig(t)
+
+	require.ErrorIs(t, runRebase(cfg, &rebaseOptions{abort: true}), ErrSilent)
+	retained, err := loadRebaseState(dir)
+	require.NoError(t, err)
+	assert.Equal(t, "restoring", retained.Phase)
+	assert.Equal(t, "old-b1", refs["b1"])
+	assert.Equal(t, "rebased-b2", refs["b2"])
+
+	fail = false
+	require.NoError(t, runRebase(cfg, &rebaseOptions{abort: true}))
+	assert.Equal(t, "old-b2", refs["b2"])
+	assert.Equal(t, "b1", current)
+	assert.NoFileExists(t, filepath.Join(dir, rebaseStateFile))
+}
+
+func TestRebase_CompletedJournalSurvivesCatalogSaveFailure(t *testing.T) {
+	dir := t.TempDir()
+	s := stack.Stack{Trunk: stack.BranchRef{Branch: "main"}, Branches: []stack.BranchRef{{Branch: "b1"}}}
+	writeStackFile(t, dir, s)
+	mock := newRebaseMock(dir, "b1")
+	mock.RebaseContinueFn = func(git.RebaseOpts) error { t.Fatal("must not repeat a completed native rebase"); return nil }
+	restore := git.SetOps(mock)
+	defer restore()
+	ctx, err := worktree.New()
+	require.NoError(t, err)
+	state := newWorktreeRebaseState(&s, ctx, "b1", map[string]string{"b1": "old-b1"}, trunkTarget{Ref: "main", SHA: "sha-main"}, 0, 1)
+	state.Phase, state.ConflictBranch = "conflict", "b1"
+	require.NoError(t, saveRebaseState(dir, state))
+	lock, err := stack.Lock(dir)
+	require.NoError(t, err)
+	defer lock.Unlock()
+	oldTimeout := stack.LockTimeout
+	stack.LockTimeout = 10 * time.Millisecond
+	defer func() { stack.LockTimeout = oldTimeout }()
+	cfg := issue250TestConfig(t)
+
+	require.ErrorIs(t, runRebase(cfg, &rebaseOptions{cont: true}), ErrLockFailed)
+	retained, err := loadRebaseState(dir)
+	require.NoError(t, err)
+	assert.Equal(t, "complete", retained.Phase)
+
+	lock.Unlock()
+	require.NoError(t, runRebase(cfg, &rebaseOptions{cont: true}))
+	assert.NoFileExists(t, filepath.Join(dir, rebaseStateFile))
+}
+
+func TestRebase_LegacyContinuePersistsCatalogUnderOperationLock(t *testing.T) {
+	dir := t.TempDir()
+	writeStackFile(t, dir, stack.Stack{
+		Trunk:    stack.BranchRef{Branch: "main"},
+		Branches: []stack.BranchRef{{Branch: "b1", Head: "old-b1", Base: "old-base"}},
+	})
+	require.NoError(t, saveRebaseState(dir, &rebaseState{
+		OriginalBranch: "b1", ConflictBranch: "b1", OriginalRefs: map[string]string{"b1": "old-b1"},
+		TrunkRef: "main", TrunkSHA: "sha-main", EndIndex: 1,
+	}))
+	mock := newRebaseMock(dir, "b1")
+	mock.RevParseFn = func(ref string) (string, error) {
+		if ref == "b1" {
+			return "new-b1", nil
+		}
+		return "sha-main", nil
+	}
+	mock.IsAncestorFn = func(a, d string) (bool, error) { return a == "sha-main" && d == "b1", nil }
+	restore := git.SetOps(mock)
+	defer restore()
+	cfg := issue250TestConfig(t)
+
+	require.NoError(t, runRebase(cfg, &rebaseOptions{cont: true}))
+
+	sf, err := stack.Load(dir)
+	require.NoError(t, err)
+	assert.Equal(t, "new-b1", sf.Stacks[0].Branches[0].Head)
+	assert.Equal(t, "sha-main", sf.Stacks[0].Branches[0].Base)
+	_, err = os.Stat(filepath.Join(dir, rebaseStateFile))
+	assert.ErrorIs(t, err, os.ErrNotExist)
+}
+
+func TestRebase_CompletedRecoveryPreservesNewWork(t *testing.T) {
+	for _, action := range []string{"continue", "abort"} {
+		for _, busy := range []bool{false, true} {
+			t.Run(fmt.Sprintf("%s/busy=%t", action, busy), func(t *testing.T) {
+				dir := t.TempDir()
+				s := stack.Stack{Trunk: stack.BranchRef{Branch: "main"}, Branches: []stack.BranchRef{{Branch: "b1"}}}
+				writeStackFile(t, dir, s)
+				mock := newRebaseMock(dir, "b1")
+				mock.IsRebaseInProgressFn = func() (bool, error) { return busy, nil }
+				mock.HasUncommittedChangesFn = func() (bool, error) { return !busy, nil }
+				mock.RebaseAbortFn = func() error { t.Fatal("must not abort a new Git operation"); return nil }
+				forbidRewriteMutations(t, mock)
+				restore := git.SetOps(mock)
+				defer restore()
+				ctx, err := worktree.New()
+				require.NoError(t, err)
+				state := newWorktreeRebaseState(&s, ctx, "b1", map[string]string{"b1": "old-b1"}, trunkTarget{}, 0, 1)
+				state.Phase = "complete"
+				require.NoError(t, saveRebaseState(dir, state))
+				before, err := os.ReadFile(filepath.Join(dir, rebaseStateFile))
+				require.NoError(t, err)
+
+				require.ErrorIs(t, runRebase(issue250TestConfig(t), &rebaseOptions{cont: action == "continue", abort: action == "abort"}), ErrSilent)
+
+				after, err := os.ReadFile(filepath.Join(dir, rebaseStateFile))
+				require.NoError(t, err)
+				assert.Equal(t, before, after)
+			})
+		}
+	}
+}
+
+func TestRebase_RecoveryRejectsDifferentExecutionLifecycle(t *testing.T) {
+	for _, mode := range []string{"", "future-lifecycle", originOnlyRebaseMode} {
+		for _, action := range []string{"continue", "abort"} {
+			t.Run(mode+"/"+action, func(t *testing.T) {
+				dir := t.TempDir()
+				mock := newRebaseMock(dir, "b1")
+				forbidRewriteMutations(t, mock)
+				mock.RebaseAbortFn = func() error { t.Fatal("must not abort an incompatible lifecycle"); return nil }
+				mock.RebaseContinueFn = func(git.RebaseOpts) error {
+					t.Fatal("must not continue an incompatible lifecycle")
+					return nil
+				}
+				restore := git.SetOps(mock)
+				defer restore()
+				state := &rebaseState{
+					ExecutionMode: mode, Phase: "conflict", OriginalBranch: "b1", ConflictBranch: "b1",
+					OriginalRefs: map[string]string{"b1": "before"},
+				}
+				if mode != originOnlyRebaseMode {
+					state.Worktrees = &worktree.Context{Origin: worktree.Location{Path: dir, ID: "."}}
+				}
+				require.NoError(t, saveRebaseState(dir, state))
+				before, err := os.ReadFile(filepath.Join(dir, rebaseStateFile))
+				require.NoError(t, err)
+				cfg, outR, errR := config.NewTestConfig()
+
+				require.ErrorIs(t, runRebase(cfg, &rebaseOptions{cont: action == "continue", abort: action == "abort"}), ErrSilent)
+
+				_, output := commandOutput(t, cfg, outR, errR)
+				if mode == originOnlyRebaseMode {
+					assert.Contains(t, output, "no recorded worktree")
+				} else {
+					assert.Contains(t, output, "matching gh-stack build")
+					assert.Contains(t, output, fmt.Sprintf("%q", dir))
+				}
+				after, err := os.ReadFile(filepath.Join(dir, rebaseStateFile))
+				require.NoError(t, err)
+				assert.Equal(t, before, after)
+			})
+		}
+	}
 }

@@ -225,7 +225,7 @@ func NearestSurvivingBranch(order []string, target string, survives func(string)
 	return ""
 }
 
-// StackFile represents the JSON file stored in .git/gh-stack.
+// StackFile represents the JSON catalog stored in Git's common directory.
 type StackFile struct {
 	SchemaVersion int     `json:"schemaVersion"`
 	Repository    string  `json:"repository"`
@@ -310,7 +310,8 @@ func stackFilePath(gitDir string) string {
 	return filepath.Join(gitDir, stackFileName)
 }
 
-// Load reads the stack file from the given git directory.
+// Load reads the catalog from the given directory, normally Git's common
+// directory. Legacy recovery may explicitly use a worktree's original directory.
 // Returns an empty StackFile if the file does not exist.
 // The returned StackFile records a checksum of the on-disk content so that
 // Save can detect concurrent modifications.
@@ -349,8 +350,8 @@ func parseStackFile(data []byte) (*StackFile, error) {
 // Save acquires an exclusive lock on the stack file, verifies the file hasn't
 // been modified since Load (optimistic concurrency), writes sf as JSON, and
 // releases the lock.  The lock is held only for the read-compare-write window.
-// Callers may hold the separate operation lock across Load/preflight/Save;
-// Save itself only acquires the catalog lock.
+// Mutation callers must separately hold the operation lock across their
+// Load/preflight/Save sequence; read-only refreshes should use SaveNonBlocking.
 // Returns *LockError if the lock times out, or *StaleError if another process
 // modified the file since it was loaded.
 func Save(gitDir string, sf *StackFile) error {

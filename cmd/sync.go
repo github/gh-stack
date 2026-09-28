@@ -10,6 +10,7 @@ import (
 	"github.com/github/gh-stack/internal/git"
 	"github.com/github/gh-stack/internal/modify"
 	"github.com/github/gh-stack/internal/stack"
+	"github.com/github/gh-stack/internal/worktree"
 	"github.com/spf13/cobra"
 )
 
@@ -62,7 +63,12 @@ than two PRs exist yet).
 Use --prune to delete local branches for merged PRs. Stack metadata is
 preserved so that rebase and display logic continue to work correctly.
 If you are on a branch that would be pruned, your checkout is moved to
-the first active branch in the stack, or the trunk if all are merged.`,
+the first active branch in the stack, or the trunk if all are merged.
+
+All stack branches and the trunk must currently be unoccupied or checked out
+in this worktree. This includes remote-added branches and merged members.
+Cross-worktree rewrites are refused before requested mutations, after
+shared-catalog migration and any discovery fetches.`,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			return runSync(cfg, opts)
 		},
@@ -75,9 +81,14 @@ the first active branch in the stack, or the trunk if all are merged.`,
 }
 
 func runSync(cfg *config.Config, opts *syncOptions) error {
+	release, err := beginStackMutation(cfg, "sync")
+	if err != nil {
+		return err
+	}
+	defer release()
 	result, err := loadStack(cfg, "")
 	if err != nil {
-		return ErrNotInStack
+		return stackLookupError(err)
 	}
 	gitDir := result.GitDir
 
@@ -89,6 +100,15 @@ func runSync(cfg *config.Config, opts *syncOptions) error {
 	sf := result.StackFile
 	s := result.Stack
 	currentBranch := result.CurrentBranch
+	originalTrunk := s.Trunk.Branch
+	if err := requireLocalBranches(cfg, s.BranchNames()); err != nil {
+		return err
+	}
+	ctx, err := worktree.New()
+	if err != nil {
+		cfg.Errorf("%s", err)
+		return ErrSilent
+	}
 
 	// Resolve remote once for fetch and push
 	remote, err := pickRemote(cfg, currentBranch, opts.remote)
@@ -97,6 +117,14 @@ func runSync(cfg *config.Config, opts *syncOptions) error {
 			cfg.Errorf("%s", err)
 		}
 		return ErrSilent
+	}
+	trunkBranch, err := normalizeTrunkBranch(s.Trunk.Branch, remote)
+	if err != nil {
+		cfg.Errorf("%s", err)
+		return ErrSilent
+	}
+	if err := requireLocalBranches(cfg, []string{trunkBranch}); err != nil {
+		return err
 	}
 
 	// --- Step 1: Fetch ---
@@ -143,7 +171,14 @@ func runSync(cfg *config.Config, opts *syncOptions) error {
 	if cb, cbErr := git.CurrentBranch(); cbErr == nil {
 		currentBranch = cb
 	}
-
+	trunkBranch, err = normalizeTrunkBranch(s.Trunk.Branch, remote)
+	if err != nil {
+		cfg.Errorf("%s", err)
+		return ErrSilent
+	}
+	if err := requireLocalBranches(cfg, append(s.BranchNames(), trunkBranch)); err != nil {
+		return err
+	}
 	// --- Step 2: Resolve trunk ---
 	trunk, err := resolveTrunkTarget(cfg, s, remote, currentBranch)
 	if err != nil {
@@ -157,6 +192,7 @@ func runSync(cfg *config.Config, opts *syncOptions) error {
 	needsRebase := trunk.Moved || len(updatedBranches) > 0 || stackNeedsRebase(s, trunk.Ref)
 	rebased := false
 	var originalRefs map[string]string
+	var state *rebaseState
 	if needsRebase {
 		cfg.Printf("")
 		cfg.Printf("Rebasing stack ...")
@@ -169,6 +205,16 @@ func runSync(cfg *config.Config, opts *syncOptions) error {
 			cfg.Errorf("Could not resolve branch SHAs: %v", err)
 			return ErrSilent
 		} else {
+			state = newWorktreeRebaseState(s, ctx, currentBranch, originalRefs, trunk, 0, len(s.Branches))
+			if s.Trunk.Branch != originalTrunk {
+				if err := stack.Save(gitDir, sf); err != nil {
+					return handleSaveError(cfg, err)
+				}
+			}
+			if err := saveRebaseState(gitDir, state); err != nil {
+				cfg.Errorf("%s", err)
+				return ErrSilent
+			}
 			result := cascadeRebase(cascadeRebaseOpts{
 				Cfg:          cfg,
 				Stack:        s,
@@ -180,42 +226,20 @@ func runSync(cfg *config.Config, opts *syncOptions) error {
 
 			if result.Err != nil {
 				cfg.Errorf("%v", result.Err)
-				if result.Rebased {
-					if err := restoreRebaseRefs(cfg, currentBranch, originalRefs); err != nil {
-						return err
-					}
-				} else {
-					_ = git.CheckoutBranch(currentBranch)
+				if err := abortRebase(cfg, gitDir); err != nil {
+					return err
 				}
-				stack.SaveNonBlocking(gitDir, sf)
 				return ErrSilent
 			}
 
 			if result.Conflicted {
 				// Abort and restore everything — sync is non-interactive.
-				inProgress, err := git.IsRebaseInProgress()
-				if err != nil {
-					cfg.Errorf("failed to check rebase state: %s", err)
-					return ErrSilent
-				}
-				if inProgress {
-					_ = git.RebaseAbort()
-				}
-				restoreErrors, err := restoreBranches(originalRefs)
-				if err != nil {
-					cfg.Errorf("%s", err)
-					return ErrSilent
-				}
-				_ = git.CheckoutBranch(currentBranch)
-
 				cfg.Errorf("Conflict detected rebasing %s onto %s", result.ConflictBranch, result.ConflictBase)
-				reportRestoreStatus(cfg, restoreErrors)
+				if err := abortRebase(cfg, gitDir); err != nil {
+					return err
+				}
 				cfg.Printf("  Run `%s` to resolve conflicts interactively.",
 					cfg.ColorCyan("gh stack rebase"))
-
-				// Persist refreshed PR state even on conflict, then bail out
-				// before pushing or reporting success.
-				stack.SaveNonBlocking(gitDir, sf)
 				return ErrConflict
 			}
 
@@ -223,19 +247,21 @@ func runSync(cfg *config.Config, opts *syncOptions) error {
 				rebased = true
 			}
 		}
-		_ = git.CheckoutBranch(currentBranch)
 	}
 
 	if unstacked := verifyStacked(s, trunk.Ref, 0, len(s.Branches)); len(unstacked) > 0 {
-		_ = git.CheckoutBranch(currentBranch)
 		reportUnstacked(cfg, trunk.Ref, unstacked)
-		if rebased && originalRefs != nil {
-			if err := restoreRebaseRefs(cfg, currentBranch, originalRefs); err != nil {
+		if state != nil {
+			if err := abortRebase(cfg, gitDir); err != nil {
 				return err
 			}
 		}
-		stack.SaveNonBlocking(gitDir, sf)
 		return ErrSilent
+	}
+	if state != nil {
+		if err := finishOriginRebase(cfg, gitDir, state, sf, s); err != nil {
+			return err
+		}
 	}
 
 	// --- Step 4: Push ---
@@ -414,7 +440,7 @@ func runSync(cfg *config.Config, opts *syncOptions) error {
 	}
 
 	// --- Step 7: Update base SHAs and save ---
-	updateBaseSHAs(s)
+	updateBaseSHAsWithTrunk(s, trunk.SHA)
 
 	if err := stack.Save(gitDir, sf); err != nil {
 		return handleSaveError(cfg, err)

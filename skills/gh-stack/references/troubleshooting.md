@@ -127,8 +127,9 @@ problem entirely, since they do not infer the stack from the current branch.
 ## Driving stacks from another tool or worktree
 
 `gh stack link` creates and updates stacks purely through the API, with no local tracking state.
-Use it when branches are managed by jj, Sapling, git-town, a separate worktree, or any workflow
-where the local `.git/gh-stack` file would be wrong or absent.
+Use it when branches are managed by jj, Sapling, git-town, or another external workflow that does
+not use gh-stack's local catalog. Linked worktrees themselves are supported: they share
+`<common-dir>/gh-stack` and do not require `link`.
 
 ```bash
 gh stack link branch-a branch-b branch-c        # bottom to top
@@ -140,11 +141,30 @@ gh stack link 7 feature-d                       # append to existing stack #7
 Because `link` writes no local state, the local navigation commands (`up`, `down`, `top`, `bottom`)
 will not work on the result. Use `gh stack checkout <stack-number>` if you later want local tracking.
 
+Git 2.36+ is required. Legacy worktree catalogs are consolidated automatically only when their
+definitions agree or are disjoint; originals are preserved. On migration conflicts, reconcile the
+reported source definitions rather than choosing the newest file. Finish legacy operations in
+their original worktree first, and do not mix old and new gh-stack writers in one clone.
+
+Navigation does not take over another worktree's checkout. Use `--print-path` with an explicit
+target, check the exit status, and change directory to the quoted output. Rebase/sync currently
+refuse foreign-owned members or writable trunks rather than rewriting across worktrees. Keep
+their target branches unoccupied or owned by the initiating worktree; rebase recovery must also
+be invoked in that origin. Prerequisite catalog migration may finish before a rewrite refusal.
+gh-stack does not automatically stash or create/remove worktrees.
+
+For `git init --separate-git-dir` repositories, Git may list the administration directory as the
+main path instead of the actual checkout. Operations from a known main or linked origin remain
+supported, but main-owner discovery from another checkout can be unavailable. Do not navigate to
+an administration directory or guess its associated checkout; run from the actual main worktree
+when its working files are needed. No private registry or Git config changes are used to infer it.
+
 ## Stack file is locked (exit 8)
 
-Another `gh stack` process holds the exclusive lock on `.git/gh-stack.lock`. The lock times out
-after about five seconds, so wait and retry. A persistent exit 8 means another process still holds
-the lock; identify and stop that process before retrying.
+Another `gh stack` process holds either the short catalog lock (`<common-dir>/gh-stack.lock`) or
+the clone-wide mutation lock (`<common-dir>/gh-stack-operation.lock`). Wait and retry; read-only
+views remain available. Do not delete lock files to bypass coordination. Paused operations are
+also guarded by shared recovery journals after their process lock has been released.
 
 ## An interrupted modify session (exit 10)
 
@@ -156,4 +176,10 @@ gh stack modify --abort
 ```
 
 Related: `submit` also detects a pending modify state, and under a TTY asks before overwriting the
-stack on GitHub with local state.
+matching stack on GitHub with local state. An unrelated stack cannot consume or clear that journal.
+
+Core modify temporarily rejects stack branches checked out in other worktrees. It works in a
+linked worktree when every member branch is unoccupied or owned there; a foreign trunk is allowed.
+Shared-journal continue/abort executes in the recorded origin even when invoked elsewhere. Native
+Git markers remain per-worktree. If recovery reports missing owners, externally changed refs, or
+save failures, fix the reported problem and retry; the journal is retained to prevent false success.

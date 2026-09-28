@@ -37,6 +37,15 @@ type Config struct {
 	// regardless of the terminal state. Used in tests.
 	ForceInteractive bool
 
+	// NonInteractive suppresses prompts even when stdout is a terminal.
+	NonInteractive bool
+
+	// WorktreePathOnly makes checkout resolution skip imports for foreign owners.
+	WorktreePathOnly bool
+
+	// StackMutation is command-lifetime coordination, never persisted.
+	StackMutation *StackMutationContext
+
 	// SelectFn, when non-nil, is called instead of prompting via the
 	// terminal. Used in tests to simulate interactive selection.
 	SelectFn func(prompt, defaultValue string, options []string) (int, error)
@@ -53,6 +62,12 @@ type Config struct {
 	// calling repository.Current(). Used in tests to avoid depending on
 	// the real git repo context.
 	RepoOverride *repository.Repository
+}
+
+type StackMutationContext struct {
+	CommonDir string
+	StateDir  string
+	Kind      string
 }
 
 // New creates a new Config with terminal-aware output and color support.
@@ -172,7 +187,7 @@ func (c *Config) PRLink(number int, url string) string {
 }
 
 func (c *Config) IsInteractive() bool {
-	return c.ForceInteractive || c.Terminal.IsTerminalOutput()
+	return !c.NonInteractive && (c.ForceInteractive || c.Terminal.IsTerminalOutput())
 }
 
 func (c *Config) Repo() (repository.Repository, error) {

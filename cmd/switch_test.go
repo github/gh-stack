@@ -11,6 +11,33 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+func TestSwitch_ForeignOwnerGuidance(t *testing.T) {
+	common, root, owner := t.TempDir(), t.TempDir(), t.TempDir()
+	writeStackFile(t, common, stack.Stack{
+		Trunk: stack.BranchRef{Branch: "main"}, Branches: []stack.BranchRef{{Branch: "b1"}, {Branch: "b2"}},
+	})
+	restore := git.SetOps(&git.MockOps{
+		GitDirFn:        func() (string, error) { return common, nil },
+		RootDirFn:       func() (string, error) { return root, nil },
+		CurrentBranchFn: func() (string, error) { return "b1", nil },
+		WorktreesFn:     func() ([]git.Worktree, error) { return []git.Worktree{{Path: owner, Branch: "b2"}}, nil },
+		CheckoutBranchFn: func(string) error {
+			t.Fatal("must not check out another worktree's branch")
+			return nil
+		},
+	})
+	defer restore()
+	cfg, outR, errR := config.NewTestConfig()
+	cfg.ForceInteractive = true
+	cfg.SelectFn = func(string, string, []string) (int, error) { return 0, nil }
+	assert.ErrorIs(t, runSwitch(cfg), ErrInvalidArgs)
+	out, diagnostics := commandOutput(t, cfg, outR, errR)
+	assert.Empty(t, out)
+	assert.Contains(t, diagnostics, owner)
+	assert.Contains(t, diagnostics, "cd --")
+	assert.NotContains(t, diagnostics, "Switched to")
+}
+
 func TestSwitch_SwitchesToSelectedBranch(t *testing.T) {
 	gitDir := t.TempDir()
 	var checkedOut string

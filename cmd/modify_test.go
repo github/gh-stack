@@ -19,6 +19,7 @@ import (
 	"github.com/github/gh-stack/internal/stack"
 	"github.com/github/gh-stack/internal/tui/modifyview"
 	"github.com/github/gh-stack/internal/tui/stackview"
+	"github.com/github/gh-stack/internal/worktree"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -490,9 +491,7 @@ func TestBuildModifyPlan(t *testing.T) {
 		}
 
 		plan := modify.BuildPlan(nodes)
-		// b1 is Removed=true so it's skipped in the main loop.
-		// b2 has no changes and is at its original position → nothing.
-		assert.Empty(t, plan, "removed nodes are skipped; unchanged nodes produce nothing")
+		assert.Equal(t, []modify.Action{{Type: "drop", Branch: "b1"}}, plan)
 	})
 
 	t.Run("rename action", func(t *testing.T) {
@@ -537,11 +536,11 @@ func TestBuildModifyPlan(t *testing.T) {
 		}
 
 		plan := modify.BuildPlan(nodes)
-		// b1 has a rename action → included
-		// b2 and b3 are Removed → skipped in the loop
-		require.Len(t, plan, 1)
+		require.Len(t, plan, 3)
 		assert.Equal(t, "rename", plan[0].Type)
 		assert.Equal(t, "feature-1", plan[0].NewName)
+		assert.Equal(t, "drop", plan[1].Type)
+		assert.Equal(t, "fold_down", plan[2].Type)
 	})
 
 	t.Run("no changes produces empty plan", func(t *testing.T) {
@@ -822,11 +821,9 @@ func TestModifyStateRoundTrip_WithPriorStackID(t *testing.T) {
 // 7. checkModifyStateGuard edge cases
 // ---------------------------------------------------------------------------
 
-func TestCheckModifyStateGuard_IgnoresReadErrors(t *testing.T) {
-	// Use a path that doesn't exist and isn't a directory — this tests
-	// the "ignore read errors" branch in checkModifyStateGuard.
-	err := modify.CheckStateGuard("/nonexistent/path/that/does/not/exist")
-	assert.NoError(t, err, "guard should silently ignore read errors")
+func TestCheckModifyStateGuard_MissingState(t *testing.T) {
+	err := modify.CheckStateGuard(t.TempDir())
+	assert.NoError(t, err)
 }
 
 func TestCheckModifyStateGuard_UnknownPhase(t *testing.T) {
@@ -839,7 +836,7 @@ func TestCheckModifyStateGuard_UnknownPhase(t *testing.T) {
 	require.NoError(t, modify.SaveState(gitDir, state))
 
 	err := modify.CheckStateGuard(gitDir)
-	assert.NoError(t, err, "guard only blocks on 'applying' phase")
+	assert.ErrorContains(t, err, "unrecognized modify state phase")
 }
 
 // ---------------------------------------------------------------------------
@@ -888,11 +885,12 @@ func TestRunModifyAbort_ConflictPhase_Unwinds(t *testing.T) {
 	var rebaseAborted bool
 	var resetCalls []struct{ branch, sha string }
 	current := ""
+	inProgress := true
 	mock := &git.MockOps{
 		GitDirFn:                 func() (string, error) { return tmpDir, nil },
-		IsRebaseInProgressFn:     func() (bool, error) { return true, nil },
+		IsRebaseInProgressFn:     func() (bool, error) { return inProgress, nil },
 		IsCherryPickInProgressFn: func() (bool, error) { return false, nil },
-		RebaseAbortFn:            func() error { rebaseAborted = true; return nil },
+		RebaseAbortFn:            func() error { rebaseAborted = true; inProgress = false; return nil },
 		BranchExistsFn:           func(string) (bool, error) { return true, nil },
 		CheckoutBranchFn:         func(name string) error { current = name; return nil },
 		ResetHardFn: func(sha string) error {
@@ -969,4 +967,277 @@ func TestRunModifyAbort_PendingSubmit_NoUnwind(t *testing.T) {
 	assert.False(t, resetCalled, "pending-submit abort must not unwind branches")
 	assert.True(t, modify.StateExists(tmpDir), "pending-submit state should be preserved")
 	assert.Contains(t, output, "gh stack submit")
+}
+
+func TestCheckModifyPreconditions_Worktrees(t *testing.T) {
+	for _, ownerBranch := range []string{"", "main", "b2"} {
+		t.Run("foreign owner "+ownerBranch, func(t *testing.T) {
+			dir, origin, foreign := t.TempDir(), t.TempDir(), t.TempDir()
+			s := stack.Stack{
+				Trunk: stack.BranchRef{Branch: "main"},
+				Branches: []stack.BranchRef{
+					{Branch: "b1"}, {Branch: "b2"},
+				},
+			}
+			writeStackFile(t, dir, s)
+			mock := &git.MockOps{
+				GitDirFn:        func() (string, error) { return dir, nil },
+				RootDirFn:       func() (string, error) { return origin, nil },
+				CurrentBranchFn: func() (string, error) { return "b1", nil },
+				BranchExistsFn:  func(string) (bool, error) { return true, nil },
+				IsAncestorFn:    func(string, string) (bool, error) { return true, nil },
+				WorktreesFn: func() ([]git.Worktree, error) {
+					return []git.Worktree{
+						{Path: origin, Branch: "b1"},
+						{Path: foreign, Branch: ownerBranch},
+					}, nil
+				},
+			}
+			restore := git.SetOps(mock)
+			defer restore()
+			cfg, _, errR := config.NewTestConfig()
+			cfg.ForceInteractive = true
+			var prQueries atomic.Int32
+			cfg.GitHubClientOverride = &github.MockClient{
+				FindPRForBranchFn: func(string) (*github.PullRequest, error) {
+					prQueries.Add(1)
+					return nil, nil
+				},
+			}
+			_, err := checkModifyPreconditions(cfg)
+			cfg.Out.Close()
+			cfg.Err.Close()
+			output, readErr := io.ReadAll(errR)
+			require.NoError(t, readErr)
+			if ownerBranch == "b2" {
+				require.Error(t, err)
+				assert.Contains(t, string(output), "distributed modify is not supported yet")
+				assert.Contains(t, string(output), foreign)
+				assert.Zero(t, prQueries.Load(), "distributed guard must run before PR refresh or TUI")
+			} else {
+				require.NoError(t, err)
+			}
+			assert.False(t, modify.StateExists(dir))
+		})
+	}
+}
+
+func TestRunModifyRecovery_UsesRecordedOrigin(t *testing.T) {
+	for _, tc := range []struct{ command, conflictType string }{
+		{"continue", "rebase"}, {"abort", "rebase"},
+		{"continue", "cherry_pick"}, {"abort", "cherry_pick"},
+	} {
+		t.Run(tc.command+" "+tc.conflictType, func(t *testing.T) {
+			common, origin, caller := t.TempDir(), t.TempDir(), t.TempDir()
+			originDir, callerDir := filepath.Join(common, "worktrees", "origin"), filepath.Join(common, "worktrees", "caller")
+			require.NoError(t, os.MkdirAll(originDir, 0755))
+			require.NoError(t, os.MkdirAll(callerDir, 0755))
+			s := stack.Stack{Trunk: stack.BranchRef{Branch: "main"}, Branches: []stack.BranchRef{{Branch: "A"}}}
+			if tc.conflictType == "cherry_pick" {
+				s.Branches = append(s.Branches, stack.BranchRef{Branch: "B"})
+			}
+			writeStackFile(t, common, s)
+			metadata, err := json.Marshal(s)
+			require.NoError(t, err)
+			state := &modify.StateFile{
+				SchemaVersion: 1, Phase: modify.PhaseConflict, ConflictBranch: "A", ConflictType: tc.conflictType,
+				OriginalBranch: "A",
+				Snapshot: modify.Snapshot{
+					StackMetadata: metadata,
+					Branches:      []modify.BranchSnapshot{{Name: "A", TipSHA: "original"}},
+				},
+				Worktrees: &worktree.Context{
+					Origin:        worktree.Location{Path: origin, ID: filepath.Join("worktrees", "origin")},
+					Pending:       "A",
+					PendingBefore: "original",
+				},
+			}
+			if tc.conflictType == "cherry_pick" {
+				state.ConflictBranch, state.FoldBranch, state.FoldTarget = "B", "B", "A"
+				state.Snapshot.Branches = append(state.Snapshot.Branches, modify.BranchSnapshot{Name: "B", TipSHA: "source"})
+			}
+			state.RecordStack(&s)
+			require.NoError(t, modify.SaveState(common, state))
+			inProgress, continued, aborted := true, false, false
+			sha := "original"
+			originOps := &git.MockOps{
+				GitDirFn:             func() (string, error) { return originDir, nil },
+				CommonDirFn:          func() (string, error) { return common, nil },
+				RootDirFn:            func() (string, error) { return origin, nil },
+				CurrentBranchFn:      func() (string, error) { return "A", nil },
+				RevParseFn:           func(string) (string, error) { return sha, nil },
+				IsRebaseInProgressFn: func() (bool, error) { return inProgress && tc.conflictType == "rebase", nil },
+				RebaseContinueFn: func(git.RebaseOpts) error {
+					require.Equal(t, "rebase", tc.conflictType)
+					continued, inProgress, sha = true, false, "updated"
+					return nil
+				},
+				RebaseAbortFn: func() error {
+					require.Equal(t, "rebase", tc.conflictType)
+					aborted, inProgress = true, false
+					return nil
+				},
+				IsCherryPickInProgressFn: func() (bool, error) { return inProgress && tc.conflictType == "cherry_pick", nil },
+				CherryPickContinueFn: func() error {
+					require.Equal(t, "cherry_pick", tc.conflictType)
+					continued, inProgress, sha = true, false, "updated"
+					return nil
+				},
+				CherryPickAbortFn: func() error {
+					require.Equal(t, "cherry_pick", tc.conflictType)
+					aborted, inProgress = true, false
+					return nil
+				},
+			}
+			callerSensitiveCalls := 0
+			callerOps := &git.MockOps{
+				GitDirFn:        func() (string, error) { return callerDir, nil },
+				CommonDirFn:     func() (string, error) { return common, nil },
+				RootDirFn:       func() (string, error) { return caller, nil },
+				CurrentBranchFn: func() (string, error) { return "observer", nil },
+				RevParseFn:      func(string) (string, error) { return sha, nil },
+				CheckoutBranchFn: func(string) error {
+					callerSensitiveCalls++
+					return nil
+				},
+				IsRebaseInProgressFn: func() (bool, error) { callerSensitiveCalls++; return false, nil },
+				IsCherryPickInProgressFn: func() (bool, error) {
+					callerSensitiveCalls++
+					return false, nil
+				},
+				HasUncommittedChangesFn: func() (bool, error) {
+					callerSensitiveCalls++
+					return true, nil
+				},
+				WorktreesFn: func() ([]git.Worktree, error) {
+					return []git.Worktree{{Path: origin, Branch: "A"}, {Path: caller, Branch: "observer"}}, nil
+				},
+			}
+			callerOps.ForWorktreeFn = func(path string) (git.Ops, error) {
+				require.True(t, worktree.SamePath(path, origin))
+				return originOps, nil
+			}
+			restore := git.SetOps(callerOps)
+			defer restore()
+			cfg, _, _ := config.NewTestConfig()
+			defer cfg.Out.Close()
+			defer cfg.Err.Close()
+			if tc.command == "continue" {
+				require.NoError(t, runModifyContinue(cfg))
+				assert.True(t, continued)
+			} else {
+				require.NoError(t, runModifyAbort(cfg))
+				assert.True(t, aborted)
+			}
+			assert.Zero(t, callerSensitiveCalls)
+			assert.False(t, modify.StateExists(common))
+			assert.Nil(t, cfg.StackMutation)
+		})
+	}
+}
+
+func TestModify_InvalidJournalsAreRetained(t *testing.T) {
+	for _, content := range []string{"not json", `{"schema_version":1,"phase":"unknown"}`} {
+		t.Run(content, func(t *testing.T) {
+			dir := t.TempDir()
+			path := modify.StatePath(dir)
+			require.NoError(t, os.WriteFile(path, []byte(content), 0644))
+			restore := git.SetOps(&git.MockOps{GitDirFn: func() (string, error) { return dir, nil }})
+			defer restore()
+			cfg, _, _ := config.NewTestConfig()
+			defer cfg.Out.Close()
+			defer cfg.Err.Close()
+			require.Error(t, runModifyAbort(cfg))
+			got, err := os.ReadFile(path)
+			require.NoError(t, err)
+			assert.Equal(t, content, string(got))
+			require.Error(t, checkNoModifyInProgress(cfg, dir))
+		})
+	}
+}
+
+func TestModifyStateIOFailures(t *testing.T) {
+	dir := t.TempDir()
+	path := modify.StatePath(dir)
+	require.NoError(t, os.Mkdir(path, 0755))
+	require.NoError(t, os.WriteFile(filepath.Join(path, "keep"), []byte("keep"), 0644))
+	require.Error(t, modify.SaveState(dir, &modify.StateFile{SchemaVersion: 1, Phase: modify.PhaseApplying}))
+	require.Error(t, modify.ClearState(dir))
+	_, err := os.Stat(filepath.Join(path, "keep"))
+	require.NoError(t, err)
+	require.Error(t, modify.CheckStateGuard(dir))
+}
+
+func TestRunModifyContinue_LegacyPrivateJournalKeepsOriginalCatalog(t *testing.T) {
+	common, origin := t.TempDir(), t.TempDir()
+	private := filepath.Join(common, "worktrees", "legacy")
+	require.NoError(t, os.MkdirAll(private, 0755))
+	other := stack.Stack{Trunk: stack.BranchRef{Branch: "main"}, Branches: []stack.BranchRef{{Branch: "other"}}}
+	s := stack.Stack{Trunk: other.Trunk, Branches: []stack.BranchRef{{Branch: "A"}, {Branch: "B"}, {Branch: "C"}}}
+	writeStackFile(t, common, other)
+	writeStackFile(t, private, s)
+	metadata, err := json.Marshal(s)
+	require.NoError(t, err)
+	state := &modify.StateFile{
+		SchemaVersion: 1, Phase: modify.PhaseConflict, ConflictType: "rebase", ConflictBranch: "A",
+		OriginalBranch: "A", RemainingBranches: []string{"B", "C"},
+		OriginalRefs: map[string]string{"A": "sha-main", "B": "sha-A", "C": "sha-B"},
+		Snapshot: modify.Snapshot{
+			StackMetadata: metadata,
+			Branches: []modify.BranchSnapshot{
+				{Name: "A", TipSHA: "sha-A"}, {Name: "B", TipSHA: "sha-B"}, {Name: "C", TipSHA: "sha-C"},
+			},
+		},
+	}
+	require.NoError(t, modify.SaveState(private, state))
+	inProgress, refused := true, false
+	continued := 0
+	current := "A"
+	restore := git.SetOps(&git.MockOps{
+		GitDirFn:             func() (string, error) { return private, nil },
+		CommonDirFn:          func() (string, error) { return common, nil },
+		RootDirFn:            func() (string, error) { return origin, nil },
+		CurrentBranchFn:      func() (string, error) { return current, nil },
+		BranchExistsFn:       func(string) (bool, error) { return true, nil },
+		RevParseFn:           func(ref string) (string, error) { return "sha-" + ref, nil },
+		IsAncestorFn:         func(string, string) (bool, error) { return false, nil },
+		IsRebaseInProgressFn: func() (bool, error) { return inProgress, nil },
+		RebaseContinueFn: func(git.RebaseOpts) error {
+			continued++
+			inProgress = false
+			return nil
+		},
+		RebaseOntoFn: func(_, _, branch string, _ git.RebaseOpts) error {
+			current = branch
+			if branch == "B" && !refused {
+				refused, inProgress = true, true
+				return assert.AnError
+			}
+			return nil
+		},
+		CheckoutBranchFn: func(branch string) error { current = branch; return nil },
+	})
+	defer restore()
+	cfg, _, errR := config.NewTestConfig()
+	defer cfg.Out.Close()
+	defer cfg.Err.Close()
+	require.ErrorIs(t, runModifyContinue(cfg), ErrConflict)
+	saved, err := modify.LoadState(private)
+	require.NoError(t, err)
+	require.NotNil(t, saved.Worktrees, "continuation should record its origin before further changes")
+	continueErr := runModifyContinue(cfg)
+	cfg.Out.Close()
+	cfg.Err.Close()
+	stderr, err := io.ReadAll(errR)
+	require.NoError(t, err)
+	require.NoError(t, continueErr, "%s", stderr)
+	assert.Equal(t, 2, continued)
+	assert.False(t, modify.StateExists(private))
+	commonCatalog, err := stack.Load(common)
+	require.NoError(t, err)
+	require.Len(t, commonCatalog.Stacks, 1)
+	assert.Equal(t, []string{"other"}, commonCatalog.Stacks[0].BranchNames())
+	privateCatalog, err := stack.Load(private)
+	require.NoError(t, err)
+	assert.Equal(t, []string{"A", "B", "C"}, privateCatalog.Stacks[0].BranchNames())
 }

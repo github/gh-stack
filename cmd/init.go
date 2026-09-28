@@ -13,9 +13,10 @@ import (
 )
 
 type initOptions struct {
-	branches []string
-	base     string
-	adopt    bool // deprecated, kept for backward compat
+	branches     []string
+	base         string
+	adopt        bool // deprecated, kept for backward compat
+	beforeCreate func(string) error
 }
 
 func InitCmd(cfg *config.Config) *cobra.Command {
@@ -57,10 +58,24 @@ Use --base to specify a different trunk branch.`,
 }
 
 func runInit(cfg *config.Config, opts *initOptions) error {
-	gitDir, err := git.GitDir()
+	if len(opts.branches) == 0 && !cfg.IsInteractive() {
+		cfg.Errorf("interactive input required; provide branch names as arguments")
+		return ErrInvalidArgs
+	}
+	for _, name := range opts.branches {
+		if err := git.ValidateRefName(name); err != nil {
+			cfg.Errorf("invalid branch name %q: must be a valid git ref", name)
+			return ErrInvalidArgs
+		}
+	}
+	release, err := beginStackMutation(cfg, "init")
 	if err != nil {
-		cfg.Errorf("not a git repository")
-		return ErrNotInStack
+		return err
+	}
+	defer release()
+	gitDir, err := stackStateDir(cfg)
+	if err != nil {
+		return err
 	}
 
 	// Determine trunk branch
@@ -157,7 +172,7 @@ func runInit(cfg *config.Config, opts *initOptions) error {
 		}
 
 		var interactiveAdopted bool
-		branches, interactiveAdopted, err = runInteractiveInit(cfg, sf, trunk, trunkRef, currentBranch)
+		branches, interactiveAdopted, err = runInteractiveInitWithPreflight(cfg, sf, trunk, trunkRef, currentBranch, opts.beforeCreate)
 		if err != nil {
 			return err
 		}
@@ -210,23 +225,32 @@ func runInit(cfg *config.Config, opts *initOptions) error {
 		}
 	}
 
-	if err := stack.Save(gitDir, sf); err != nil {
-		return handleSaveError(cfg, err)
-	}
-
-	// --- Output: switch to top branch + "What's next" ---
-
+	// Complete the checkout before publishing the catalog. Adoption of an
+	// occupied branch is metadata-only and must leave both worktrees alone.
 	lastBranch := branches[len(branches)-1]
-	if currentBranch != lastBranch {
-		if err := git.CheckoutBranch(lastBranch); err != nil {
+	owner, err := foreignWorktreePath(lastBranch)
+	if err != nil {
+		cfg.Errorf("%s", err)
+		return ErrSilent
+	}
+	if owner == "" && currentBranch != lastBranch {
+		if err := checkoutWorktreeBranch(cfg, lastBranch, false); err != nil {
+			var exitErr *ExitError
+			if errors.As(err, &exitErr) {
+				return err
+			}
 			cfg.Errorf("switching to branch %s: %s", lastBranch, err)
 			return ErrSilent
 		}
 	}
 
+	if err := stack.Save(gitDir, sf); err != nil {
+		return stackSaveError(cfg, err)
+	}
+
 	hasAdopted := len(adopted) > 0
 
-	printWhatsNext(cfg, &newStack, branches, hasAdopted, prCount)
+	printWhatsNextInWorktree(cfg, &newStack, branches, hasAdopted, prCount, owner)
 
 	return nil
 }
@@ -263,6 +287,11 @@ func resolveArgBranches(cfg *config.Config, opts *initOptions, sf *stack.StackFi
 
 		resolved = append(resolved, branchInfo{name: b, exists: exists})
 	}
+	if opts.beforeCreate != nil && len(resolved) > 0 {
+		if err := opts.beforeCreate(resolved[len(resolved)-1].name); err != nil {
+			return nil, nil, err
+		}
+	}
 
 	// Phase 2: create missing branches
 	branches := make([]string, 0, len(resolved))
@@ -290,6 +319,10 @@ func resolveArgBranches(cfg *config.Config, opts *initOptions, sf *stack.StackFi
 // one. Returns the branches and whether the branch was adopted (already
 // existed).
 func runInteractiveInit(cfg *config.Config, sf *stack.StackFile, trunk, trunkRef, currentBranch string) ([]string, bool, error) {
+	return runInteractiveInitWithPreflight(cfg, sf, trunk, trunkRef, currentBranch, nil)
+}
+
+func runInteractiveInitWithPreflight(cfg *config.Config, sf *stack.StackFile, trunk, trunkRef, currentBranch string, beforeCreate func(string) error) ([]string, bool, error) {
 	p := prompter.New(cfg.In, cfg.Out, cfg.Err)
 
 	cfg.Printf("Initializing a stack from %s.", trunk)
@@ -359,6 +392,11 @@ func runInteractiveInit(cfg *config.Config, sf *stack.StackFile, trunk, trunkRef
 		cfg.Errorf("failed to check branch %s: %s", branchName, err)
 		return nil, false, ErrSilent
 	}
+	if beforeCreate != nil {
+		if err := beforeCreate(branchName); err != nil {
+			return nil, false, err
+		}
+	}
 	if exists {
 		wasAdopted = true
 	} else {
@@ -392,6 +430,10 @@ func promptBranchName(cfg *config.Config) (string, error) {
 
 // printWhatsNext prints the scenario-aware "What's next" block after init.
 func printWhatsNext(cfg *config.Config, s *stack.Stack, branches []string, hasAdopted bool, prCount int) {
+	printWhatsNextInWorktree(cfg, s, branches, hasAdopted, prCount, "")
+}
+
+func printWhatsNextInWorktree(cfg *config.Config, s *stack.Stack, branches []string, hasAdopted bool, prCount int, owner string) {
 	lastBranch := branches[len(branches)-1]
 
 	// Build the chain: main ← branch1 ← branch2
@@ -410,7 +452,11 @@ func printWhatsNext(cfg *config.Config, s *stack.Stack, branches []string, hasAd
 	}
 
 	// Position
-	cfg.Printf("  You're on %s (top of stack).", lastBranch)
+	if owner != "" {
+		reportWorktreeOwner(cfg, lastBranch, owner)
+	} else {
+		cfg.Printf("  You're on %s (top of stack).", lastBranch)
+	}
 
 	// PR summary (only when adopting and at least one PR found)
 	if hasAdopted && prCount > 0 {

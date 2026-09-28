@@ -29,6 +29,8 @@ layers, read `references/stack-design.md`.
 
 ## Setup
 
+Requires Git 2.36+ and an authenticated GitHub CLI.
+
 ```bash
 gh extension install github/gh-stack
 git config rerere.enabled true         # remember conflict resolutions
@@ -59,6 +61,10 @@ Agent harnesses differ, so always pass the flags below instead of relying on tha
 - `view --short` is safe in both modes, but it is formatted for humans. Use `--json` to parse.
 - **`checkout <pr>` when a different local stack already covers those branches** cannot be forced.
   Run `gh stack unstack --local` first (this keeps the stack on GitHub), then retry.
+- **Worktrees:** local stacks share one common-directory catalog. Use `--print-path` with
+  navigation or explicit-target `checkout` to locate a foreign-owned branch without stealing its
+  checkout. Unoccupied targets are checked out here first. Check the exit status before changing
+  directories; parse only successful path-mode stdout, never status messages.
 
 ## Branch placement
 
@@ -162,6 +168,14 @@ an ancestor of the branch.
 ## Constraints
 
 - Stacks are strictly linear: one parent, at most one child. Use separate stacks for parallel work.
+- `rebase` and `sync` currently require all members and writable trunks to be unoccupied or owned
+  by the invoking worktree. They refuse distributed rewrites before requested changes, after
+  prerequisite catalog migration. They never auto-stash or create/remove worktrees. Mutations
+  serialize across the clone; rebase recovery must run in its recorded origin. Legacy recovery
+  must finish in its original worktree before migration.
+- Core `modify` temporarily rejects distributed stack branches before TUI/apply. Linked-worktree
+  use is allowed when all member branches are unoccupied or owned here; trunk ownership alone is
+  not a blocker. Its recovery flags still use the recorded origin from any linked worktree.
 - There is no non-interactive reorder or removal. Errors may suggest `gh stack modify`, but it is
   TUI-only — restructure with `unstack` then `init` instead.
 - PR titles and bodies are auto-generated. Use `gh pr edit` afterwards to change them.

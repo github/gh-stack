@@ -5,6 +5,78 @@ description: Common patterns and workflows for using Stacked PRs effectively.
 
 This guide covers the most common workflows for day-to-day use of Stacked PRs, from the standard flow to advanced patterns.
 
+## Working Across Git Worktrees
+
+With Git 2.36+, you can keep separate stacks in linked worktrees or check out different layers of one stack in different worktrees. Stack membership is shared; it does not belong to whichever directory originally created the stack.
+
+### Shared catalog and migration
+
+The catalog is `<common-dir>/gh-stack`, where the common directory is reported by `git rev-parse --path-format=absolute --git-common-dir`. In an ordinary clone this is `.git/gh-stack`. gh-stack's rebase and modify recovery journals also live there. Git's HEAD, index, rebase, and cherry-pick markers remain local to each worktree.
+
+On upgrade, gh-stack automatically consolidates nonconflicting legacy catalogs, coalesces equivalent definitions, and preserves originals as backups. Sharing a trunk is fine; conflicting branch membership or stack definitions stop migration and identify the source files. Reconcile the conflicting definitions rather than deleting whichever file looks older. Finish or abort legacy operations in their original worktree before migration, and do not run old and new gh-stack versions against the same clone.
+
+Migration is a prerequisite to the requested operation. It may publish the shared catalog and preservation backups even when the operation later refuses a foreign-owned rewrite. After migration, that refusal leaves refs, indexes, working files, requested stack membership, and remote stacks unchanged. Fetches used for discovery may still have completed.
+
+### Separate Git administration directories
+
+Repositories created with `git init --separate-git-dir` keep the administration directory outside the main working directory. Their shared catalog and operations in an explicitly known main or linked worktree remain supported.
+
+There is a discovery limitation: Git's worktree list can report that administration directory as the main path, without a reverse pointer to the real main working directory. Automatic discovery of the main owner from a linked checkout may therefore be unavailable. If an operation needs that owner's working files, start from the actual main worktree instead. Do not `cd` into an administration directory or infer the checkout from its parent directory. gh-stack does not add a private worktree registry or change Git configuration to repair discovery.
+
+### Adopt existing branches
+
+```sh
+# Branches can already be checked out in other worktrees
+gh stack init auth api frontend
+# From the top branch, adopt another existing layer
+gh stack add integration
+```
+
+Adopting an occupied branch records membership without switching either checkout. The command reports its owning path. `add -m`, `-A`, and `-u` cannot be used to commit or stage in another worktree and are rejected before changing membership or staging files.
+
+### Navigate without stealing a checkout
+
+Ordinary navigation to a foreign-owned branch fails with its path and leaves your checkout unchanged. For shell integration, `up`, `down`, `top`, `bottom`, `trunk`, and **explicit-target** `checkout` accept `--print-path`:
+
+| Target | Successful behavior |
+|--------|---------------------|
+| Checked out in another worktree | Print its absolute owner path; change neither checkout |
+| Unoccupied | Check it out here, then print this worktree's absolute path |
+| Already current | Print this worktree's absolute path |
+
+Successful stdout is the raw path plus one newline, with no status text or shell quoting. Diagnostics go to stderr; errors or ambiguous selection leave stdout empty. Path mode never opens a picker, and `checkout --print-path` requires a target.
+
+This Bash/Zsh wrapper checks the command's exit status before changing directories and quotes paths containing spaces:
+
+```sh
+gscd() {
+  local target
+  target=$(gh stack "$@" --print-path) || return $?
+  if [ -z "$target" ]; then
+    printf '%s\n' 'gh stack returned an empty path' >&2
+    return 1
+  fi
+  cd -- "$target"
+}
+
+gscd bottom
+gscd checkout api
+```
+
+gh-stack does not install shell functions or change your shell's directory. Do not use `eval` or parse human-readable diagnostics for navigation.
+
+### Rebase, sync, and recover
+
+`rebase` and `sync` currently use only the initiating worktree. All stack members must be unoccupied or checked out there, including members outside a requested rebase range and merged members that rollback or pruning could touch. A foreign-owned trunk is refused when trunk updates are enabled; `rebase --no-trunk` leaves it alone. Sync checks remote-added and replacement branches before importing them. This conservative limit prevents partial distributed rewrites rather than silently skipping layers. gh-stack never auto-stashes, transfers ownership, or creates/removes worktrees.
+
+Resolve and stage conflicts in the worktree named by the diagnostic, then run `gh stack rebase --continue` or `--abort` **in that original worktree**. Invoking rebase recovery elsewhere fails before Git mutation. `sync` restores its cascade on conflicts rather than pushing partial results; completed fetches and earlier fast-forwards are outside that rollback boundary. Partial restoration or publication failures retain recovery state. Repair the reported problem and retry recovery in the origin rather than deleting the journal.
+
+Finish paused operations before changing gh-stack versions or preview stages. Origin-only journals are explicitly marked; a build that cannot interpret a journal's execution lifecycle must leave it intact. If recovery reports an incompatible lifecycle, use the matching build in the recorded origin to finish or abort it instead of editing or removing the journal.
+
+gh-stack serializes mutations across the clone, including independent stacks. Read-only views remain available. A paused rebase or modify journal blocks new gh-stack mutations until recovery. These locks coordinate **gh-stack only**, not arbitrary Git commands, editors, or other tools. Keep affected worktrees quiescent while history is being rewritten. During a pause, make only the requested conflict-resolution edits and staging in the reported worktree; avoid unrelated commits or checkout changes on participating branches.
+
+**Core modify limitation:** `modify` works inside a linked worktree only when every stack branch is unoccupied or checked out there. Distributed modify is temporarily rejected before the TUI or apply changes. Trunk ownership alone is allowed. Its `--continue` and `--abort` use the recorded origin even when invoked elsewhere; see [Restructuring stacks](/gh-stack/guides/modify/).
+
 ## Standard Workflow
 
 The basic flow: initialize a stack, add branches for each logical unit of work, commit, push, iterate on review feedback, and merge.
@@ -208,6 +280,8 @@ After rebasing, push the updated branches:
 ```sh
 gh stack push
 ```
+
+To preserve author dates as committer dates, start with `gh stack rebase --committer-date-is-author-date` (or `--preserve-dates`). This selects Git's merge backend so the date setting survives a conflict. After staging a resolution, use `gh stack rebase --continue`; the continuation uses the settings saved by Git rather than repeating start-only date flags.
 
 `gh stack push` uses `--force-with-lease` to safely update the rebased branches. This is a safe form of force push — it ensures you don't overwrite changes that someone else pushed since your last fetch. If the remote has unexpected changes, the push is rejected and you can investigate.
 

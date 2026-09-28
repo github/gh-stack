@@ -6,9 +6,11 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
 	"time"
 
 	"github.com/github/gh-stack/internal/stack"
+	"github.com/github/gh-stack/internal/worktree"
 )
 
 const stateFileName = "gh-stack-modify-state"
@@ -20,16 +22,22 @@ const (
 )
 
 // StateFile holds the state of an in-progress or pending-submit modify operation.
-// It is stored at .git/gh-stack-modify-state.
+// It is stored at <common-dir>/gh-stack-modify-state.
 type StateFile struct {
-	SchemaVersion      int            `json:"schema_version"`
-	StackName          string         `json:"stack_name"`
-	StackIndex         int            `json:"stack_index"` // index in StackFile.Stacks at modify start
-	StartedAt          time.Time      `json:"started_at"`
-	Phase              string         `json:"phase"` // "applying", "conflict", or "pending_submit"
-	PriorRemoteStackID string         `json:"prior_remote_stack_id,omitempty"`
-	Snapshot           Snapshot       `json:"snapshot"`
-	Plan               []Action       `json:"plan"`
+	SchemaVersion         int               `json:"schema_version"`
+	StackName             string            `json:"stack_name"`
+	StackIndex            int               `json:"stack_index"` // legacy hint, never an identity
+	StartedAt             time.Time         `json:"started_at"`
+	Phase                 string            `json:"phase"`
+	PriorRemoteStackID    string            `json:"prior_remote_stack_id,omitempty"`
+	Snapshot              Snapshot          `json:"snapshot"`
+	Plan                  []Action          `json:"plan"`
+	Worktrees             *worktree.Context `json:"worktrees,omitempty"`
+	StackBranches         []string          `json:"stack_branches"`
+	PreviousStackBranches []string          `json:"previous_stack_branches"`
+	RenamedBranches       map[string]string `json:"renamed_branches,omitempty"`
+	CreatedBranches       map[string]string `json:"created_branches,omitempty"`
+	PendingAction         *Action           `json:"pending_action,omitempty"`
 
 	// Conflict state — populated when phase is "conflict"
 	ConflictBranch    string            `json:"conflict_branch,omitempty"`
@@ -89,6 +97,9 @@ func LoadState(gitDir string) (*StateFile, error) {
 	if err := json.Unmarshal(data, &state); err != nil {
 		return nil, fmt.Errorf("parsing modify state: %w", err)
 	}
+	if state.SchemaVersion > 1 {
+		return nil, fmt.Errorf("modify state uses unsupported schema version %d; upgrade gh-stack before recovery", state.SchemaVersion)
+	}
 	return &state, nil
 }
 
@@ -104,9 +115,81 @@ func SaveState(gitDir string, state *StateFile) error {
 	return nil
 }
 
+func (s *StateFile) RecordStack(target *stack.Stack) {
+	names := target.BranchNames()
+	if s.StackBranches != nil && !slices.Equal(s.StackBranches, names) {
+		s.PreviousStackBranches = s.StackBranches
+	}
+	s.StackName = target.Trunk.Branch
+	s.StackBranches = append([]string{}, names...)
+}
+
+// MatchesStack never uses the catalog position as an identity. Older records
+// can be identified by their remote ID or the original snapshot.
+func MatchesStack(state *StateFile, target *stack.Stack) bool {
+	if state == nil || target == nil {
+		return false
+	}
+	if state.PriorRemoteStackID != "" && target.ID != "" {
+		return state.PriorRemoteStackID == target.ID
+	}
+	if state.StackBranches != nil {
+		if state.StackName != target.Trunk.Branch {
+			return false
+		}
+		if slices.Equal(state.StackBranches, target.BranchNames()) {
+			return true
+		}
+		// The journal is published before the catalog. An interrupted save
+		// may leave either definition on disk, but submit must match only
+		// the completed definition.
+		return state.Phase != PhasePendingSubmit && state.PreviousStackBranches != nil &&
+			slices.Equal(state.PreviousStackBranches, target.BranchNames())
+	}
+	var original stack.Stack
+	if err := json.Unmarshal(state.Snapshot.StackMetadata, &original); err != nil {
+		return false
+	}
+	if original.Trunk.Branch == "" || original.Trunk.Branch != target.Trunk.Branch {
+		return false
+	}
+	if slices.Equal(original.BranchNames(), target.BranchNames()) {
+		return true
+	}
+	names := original.BranchNames()
+	for _, action := range state.Plan {
+		switch action.Type {
+		case "rename":
+			for i, name := range names {
+				if name == action.Branch {
+					names[i] = action.NewName
+				}
+			}
+		case "drop", "fold_down", "fold_up":
+			names = slices.DeleteFunc(names, func(name string) bool { return name == action.Branch })
+		case "insert_below", "insert_above":
+			if action.NewPosition < 0 || action.NewPosition > len(names) || action.NewName == "" {
+				return false
+			}
+			names = slices.Insert(names, action.NewPosition, action.NewName)
+		case "move":
+			index := slices.Index(names, action.Branch)
+			if index < 0 || action.NewPosition < 0 || action.NewPosition >= len(names) {
+				return false
+			}
+			names = slices.Delete(names, index, index+1)
+			names = slices.Insert(names, action.NewPosition, action.Branch)
+		}
+	}
+	return slices.Equal(names, target.BranchNames())
+}
+
 // ClearState removes the modify state file.
-func ClearState(gitDir string) {
-	_ = os.Remove(StatePath(gitDir))
+func ClearState(gitDir string) error {
+	if err := os.Remove(StatePath(gitDir)); err != nil && !errors.Is(err, os.ErrNotExist) {
+		return fmt.Errorf("removing modify state: %w", err)
+	}
+	return nil
 }
 
 // StateExists returns true if a modify state file exists.
@@ -121,7 +204,7 @@ func StateExists(gitDir string) bool {
 func CheckStateGuard(gitDir string) error {
 	state, err := LoadState(gitDir)
 	if err != nil {
-		return nil // ignore read errors
+		return err
 	}
 	if state == nil {
 		return nil
@@ -131,6 +214,9 @@ func CheckStateGuard(gitDir string) error {
 	}
 	if state.Phase == PhaseConflict {
 		return fmt.Errorf("a modify has unresolved conflicts — run `gh stack modify --continue` or `gh stack modify --abort`")
+	}
+	if state.Phase != PhasePendingSubmit {
+		return fmt.Errorf("unrecognized modify state phase %q; recovery state was retained", state.Phase)
 	}
 	return nil
 }

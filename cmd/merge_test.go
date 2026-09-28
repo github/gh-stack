@@ -110,6 +110,7 @@ func TestRunMerge_NoArg_MergesWholeStack(t *testing.T) {
 }
 
 func TestRunMerge_StackNumberArg(t *testing.T) {
+	defer mockRemoteOnlyGit()()
 	var gotPR int
 	gotAction := "unset"
 	cfg, outR, errR := config.NewTestConfig()
@@ -134,6 +135,7 @@ func TestRunMerge_StackNumberArg(t *testing.T) {
 }
 
 func TestRunMerge_MergeQueue_Headless(t *testing.T) {
+	defer mockRemoteOnlyGit()()
 	gotMethod, gotAction := "unset", "unset"
 	cfg, outR, errR := config.NewTestConfig()
 	cfg.GitHubClientOverride = &github.MockClient{
@@ -163,6 +165,7 @@ func TestRunMerge_MergeQueue_Headless(t *testing.T) {
 }
 
 func TestRunMerge_MergeQueue_IgnoresMethodFlag(t *testing.T) {
+	defer mockRemoteOnlyGit()()
 	gotMethod, gotAction := "unset", "unset"
 	cfg, outR, errR := config.NewTestConfig()
 	cfg.GitHubClientOverride = &github.MockClient{
@@ -191,6 +194,7 @@ func TestRunMerge_MergeQueue_IgnoresMethodFlag(t *testing.T) {
 }
 
 func TestRunMerge_MergeQueueDetectionError_FallsBackToDirect(t *testing.T) {
+	defer mockRemoteOnlyGit()()
 	gotMethod, gotAction := "unset", "unset"
 	cfg, outR, errR := config.NewTestConfig()
 	cfg.GitHubClientOverride = &github.MockClient{
@@ -222,6 +226,7 @@ func TestRunMerge_MergeQueueDetectionError_FallsBackToDirect(t *testing.T) {
 }
 
 func TestRunMerge_PRNumberArg(t *testing.T) {
+	defer mockRemoteOnlyGit()()
 	var gotPR int
 	cfg, outR, errR := config.NewTestConfig()
 	cfg.GitHubClientOverride = &github.MockClient{
@@ -248,6 +253,7 @@ func TestRunMerge_PRNumberArg(t *testing.T) {
 }
 
 func TestRunMerge_SquashFlag(t *testing.T) {
+	defer mockRemoteOnlyGit()()
 	var gotMethod string
 	cfg, outR, errR := config.NewTestConfig()
 	cfg.GitHubClientOverride = &github.MockClient{
@@ -270,6 +276,7 @@ func TestRunMerge_SquashFlag(t *testing.T) {
 }
 
 func TestRunMerge_ConflictingMethodFlags(t *testing.T) {
+	defer mockRemoteOnlyGit()()
 	cfg, outR, errR := config.NewTestConfig()
 	opts := fastOptions()
 	opts.squash = true
@@ -283,6 +290,7 @@ func TestRunMerge_ConflictingMethodFlags(t *testing.T) {
 }
 
 func TestRunMerge_InvalidMergeMethod(t *testing.T) {
+	defer mockRemoteOnlyGit()()
 	cfg, outR, errR := config.NewTestConfig()
 	opts := fastOptions()
 	opts.mergeMethod = "fast-forward"
@@ -295,6 +303,7 @@ func TestRunMerge_InvalidMergeMethod(t *testing.T) {
 }
 
 func TestRunMerge_DisallowedMethod(t *testing.T) {
+	defer mockRemoteOnlyGit()()
 	cfg, outR, errR := config.NewTestConfig()
 	cfg.GitHubClientOverride = &github.MockClient{
 		GetStackFn: func(n int) (*github.RemoteStack, error) {
@@ -315,6 +324,7 @@ func TestRunMerge_DisallowedMethod(t *testing.T) {
 }
 
 func TestRunMerge_DraftTarget(t *testing.T) {
+	defer mockRemoteOnlyGit()()
 	cfg, outR, errR := config.NewTestConfig()
 	cfg.GitHubClientOverride = &github.MockClient{
 		GetStackFn: func(n int) (*github.RemoteStack, error) { return nil, notFoundErr() },
@@ -331,6 +341,7 @@ func TestRunMerge_DraftTarget(t *testing.T) {
 }
 
 func TestRunMerge_BlockerBelowTarget(t *testing.T) {
+	defer mockRemoteOnlyGit()()
 	cfg, outR, errR := config.NewTestConfig()
 	cfg.GitHubClientOverride = &github.MockClient{
 		GetStackFn: func(n int) (*github.RemoteStack, error) { return nil, notFoundErr() },
@@ -347,6 +358,7 @@ func TestRunMerge_BlockerBelowTarget(t *testing.T) {
 }
 
 func TestRunMerge_AlreadyMergedTarget(t *testing.T) {
+	defer mockRemoteOnlyGit()()
 	cfg, outR, errR := config.NewTestConfig()
 	cfg.GitHubClientOverride = &github.MockClient{
 		GetStackFn: func(n int) (*github.RemoteStack, error) { return nil, notFoundErr() },
@@ -363,6 +375,7 @@ func TestRunMerge_AlreadyMergedTarget(t *testing.T) {
 }
 
 func TestRunMerge_WholeStackBlockedByDraft(t *testing.T) {
+	defer mockRemoteOnlyGit()()
 	submitCalled := false
 	cfg, outR, errR := config.NewTestConfig()
 	cfg.GitHubClientOverride = &github.MockClient{
@@ -405,6 +418,7 @@ func TestRunMerge_NothingToMerge_AllMerged(t *testing.T) {
 }
 
 func TestRunMerge_SubmitNotMergeable(t *testing.T) {
+	defer mockRemoteOnlyGit()()
 	cfg, outR, errR := config.NewTestConfig()
 	cfg.GitHubClientOverride = &github.MockClient{
 		GetStackFn: func(n int) (*github.RemoteStack, error) {
@@ -424,6 +438,7 @@ func TestRunMerge_SubmitNotMergeable(t *testing.T) {
 }
 
 func TestRunMerge_PollFailedConflict(t *testing.T) {
+	defer mockRemoteOnlyGit()()
 	cfg, outR, errR := config.NewTestConfig()
 	cfg.GitHubClientOverride = &github.MockClient{
 		GetStackFn: func(n int) (*github.RemoteStack, error) {
@@ -446,6 +461,7 @@ func TestRunMerge_PollFailedConflict(t *testing.T) {
 }
 
 func TestRunMerge_AlreadyMergedOnSubmit(t *testing.T) {
+	defer mockRemoteOnlyGit()()
 	cfg, outR, errR := config.NewTestConfig()
 	cfg.GitHubClientOverride = &github.MockClient{
 		GetStackFn: func(n int) (*github.RemoteStack, error) {
@@ -464,6 +480,7 @@ func TestRunMerge_AlreadyMergedOnSubmit(t *testing.T) {
 }
 
 func TestRunMerge_Enqueued(t *testing.T) {
+	defer mockRemoteOnlyGit()()
 	cfg, outR, errR := config.NewTestConfig()
 	cfg.GitHubClientOverride = &github.MockClient{
 		GetStackFn: func(n int) (*github.RemoteStack, error) {
@@ -485,6 +502,7 @@ func TestRunMerge_Enqueued(t *testing.T) {
 }
 
 func TestRunMerge_EnqueuedOnSubmit(t *testing.T) {
+	defer mockRemoteOnlyGit()()
 	cfg, outR, errR := config.NewTestConfig()
 	cfg.GitHubClientOverride = &github.MockClient{
 		GetStackFn: func(n int) (*github.RemoteStack, error) {
@@ -503,6 +521,7 @@ func TestRunMerge_EnqueuedOnSubmit(t *testing.T) {
 }
 
 func TestRunMerge_AsyncMergeUnavailable(t *testing.T) {
+	defer mockRemoteOnlyGit()()
 	cfg, outR, errR := config.NewTestConfig()
 	cfg.GitHubClientOverride = &github.MockClient{
 		GetStackFn: func(n int) (*github.RemoteStack, error) {
@@ -521,6 +540,7 @@ func TestRunMerge_AsyncMergeUnavailable(t *testing.T) {
 }
 
 func TestRunMerge_StacksUnavailable(t *testing.T) {
+	defer mockRemoteOnlyGit()()
 	cfg, outR, errR := config.NewTestConfig()
 	cfg.GitHubClientOverride = &github.MockClient{
 		GetStackFn:       func(n int) (*github.RemoteStack, error) { return nil, notFoundErr() },
@@ -549,6 +569,7 @@ func TestRunMerge_NoArg_NotInStack(t *testing.T) {
 }
 
 func TestRunMerge_DefaultMethodFallsBackToAllowed(t *testing.T) {
+	defer mockRemoteOnlyGit()()
 	var gotMethod string
 	cfg, outR, errR := config.NewTestConfig()
 	cfg.GitHubClientOverride = &github.MockClient{

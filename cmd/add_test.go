@@ -8,10 +8,122 @@ import (
 	"github.com/AlecAivazis/survey/v2/terminal"
 	"github.com/github/gh-stack/internal/config"
 	"github.com/github/gh-stack/internal/git"
+	"github.com/github/gh-stack/internal/github"
 	"github.com/github/gh-stack/internal/stack"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
+
+func TestAdd_ForeignAdoptionAndCommitPreflight(t *testing.T) {
+	tests := []struct {
+		name      string
+		opts      addOptions
+		empty     bool
+		noStack   bool
+		wantError bool
+	}{
+		{name: "metadata adoption"},
+		{name: "message", opts: addOptions{message: "commit"}, wantError: true},
+		{name: "stage all", opts: addOptions{stageAll: true}, wantError: true},
+		{name: "stage tracked", opts: addOptions{stageTracked: true}, wantError: true},
+		{name: "empty layer shortcut", opts: addOptions{stageAll: true, message: "commit"}, empty: true, wantError: true},
+		{name: "initialize from add", opts: addOptions{stageAll: true, message: "commit"}, noStack: true, wantError: true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			common, local, root, owner := t.TempDir(), t.TempDir(), t.TempDir(), t.TempDir()
+			if !tt.noStack {
+				saveStack(t, common, stack.Stack{Trunk: stack.BranchRef{Branch: "main"}, Branches: []stack.BranchRef{{Branch: "b1"}}})
+			}
+			restore := git.SetOps(&git.MockOps{
+				GitDirFn:        func() (string, error) { return local, nil },
+				CommonDirFn:     func() (string, error) { return common, nil },
+				RootDirFn:       func() (string, error) { return root, nil },
+				CurrentBranchFn: func() (string, error) { return "b1", nil },
+				BranchExistsFn:  func(string) (bool, error) { return true, nil },
+				WorktreesFn:     func() ([]git.Worktree, error) { return []git.Worktree{{Path: owner, Branch: "b2"}}, nil },
+				RevParseMultiFn: func([]string) ([]string, error) {
+					if tt.empty {
+						return []string{"same", "same"}, nil
+					}
+					return []string{"parent", "current"}, nil
+				},
+				MergeBaseFn: func(string, string) (string, error) { return "adopted-base", nil },
+				StageAllFn: func() error {
+					t.Fatal("must reject before staging")
+					return nil
+				},
+				StageTrackedFn: func() error {
+					t.Fatal("must reject before staging")
+					return nil
+				},
+				CommitFn: func(string) (string, error) {
+					t.Fatal("must not commit in either worktree")
+					return "", nil
+				},
+				CheckoutBranchFn: func(string) error {
+					t.Fatal("foreign adoption must not check out")
+					return nil
+				},
+			})
+			defer restore()
+			cfg, outR, errR := config.NewTestConfig()
+			cfg.ForceInteractive = true
+			cfg.ConfirmFn = func(string, bool) (bool, error) { return true, nil }
+			cfg.GitHubClientOverride = &github.MockClient{}
+			err := runAdd(cfg, &tt.opts, []string{"b2"})
+			out, diagnostics := commandOutput(t, cfg, outR, errR)
+			assert.Empty(t, out)
+			assert.Contains(t, diagnostics, owner)
+			sf, loadErr := stack.Load(common)
+			require.NoError(t, loadErr)
+			if tt.wantError {
+				assert.ErrorIs(t, err, ErrInvalidArgs)
+				if tt.noStack {
+					assert.Empty(t, sf.Stacks)
+				} else {
+					require.Len(t, sf.Stacks, 1)
+					assert.Equal(t, []string{"b1"}, sf.Stacks[0].BranchNames())
+				}
+			} else {
+				require.NoError(t, err)
+				require.Len(t, sf.Stacks, 1)
+				assert.Equal(t, []string{"b1", "b2"}, sf.Stacks[0].BranchNames())
+				assert.Equal(t, "adopted-base", sf.Stacks[0].Branches[1].Base)
+				assert.Contains(t, diagnostics, "Adopted")
+				assert.Contains(t, diagnostics, "left unchanged")
+			}
+		})
+	}
+}
+
+func TestAdd_InteractiveInitForeignTargetFailsBeforeStaging(t *testing.T) {
+	common, root, owner := t.TempDir(), t.TempDir(), t.TempDir()
+	restore := git.SetOps(&git.MockOps{
+		GitDirFn:          func() (string, error) { return common, nil },
+		RootDirFn:         func() (string, error) { return root, nil },
+		IsRerereEnabledFn: func() (bool, error) { return true, nil },
+		BranchExistsFn:    func(string) (bool, error) { return true, nil },
+		WorktreesFn:       func() ([]git.Worktree, error) { return []git.Worktree{{Path: owner, Branch: "foreign"}}, nil },
+		StageAllFn: func() error {
+			t.Fatal("must reject the prompted foreign target before staging")
+			return nil
+		},
+	})
+	defer restore()
+	cfg, outR, errR := config.NewTestConfig()
+	cfg.ForceInteractive = true
+	cfg.ConfirmFn = func(string, bool) (bool, error) { return true, nil }
+	cfg.InputFn = func(string) (string, error) { return "foreign", nil }
+	cfg.GitHubClientOverride = &github.MockClient{}
+	require.ErrorIs(t, runAdd(cfg, &addOptions{stageAll: true}, nil), ErrInvalidArgs)
+	out, diagnostics := commandOutput(t, cfg, outR, errR)
+	assert.Empty(t, out)
+	assert.Contains(t, diagnostics, owner)
+	sf, err := stack.Load(common)
+	require.NoError(t, err)
+	assert.Empty(t, sf.Stacks)
+}
 
 // saveStack is a helper to pre-create a stack file for add tests.
 func saveStack(t *testing.T, gitDir string, s stack.Stack) {

@@ -1,6 +1,10 @@
 package git
 
-import "fmt"
+import (
+	"fmt"
+	"os"
+	"path/filepath"
+)
 
 // MockOps is a test double for git operations.
 // Each field is an optional function that, when set, handles the corresponding
@@ -75,7 +79,7 @@ func (m *MockOps) GitDir() (string, error) {
 	if m.GitDirFn != nil {
 		return m.GitDirFn()
 	}
-	return "/tmp/fake-git-dir", nil
+	return filepath.Join(os.TempDir(), "fake-git-dir"), nil
 }
 
 func (m *MockOps) CommonDir() (string, error) {
@@ -110,7 +114,7 @@ func (m *MockOps) RootDir() (string, error) {
 	if m.RootDirFn != nil {
 		return m.RootDirFn()
 	}
-	return "/tmp/fake-repo", nil
+	return filepath.Join(os.TempDir(), "fake-repo"), nil
 }
 
 func (m *MockOps) CurrentBranch() (string, error) {

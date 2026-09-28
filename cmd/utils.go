@@ -215,10 +215,9 @@ func loadStack(cfg *config.Config, branch string) (*loadStackResult, error) {
 // result with a nil Stack when the branch is not tracked instead of reporting
 // an error. Other lookup failures are still reported and returned.
 func loadStackOptional(cfg *config.Config, branch string) (*loadStackResult, error) {
-	gitDir, err := git.GitDir()
+	gitDir, err := stackStateDir(cfg)
 	if err != nil {
-		cfg.Errorf("not a git repository")
-		return nil, fmt.Errorf("not a git repository")
+		return nil, err
 	}
 
 	sf, err := stack.Load(gitDir)
@@ -287,10 +286,13 @@ func reportBranchNotInStack(cfg *config.Config, branch string, branchFromArg boo
 // that must stay purely local (e.g. `--local`) pass false, and legacy stacks
 // whose number isn't recorded locally are reported as not tracked.
 func lookupStackByNumber(cfg *config.Config, number int, allowRemote bool) (result *loadStackResult, ok bool, err error) {
-	gitDir, err := git.GitDir()
-	if err != nil {
+	if _, err := git.CommonDir(); err != nil {
 		// Not a git repository — nothing can be tracked locally.
 		return nil, false, nil
+	}
+	gitDir, err := stackStateDir(cfg)
+	if err != nil {
+		return nil, false, err
 	}
 
 	sf, err := stack.Load(gitDir)
@@ -404,9 +406,8 @@ func handleSaveError(cfg *config.Config, err error) error {
 // resolveStack finds the stack for the given branch, handling ambiguity when
 // a branch (typically a trunk) belongs to multiple stacks. If exactly one
 // stack matches, it is returned directly. If multiple stacks match, the user
-// is prompted to select one and the working tree is switched to the top branch
-// of the selected stack. Returns nil with no error if no stack contains the
-// branch.
+// is prompted to select one. Commands that need rewrite preflight and read-only
+// callers leave checkout unchanged. Returns nil if no stack contains the branch.
 func resolveStack(sf *stack.StackFile, branch string, cfg *config.Config) (*stack.Stack, error) {
 	stacks := sf.FindAllStacksForBranch(branch)
 
@@ -418,7 +419,7 @@ func resolveStack(sf *stack.StackFile, branch string, cfg *config.Config) (*stac
 	}
 
 	if !cfg.IsInteractive() {
-		return nil, fmt.Errorf("branch %q belongs to multiple stacks; use an interactive terminal to select one", branch)
+		return nil, fmt.Errorf("branch %q belongs to multiple stacks; use an interactive terminal to select one: %w", branch, ErrDisambiguate)
 	}
 
 	cfg.Warningf("Branch %q is the trunk of multiple stacks", branch)
@@ -428,8 +429,14 @@ func resolveStack(sf *stack.StackFile, branch string, cfg *config.Config) (*stac
 		options[i] = s.DisplayChain()
 	}
 
-	p := prompter.New(cfg.In, cfg.Out, cfg.Err)
-	selected, err := p.Select("Which stack would you like to use?", "", options)
+	var selected int
+	var err error
+	if cfg.SelectFn != nil {
+		selected, err = cfg.SelectFn("Which stack would you like to use?", "", options)
+	} else {
+		p := prompter.New(cfg.In, cfg.Out, cfg.Err)
+		selected, err = p.Select("Which stack would you like to use?", "", options)
+	}
 	if err != nil {
 		if isInterruptError(err) {
 			clearSelectPrompt(cfg, len(options))
@@ -439,17 +446,36 @@ func resolveStack(sf *stack.StackFile, branch string, cfg *config.Config) (*stac
 		return nil, fmt.Errorf("stack selection: %w", err)
 	}
 
+	if selected < 0 || selected >= len(stacks) {
+		return nil, fmt.Errorf("invalid stack selection")
+	}
 	s := stacks[selected]
 
 	if len(s.Branches) == 0 {
 		return nil, fmt.Errorf("selected stack %q has no branches", s.DisplayChain())
+	}
+	// Selection must not mutate a checkout before rewrite ownership preflight.
+	if cfg.StackMutation == nil {
+		return s, nil
+	}
+	switch cfg.StackMutation.Kind {
+	case "rebase", "rebase-continue", "rebase-abort", "sync", "modify":
+		return s, nil
 	}
 
 	// Switch to the top branch of the selected stack so future commands
 	// resolve unambiguously.
 	topBranch := s.Branches[len(s.Branches)-1].Branch
 	if topBranch != branch {
-		if err := git.CheckoutBranch(topBranch); err != nil {
+		path, err := foreignWorktreePath(topBranch)
+		if err != nil {
+			return nil, err
+		}
+		if path != "" {
+			cfg.Infof("Selected stack; %s is checked out in %s", topBranch, path)
+			return s, nil
+		}
+		if err := checkoutWorktreeBranch(cfg, topBranch, false); err != nil {
 			return nil, fmt.Errorf("failed to checkout branch %s: %w", topBranch, err)
 		}
 		cfg.Successf("Switched to %s", topBranch)
@@ -773,6 +799,10 @@ func syncStackPRsFromRemote(client github.ClientOps, s *stack.Stack) (map[string
 // in a stack. Call this after any operation that may have moved branch refs
 // (rebase, push, etc.).
 func updateBaseSHAs(s *stack.Stack) {
+	updateBaseSHAsWithTrunk(s, "")
+}
+
+func updateBaseSHAsWithTrunk(s *stack.Stack, trunkSHA string) {
 	// Collect all refs we need to resolve, then batch into one git call.
 	var refs []string
 	type refPair struct {
@@ -806,12 +836,19 @@ func updateBaseSHAs(s *stack.Stack) {
 		return
 	}
 	for _, p := range pairs {
-		if base, ok := shaMap[p.parent]; ok && canUpdateBase(base, p.branch, s.Branches[p.index].Base) {
+		base, ok := shaMap[p.parent]
+		if p.parent == s.Trunk.Branch && trunkSHA != "" {
+			base, ok = trunkSHA, true
+		}
+		if ok && canUpdateBase(base, p.branch, s.Branches[p.index].Base) {
 			s.Branches[p.index].Base = base
 		}
 		if head, ok := shaMap[p.branch]; ok {
 			s.Branches[p.index].Head = head
 		}
+	}
+	if trunkSHA != "" {
+		s.Trunk.Head = trunkSHA
 	}
 }
 
@@ -824,7 +861,15 @@ func canUpdateBase(parentSHA, branch, currentBase string) bool {
 		return true
 	}
 	isAncestor, err := git.IsAncestor(parentSHA, branch)
-	return err == nil && isAncestor
+	if err != nil || !isAncestor {
+		return false
+	}
+	if valid, err := git.IsAncestor(currentBase, branch); err == nil && valid {
+		if older, err := git.IsAncestor(parentSHA, currentBase); err == nil && older {
+			return false
+		}
+	}
+	return true
 }
 
 // activeBranchNames returns the branch names for all non-merged branches in a stack.
@@ -1625,6 +1670,9 @@ func reconcileRemoteStack(cfg *config.Config, sf *stack.StackFile, s *stack.Stac
 	if err != nil {
 		return res, nil
 	}
+	if err := preflightSyncReconciliation(cfg, s, prs, remote); err != nil {
+		return res, err
+	}
 
 	localActive, remoteActive := activeStackSequences(s, prs)
 
@@ -1641,6 +1689,22 @@ func reconcileRemoteStack(cfg *config.Config, sf *stack.StackFile, s *stack.Stac
 	default:
 		return resolveStackDivergence(cfg, client, sf, s, currentBranch, gitDir, remote, prs, remoteActive)
 	}
+}
+
+func preflightSyncReconciliation(cfg *config.Config, s *stack.Stack, prs []*github.PullRequest, remote string) error {
+	if cfg.StackMutation == nil || cfg.StackMutation.Kind != "sync" {
+		return nil
+	}
+	trunk, err := normalizeTrunkBranch(s.Trunk.Branch, remote)
+	if err != nil {
+		cfg.Errorf("%s", err)
+		return ErrSilent
+	}
+	branches := append(s.BranchNames(), trunk)
+	for _, pr := range prs {
+		branches = append(branches, pr.HeadRefName)
+	}
+	return requireLocalBranches(cfg, branches)
 }
 
 // activeStackSequences returns the ordered active (non-merged) branch-name
@@ -1837,6 +1901,11 @@ func resolveStackDivergence(cfg *config.Config, client github.ClientOps, sf *sta
 		cfg.Errorf("selection failed: %v", err)
 		return remoteReconcileResult{}, ErrSilent
 	}
+	if selected == 0 || selected == 1 {
+		if err := preflightSyncReconciliation(cfg, s, prs, remote); err != nil {
+			return remoteReconcileResult{}, err
+		}
+	}
 
 	switch selected {
 	case 0:
@@ -1901,7 +1970,13 @@ func resolveDivergenceUseRemote(cfg *config.Config, sf *stack.StackFile, s *stac
 	// move them to the nearest surviving branch so they don't end up detached
 	// from the stack.
 	if target := nearestBranchAfterReplace(oldBranches, currentBranch, newStack); target != currentBranch {
-		if err := git.CheckoutBranch(target); err != nil {
+		path, err := foreignWorktreePath(target)
+		if err != nil {
+			return res, err
+		}
+		if path != "" {
+			cfg.Infof("Current checkout retained; surviving branch %s is in worktree %s", target, path)
+		} else if err := checkoutWorktreeBranch(cfg, target, false); err != nil {
 			cfg.Warningf("Failed to switch from %s to %s: %v", currentBranch, target, err)
 		} else {
 			cfg.Printf("Switched to %s (original branch %s is no longer in the stack)", target, currentBranch)

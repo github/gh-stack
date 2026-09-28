@@ -2,6 +2,9 @@ package cmd
 
 import (
 	"fmt"
+	"io"
+	"os"
+	"path/filepath"
 	"testing"
 
 	"github.com/cli/go-gh/v2/pkg/api"
@@ -12,6 +15,176 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
+
+func TestCheckout_PrintPathRequiresTarget(t *testing.T) {
+	cfg, outR, errR := config.NewTestConfig()
+	cfg.ForceInteractive = true
+	cmd := CheckoutCmd(cfg)
+	cmd.SetArgs([]string{"--print-path"})
+	cmd.SetOut(io.Discard)
+	cmd.SetErr(io.Discard)
+	assert.ErrorIs(t, cmd.Execute(), ErrInvalidArgs)
+	out, diagnostics := commandOutput(t, cfg, outR, errR)
+	assert.Empty(t, out)
+	assert.Contains(t, diagnostics, "explicit")
+}
+
+func TestCheckout_PrintPathAmbiguousBranch(t *testing.T) {
+	common := t.TempDir()
+	writeStackFileMulti(t, common,
+		stack.Stack{Trunk: stack.BranchRef{Branch: "main"}, Branches: []stack.BranchRef{{Branch: "one"}}},
+		stack.Stack{Trunk: stack.BranchRef{Branch: "main"}, Branches: []stack.BranchRef{{Branch: "two"}}},
+	)
+	restore := git.SetOps(&git.MockOps{GitDirFn: func() (string, error) { return common, nil }})
+	defer restore()
+	cfg, outR, errR := config.NewTestConfig()
+	cfg.ForceInteractive = true
+	assert.ErrorIs(t, runCheckout(cfg, &checkoutOptions{target: "main", printPath: true}), ErrDisambiguate)
+	out, diagnostics := commandOutput(t, cfg, outR, errR)
+	assert.Empty(t, out)
+	assert.Contains(t, diagnostics, "multiple stacks")
+}
+
+func TestCheckout_RemotePrintPathDoesNotImportDuringRecovery(t *testing.T) {
+	common, root, owner := t.TempDir(), t.TempDir(), t.TempDir()
+	require.NoError(t, os.WriteFile(filepath.Join(common, rebaseStateFile), []byte(`{"worktrees":{}}`), 0600))
+	restore := git.SetOps(&git.MockOps{
+		GitDirFn:    func() (string, error) { return common, nil },
+		RootDirFn:   func() (string, error) { return root, nil },
+		WorktreesFn: func() ([]git.Worktree, error) { return []git.Worktree{{Path: owner, Branch: "remote"}}, nil },
+		FetchFn: func(string) error {
+			t.Fatal("read-only path resolution must not fetch")
+			return nil
+		},
+		CheckoutBranchFn: func(string) error {
+			t.Fatal("read-only path resolution must not check out")
+			return nil
+		},
+	})
+	defer restore()
+	cfg, outR, errR := config.NewTestConfig()
+	cfg.ForceInteractive = true
+	cfg.GitHubClientOverride = &github.MockClient{
+		GetStackFn: func(int) (*github.RemoteStack, error) {
+			return &github.RemoteStack{Number: 7, PullRequests: []int{10}}, nil
+		},
+		FindPRByNumberFn: func(int) (*github.PullRequest, error) {
+			return &github.PullRequest{Number: 10, BaseRefName: "main", HeadRefName: "remote"}, nil
+		},
+	}
+	require.NoError(t, runCheckout(cfg, &checkoutOptions{target: "7", printPath: true}))
+	out, _ := commandOutput(t, cfg, outR, errR)
+	assert.Equal(t, owner+"\n", out)
+	assert.NoFileExists(t, filepath.Join(common, "gh-stack"))
+}
+
+func TestCheckout_RealLinkedWorktreeFromSubdirectory(t *testing.T) {
+	root := t.TempDir()
+	owner := filepath.Join(t.TempDir(), "linked owner's tree")
+	issue250Git(t, root, "init", "-b", "main")
+	issue250Git(t, root, "-c", "commit.gpgsign=false", "commit", "--allow-empty", "-m", "initial")
+	issue250Git(t, root, "branch", "local")
+	issue250Git(t, root, "branch", "unoccupied")
+	issue250Git(t, root, "worktree", "add", "-b", "foreign", owner)
+	issue250Git(t, root, "checkout", "local")
+	subdir := filepath.Join(root, "nested", "directory")
+	require.NoError(t, os.MkdirAll(subdir, 0700))
+	withIssue250Repo(t, subdir)
+	common, err := git.CommonDir()
+	require.NoError(t, err)
+	writeStackFile(t, common, stack.Stack{
+		Trunk:    stack.BranchRef{Branch: "main"},
+		Branches: []stack.BranchRef{{Branch: "local"}, {Branch: "foreign"}, {Branch: "unoccupied"}},
+	})
+	actualRoot, err := git.RootDir()
+	require.NoError(t, err)
+	actualOwner, err := requireWorktree(t, git.CurrentOps(), owner).RootDir()
+	require.NoError(t, err)
+
+	cfg, outR, errR := config.NewTestConfig()
+	assert.ErrorIs(t, runCheckout(cfg, &checkoutOptions{target: "foreign"}), ErrInvalidArgs)
+	out, diagnostics := commandOutput(t, cfg, outR, errR)
+	assert.Empty(t, out)
+	assert.Contains(t, diagnostics, actualOwner)
+	assert.Equal(t, "local", issue250Git(t, root, "branch", "--show-current"))
+	assert.Equal(t, "foreign", issue250Git(t, owner, "branch", "--show-current"))
+
+	cfg, outR, errR = config.NewTestConfig()
+	require.NoError(t, runCheckout(cfg, &checkoutOptions{target: "foreign", printPath: true}))
+	out, _ = commandOutput(t, cfg, outR, errR)
+	assert.Equal(t, actualOwner+"\n", out)
+	assert.Equal(t, "local", issue250Git(t, root, "branch", "--show-current"))
+
+	cfg, outR, errR = config.NewTestConfig()
+	require.NoError(t, runCheckout(cfg, &checkoutOptions{target: "unoccupied", printPath: true}))
+	out, _ = commandOutput(t, cfg, outR, errR)
+	assert.Equal(t, actualRoot+"\n", out)
+	assert.Equal(t, "unoccupied", issue250Git(t, root, "branch", "--show-current"))
+	assert.Equal(t, "foreign", issue250Git(t, owner, "branch", "--show-current"))
+}
+
+func TestCheckout_SeparateGitDirMainOwner(t *testing.T) {
+	t.Setenv("GIT_CONFIG_COUNT", "1")
+	t.Setenv("GIT_CONFIG_KEY_0", "safe.bareRepository")
+	t.Setenv("GIT_CONFIG_VALUE_0", "explicit")
+	root, admin := t.TempDir(), filepath.Join(t.TempDir(), "git administration")
+	linked := filepath.Join(t.TempDir(), "linked worktree")
+	issue250Git(t, root, "init", "--separate-git-dir", admin, "-b", "main")
+	issue250Git(t, root, "-c", "commit.gpgsign=false", "commit", "--allow-empty", "-m", "initial")
+	issue250Git(t, root, "worktree", "add", "-b", "linked", linked)
+	withIssue250Repo(t, root)
+	common, err := git.CommonDir()
+	require.NoError(t, err)
+	actualRoot, err := git.RootDir()
+	require.NoError(t, err)
+	writeStackFile(t, common, stack.Stack{
+		Trunk: stack.BranchRef{Branch: "main"}, Branches: []stack.BranchRef{{Branch: "linked"}},
+	})
+
+	cfg, outR, errR := config.NewTestConfig()
+	require.NoError(t, runTrunkWithPath(cfg, true))
+	out, _ := commandOutput(t, cfg, outR, errR)
+	assert.Equal(t, actualRoot+"\n", out, "the main worktree can use its observed root")
+
+	withIssue250Repo(t, linked)
+	trees, err := git.Worktrees()
+	require.NoError(t, err)
+	var mainPath string
+	for _, tree := range trees {
+		if tree.Branch == "main" {
+			mainPath = tree.Path
+		}
+	}
+	require.NotEmpty(t, mainPath)
+	commonInfo, err := os.Stat(common)
+	require.NoError(t, err)
+	mainInfo, err := os.Stat(mainPath)
+	require.NoError(t, err)
+	adminOnly := os.SameFile(commonInfo, mainInfo)
+
+	cfg, outR, errR = config.NewTestConfig()
+	err = runTrunkWithPath(cfg, true)
+	out, diagnostics := commandOutput(t, cfg, outR, errR)
+	if adminOnly {
+		assert.Error(t, err)
+		assert.Empty(t, out, "an administrative directory is not a navigable worktree")
+		assert.Contains(t, diagnostics, "separate Git directory")
+		assert.Contains(t, diagnostics, "main worktree")
+	} else {
+		require.NoError(t, err, diagnostics)
+		assert.Equal(t, mainPath+"\n", out)
+	}
+	assert.Equal(t, "main", issue250Git(t, root, "branch", "--show-current"))
+	assert.Equal(t, "linked", issue250Git(t, linked, "branch", "--show-current"))
+
+	issue250Git(t, root, "config", "core.worktree", actualRoot)
+	cfg, outR, errR = config.NewTestConfig()
+	require.NoError(t, runTrunkWithPath(cfg, true))
+	out, _ = commandOutput(t, cfg, outR, errR)
+	assert.Equal(t, actualRoot+"\n", out, "a configured backlink identifies the main worktree from a linked caller")
+	assert.Equal(t, "main", issue250Git(t, root, "branch", "--show-current"))
+	assert.Equal(t, "linked", issue250Git(t, linked, "branch", "--show-current"))
+}
 
 func TestCheckout_ByBranchName(t *testing.T) {
 	gitDir := t.TempDir()

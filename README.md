@@ -10,7 +10,7 @@ Stacked PRs break large changes into a chain of small, reviewable pull requests 
 gh extension install github/gh-stack
 ```
 
-Requires the [GitHub CLI](https://cli.github.com/) (`gh`) v2.0+.
+Requires the [GitHub CLI](https://cli.github.com/) (`gh`) v2.0+ and Git 2.36+.
 
 ## AI agent integration
 
@@ -60,7 +60,25 @@ When you submit, `gh stack` creates one PR per branch and links them together as
 
 ### Local tracking
 
-Stack metadata is stored in `.git/gh-stack` (a JSON file, not committed to the repo). This tracks which branches belong to which stack and their ordering. Rebase state during interrupted rebases is stored separately in `.git/gh-stack-rebase-state`.
+Stack metadata is stored in `<common-dir>/gh-stack` (a JSON file, not committed to the repo), where `<common-dir>` is Git's common directory. In a normal clone this is `.git/gh-stack`. All linked worktrees share this catalog, including stack membership, ordering, and PR metadata.
+
+The gh-stack recovery journals, `gh-stack-rebase-state` and `gh-stack-modify-state`, also live in the common directory and record the worktrees involved. Git's own HEAD, index, rebase, and cherry-pick markers remain **per worktree**.
+
+On upgrade, nonconflicting legacy worktree catalogs are consolidated automatically and originals are preserved as backups. Migration is a prerequisite and can complete even if the requested rewrite is subsequently refused. Conflicting definitions stop migration rather than choosing one; the error identifies the files to reconcile. Finish or abort legacy in-progress operations in their original worktree first. Do not mix old and new gh-stack versions within one clone.
+
+### Git worktrees
+
+You can keep independent stacks in linked worktrees or track a stack whose branches are distributed across them. **For now, `rebase` and `sync` require all stack branches to be unoccupied or checked out in the initiating worktree.** They conservatively refuse foreign-owned members, even outside a requested rebase range, before changing refs, checkouts, stack membership, or remote stacks. A foreign-owned trunk is also refused when trunk updates are enabled; `rebase --no-trunk` does not update it.
+
+Mutations are serialized across the clone, while read-only views remain available. Paused operations must be continued or aborted before another mutation. Rebase recovery must be invoked in its recorded original worktree; invoking it elsewhere fails without changing either checkout. Modify recovery can be invoked elsewhere and still executes in its recorded origin. gh-stack never automatically stashes changes, creates/removes worktrees, or steals another checkout.
+
+Mutation locks coordinate **gh-stack processes only**, not arbitrary Git commands, editors, or other tools. Keep affected worktrees idle while history is being rewritten. During a pause, make only the requested conflict-resolution edits and staging in the reported worktree.
+
+Navigation to a branch checked out elsewhere reports its path and fails without switching. Add `--print-path` to `up`, `down`, `top`, `bottom`, `trunk`, or an explicit-target `checkout` to get the owning path instead. Unoccupied targets are checked out here before printing this worktree's path; successful stdout contains only the absolute path and a newline. See the [worktree workflow](docs/src/content/docs/guides/workflows.md#working-across-git-worktrees) for a shell wrapper that checks errors before changing directories.
+
+**Temporary core limitation:** `modify` works inside a linked worktree only when all stack branches are unoccupied or checked out in that same worktree. Distributed modify is rejected before opening the TUI or applying changes. A trunk checked out elsewhere is allowed because modify only reads it.
+
+With `git init --separate-git-dir`, Git may report the administration directory instead of the main working directory in its worktree list. Shared storage and operations from a known main or linked worktree still work, but discovering that main worktree's owner path from another checkout can be unavailable. Do not treat an administration-directory path as a checkout directory; use the actual main worktree when its location cannot be discovered.
 
 ## Commands
 
@@ -75,6 +93,8 @@ gh stack init [flags] [branches...]
 Initializes a new stack locally. In interactive mode (no arguments), prompts for a branch name and offers to use the current branch as the first layer.
 
 When explicit branch names are given, existing branches are adopted automatically and any missing branches are created. The trunk defaults to the repository's default branch unless overridden with `--base`.
+
+An existing branch checked out in another worktree can be adopted without checking it out here. If the final branch is occupied elsewhere, `init` reports its owner and leaves your current checkout unchanged.
 
 Enables `git rerere` automatically so that conflict resolutions are remembered across rebases.
 
@@ -107,6 +127,8 @@ gh stack add [flags] [branch]
 ```
 
 For an existing stack, creates a new branch at the current HEAD, adds it to the top of the stack, and checks it out. Must be run while on the topmost branch of a stack. If no branch name is given, prompts for one.
+
+An existing branch checked out in another worktree can also be adopted without switching either checkout. Commit/stage shortcuts cannot be used to adopt a foreign-owned branch and fail before staging or changing stack membership.
 
 When run interactively from a branch that is not part of a stack, `add` offers to initialize a new stack instead. The supplied or auto-generated branch name becomes the first layer; without one, the standard `init` prompts are used.
 
@@ -204,6 +226,8 @@ If a rebase conflict occurs, the operation pauses and prints the conflicted file
 | `--abort` | Abort the rebase and restore all branches to their pre-rebase state |
 | `--remote <name>` | Remote to fetch from (defaults to auto-detected remote) |
 | `--committer-date-is-author-date` | Set the committer date to the author date during rebase. Alias: `--preserve-dates` |
+
+Date-preserving rebases use Git's merge backend so the date setting survives conflicts. Resume with `gh stack rebase --continue`; continuation uses Git's saved settings rather than repeating start-only options.
 
 | Argument | Description |
 |----------|-------------|

@@ -1,8 +1,11 @@
 package cmd
 
 import (
+	"errors"
 	"fmt"
 	"io"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -2603,4 +2606,168 @@ func TestSync_MergedBranchPruned_NoFalseDivergence(t *testing.T) {
 
 	assert.Empty(t, created)
 	assert.NotContains(t, output, "diverged")
+}
+
+func TestSync_ForeignTargetsRefusedBeforeMutation(t *testing.T) {
+	for _, owner := range []string{"b1", "main"} {
+		t.Run(owner, func(t *testing.T) {
+			dir := t.TempDir()
+			writeStackFile(t, dir, stack.Stack{
+				Trunk: stack.BranchRef{Branch: "main"},
+				Branches: []stack.BranchRef{
+					{Branch: "b1", PullRequest: &stack.PullRequestRef{Number: 1, Merged: true}},
+					{Branch: "b2"},
+				},
+			})
+			before, err := os.ReadFile(filepath.Join(dir, "gh-stack"))
+			require.NoError(t, err)
+			mock := newSyncMock(dir, "b2")
+			mockForeignOwner(t, mock, dir, "b2", owner)
+			forbidRewriteMutations(t, mock)
+			output, err := runSyncCfg(t, mock, func(cfg *config.Config) {
+				cfg.GitHubClientOverride = &github.MockClient{}
+			})
+			require.ErrorIs(t, err, ErrInvalidArgs)
+			assert.Contains(t, output, "cross-worktree rebase and sync are not supported yet")
+			after, err := os.ReadFile(filepath.Join(dir, "gh-stack"))
+			require.NoError(t, err)
+			assert.Equal(t, before, after)
+			assert.NoFileExists(t, filepath.Join(dir, rebaseStateFile))
+		})
+	}
+}
+
+func TestSync_ForeignRemoteTargetsRefusedBeforeReconciliation(t *testing.T) {
+	for _, tc := range []struct {
+		name         string
+		remote       []int
+		choice       int
+		duringPrompt bool
+	}{
+		{name: "remote append", remote: []int{101, 102, 103}},
+		{name: "replace local", remote: []int{101, 103}, choice: 0, duringPrompt: true},
+		{name: "delete remote", remote: []int{101, 103}, choice: 1, duringPrompt: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			dir := t.TempDir()
+			writeStackFile(t, dir, stack.Stack{
+				ID: "9", Number: 9, Trunk: stack.BranchRef{Branch: "main"},
+				Branches: []stack.BranchRef{{Branch: "b1"}, {Branch: "b2"}},
+			})
+			before, err := os.ReadFile(filepath.Join(dir, "gh-stack"))
+			require.NoError(t, err)
+			mock := newSyncMock(dir, "b2")
+			owner := mockForeignOwner(t, mock, dir, "b2", "b3")
+			owned := !tc.duringPrompt
+			worktrees := mock.WorktreesFn
+			mock.WorktreesFn = func() ([]git.Worktree, error) {
+				trees, err := worktrees()
+				if !owned {
+					trees[1].Branch = "unrelated"
+				}
+				return trees, err
+			}
+			forbidRewriteMutations(t, mock)
+			fetches := 0
+			mock.FetchBranchesFn = func(string, []string) error { fetches++; return nil }
+			lookups := 0
+			ghMock := &github.MockClient{
+				ListStacksFn: func() ([]github.RemoteStack, error) {
+					lookups++
+					return []github.RemoteStack{{ID: 9, Number: 9, PullRequests: tc.remote}}, nil
+				},
+				FindPRByNumberFn: prByNumberFinder(map[int]string{101: "b1", 102: "b2", 103: "b3"}),
+				UnstackFn: func(int) (*github.RemoteStack, bool, error) {
+					t.Fatal("must not mutate the remote stack")
+					return nil, false, nil
+				},
+			}
+
+			output, err := runSyncCfg(t, mock, func(cfg *config.Config) {
+				cfg.GitHubClientOverride = ghMock
+				cfg.ForceInteractive = true
+				cfg.SelectFn = func(string, string, []string) (int, error) {
+					require.True(t, tc.duringPrompt, "ownership preflight must precede reconciliation choices")
+					owned = true
+					return tc.choice, nil
+				}
+			})
+
+			require.ErrorIs(t, err, ErrInvalidArgs)
+			assert.Positive(t, fetches, "discovery fetch is an allowed prerequisite")
+			assert.Positive(t, lookups)
+			assert.Contains(t, output, owner)
+			after, err := os.ReadFile(filepath.Join(dir, "gh-stack"))
+			require.NoError(t, err)
+			assert.Equal(t, before, after)
+			assert.NoFileExists(t, filepath.Join(dir, rebaseStateFile))
+		})
+	}
+}
+
+func TestSync_InvalidOriginRefusesBeforeReconciliation(t *testing.T) {
+	dir := t.TempDir()
+	writeStackFile(t, dir, stack.Stack{
+		ID: "9", Trunk: stack.BranchRef{Branch: "main"}, Branches: []stack.BranchRef{{Branch: "b1"}},
+	})
+	mock := newSyncMock(dir, "b1")
+	mock.RootDirFn = func() (string, error) { return "", errors.New("origin unavailable") }
+	forbidRewriteMutations(t, mock)
+
+	output, err := runSyncCfg(t, mock, func(cfg *config.Config) {
+		cfg.GitHubClientOverride = &github.MockClient{ListStacksFn: func() ([]github.RemoteStack, error) {
+			t.Fatal("origin validation must precede remote reconciliation")
+			return nil, nil
+		}}
+	})
+
+	require.ErrorIs(t, err, ErrSilent)
+	assert.Contains(t, output, "origin unavailable")
+}
+
+func TestSync_RollbackFailureRetainsOriginRecovery(t *testing.T) {
+	dir := t.TempDir()
+	writeStackFile(t, dir, stack.Stack{
+		Trunk: stack.BranchRef{Branch: "main"}, Branches: []stack.BranchRef{{Branch: "b1"}, {Branch: "b2"}},
+	})
+	current := "b2"
+	refs := map[string]string{"main": "trunk", "b1": "old-b1", "b2": "old-b2"}
+	busy, failReset := false, true
+	mock := newSyncMock(dir, current)
+	mock.CurrentBranchFn = func() (string, error) { return current, nil }
+	mock.RevParseFn = func(ref string) (string, error) { return refs[strings.TrimPrefix(ref, "origin/")], nil }
+	mock.IsAncestorFn = func(a, b string) (bool, error) { return a == "old-b1" && b == "b2", nil }
+	mock.CheckoutBranchFn = func(branch string) error { current = branch; return nil }
+	mock.RebaseFn = func(string, git.RebaseOpts) error { refs[current] = "rebased-b1"; return nil }
+	mock.RebaseOntoFn = func(_, _, branch string, _ git.RebaseOpts) error {
+		current, busy = branch, true
+		return errors.New("conflict")
+	}
+	mock.IsRebaseInProgressFn = func() (bool, error) { return busy, nil }
+	mock.RebaseAbortFn = func() error { busy = false; return nil }
+	mock.ResetHardFn = func(sha string) error {
+		if failReset {
+			return errors.New("reset failed")
+		}
+		refs[current] = sha
+		return nil
+	}
+	mock.PushFn = func(string, []string, bool, bool) error { t.Fatal("must not push after failed rollback"); return nil }
+	restore := git.SetOps(mock)
+	defer restore()
+	cfg := issue250TestConfig(t)
+
+	require.ErrorIs(t, runSync(cfg, &syncOptions{}), ErrSilent)
+	state, err := loadRebaseState(dir)
+	require.NoError(t, err)
+	assert.Equal(t, "restoring", state.Phase)
+	assert.Equal(t, originOnlyRebaseMode, state.ExecutionMode)
+	require.NotNil(t, state.Worktrees)
+	assert.Equal(t, "rebased-b1", refs["b1"])
+
+	failReset = false
+	require.NoError(t, runRebase(cfg, &rebaseOptions{abort: true}))
+	assert.Equal(t, "old-b1", refs["b1"])
+	assert.Equal(t, "b2", current)
+	assert.NoFileExists(t, filepath.Join(dir, rebaseStateFile))
 }

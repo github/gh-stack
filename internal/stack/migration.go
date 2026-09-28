@@ -74,7 +74,6 @@ func HasLegacyState(commonDir string) (bool, error) {
 }
 
 // MigrateLegacyState consolidates legacy catalogs into the common directory.
-// Command paths do not call this helper yet; catalog locations are unchanged.
 // The caller must hold LockOperation; this function takes the catalog lock.
 // Only disjoint stacks and equivalent duplicates are merged. Original bytes
 // are retained in *.pre-worktree-migration backups after common publication.

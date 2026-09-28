@@ -7,7 +7,6 @@ import (
 	"github.com/cli/go-gh/v2/pkg/api"
 	"github.com/github/gh-stack/internal/config"
 	"github.com/github/gh-stack/internal/github"
-	"github.com/github/gh-stack/internal/modify"
 	"github.com/github/gh-stack/internal/stack"
 	"github.com/spf13/cobra"
 )
@@ -68,14 +67,26 @@ remain stacked, the stack is kept (and local tracking, if any, is unchanged).`,
 }
 
 func runUnstack(cfg *config.Config, opts *unstackOptions) error {
+	release, err := beginOptionalStackMutation(cfg, "unstack")
+	if err != nil {
+		return err
+	}
+	defer release()
 	// A stack number targets a specific stack. It is unstacked directly on
 	// GitHub by number (remote-first), so this works from anywhere in the
 	// repository whether or not the stack is tracked locally.
 	if opts.stackNumber > 0 {
+		if cfg.StackMutation == nil {
+			if !opts.local {
+				return runRemoteUnstack(cfg, opts.stackNumber)
+			}
+			cfg.Errorf("stack #%d is not tracked locally", opts.stackNumber)
+			return ErrNotInStack
+		}
 		// --local must never contact GitHub, so it uses a strictly local lookup
 		result, ok, err := lookupStackByNumber(cfg, opts.stackNumber, !opts.local)
 		if err != nil {
-			return ErrNotInStack
+			return stackLookupError(err)
 		}
 		if !ok {
 			// The stack number isn't tracked locally.
@@ -94,7 +105,7 @@ func runUnstack(cfg *config.Config, opts *unstackOptions) error {
 	// No argument: operate on the active stack for the current branch.
 	result, err := loadStack(cfg, "")
 	if err != nil {
-		return ErrNotInStack
+		return stackLookupError(err)
 	}
 	return unstackTrackedStack(cfg, opts, result)
 }
@@ -103,11 +114,6 @@ func runUnstack(cfg *config.Config, opts *unstackOptions) error {
 // GitHub (unless --local) and then removes it from local tracking.
 func unstackTrackedStack(cfg *config.Config, opts *unstackOptions, result *loadStackResult) error {
 	gitDir := result.GitDir
-
-	if err := modify.CheckStateGuard(gitDir); err != nil {
-		cfg.Errorf("%s", err)
-		return ErrModifyRecovery
-	}
 
 	sf := result.StackFile
 	s := result.Stack
@@ -158,7 +164,7 @@ func unstackTrackedStack(cfg *config.Config, opts *unstackOptions, result *loadS
 		}
 	}
 	if err := stack.Save(gitDir, sf); err != nil {
-		return handleSaveError(cfg, err)
+		return stackSaveError(cfg, err)
 	}
 	cfg.Successf("Stack removed from local tracking")
 

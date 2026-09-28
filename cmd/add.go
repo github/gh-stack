@@ -1,13 +1,13 @@
 package cmd
 
 import (
+	"errors"
 	"fmt"
 
 	"github.com/cli/go-gh/v2/pkg/prompter"
 	"github.com/github/gh-stack/internal/branch"
 	"github.com/github/gh-stack/internal/config"
 	"github.com/github/gh-stack/internal/git"
-	"github.com/github/gh-stack/internal/modify"
 	"github.com/github/gh-stack/internal/stack"
 	"github.com/spf13/cobra"
 )
@@ -60,16 +60,24 @@ func runAdd(cfg *config.Config, opts *addOptions, args []string) error {
 		return ErrInvalidArgs
 	}
 
+	release, err := beginStackMutation(cfg, "add")
+	if err != nil {
+		return err
+	}
+	defer release()
+	wantsCommit := opts.message != "" || opts.stageAll || opts.stageTracked
+	// An explicit foreign target is incompatible even with the empty-layer
+	// shortcut: never stage or commit before checking its ownership.
+	if wantsCommit && len(args) > 0 && args[0] != "" {
+		if err := rejectForeignCommitTarget(cfg, args[0]); err != nil {
+			return err
+		}
+	}
 	result, err := loadStackOptional(cfg, "")
 	if err != nil {
-		return ErrNotInStack
+		return stackLookupError(err)
 	}
 	gitDir := result.GitDir
-
-	if err := modify.CheckStateGuard(gitDir); err != nil {
-		cfg.Errorf("%s", err)
-		return ErrModifyRecovery
-	}
 
 	if result.Stack == nil {
 		branchName, err := addBranchNameFromArgs(cfg, opts, args)
@@ -101,7 +109,6 @@ func runAdd(cfg *config.Config, opts *addOptions, args []string) error {
 	// Check if the current branch is a stack branch with no unique commits
 	// relative to its parent. If so, the commit should land on this branch
 	// without creating a new one (e.g., right after init).
-	wantsCommit := opts.message != "" || opts.stageAll || opts.stageTracked
 	var branchIsEmpty bool
 	if wantsCommit && idx >= 0 {
 		parentBranch := s.ActiveBaseBranch(currentBranch)
@@ -172,6 +179,16 @@ func runAdd(cfg *config.Config, opts *addOptions, args []string) error {
 		cfg.Errorf("failed to check branch %s: %s", branchName, err)
 		return ErrSilent
 	}
+	owner, err := foreignWorktreePath(branchName)
+	if err != nil {
+		cfg.Errorf("%s", err)
+		return ErrSilent
+	}
+	if owner != "" && wantsCommit {
+		reportWorktreeOwner(cfg, branchName, owner)
+		cfg.Errorf("commit and staging flags cannot be used when adopting a branch checked out in another worktree")
+		return ErrInvalidArgs
+	}
 	var adoptedBase string
 	if adopted {
 		adoptedBase, err = git.MergeBase(currentBranch, branchName)
@@ -197,9 +214,15 @@ func runAdd(cfg *config.Config, opts *addOptions, args []string) error {
 		}
 	}
 
-	if err := git.CheckoutBranch(branchName); err != nil {
-		cfg.Errorf("failed to checkout branch: %s", err)
-		return ErrSilent
+	if owner == "" {
+		if err := checkoutWorktreeBranch(cfg, branchName, false); err != nil {
+			var exitErr *ExitError
+			if errors.As(err, &exitErr) {
+				return err
+			}
+			cfg.Errorf("failed to checkout branch: %s", err)
+			return ErrSilent
+		}
 	}
 
 	base := adoptedBase
@@ -223,7 +246,7 @@ func runAdd(cfg *config.Config, opts *addOptions, args []string) error {
 	}
 
 	if err := stack.Save(gitDir, sf); err != nil {
-		return handleSaveError(cfg, err)
+		return stackSaveError(cfg, err)
 	}
 
 	// Print summary
@@ -241,7 +264,24 @@ func runAdd(cfg *config.Config, opts *addOptions, args []string) error {
 			cfg.Successf("Created and checked out branch %q", branchName)
 		}
 	}
+	if owner != "" {
+		reportWorktreeOwner(cfg, branchName, owner)
+	}
 
+	return nil
+}
+
+func rejectForeignCommitTarget(cfg *config.Config, branchName string) error {
+	owner, err := foreignWorktreePath(branchName)
+	if err != nil {
+		cfg.Errorf("%s", err)
+		return ErrSilent
+	}
+	if owner != "" {
+		reportWorktreeOwner(cfg, branchName, owner)
+		cfg.Errorf("commit and staging flags cannot be used with a branch checked out in another worktree")
+		return ErrInvalidArgs
+	}
 	return nil
 }
 
@@ -290,13 +330,18 @@ func initializeStackFromAdd(cfg *config.Config, opts *addOptions, branchName, cu
 	}
 
 	wantsCommit := opts.message != "" || opts.stageAll || opts.stageTracked
+	initOpts := &initOptions{}
 	if wantsCommit {
-		if err := stageAndValidate(cfg, opts); err != nil {
-			return ErrSilent
+		initOpts.beforeCreate = func(target string) error {
+			if err := rejectForeignCommitTarget(cfg, target); err != nil {
+				return err
+			}
+			if err := stageAndValidate(cfg, opts); err != nil {
+				return ErrSilent
+			}
+			return nil
 		}
 	}
-
-	initOpts := &initOptions{}
 	if branchName != "" {
 		initOpts.branches = []string{branchName}
 	}

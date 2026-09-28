@@ -2,7 +2,9 @@ package modify
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
+	"slices"
 	"time"
 
 	"github.com/github/gh-stack/internal/config"
@@ -66,8 +68,8 @@ func BuildPlan(nodes []modifyview.ModifyBranchNode) []Action {
 			effectiveIdx++
 		}
 
-		if n.Removed {
-			continue // Removed nodes are handled by their pending action
+		if n.Removed && n.PendingAction == nil {
+			continue
 		}
 
 		if n.PendingAction != nil {
@@ -85,7 +87,7 @@ func BuildPlan(nodes []modifyview.ModifyBranchNode) []Action {
 			plan = append(plan, action)
 		}
 
-		if !n.IsInserted && n.OriginalPosition != i && n.PendingAction == nil {
+		if !n.Removed && !n.IsInserted && n.OriginalPosition != i && n.PendingAction == nil {
 			plan = append(plan, Action{
 				Type:        "move",
 				Branch:      n.Ref.Branch,
@@ -109,18 +111,23 @@ func ApplyPlan(
 	currentBranch string,
 	updateBaseSHAs func(*stack.Stack),
 ) (*modifyview.ApplyResult, *modifyview.ConflictInfo, error) {
+	existing, err := LoadState(gitDir)
+	if err != nil {
+		return nil, nil, err
+	}
+	if existing != nil {
+		return nil, nil, fmt.Errorf("a modify journal already exists; finish or abort that operation before applying another plan")
+	}
+	ctx, err := CheckWorktrees(s)
+	if err != nil {
+		return nil, nil, err
+	}
+
 	// Build the snapshot before any changes
 	snapshot, err := BuildSnapshot(s)
 	if err != nil {
 		return nil, nil, fmt.Errorf("building snapshot: %w", err)
 	}
-
-	// Acquire the stack lock before making any changes
-	lock, err := stack.Lock(gitDir)
-	if err != nil {
-		return nil, nil, fmt.Errorf("acquiring stack lock: %w", err)
-	}
-	defer lock.Unlock()
 
 	// Check branch availability before writing recovery state or changing refs.
 	branchNames := make([]string, 0, len(s.Branches)+1)
@@ -143,6 +150,13 @@ func ApplyPlan(
 	}
 
 	plan := BuildPlan(nodes)
+	for _, action := range plan {
+		if action.NewName != "" {
+			if _, err := git.BranchExists(action.NewName); err != nil {
+				return nil, nil, fmt.Errorf("checking target branch %s: %w", action.NewName, err)
+			}
+		}
+	}
 
 	// Find the index of this stack in the stack file for reliable identification
 	stackIndex := -1
@@ -163,10 +177,12 @@ func ApplyPlan(
 		PriorRemoteStackID: s.ID,
 		Snapshot:           snapshot,
 		Plan:               plan,
+		OriginalBranch:     currentBranch,
+		Worktrees:          ctx,
+		RenamedBranches:    make(map[string]string),
+		CreatedBranches:    make(map[string]string),
 	}
-	if err := SaveState(gitDir, stateFile); err != nil {
-		return nil, nil, fmt.Errorf("saving modify state: %w", err)
-	}
+	stateFile.RecordStack(s)
 
 	result := &modifyview.ApplyResult{Success: true}
 
@@ -189,18 +205,43 @@ func ApplyPlan(
 			originalParentTips[b.Branch] = sha
 		}
 	}
+	stateFile.OriginalRefs = originalParentTips
+	if err := SaveState(gitDir, stateFile); err != nil {
+		return nil, nil, fmt.Errorf("saving modify state: %w", err)
+	}
+	rollback := func(cause error) error {
+		return errors.Join(cause, unwindState(cfg, gitDir, stateFile, sf))
+	}
 
 	// Step 1: Renames
 	for i, n := range nodes {
 		if n.PendingAction != nil && n.PendingAction.Type == modifyview.ActionRename {
 			oldName := n.Ref.Branch
 			newName := n.PendingAction.NewName
-			if err := git.RenameBranch(oldName, newName); err != nil {
-				unwindErr := Unwind(cfg, gitDir, snapshot, stackIndex, sf, plan)
-				if unwindErr != nil {
-					return nil, nil, fmt.Errorf("rename failed (%v) and unwind failed (%v)", err, unwindErr)
-				}
-				return nil, nil, fmt.Errorf("renaming %s to %s: %w", oldName, newName, err)
+			ops, err := prepareMutation(stateFile)
+			if err != nil {
+				return nil, nil, err
+			}
+			exists, err := ops.BranchExists(newName)
+			if err != nil {
+				return nil, nil, fmt.Errorf("checking rename target %s: %w", newName, err)
+			}
+			if exists {
+				return nil, nil, rollback(fmt.Errorf("cannot rename %s to %s: branch already exists", oldName, newName))
+			}
+			stateFile.PendingAction = &Action{Type: "rename", Branch: oldName, NewName: newName}
+			ops, err = startRefMutation(gitDir, stateFile, oldName)
+			if err != nil {
+				return nil, nil, err
+			}
+			if err := ops.RenameBranch(oldName, newName); err != nil {
+				return nil, nil, rollback(fmt.Errorf("renaming %s to %s: %w", oldName, newName, err))
+			}
+			ctx.Rename(oldName, newName)
+			stateFile.RenamedBranches[oldName] = newName
+			stateFile.PendingAction = nil
+			if err := ctx.Record(newName); err != nil {
+				return nil, nil, err
 			}
 
 			// Update in-memory state
@@ -227,6 +268,10 @@ func ApplyPlan(
 			})
 			if n.Ref.PullRequest != nil {
 				affectsPRs = true
+			}
+			stateFile.AffectsPRs = affectsPRs
+			if err := saveProgress(gitDir, stateFile, s, sf); err != nil {
+				return nil, nil, err
 			}
 			cfg.Successf("Renamed %s → %s", oldName, newName)
 		}
@@ -285,13 +330,32 @@ func ApplyPlan(
 			}
 		}
 
-		// Create the git branch at the parent's tip
-		if err := git.CreateBranch(newName, parentBranch); err != nil {
-			unwindErr := Unwind(cfg, gitDir, snapshot, stackIndex, sf, plan)
-			if unwindErr != nil {
-				return nil, nil, fmt.Errorf("creating branch %s failed (%v) and unwind failed (%v)", newName, err, unwindErr)
-			}
-			return nil, nil, fmt.Errorf("creating branch %s from %s: %w", newName, parentBranch, err)
+		ops, err := prepareMutation(stateFile)
+		if err != nil {
+			return nil, nil, err
+		}
+		exists, err := ops.BranchExists(newName)
+		if err != nil {
+			return nil, nil, fmt.Errorf("checking insert target %s: %w", newName, err)
+		}
+		if exists {
+			return nil, nil, rollback(fmt.Errorf("cannot insert %s: branch already exists", newName))
+		}
+		parentSHA, err := ops.RevParse(parentBranch)
+		if err != nil {
+			return nil, nil, rollback(fmt.Errorf("resolving insert parent %s: %w", parentBranch, err))
+		}
+		stateFile.PendingAction = &Action{Type: string(n.PendingAction.Type), Branch: n.Ref.Branch, NewName: newName}
+		if err := SaveState(gitDir, stateFile); err != nil {
+			return nil, nil, err
+		}
+		if err := ops.CreateBranch(newName, parentSHA); err != nil {
+			return nil, nil, rollback(fmt.Errorf("creating branch %s from %s: %w", newName, parentBranch, err))
+		}
+		stateFile.CreatedBranches[newName] = parentSHA
+		stateFile.PendingAction = nil
+		if err := ctx.Record(newName); err != nil {
+			return nil, nil, err
 		}
 
 		// Insert BranchRef into s.Branches at the correct position
@@ -325,6 +389,10 @@ func ApplyPlan(
 		}
 
 		result.InsertedBranches = append(result.InsertedBranches, newName)
+		stateFile.AffectsPRs = affectsPRs
+		if err := saveProgress(gitDir, stateFile, s, sf); err != nil {
+			return nil, nil, err
+		}
 		cfg.Successf("Inserted %s after %s", newName, parentBranch)
 	}
 
@@ -384,15 +452,22 @@ func ApplyPlan(
 		if n.PendingAction.Type == modifyview.ActionFoldDown {
 			// Fold-down: cherry-pick the folded branch's commits onto the target.
 			commits, err := git.LogRange(baseBranch, foldBranch)
-			if err != nil || len(commits) == 0 {
+			if err != nil {
+				return nil, nil, rollback(fmt.Errorf("reading commits to fold from %s: %w", foldBranch, err))
+			}
+			if len(commits) == 0 {
 				cfg.Printf("No commits to fold from %s", foldBranch)
 			} else {
-				if err := git.CheckoutBranch(targetBranch); err != nil {
-					unwindErr := Unwind(cfg, gitDir, snapshot, stackIndex, sf, plan)
-					if unwindErr != nil {
-						return nil, nil, fmt.Errorf("checkout failed (%v) and unwind failed (%v)", err, unwindErr)
-					}
-					return nil, nil, fmt.Errorf("checking out %s for fold: %w", targetBranch, err)
+				stateFile.ConflictBranch = foldBranch
+				stateFile.ConflictType = "cherry_pick"
+				stateFile.FoldBranch, stateFile.FoldTarget = foldBranch, targetBranch
+				stateFile.AffectsPRs = affectsPRs
+				ops, err := startRefMutation(gitDir, stateFile, targetBranch)
+				if err != nil {
+					return nil, nil, err
+				}
+				if err := ops.CheckoutBranch(targetBranch); err != nil {
+					return nil, nil, rollback(fmt.Errorf("checking out %s for fold: %w", targetBranch, err))
 				}
 
 				shas := make([]string, len(commits))
@@ -400,13 +475,10 @@ func ApplyPlan(
 					shas[len(commits)-1-i] = c.SHA
 				}
 
-				git.CherryPickQuit()
-
-				if err := git.CherryPick(shas); err != nil {
+				if err := ops.CherryPick(shas); err != nil {
 					conflict := &modifyview.ConflictInfo{Branch: foldBranch}
-					if files, ferr := git.ConflictedFiles(); ferr == nil {
-						conflict.ConflictedFiles = files
-					}
+					files, fileErr := ops.ConflictedFiles()
+					conflict.ConflictedFiles = files
 
 					// Compute remaining branches for cascading rebase after cherry-pick resumes.
 					// Since folds happen before cascading rebase (Step 5), all non-merged, non-folded
@@ -425,19 +497,18 @@ func ApplyPlan(
 					stateFile.FoldBranch = foldBranch
 					stateFile.FoldTarget = targetBranch
 					stateFile.RemainingBranches = remaining
-					stateFile.OriginalBranch = currentBranch
-					stateFile.OriginalRefs = originalParentTips
 					stateFile.AffectsPRs = affectsPRs
-					if saveErr := SaveState(gitDir, stateFile); saveErr != nil {
-						cfg.Warningf("failed to save conflict state: %v", saveErr)
+					if saveErr := saveProgress(gitDir, stateFile, s, sf); saveErr != nil {
+						return nil, nil, errors.Join(err, saveErr)
+					}
+					if fileErr != nil {
+						return nil, nil, errors.Join(err, fmt.Errorf("reading conflicts in %s: %w", ctx.Origin.Path, fileErr))
 					}
 
-					// Save stack metadata so far
-					if saveErr := stack.SaveWithLock(gitDir, sf, lock); saveErr != nil {
-						cfg.Warningf("failed to save stack metadata: %v", saveErr)
-					}
-
-					return nil, conflict, fmt.Errorf("cherry-pick conflict folding %s into %s", foldBranch, targetBranch)
+					return nil, conflict, fmt.Errorf("cherry-pick conflict folding %s into %s in %s", foldBranch, targetBranch, ctx.Origin.Path)
+				}
+				if err := ctx.Record(targetBranch); err != nil {
+					return nil, nil, err
 				}
 
 				cfg.Successf("Folded %s into %s (%d commits)", foldBranch, targetBranch, len(commits))
@@ -456,6 +527,10 @@ func ApplyPlan(
 		foldIdx = s.IndexOf(foldBranch) // re-resolve in case earlier folds shifted indices
 		if foldIdx >= 0 && foldIdx < len(s.Branches) {
 			s.Branches = append(s.Branches[:foldIdx], s.Branches[foldIdx+1:]...)
+		}
+		stateFile.AffectsPRs = affectsPRs
+		if err := saveProgress(gitDir, stateFile, s, sf); err != nil {
+			return nil, nil, err
 		}
 	}
 
@@ -482,6 +557,10 @@ func ApplyPlan(
 		}
 
 		s.Branches = append(s.Branches[:dropIdx], s.Branches[dropIdx+1:]...)
+		stateFile.AffectsPRs = affectsPRs
+		if err := saveProgress(gitDir, stateFile, s, sf); err != nil {
+			return nil, nil, err
+		}
 		cfg.Successf("Dropped %s from stack", dropBranch)
 	}
 
@@ -549,127 +628,113 @@ func ApplyPlan(
 		}
 
 		s.Branches = newBranches
+		if err := saveProgress(gitDir, stateFile, s, sf); err != nil {
+			return nil, nil, err
+		}
 	}
 
-	// Step 6: Cascading rebase — rebase each active branch onto its new parent.
-	// Use the original parent tip SHA as the oldBase for --onto, so that only
-	// the branch's own commits are replayed onto the new parent.
-	for i, b := range s.Branches {
-		if b.IsMerged() {
-			continue
-		}
-
-		var newBase string
-		if i == 0 {
-			newBase = s.Trunk.Branch
-		} else {
-			newBase = s.ActiveBaseBranch(b.Branch)
-		}
-
-		// Use the branch's original parent tip as the oldBase for --onto.
-		// This ensures we replay only this branch's unique commits.
-		oldBase, hasOldBase := originalParentTips[b.Branch]
-		if !hasOldBase {
-			// No original parent recorded — try merge-base as fallback
-			if mb, mberr := git.MergeBase(newBase, b.Branch); mberr == nil {
-				oldBase = mb
-			} else {
-				continue
-			}
-		}
-
-		// Check if rebase is actually needed
-		isAnc, ancErr := git.IsAncestor(newBase, b.Branch)
-		if ancErr == nil && isAnc {
-			if mb, mberr := git.MergeBase(newBase, b.Branch); mberr == nil && mb == oldBase {
-				continue // No rebase needed
-			}
-		}
-
-		if err := git.RebaseOnto(newBase, oldBase, b.Branch, git.RebaseOpts{}); err != nil {
-			if git.IsRebaseStartError(err) {
-				if saveErr := stack.SaveWithLock(gitDir, sf, lock); saveErr != nil {
-					cfg.Warningf("failed to save stack metadata: %v", saveErr)
-				}
-				return nil, nil, fmt.Errorf("could not start rebase of %s onto %s: %w", b.Branch, newBase, err)
-			}
-
-			conflict := &modifyview.ConflictInfo{
-				Branch: b.Branch,
-			}
-			if files, ferr := git.ConflictedFiles(); ferr == nil {
-				conflict.ConflictedFiles = files
-			}
-
-			if b.PullRequest != nil {
-				affectsPRs = true
-			}
-
-			// Save conflict state so --continue can resume
-			remaining := make([]string, 0)
-			for j := i + 1; j < len(s.Branches); j++ {
-				if !s.Branches[j].IsMerged() {
-					remaining = append(remaining, s.Branches[j].Branch)
-				}
-			}
-			stateFile.Phase = PhaseConflict
-			stateFile.ConflictBranch = b.Branch
-			stateFile.ConflictType = "rebase"
-			stateFile.RemainingBranches = remaining
-			stateFile.OriginalBranch = currentBranch
-			stateFile.OriginalRefs = originalParentTips
-			stateFile.AffectsPRs = affectsPRs
-			if saveErr := SaveState(gitDir, stateFile); saveErr != nil {
-				cfg.Warningf("failed to save conflict state: %v", saveErr)
-			}
-
-			// Save stack metadata so far (renames, folds, drops already applied)
-			if saveErr := stack.SaveWithLock(gitDir, sf, lock); saveErr != nil {
-				cfg.Warningf("failed to save stack metadata: %v", saveErr)
-			}
-
-			return nil, conflict, fmt.Errorf("rebase conflict on %s", b.Branch)
-		}
-
-		cfg.Successf("Rebased %s onto %s", b.Branch, newBase)
-		if b.PullRequest != nil {
-			affectsPRs = true
-		}
-		result.MovedBranches++
+	// Step 6: Replay each active branch's original commit range onto its new parent.
+	moved, conflict, err := rebaseRemaining(cfg, gitDir, stateFile, s, sf, s.BranchNames())
+	if err != nil {
+		return nil, conflict, err
 	}
+	result.MovedBranches = moved
 
 	// Check out the best branch — the original if it's still in the stack,
 	// otherwise the nearest surviving branch.
 	targetBranch := resolveCheckoutBranch(currentBranch, plan, snapshot, s)
-	if err := git.CheckoutBranch(targetBranch); err == nil {
-		if targetBranch != currentBranch {
-			cfg.Printf("Switched to %s (original branch %s is no longer in the stack)", targetBranch, currentBranch)
-		}
+	if err := ctx.RestoreOrigin(targetBranch); err != nil {
+		return nil, nil, err
+	}
+	if targetBranch != currentBranch {
+		cfg.Printf("Switched to %s (original branch %s is no longer in the stack)", targetBranch, currentBranch)
 	}
 
 	// Update base SHAs
 	updateBaseSHAs(s)
 
 	// Update state file phase — only require submit when PRs are affected
-	result.NeedsSubmit = s.ID != "" && affectsPRs
-	if result.NeedsSubmit {
-		stateFile.Phase = PhasePendingSubmit
-		if err := SaveState(gitDir, stateFile); err != nil {
-			cfg.Warningf("failed to update modify state: %s", err)
-		}
-	}
-
-	// Save stack metadata — this must succeed since git refs have been rewritten
-	if err := stack.SaveWithLock(gitDir, sf, lock); err != nil {
-		return nil, nil, fmt.Errorf("saving stack metadata: %w", err)
-	}
-
-	// Clear state after metadata save succeeds to preserve --abort recovery
-	if !result.NeedsSubmit {
-		ClearState(gitDir)
+	result.NeedsSubmit = s.ID != "" && stateFile.AffectsPRs
+	if err := finishApply(gitDir, stateFile, s, sf, result.NeedsSubmit); err != nil {
+		return nil, nil, err
 	}
 
 	return result, nil, nil
+}
+
+func rebaseRemaining(cfg *config.Config, dir string, state *StateFile, s *stack.Stack, sf *stack.StackFile, branches []string) (int, *modifyview.ConflictInfo, error) {
+	moved := 0
+	for i, name := range branches {
+		index := s.IndexOf(name)
+		if index < 0 {
+			return moved, nil, fmt.Errorf("branch %s is missing from the recorded stack; recovery state was retained", name)
+		}
+		branch := s.Branches[index]
+		if branch.IsMerged() {
+			continue
+		}
+		ops, err := state.Worktrees.OriginOps()
+		if err != nil {
+			return moved, nil, err
+		}
+		newBase := s.ActiveBaseBranch(name)
+		oldBase := state.OriginalRefs[name]
+		if oldBase == "" {
+			oldBase, err = ops.MergeBase(newBase, name)
+			if err != nil {
+				return moved, nil, fmt.Errorf("finding original base for %s: %w", name, err)
+			}
+		}
+		ancestor, err := ops.IsAncestor(newBase, name)
+		if err != nil {
+			return moved, nil, fmt.Errorf("checking ancestry of %s: %w", name, err)
+		}
+		if ancestor {
+			base, err := ops.MergeBase(newBase, name)
+			if err != nil {
+				return moved, nil, fmt.Errorf("finding merge base for %s: %w", name, err)
+			}
+			if base == oldBase {
+				continue
+			}
+		}
+		state.ConflictBranch = name
+		state.ConflictType = "rebase"
+		state.RemainingBranches = append([]string{}, branches[i+1:]...)
+		state.AffectsPRs = state.AffectsPRs || branch.PullRequest != nil
+		ops, err = startRefMutation(dir, state, name)
+		if err != nil {
+			return moved, nil, err
+		}
+		if err := ops.RebaseOnto(newBase, oldBase, name, git.RebaseOpts{}); err != nil {
+			state.Phase = PhaseConflict
+			if git.IsRebaseStartError(err) {
+				state.ConflictType = "rebase_start"
+			}
+			if saveErr := saveProgress(dir, state, s, sf); saveErr != nil {
+				return moved, nil, errors.Join(err, saveErr)
+			}
+			if git.IsRebaseStartError(err) {
+				return moved, nil, fmt.Errorf("could not start rebase of %s onto %s in %s: %w", name, newBase, state.Worktrees.Origin.Path, err)
+			}
+			files, fileErr := ops.ConflictedFiles()
+			if fileErr != nil {
+				return moved, nil, errors.Join(err, fmt.Errorf("reading conflicts in %s: %w", state.Worktrees.Origin.Path, fileErr))
+			}
+			return moved, &modifyview.ConflictInfo{Branch: name, ConflictedFiles: files},
+				fmt.Errorf("rebase conflict on %s in %s", name, state.Worktrees.Origin.Path)
+		}
+		if err := state.Worktrees.Record(name); err != nil {
+			return moved, nil, err
+		}
+		state.ConflictBranch, state.ConflictType = "", "cascade"
+		if err := saveProgress(dir, state, s, sf); err != nil {
+			return moved, nil, err
+		}
+		cfg.Successf("Rebased %s onto %s", name, newBase)
+		moved++
+	}
+	return moved, nil, nil
 }
 
 // resolveCheckoutBranch determines which branch to check out after a modify
@@ -801,38 +866,58 @@ func ContinueApply(
 		return fmt.Errorf("loading stack: %w", err)
 	}
 
-	// Acquire lock for the duration of the operation
-	lock, err := stack.Lock(gitDir)
+	s, err := findStack(state, sf)
 	if err != nil {
-		return fmt.Errorf("acquiring stack lock: %w", err)
+		return err
 	}
-	defer lock.Unlock()
-
-	// Find the stack using the saved index for reliable identification.
-	var s *stack.Stack
-	if state.StackIndex >= 0 && state.StackIndex < len(sf.Stacks) {
-		s = &sf.Stacks[state.StackIndex]
+	if state.StackBranches != nil && (state.StackName != s.Trunk.Branch || !slices.Equal(state.StackBranches, s.BranchNames())) {
+		return fmt.Errorf("the modify catalog update did not complete or the stack changed; run `gh stack modify --abort` to recover")
 	}
-	if s == nil {
-		return fmt.Errorf("stack at index %d not found (stack file may have changed)", state.StackIndex)
+	ctx, err := recoveryContext(gitDir, state)
+	if err != nil {
+		return err
 	}
-
-	// Carry forward whether any prior actions already affected PRs
-	affectsPRs := state.AffectsPRs
+	ops, err := ctx.OriginOps()
+	if err != nil {
+		return err
+	}
+	inProgress, err := ops.IsRebaseInProgress()
+	if err != nil {
+		return fmt.Errorf("checking rebase state before continuation: %w", err)
+	}
+	if _, err := ops.IsCherryPickInProgress(); err != nil {
+		return fmt.Errorf("checking cherry-pick state before continuation: %w", err)
+	}
+	existing, err := recoveryBranchAvailability(state, ops)
+	if err != nil {
+		return err
+	}
+	if state.Worktrees == nil {
+		if err := adoptLegacyContext(state, ctx, ops, existing); err != nil {
+			return err
+		}
+	}
+	state.RecordStack(s)
+	if err := SaveState(gitDir, state); err != nil {
+		return err
+	}
 
 	// Check the conflict branch itself
 	if idx := s.IndexOf(state.ConflictBranch); idx >= 0 && s.Branches[idx].PullRequest != nil {
-		affectsPRs = true
+		state.AffectsPRs = true
 	}
 
-	remainingBranches := state.RemainingBranches
+	remainingBranches := append([]string{}, state.RemainingBranches...)
 
 	// Finish the in-progress git operation, or resume at a rebase that was
 	// previously refused before it could start.
 	switch state.ConflictType {
 	case "cherry_pick":
-		if err := git.CherryPickContinue(); err != nil {
-			return fmt.Errorf("cherry-pick continue failed — resolve remaining conflicts and try again: %w", err)
+		if err := ops.CherryPickContinue(); err != nil {
+			return fmt.Errorf("cherry-pick continue failed in %s — resolve remaining conflicts and try again: %w", ctx.Origin.Path, err)
+		}
+		if err := ctx.Record(state.FoldTarget); err != nil {
+			return err
 		}
 		cfg.Successf("Folded %s into %s", state.FoldBranch, state.FoldTarget)
 
@@ -843,148 +928,51 @@ func ContinueApply(
 		}
 	case "", "rebase":
 		// Rebase conflict
-		inProgress, err := git.IsRebaseInProgress()
-		if err != nil {
-			return fmt.Errorf("checking rebase state: %w", err)
-		}
 		if inProgress {
-			if err := git.RebaseContinue(git.RebaseOpts{}); err != nil {
-				return fmt.Errorf("rebase continue failed — resolve remaining conflicts and try again: %w", err)
+			if err := ops.RebaseContinue(git.RebaseOpts{}); err != nil {
+				return fmt.Errorf("rebase continue failed in %s — resolve remaining conflicts and try again: %w", ctx.Origin.Path, err)
 			}
+		}
+		if err := ctx.Record(state.ConflictBranch); err != nil {
+			return err
 		}
 		cfg.Successf("Rebased %s", state.ConflictBranch)
 	case "rebase_start":
 		remainingBranches = append([]string{state.ConflictBranch}, remainingBranches...)
+	case "cascade":
 	default:
 		return fmt.Errorf("unknown modify conflict type %q", state.ConflictType)
 	}
 
-	// Continue cascading rebase for remaining branches
-	for _, branchName := range remainingBranches {
-		idx := s.IndexOf(branchName)
-		if idx < 0 {
-			cfg.Warningf("branch %s no longer in stack, skipping", branchName)
-			continue
-		}
-		b := s.Branches[idx]
-		if b.IsMerged() {
-			continue
-		}
-
-		var newBase string
-		if idx == 0 {
-			newBase = s.Trunk.Branch
-		} else {
-			newBase = s.ActiveBaseBranch(b.Branch)
-		}
-
-		// Use original parent tip or merge-base as oldBase
-		oldBase := ""
-		if state.OriginalRefs != nil {
-			oldBase = state.OriginalRefs[b.Branch]
-		}
-		if oldBase == "" {
-			if mb, mberr := git.MergeBase(newBase, b.Branch); mberr == nil {
-				oldBase = mb
-			} else {
-				continue
-			}
-		}
-
-		// Check if rebase is needed
-		isAnc, ancErr := git.IsAncestor(newBase, b.Branch)
-		if ancErr == nil && isAnc {
-			if mb, mberr := git.MergeBase(newBase, b.Branch); mberr == nil && mb == oldBase {
-				continue
-			}
-		}
-
-		if err := git.RebaseOnto(newBase, oldBase, b.Branch, git.RebaseOpts{}); err != nil {
-			if git.IsRebaseStartError(err) {
-				remaining := make([]string, 0)
-				foundCurrent := false
-				for _, rn := range remainingBranches {
-					if rn == branchName {
-						foundCurrent = true
-						continue
-					}
-					if foundCurrent {
-						remaining = append(remaining, rn)
-					}
-				}
-				state.ConflictBranch = branchName
-				state.ConflictType = "rebase_start"
-				state.RemainingBranches = remaining
-				state.AffectsPRs = affectsPRs
-				if saveErr := SaveState(gitDir, state); saveErr != nil {
-					cfg.Warningf("failed to update modify state: %v", saveErr)
-				}
-				if saveErr := stack.SaveWithLock(gitDir, sf, lock); saveErr != nil {
-					cfg.Warningf("failed to save stack metadata: %v", saveErr)
-				}
-				return fmt.Errorf("could not start rebase of %s onto %s: %w", b.Branch, newBase, err)
-			}
-
-			// Another conflict — update state and bail
-			remaining := make([]string, 0)
-			foundCurrent := false
-			for _, rn := range remainingBranches {
-				if rn == branchName {
-					foundCurrent = true
-					continue
-				}
-				if foundCurrent {
-					remaining = append(remaining, rn)
-				}
-			}
-			state.ConflictBranch = branchName
-			// These remaining branches are always rebased via RebaseOnto, so
-			// the in-progress operation is a rebase. Update ConflictType in
-			// case the original conflict was a cherry-pick (fold-down) — a
-			// stale "cherry_pick" here would make the next --continue call
-			// CherryPickContinue and fail.
-			state.ConflictType = "rebase"
-			state.RemainingBranches = remaining
-			state.AffectsPRs = affectsPRs
-			_ = SaveState(gitDir, state)
-
-			// Persist the stack metadata so far. A fold-down removes the
-			// folded branch from the in-memory stack (above) before the
-			// cascade rebase runs. If we don't save it here, the next
-			// --continue re-reads the on-disk metadata (folded branch still
-			// present) and — because ConflictType is now "rebase" — skips the
-			// fold-removal block, silently resurrecting the folded branch as a
-			// phantom entry. Mirrors ApplyPlan's save-on-conflict.
-			if saveErr := stack.SaveWithLock(gitDir, sf, lock); saveErr != nil {
-				cfg.Warningf("failed to save stack metadata: %v", saveErr)
-			}
-			cfg.Warningf("Conflict rebasing %s", branchName)
-			if files, ferr := git.ConflictedFiles(); ferr == nil {
-				for _, f := range files {
-					cfg.Printf("  %s", f)
-				}
+	state.ConflictBranch, state.ConflictType = "", "cascade"
+	state.RemainingBranches = remainingBranches
+	if err := saveProgress(gitDir, state, s, sf); err != nil {
+		return err
+	}
+	if _, conflict, err := rebaseRemaining(cfg, gitDir, state, s, sf, remainingBranches); err != nil {
+		if conflict != nil {
+			cfg.Warningf("Conflict rebasing %s in %s", conflict.Branch, ctx.Origin.Path)
+			for _, file := range conflict.ConflictedFiles {
+				cfg.Printf("  %s", file)
 			}
 			cfg.Printf("")
-			cfg.Printf("Resolve the conflicts, stage with `%s`, then run `%s`",
+			cfg.Printf("Resolve the conflicts in %s, stage with `%s`, then run `%s`",
+				ctx.Origin.Path,
 				cfg.ColorCyan("git add <file>"),
 				cfg.ColorCyan("gh stack modify --continue"))
 			cfg.Printf("Or restore the stack with `%s`",
 				cfg.ColorCyan("gh stack modify --abort"))
-			return fmt.Errorf("rebase conflict on %s", branchName)
 		}
-
-		cfg.Successf("Rebased %s onto %s", branchName, newBase)
-		if b.PullRequest != nil {
-			affectsPRs = true
-		}
+		return err
 	}
 	// All rebases done — check out the best branch
 	if state.OriginalBranch != "" {
 		targetBranch := resolveCheckoutBranch(state.OriginalBranch, state.Plan, state.Snapshot, s)
-		if err := git.CheckoutBranch(targetBranch); err == nil {
-			if targetBranch != state.OriginalBranch {
-				cfg.Printf("Switched to %s (original branch %s is no longer in the stack)", targetBranch, state.OriginalBranch)
-			}
+		if err := ctx.RestoreOrigin(targetBranch); err != nil {
+			return err
+		}
+		if targetBranch != state.OriginalBranch {
+			cfg.Printf("Switched to %s (original branch %s is no longer in the stack)", targetBranch, state.OriginalBranch)
 		}
 	}
 
@@ -992,25 +980,9 @@ func ContinueApply(
 	updateBaseSHAs(s)
 
 	// Transition to pending_submit only when PRs are affected
-	needsSubmit := s.ID != "" && affectsPRs
-	if needsSubmit {
-		state.Phase = PhasePendingSubmit
-		state.ConflictBranch = ""
-		state.RemainingBranches = nil
-		state.OriginalRefs = nil
-		if err := SaveState(gitDir, state); err != nil {
-			cfg.Warningf("failed to update modify state: %s", err)
-		}
-	}
-
-	// Save stack metadata
-	if err := stack.SaveWithLock(gitDir, sf, lock); err != nil {
-		cfg.Warningf("failed to save stack: %v", err)
-	}
-
-	// Clear state after metadata save succeeds to preserve --abort recovery
-	if !needsSubmit {
-		ClearState(gitDir)
+	needsSubmit := s.ID != "" && state.AffectsPRs
+	if err := finishApply(gitDir, state, s, sf, needsSubmit); err != nil {
+		return err
 	}
 
 	cfg.Successf("Stack modified successfully")
@@ -1023,102 +995,27 @@ func ContinueApply(
 }
 
 // Unwind restores the stack to its pre-modify state using the snapshot.
-// stackIndex is the index of the stack in sf.Stacks at modify start time.
+// stackIndex is retained for legacy callers, but is never used as an identity.
 func Unwind(cfg *config.Config, gitDir string, snapshot Snapshot, stackIndex int, sf *stack.StackFile, plan []Action) error {
-	// Abort any in-progress rebase or cherry-pick so the working tree and
-	// index are clean before we restore branch tips. A fold-down conflict
-	// leaves an in-progress cherry-pick with an unmerged index; without
-	// aborting it first, the restore checkouts below would fail.
-	rebasing, err := git.IsRebaseInProgress()
+	state, err := LoadState(gitDir)
 	if err != nil {
-		return fmt.Errorf("checking rebase state before unwind: %w", err)
+		return err
 	}
-	picking, err := git.IsCherryPickInProgress()
-	if err != nil {
-		return fmt.Errorf("checking cherry-pick state before unwind: %w", err)
-	}
-	snapshotNames := make(map[string]bool, len(snapshot.Branches))
-	branchExists := make(map[string]bool)
-	for _, bs := range snapshot.Branches {
-		snapshotNames[bs.Name] = true
-		exists, err := git.BranchExists(bs.Name)
-		if err != nil {
-			return fmt.Errorf("checking branch %s before unwind: %w", bs.Name, err)
+	if state == nil {
+		state = &StateFile{
+			SchemaVersion: 1, StackIndex: stackIndex, Phase: PhaseApplying,
+			Snapshot: snapshot, Plan: plan,
 		}
-		branchExists[bs.Name] = exists
-	}
-	for _, action := range plan {
-		if action.NewName != "" && !snapshotNames[action.NewName] &&
-			(action.Type == "rename" || action.Type == "insert_below" || action.Type == "insert_above") {
-			exists, err := git.BranchExists(action.NewName)
-			if err != nil {
-				return fmt.Errorf("checking branch %s before cleanup: %w", action.NewName, err)
-			}
-			branchExists[action.NewName] = exists
+	} else {
+		var original stack.Stack
+		if err := json.Unmarshal(snapshot.StackMetadata, &original); err != nil {
+			return fmt.Errorf("reading recovery snapshot: %w", err)
+		}
+		if !MatchesStack(&StateFile{Snapshot: state.Snapshot}, &original) {
+			return fmt.Errorf("modify journal belongs to a different stack; recovery state was retained")
 		}
 	}
-	if rebasing {
-		_ = git.RebaseAbort()
-	}
-	if picking {
-		_ = git.CherryPickAbort()
-	}
-
-	// Restore branch tips
-	for _, bs := range snapshot.Branches {
-		if !branchExists[bs.Name] {
-			// Branch was renamed — try to find it by SHA and recreate
-			if err := git.CreateBranch(bs.Name, bs.TipSHA); err != nil {
-				cfg.Warningf("failed to restore branch %s: %v", bs.Name, err)
-				continue
-			}
-		} else {
-			if err := git.CheckoutBranch(bs.Name); err != nil {
-				cfg.Warningf("failed to checkout %s for unwind: %v", bs.Name, err)
-				continue
-			}
-			if err := git.ResetHard(bs.TipSHA); err != nil {
-				cfg.Warningf("failed to reset %s to %s: %v", bs.Name, bs.TipSHA[:7], err)
-				continue
-			}
-		}
-	}
-
-	// Clean up branches created by renames or inserts during the partial apply
-	for _, action := range plan {
-		if action.NewName != "" && (action.Type == "rename" || action.Type == "insert_below" || action.Type == "insert_above") {
-			if !snapshotNames[action.NewName] && branchExists[action.NewName] {
-				_ = git.DeleteBranch(action.NewName, true)
-			}
-		}
-	}
-
-	// Restore stack metadata from snapshot
-	var restoredStack stack.Stack
-	if err := json.Unmarshal(snapshot.StackMetadata, &restoredStack); err != nil {
-		return fmt.Errorf("restoring stack metadata: %w", err)
-	}
-
-	// Replace the stack at the saved index
-	if stackIndex >= 0 && stackIndex < len(sf.Stacks) {
-		sf.Stacks[stackIndex] = restoredStack
-	}
-
-	// Save restored stack
-	if err := stack.Save(gitDir, sf); err != nil {
-		cfg.Warningf("failed to save restored stack: %v", err)
-	}
-
-	// Clear state file
-	ClearState(gitDir)
-
-	// Checkout the first snapshot branch
-	if len(snapshot.Branches) > 0 {
-		_ = git.CheckoutBranch(snapshot.Branches[0].Name)
-	}
-
-	cfg.Successf("Stack restored to pre-modify state")
-	return nil
+	return unwindState(cfg, gitDir, state, sf)
 }
 
 // UnwindFromStateFile restores the stack from a modify state file (for --abort).
@@ -1136,5 +1033,5 @@ func UnwindFromStateFile(cfg *config.Config, gitDir string) error {
 		return fmt.Errorf("loading stack: %w", err)
 	}
 
-	return Unwind(cfg, gitDir, state.Snapshot, state.StackIndex, sf, state.Plan)
+	return unwindState(cfg, gitDir, state, sf)
 }

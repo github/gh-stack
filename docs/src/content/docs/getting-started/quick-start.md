@@ -6,7 +6,7 @@ description: Install the gh stack CLI and create your first Stacked PR in minute
 ## Prerequisites
 
 - [GitHub CLI](https://cli.github.com/) (`gh`) v2.0 or later, authenticated
-- Git 2.20 or later
+- Git 2.36 or later
 - A GitHub repository you can push to
 
 ## Install the CLI Extension
@@ -92,6 +92,14 @@ gh stack view
 ```
 
 This shows all branches, their PR links, statuses, and the most recent commit on each.
+
+## Using Existing Worktrees
+
+Linked worktrees share the same local stack catalog. You can adopt branches already checked out elsewhere with `gh stack init branch-a branch-b` or `gh stack add branch-c`; adoption does not move either checkout. `add`'s commit/stage shortcuts cannot target another worktree.
+
+`rebase` and `sync` currently require all stack branches and any trunk they update to be unoccupied or checked out in the invoking worktree. They refuse distributed rewrites rather than skipping layers. gh-stack does not auto-stash or manage worktree creation/removal. To navigate across worktrees, use `--print-path` and a shell wrapper that checks the command's exit status before `cd`; see [Working across Git worktrees](/gh-stack/guides/workflows/#working-across-git-worktrees).
+
+For this core release, `modify` supports a stack within one worktree but temporarily rejects stack branches checked out in other worktrees.
 
 ## What's Next?
 

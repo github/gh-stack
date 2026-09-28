@@ -55,9 +55,9 @@ func Lock(gitDir string) (*FileLock, error) {
 	return lock, err
 }
 
-// LockOperation provides a separate operation lock in the given directory.
-// Callers using it must acquire it before loading mutation state or taking the
-// catalog lock. Save may be used while this lock is held.
+// LockOperation serializes gh-stack mutations across the clone. Acquire it
+// before loading mutation snapshots and before taking the catalog lock.
+// Unlike the catalog lock, it may be held across Git operations.
 func LockOperation(commonDir string) (*FileLock, error) {
 	lock, _, err := acquireLock(filepath.Join(commonDir, operationLockFileName), "stack operation", true)
 	return lock, err

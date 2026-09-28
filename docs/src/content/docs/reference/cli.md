@@ -9,11 +9,19 @@ description: Complete reference for all gh stack commands.
 gh extension install github/gh-stack
 ```
 
-Requires the [GitHub CLI](https://cli.github.com/) (`gh`) v2.0+.
+Requires the [GitHub CLI](https://cli.github.com/) (`gh`) v2.0+ and Git 2.36+.
 
 :::note[Authentication]
 The `gh stack` CLI uses your GitHub CLI authentication — run `gh auth login` if you haven't already.
 :::
+
+### Worktree behavior
+
+All linked worktrees share `<common-dir>/gh-stack` and gh-stack recovery journals. Native Git HEAD, index, rebase, and cherry-pick markers remain per-worktree. Mutations are serialized across the clone; read-only views remain available. Nonconflicting legacy catalogs migrate automatically with originals preserved; conflicting definitions require reconciliation. Complete legacy recovery in its original worktree before migration, and do not mix old and new versions in one clone.
+
+`rebase` and `sync` currently refuse foreign-owned stack members and writable trunks before requested ref, checkout, membership, or remote-stack changes. This includes members outside a rebase range and remote-added sync branches. Prerequisite catalog migration and discovery fetches may already have completed. Neither command auto-stashes or manages worktree creation/removal. Rebase `--continue` and `--abort` must be invoked in the recorded origin; modify recovery may be invoked elsewhere but executes there. Partial recovery failures retain state. See [Working across Git worktrees](/gh-stack/guides/workflows/#working-across-git-worktrees) for details.
+
+For repositories created with `git init --separate-git-dir`, operations from a known worktree remain supported, but automatic discovery of the main working directory from another checkout may be unavailable. Git's reported main path can be the administration directory rather than a usable checkout; do not use it as a working-directory navigation target.
 
 ---
 
@@ -34,6 +42,8 @@ gh stack init [flags] [branches...]
 Initializes a new stack locally. In interactive mode (no arguments), prompts for a branch name and offers to use the current branch as the first layer.
 
 When explicit branch names are given, existing branches are adopted automatically and any missing branches are created. The trunk defaults to the repository's default branch unless overridden with `--base`.
+
+Branches checked out in other worktrees can be adopted. If the final branch is occupied elsewhere, `init` leaves your current checkout unchanged and reports the owner instead.
 
 Enables `git rerere` automatically so that conflict resolutions are remembered across rebases.
 
@@ -70,6 +80,8 @@ gh stack add [flags] [branch]
 > **Note:** `-A` and `-u` are mutually exclusive.
 
 For an existing stack, creates a new branch at the current HEAD, adds it to the top of the stack, and checks it out. Must be run while on the topmost branch of a stack. If no branch name is given, prompts for one.
+
+Existing foreign-owned branches are adopted without switching either checkout. Commit/stage shortcuts (`-m`, `-A`, `-u`) are incompatible with that adoption and fail before staging or changing membership.
 
 When run interactively from a branch that is not part of a stack, `add` offers to initialize a new stack instead. The supplied or auto-generated branch name becomes the first layer; without one, the standard `init` prompts are used.
 
@@ -135,6 +147,12 @@ Check out a stack by its stack number, a pull request number, a PR URL, or a bra
 gh stack checkout [<stack-number> | <pr-number> | <pr-url> | <branch>]
 ```
 
+| Flag | Description |
+|------|-------------|
+| `--print-path` | Print the target worktree's absolute path; requires an explicit target and never prompts |
+
+For a foreign-owned target, `--print-path` changes neither checkout. For an unoccupied target, it checks the branch out here before printing this worktree's path. Without the flag, foreign ownership is an error with a path diagnostic, not a successful switch. See [Navigation](#navigation) for the output contract.
+
 A bare number is interpreted first as a stack or PR number (repo-scoped identifiers shown in the GitHub UI). If nothing matches the number, it is tried as a branch name.
 
 When a remote stack is referenced, the command fetches the stack on GitHub, pulls the branches, and sets up the stack locally. If the stack already exists locally and matches, it switches to the branch. If the local and remote stacks have different compositions, you'll be prompted to resolve the conflict.
@@ -186,6 +204,9 @@ The command checks these conditions before opening the TUI:
 3. No rebase in progress
 4. No PR in the stack is queued for merge
 5. Commit history must be linear (no merge commits, no diverged branches)
+6. All stack branches must be unoccupied or checked out in the invoking worktree
+
+**Core limitation:** distributed modify is temporarily rejected before the TUI and rechecked before applying. A trunk checked out elsewhere is allowed because modify only reads it.
 
 **Operations:**
 
@@ -208,6 +229,8 @@ When you press `Ctrl+S`, the staged changes are applied by renaming branches, in
 If a rebase conflict occurs, you can:
 - Resolve conflicts, stage files, and run `gh stack modify --continue`
 - Or run `gh stack modify --abort` to abort the operation and restore the stack to the pre-modify state
+
+Resolve and stage in the worktree named by the conflict message. Both recovery flags may be invoked from another linked worktree, but execute in the recorded origin and leave the caller's checkout alone. Failed restore or journal/catalog saves retain recovery state. Pending-submit state is consumed only for the matching stack.
 
 **After modifying:**
 
@@ -363,6 +386,8 @@ gh stack rebase [flags] [branch]
 | `--remote <name>` | Remote to fetch from (defaults to auto-detected remote) |
 | `--committer-date-is-author-date` | Set the committer date to the author date during rebase. Alias: `--preserve-dates` |
 
+Date-preserving rebases explicitly use Git's merge backend so the setting persists across conflicts. `--continue` uses the saved native rebase settings; it does not resend start-only date options.
+
 | Argument | Description |
 |----------|-------------|
 | `[branch]` | Target branch (defaults to the current branch) |
@@ -515,6 +540,10 @@ gh stack merge --yes --squash
 Move between branches in the current stack without having to remember branch names. The **bottom** of the stack is the branch closest to the trunk, and the **top** is furthest from it. `up` moves away from trunk; `down` moves toward it.
 
 All navigation commands clamp to the bounds of the stack — moving up from the top or down from the bottom is a no-op with a message.
+
+`up`, `down`, `top`, `bottom`, `trunk`, and explicit-target `checkout` support `--print-path`. A foreign-owned target prints its owner path without switching; an unoccupied target is checked out in the invoking worktree before its path is printed. Already-current targets print the current worktree root.
+
+Successful path-mode stdout is **only the raw absolute path plus one newline**. Diagnostics go to stderr; errors and ambiguous targets produce no stdout, and path mode never prompts. Without the flag, navigation to a branch occupied elsewhere fails and reports its path. A shell wrapper must check the command's exit status before `cd`, quote the path, and never use `eval`; see the [Bash/Zsh example](/gh-stack/guides/workflows/#navigate-without-stealing-a-checkout).
 
 ### `gh stack switch`
 

@@ -1,13 +1,13 @@
 package cmd
 
 import (
+	"errors"
 	"fmt"
 	"strings"
 
 	"github.com/AlecAivazis/survey/v2"
 	"github.com/cli/go-gh/v2/pkg/text"
 	"github.com/github/gh-stack/internal/config"
-	"github.com/github/gh-stack/internal/git"
 	"github.com/spf13/cobra"
 )
 
@@ -36,7 +36,7 @@ To move one branch down or up without an interactive picker, use
 func runSwitch(cfg *config.Config) error {
 	result, err := loadStack(cfg, "")
 	if err != nil {
-		return ErrNotInStack
+		return stackLookupError(err)
 	}
 	s := result.Stack
 
@@ -87,7 +87,11 @@ func runSwitch(cfg *config.Config) error {
 		return nil
 	}
 
-	if err := git.CheckoutBranch(targetBranch); err != nil {
+	if err := checkoutWorktreeBranch(cfg, targetBranch, false); err != nil {
+		var exitErr *ExitError
+		if errors.As(err, &exitErr) {
+			return err
+		}
 		cfg.Errorf("failed to checkout %s: %v", targetBranch, err)
 		return ErrSilent
 	}
