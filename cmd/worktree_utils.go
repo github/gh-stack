@@ -77,7 +77,7 @@ func beginStackMutation(cfg *config.Config, kind string) (func(), error) {
 		lock.Unlock()
 		return nil, err
 	}
-	cfg.StackMutation = &config.StackMutationContext{CommonDir: commonDir, StateDir: stateDir, Kind: kind}
+	cfg.StackMutation = &config.StackMutationContext{CommonDir: commonDir, StateDir: stateDir}
 	released := false
 	return func() {
 		if !released {
@@ -165,6 +165,9 @@ func readStackJournals(cfg *config.Config, commonDir, localDir string) ([]stackJ
 						err = json.Unmarshal(data, &state)
 						if err == nil && state == nil {
 							err = fmt.Errorf("invalid rebase recovery record")
+						}
+						if err == nil {
+							err = validateRebaseExecutionMode(state)
 						}
 						if err == nil {
 							journal.phase, journal.legacy = state.Phase, state.Worktrees == nil
@@ -383,29 +386,6 @@ func foreignWorktreePath(target string) (string, error) {
 		return "", fmt.Errorf("worktree %s no longer belongs to this repository", owner)
 	}
 	return owner, nil
-}
-
-// Until owner-scoped rebase/sync execution is enabled, include every possible
-// write and rollback target, not just the requested rebase range.
-func requireLocalBranches(cfg *config.Config, branches []string) error {
-	seen := make(map[string]bool)
-	for _, branch := range branches {
-		if branch == "" || seen[branch] {
-			continue
-		}
-		seen[branch] = true
-		owner, err := foreignWorktreePath(branch)
-		if err != nil {
-			cfg.Errorf("%s", err)
-			return ErrSilent
-		}
-		if owner != "" {
-			reportWorktreeOwner(cfg, branch, owner)
-			cfg.Errorf("cross-worktree rebase and sync are not supported yet; all affected branches must be unoccupied or checked out in this worktree")
-			return ErrInvalidArgs
-		}
-	}
-	return nil
 }
 
 func reportWorktreeOwner(cfg *config.Config, target, path string) {

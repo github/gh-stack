@@ -111,10 +111,9 @@ The routine command. Steps, in order:
 8. **Prune** local branches for merged PRs, only when `--prune` is passed in a non-interactive
    environment.
 
-Foreign-owned members, including merged branches, and foreign-owned trunks are currently refused
-before requested mutations. Remote additions/replacements are checked before import. Prerequisite
-catalog migration may already have completed. Cascade rollback does not undo prior fetches or
-completed fast-forwards; partial restoration failures retain recovery state.
+Affected clean worktrees are updated automatically. Dirty/busy/unavailable owners stop unsafe
+updates, and pruning skips branches occupied elsewhere. Cascade rollback does not undo prior
+fetches or completed fast-forwards; partial restoration failures retain recovery state.
 
 ## rebase
 
@@ -130,10 +129,9 @@ to rebase only part of the stack.
 - A merged PR is detected automatically and replayed with `--onto` against the correct target, so a
   squash-merged parent does not produce spurious conflicts.
 - Starting a rebase while one is in progress exits **7**.
-- All members must currently be unoccupied or checked out in the initiating worktree, even those
-  outside the selected range. Foreign-owned trunks require `--no-trunk`. Resolve/stage conflicts
-  at the reported path and invoke `--continue`/`--abort` there; recovery from another worktree is
-  refused. No auto-stash or worktree lifecycle management.
+- Occupied branches are rebased in their clean owning worktrees; unoccupied branches use the
+  origin. Resolve/stage conflicts at the reported path. `--continue`/`--abort` may run from any
+  linked worktree and use the recorded owners. No auto-stash or worktree lifecycle management.
 
 ## view
 

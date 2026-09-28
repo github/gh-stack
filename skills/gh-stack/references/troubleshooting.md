@@ -147,11 +147,9 @@ reported source definitions rather than choosing the newest file. Finish legacy 
 their original worktree first, and do not mix old and new gh-stack writers in one clone.
 
 Navigation does not take over another worktree's checkout. Use `--print-path` with an explicit
-target, check the exit status, and change directory to the quoted output. Rebase/sync currently
-refuse foreign-owned members or writable trunks rather than rewriting across worktrees. Keep
-their target branches unoccupied or owned by the initiating worktree; rebase recovery must also
-be invoked in that origin. Prerequisite catalog migration may finish before a rewrite refusal.
-gh-stack does not automatically stash or create/remove worktrees.
+target, check the exit status, and change directory to the quoted output. Only affected clean
+owners are updated by rebase/sync; commit or stash manually when those owners are dirty. gh-stack
+does not automatically stash or create/remove worktrees.
 
 For `git init --separate-git-dir` repositories, Git may list the administration directory as the
 main path instead of the actual checkout. Operations from a known main or linked origin remain

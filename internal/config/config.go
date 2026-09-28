@@ -67,7 +67,6 @@ type Config struct {
 type StackMutationContext struct {
 	CommonDir string
 	StateDir  string
-	Kind      string
 }
 
 // New creates a new Config with terminal-aware output and color support.

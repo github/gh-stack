@@ -168,10 +168,9 @@ an ancestor of the branch.
 ## Constraints
 
 - Stacks are strictly linear: one parent, at most one child. Use separate stacks for parallel work.
-- `rebase` and `sync` currently require all members and writable trunks to be unoccupied or owned
-  by the invoking worktree. They refuse distributed rewrites before requested changes, after
-  prerequisite catalog migration. They never auto-stash or create/remove worktrees. Mutations
-  serialize across the clone; rebase recovery must run in its recorded origin.
+- `rebase` and `sync` automatically update affected clean worktrees; they never auto-stash or
+  create/remove worktrees. Mutations serialize across the clone, and paused operations require
+  recovery in their recorded owners.
 - Core `modify` temporarily rejects distributed stack branches before TUI/apply. Linked-worktree
   use is allowed when all member branches are unoccupied or owned here; trunk ownership alone is
   not a blocker. Its recovery flags still use the recorded origin from any linked worktree.

@@ -97,7 +97,7 @@ This shows all branches, their PR links, statuses, and the most recent commit on
 
 Linked worktrees share the same local stack catalog. You can adopt branches already checked out elsewhere with `gh stack init branch-a branch-b` or `gh stack add branch-c`; adoption does not move either checkout. `add`'s commit/stage shortcuts cannot target another worktree.
 
-`rebase` and `sync` currently require all stack branches and any trunk they update to be unoccupied or checked out in the invoking worktree. They refuse distributed rewrites rather than skipping layers. gh-stack does not auto-stash or manage worktree creation/removal. To navigate across worktrees, use `--print-path` and a shell wrapper that checks the command's exit status before `cd`; see [Working across Git worktrees](/gh-stack/guides/workflows/#working-across-git-worktrees).
+`rebase` and `sync` automatically update affected clean owners. gh-stack does not auto-stash or manage worktree creation/removal. To navigate across worktrees, use `--print-path` and a shell wrapper that checks the command's exit status before `cd`; see [Working across Git worktrees](/gh-stack/guides/workflows/#working-across-git-worktrees).
 
 For this core release, `modify` supports a stack within one worktree but temporarily rejects stack branches checked out in other worktrees.
 

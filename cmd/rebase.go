@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"slices"
 	"strings"
 
 	"github.com/github/gh-stack/internal/config"
@@ -36,6 +35,9 @@ type rebaseState struct {
 	StackTrunk                string            `json:"stackTrunk,omitempty"`
 	StackBranches             []string          `json:"stackBranches,omitempty"`
 	OriginalStack             *stack.Stack      `json:"originalStack,omitempty"`
+	RebaseBase                string            `json:"rebaseBase,omitempty"`
+	RebaseOldBase             string            `json:"rebaseOldBase,omitempty"`
+	RebaseOnto                bool              `json:"rebaseOnto,omitempty"`
 	CurrentBranchIndex        int               `json:"currentBranchIndex"`
 	ConflictBranch            string            `json:"conflictBranch"`
 	RemainingBranches         []string          `json:"remainingBranches"`
@@ -69,12 +71,7 @@ layer in its commit history, rebasing if necessary.
 
 Use --no-trunk to skip fetching and rebasing with the trunk branch.
 Only the inter-branch rebases are performed (branch 2 onto branch 1,
-branch 3 onto branch 2, etc.).
-
-All stack branches and any trunk being updated must currently be unoccupied
-or checked out in this worktree. Cross-worktree rewrites are refused before
-requested mutations, after shared-catalog migration. Continue and abort must
-be run in the worktree where the rebase started.`,
+branch 3 onto branch 2, etc.).`,
 		Example: `  # Rebase the entire stack
   $ gh stack rebase
 
@@ -127,7 +124,8 @@ func runRebase(cfg *config.Config, opts *rebaseOptions) error {
 	defer release()
 	gitDir, err := stackStateDir(cfg)
 	if err != nil {
-		return err
+		cfg.Errorf("not a git repository")
+		return ErrNotInStack
 	}
 
 	if opts.cont {
@@ -151,40 +149,41 @@ func runRebase(cfg *config.Config, opts *rebaseOptions) error {
 	s := result.Stack
 	currentBranch := result.CurrentBranch
 	originalTrunk := s.Trunk.Branch
-	if err := requireLocalBranches(cfg, s.BranchNames()); err != nil {
-		return err
+
+	anchor := currentBranch
+	if opts.branch != "" {
+		anchor = opts.branch
 	}
+	currentIdx := s.IndexOf(anchor)
+	if currentIdx < 0 {
+		currentIdx = 0
+	}
+	startIdx, endIdx := 0, len(s.Branches)
+	if endIdx == 0 {
+		cfg.Printf("No branches to rebase")
+		return nil
+	}
+	if opts.downstack {
+		endIdx = currentIdx + 1
+	}
+	if opts.upstack {
+		startIdx = currentIdx
+	}
+	if opts.noTrunk && startIdx < 1 {
+		startIdx = 1
+	}
+	branchesToRebase := s.Branches[startIdx:endIdx]
+	if len(branchesToRebase) == 0 {
+		cfg.Printf("No branches to rebase")
+		return nil
+	}
+	_ = syncStackPRs(cfg, s)
 	ctx, err := worktree.New()
 	if err != nil {
 		cfg.Errorf("%s", err)
 		return ErrSilent
 	}
-	anchor := currentBranch
-	if opts.branch != "" {
-		anchor = opts.branch
-	}
-	var remote string
-	if !opts.noTrunk {
-		remote, err = pickRemote(cfg, anchor, opts.remote)
-		if err != nil {
-			if !errors.Is(err, errInterrupt) {
-				cfg.Errorf("%s", err)
-			}
-			return ErrSilent
-		}
-		trunkBranch, err := normalizeTrunkBranch(s.Trunk.Branch, remote)
-		if err != nil {
-			cfg.Errorf("%s", err)
-			return ErrSilent
-		}
-		if err := requireLocalBranches(cfg, []string{trunkBranch}); err != nil {
-			return err
-		}
-	}
-	if err := worktree.CheckClean(git.CurrentOps(), ctx.Origin.Path); err != nil {
-		cfg.Errorf("%s", err)
-		return ErrSilent
-	}
+	required := rebaseBranchNames(branchesToRebase)
 
 	// Enable git rerere so conflict resolutions are remembered.
 	if err := ensureRerere(cfg); errors.Is(err, errInterrupt) {
@@ -193,9 +192,13 @@ func runRebase(cfg *config.Config, opts *rebaseOptions) error {
 
 	var trunk trunkTarget
 	if !opts.noTrunk {
-		trunk, err = resolveTrunkTarget(cfg, s, remote, currentBranch)
+		// Resolve remote for fetch and trunk comparison
+		remote, err := pickRemote(cfg, anchor, opts.remote)
 		if err != nil {
-			return err
+			if !errors.Is(err, errInterrupt) {
+				cfg.Errorf("%s", err)
+			}
+			return ErrSilent
 		}
 
 		// Fast-forward stack branches that are behind their remote tracking branch.
@@ -203,51 +206,35 @@ func runRebase(cfg *config.Config, opts *rebaseOptions) error {
 			cfg.Errorf("failed to fetch stack branches from %s: %v", remote, err)
 			return ErrSilent
 		}
-		fastForwardBranches(cfg, s, remote, currentBranch)
+		planned := planFastForwardBranches(s, remote)
+		for _, forward := range planned {
+			required = append(required, forward.Branch)
+		}
+		if err := ctx.Preflight(required); err != nil {
+			cfg.Errorf("%s", err)
+			return ErrSilent
+		}
+		trunk, err = resolveTrunkTarget(cfg, s, remote, currentBranch, trunkResolveOptions{Worktrees: ctx})
+		if err != nil {
+			return err
+		}
+		if _, err := fastForwardBranches(cfg, planned, ctx); err != nil {
+			cfg.Errorf("%s", err)
+			return ErrSilent
+		}
+	} else if err := ctx.Preflight(required); err != nil {
+		cfg.Errorf("%s", err)
+		return ErrSilent
 	}
 
 	cfg.Printf("Stack detected: %s", s.DisplayChain())
-
-	currentIdx := s.IndexOf(anchor)
-	if currentIdx < 0 {
-		currentIdx = 0
-	}
-	if len(s.Branches) == 0 {
-		cfg.Printf("No branches to rebase")
-		return nil
-	}
 
 	if opts.upstack && currentIdx >= 0 && s.Branches[currentIdx].IsMerged() {
 		cfg.Warningf("Current branch %q has already been merged", currentBranch)
 	}
 
-	startIdx := 0
-	endIdx := len(s.Branches)
-
-	if opts.downstack {
-		endIdx = currentIdx + 1
-	}
-	if opts.upstack {
-		startIdx = currentIdx
-	}
-
-	// With --no-trunk, skip the first branch (which would rebase onto trunk).
-	if opts.noTrunk && startIdx < 1 {
-		startIdx = 1
-	}
-
-	branchesToRebase := s.Branches[startIdx:endIdx]
-
-	if len(branchesToRebase) == 0 {
-		cfg.Printf("No branches to rebase")
-		return nil
-	}
-
 	cfg.Printf("Rebasing branches in order, starting from %s to %s",
 		branchesToRebase[0].Branch, branchesToRebase[len(branchesToRebase)-1].Branch)
-
-	// Sync PR state before rebase so we can detect merged PRs.
-	_ = syncStackPRs(cfg, s)
 
 	originalRefs, err := resolveOriginalRefs(s)
 	if err != nil {
@@ -292,12 +279,16 @@ func runRebase(cfg *config.Config, opts *rebaseOptions) error {
 		OntoOldBase:               ontoOldBase,
 		CommitterDateIsAuthorDate: opts.committerDateIsAuthorDate,
 		TrunkRef:                  trunk.Ref,
+		TrunkSHA:                  trunk.SHA,
+		Worktrees:                 ctx,
+		State:                     state,
+		StateDir:                  gitDir,
 	})
 
 	if rebaseResult.Err != nil {
 		cfg.Errorf("%v", rebaseResult.Err)
-		if err := abortRebase(cfg, gitDir); err != nil {
-			return err
+		if err := rollbackWorktreeRebase(cfg, gitDir, state); err != nil {
+			return errors.Join(ErrSilent, err)
 		}
 		return ErrSilent
 	}
@@ -305,36 +296,17 @@ func runRebase(cfg *config.Config, opts *rebaseOptions) error {
 	if rebaseResult.Conflicted {
 		cfg.Warningf("Rebasing %s onto %s — conflict", rebaseResult.ConflictBranch, rebaseResult.ConflictBase)
 
-		state.Phase = "conflict"
-		state.CurrentBranchIndex = rebaseResult.ConflictIdx
-		state.ConflictBranch = rebaseResult.ConflictBranch
-		state.RemainingBranches = rebaseResult.Remaining
-		state.UseOnto, state.OntoOldBase = rebaseResult.NeedsOnto, rebaseResult.OntoOldBase
-		if err := saveRebaseState(gitDir, state); err != nil {
-			cfg.Errorf("failed to save conflict progress; run `gh stack rebase --abort`: %s", err)
-			return ErrSilent
-		}
-
-		printConflictDetails(cfg, rebaseResult.ConflictBase)
+		printWorktreeConflict(cfg, state, rebaseResult.ConflictBase)
 		cfg.Printf("")
 
 		cfg.Printf("Resolve conflicts on %s, then run `%s`",
 			rebaseResult.ConflictBranch, cfg.ColorCyan("gh stack rebase --continue"))
 		cfg.Printf("Or abort this operation with `%s`",
 			cfg.ColorCyan("gh stack rebase --abort"))
-		cfg.Printf("Run recovery in the original worktree: %s", ctx.Origin.Path)
 		return ErrConflict
 	}
 
-	if unstacked := verifyStacked(s, trunk.Ref, startIdx, endIdx); len(unstacked) > 0 {
-		reportUnstacked(cfg, trunk.Ref, unstacked)
-		if err := abortRebase(cfg, gitDir); err != nil {
-			return err
-		}
-		return ErrSilent
-	}
-
-	if err := finishOriginRebase(cfg, gitDir, state, sf, s); err != nil {
+	if err := finishWorktreeRebase(cfg, gitDir, state, sf, s); err != nil {
 		return err
 	}
 
@@ -375,12 +347,8 @@ func continueRebase(cfg *config.Config, gitDir string) error {
 		}
 		return ErrSilent
 	}
-	if err := requireRebaseOrigin(cfg, gitDir, state); err != nil {
-		return err
-	}
-	if state.Phase != "" && state.Phase != "conflict" && state.Phase != "complete" {
-		cfg.Errorf("rebase stopped in phase %q; run `gh stack rebase --abort` in the original worktree", state.Phase)
-		return ErrSilent
+	if state.Worktrees != nil {
+		return continueWorktreeRebase(cfg, gitDir, state)
 	}
 
 	sf, err := stack.Load(gitDir)
@@ -391,20 +359,12 @@ func continueRebase(cfg *config.Config, gitDir string) error {
 
 	// Use the saved original branch to find the stack, since git may be in
 	// a detached HEAD state during an active rebase.
-	var s *stack.Stack
-	if state.Worktrees != nil {
-		s, err = rebaseStackFromState(sf, state)
-	} else {
-		s, err = resolveStack(sf, state.OriginalBranch, cfg)
-	}
+	s, err := resolveStack(sf, state.OriginalBranch, cfg)
 	if err != nil {
 		return err
 	}
 	if s == nil {
 		return fmt.Errorf("no stack found for branch %s", state.OriginalBranch)
-	}
-	if state.Phase == "complete" {
-		return finishOriginRebase(cfg, gitDir, state, sf, s)
 	}
 	trunkRef := state.TrunkRef
 	if trunkRef == "" {
@@ -494,7 +454,10 @@ func continueRebase(cfg *config.Config, gitDir string) error {
 
 		if result.Err != nil {
 			cfg.Errorf("%v", result.Err)
-			if err := abortRebase(cfg, gitDir); err != nil {
+			if err := restoreRebaseRefs(cfg, state.OriginalBranch, state.OriginalRefs); err != nil {
+				return err
+			}
+			if err := clearRebaseState(gitDir); err != nil {
 				return err
 			}
 			return ErrSilent
@@ -503,7 +466,6 @@ func continueRebase(cfg *config.Config, gitDir string) error {
 		if result.Conflicted {
 			cfg.Warningf("Rebasing %s onto %s — conflict", result.ConflictBranch, result.ConflictBase)
 
-			state.Phase = "conflict"
 			state.CurrentBranchIndex = result.ConflictIdx
 			state.ConflictBranch = result.ConflictBranch
 			state.RemainingBranches = result.Remaining
@@ -523,6 +485,8 @@ func continueRebase(cfg *config.Config, gitDir string) error {
 		}
 	}
 
+	_ = git.CheckoutBranch(state.OriginalBranch)
+
 	verifyStart, verifyEnd := state.StartIndex, state.EndIndex
 	if verifyEnd <= verifyStart {
 		verifyStart, verifyEnd = 0, len(s.Branches)
@@ -532,14 +496,25 @@ func continueRebase(cfg *config.Config, gitDir string) error {
 	}
 	if unstacked := verifyStacked(s, trunkBase, verifyStart, verifyEnd); len(unstacked) > 0 {
 		reportUnstacked(cfg, trunkRef, unstacked)
-		if err := abortRebase(cfg, gitDir); err != nil {
+		if err := restoreRebaseRefs(cfg, state.OriginalBranch, state.OriginalRefs); err != nil {
+			return err
+		}
+		if err := clearRebaseState(gitDir); err != nil {
 			return err
 		}
 		return ErrSilent
 	}
 
-	if err := finishOriginRebase(cfg, gitDir, state, sf, s); err != nil {
-		return err
+	updateBaseSHAsWithTrunk(s, state.TrunkSHA)
+
+	_ = syncStackPRs(cfg, s)
+
+	if err := stack.Save(gitDir, sf); err != nil {
+		return handleSaveError(cfg, err)
+	}
+	if err := clearRebaseState(gitDir); err != nil {
+		cfg.Errorf("rebase completed but recovery state could not be cleared: %v", err)
+		return ErrSilent
 	}
 
 	if state.NoTrunk {
@@ -565,18 +540,14 @@ func abortRebase(cfg *config.Config, gitDir string) error {
 		}
 		return ErrSilent
 	}
-	if err := requireRebaseOrigin(cfg, gitDir, state); err != nil {
-		return err
-	}
-	if state.OriginalStack != nil {
-		sf, err := stack.Load(gitDir)
-		if err != nil {
-			return err
+	if state.Worktrees != nil {
+		if err := rollbackWorktreeRebase(cfg, gitDir, state); err != nil {
+			return errors.Join(ErrSilent, err)
 		}
-		if _, err := rebaseStackFromState(sf, state); err != nil {
-			return err
-		}
+		cfg.Successf("Rebase aborted and branches restored")
+		return nil
 	}
+
 	inProgress, err := git.IsRebaseInProgress()
 	if err != nil {
 		return fmt.Errorf("checking rebase state: %w", err)
@@ -586,15 +557,10 @@ func abortRebase(cfg *config.Config, gitDir string) error {
 			return fmt.Errorf("checking branch %s before restoring: %w", branch, err)
 		}
 	}
-	state.Phase = "restoring"
-	if err := saveRebaseState(gitDir, state); err != nil {
-		cfg.Errorf("saving recovery state before restoration: %s", err)
-		return ErrSilent
-	}
 	if inProgress {
 		if err := git.RebaseAbort(); err != nil {
 			cfg.Errorf("aborting rebase; recovery state was retained: %s", err)
-			return ErrSilent
+			return errors.Join(ErrSilent, err)
 		}
 	}
 	root, err := git.RootDir()
@@ -604,14 +570,11 @@ func abortRebase(cfg *config.Config, gitDir string) error {
 	}
 	if err := worktree.CheckClean(git.CurrentOps(), root); err != nil {
 		cfg.Errorf("recovery state was retained: %s", err)
-		return ErrSilent
+		return errors.Join(ErrSilent, err)
 	}
 
 	var restoreErrors []string
 	for branch, sha := range state.OriginalRefs {
-		if current, err := git.RevParse(branch); err == nil && current == sha {
-			continue
-		}
 		if err := git.CheckoutBranch(branch); err != nil {
 			restoreErrors = append(restoreErrors, fmt.Sprintf("checkout %s: %s", branch, err))
 			continue
@@ -620,174 +583,19 @@ func abortRebase(cfg *config.Config, gitDir string) error {
 			restoreErrors = append(restoreErrors, fmt.Sprintf("reset %s: %s", branch, err))
 		}
 	}
-	if err := git.CheckoutBranch(state.OriginalBranch); err != nil {
-		restoreErrors = append(restoreErrors, fmt.Sprintf("restoring original checkout: %s", err))
-	}
+
+	_ = git.CheckoutBranch(state.OriginalBranch)
+	clearRebaseState(gitDir)
+
 	if len(restoreErrors) > 0 {
-		cfg.Warningf("Some branches could not be fully restored; recovery state was retained:")
+		cfg.Warningf("Rebase aborted but some branches could not be fully restored:")
 		for _, e := range restoreErrors {
 			cfg.Printf("  %s", e)
 		}
 		return ErrSilent
 	}
-	if state.OriginalStack != nil {
-		if err := restoreWorktreeRebaseMetadata(gitDir, state); err != nil {
-			cfg.Errorf("restoring metadata; recovery state was retained: %s", err)
-			return ErrSilent
-		}
-	}
-	if err := clearRebaseState(gitDir); err != nil {
-		cfg.Errorf("branches restored, but recovery state could not be cleared: %s", err)
-		return ErrSilent
-	}
 
 	cfg.Successf("Rebase aborted and branches restored")
-	return nil
-}
-
-func newWorktreeRebaseState(s *stack.Stack, ctx *worktree.Context, originalBranch string, refs map[string]string, trunk trunkTarget, start, end int) *rebaseState {
-	snapshot := *s
-	snapshot.Branches = append([]stack.BranchRef{}, s.Branches...)
-	return &rebaseState{
-		ExecutionMode:      originOnlyRebaseMode,
-		Phase:              "applying",
-		Worktrees:          ctx,
-		StackID:            s.ID,
-		StackTrunk:         s.Trunk.Branch,
-		StackBranches:      s.BranchNames(),
-		OriginalStack:      &snapshot,
-		OriginalBranch:     originalBranch,
-		OriginalRefs:       refs,
-		CurrentBranchIndex: start,
-		StartIndex:         start,
-		EndIndex:           end,
-		TrunkRef:           trunk.Ref,
-		TrunkSHA:           trunk.SHA,
-	}
-}
-
-func requireRebaseOrigin(cfg *config.Config, dir string, state *rebaseState) error {
-	localDir, err := git.GitDir()
-	if err != nil {
-		return err
-	}
-	if state.Worktrees == nil {
-		if !worktree.SamePath(localDir, dir) {
-			cfg.Errorf("legacy rebase recovery must run in its original worktree (Git directory %s)", dir)
-			return ErrRebaseActive
-		}
-	} else {
-		ops, err := state.Worktrees.OriginOps()
-		if err != nil {
-			cfg.Errorf("%s", err)
-			return ErrRebaseActive
-		}
-		originDir, err := ops.GitDir()
-		if err != nil {
-			return err
-		}
-		if !worktree.SamePath(localDir, originDir) {
-			cfg.Errorf("rebase recovery must run in its original worktree: %s", state.Worktrees.Origin.Path)
-			cfg.Printf("Return there before running `gh stack rebase --continue` or `gh stack rebase --abort`")
-			return ErrRebaseActive
-		}
-	}
-	branches := append([]string{state.OriginalBranch, state.ConflictBranch}, state.RemainingBranches...)
-	for name := range state.OriginalRefs {
-		branches = append(branches, name)
-	}
-	if err := requireLocalBranches(cfg, branches); err != nil {
-		return err
-	}
-	if state.Phase == "complete" {
-		root, err := git.RootDir()
-		if err != nil {
-			return err
-		}
-		if err := worktree.CheckClean(git.CurrentOps(), root); err != nil {
-			cfg.Errorf("recovery state was retained: %s", err)
-			return ErrSilent
-		}
-	}
-	return nil
-}
-
-func rebaseStackFromState(sf *stack.StackFile, state *rebaseState) (*stack.Stack, error) {
-	switch state.Phase {
-	case "applying", "conflict", "complete", "restoring":
-	default:
-		return nil, fmt.Errorf("unknown saved rebase phase %q", state.Phase)
-	}
-	var target *stack.Stack
-	for i := range sf.Stacks {
-		s := &sf.Stacks[i]
-		if s.Trunk.Branch != state.StackTrunk || !slices.Equal(s.BranchNames(), state.StackBranches) {
-			continue
-		}
-		if (state.Phase == "applying" || state.Phase == "conflict") && state.StackID != "" && s.ID != "" && state.StackID != s.ID {
-			continue
-		}
-		if target != nil {
-			return nil, fmt.Errorf("saved rebase matches multiple stacks; resolve the catalog before continuing")
-		}
-		target = s
-	}
-	if target == nil {
-		return nil, fmt.Errorf("the stack changed since this rebase started; restore its original membership or run gh stack rebase --abort")
-	}
-	if state.StartIndex < 0 || state.EndIndex > len(target.Branches) ||
-		state.StartIndex > state.EndIndex || state.CurrentBranchIndex < state.StartIndex ||
-		state.CurrentBranchIndex > state.EndIndex {
-		return nil, fmt.Errorf("invalid branch range in saved rebase state")
-	}
-	return target, nil
-}
-
-func restoreWorktreeRebaseMetadata(dir string, state *rebaseState) error {
-	sf, err := stack.Load(dir)
-	if err != nil {
-		return err
-	}
-	target, err := rebaseStackFromState(sf, state)
-	if err != nil {
-		return err
-	}
-	if !slices.Equal(state.OriginalStack.BranchNames(), target.BranchNames()) {
-		return fmt.Errorf("original stack snapshot does not match the recovery target")
-	}
-	target.Trunk.Head = state.OriginalStack.Trunk.Head
-	for i, before := range state.OriginalStack.Branches {
-		target.Branches[i].Base = before.Base
-		target.Branches[i].Head = before.Head
-		if sha, err := git.RevParse(before.Branch); err == nil {
-			target.Branches[i].Head = sha
-		} else if !before.IsMerged() {
-			return fmt.Errorf("reading restored branch %s: %w", before.Branch, err)
-		}
-	}
-	return stack.Save(dir, sf)
-}
-
-func finishOriginRebase(cfg *config.Config, dir string, state *rebaseState, sf *stack.StackFile, s *stack.Stack) error {
-	state.Phase = "complete"
-	state.RemainingBranches = nil
-	if err := saveRebaseState(dir, state); err != nil {
-		cfg.Errorf("saving completed rebase; recovery state was retained: %s", err)
-		return ErrSilent
-	}
-	if err := git.CheckoutBranch(state.OriginalBranch); err != nil {
-		cfg.Errorf("restoring original checkout; recovery state was retained: %s", err)
-		return ErrSilent
-	}
-	updateBaseSHAsWithTrunk(s, state.TrunkSHA)
-	_ = syncStackPRs(cfg, s)
-	if err := stack.Save(dir, sf); err != nil {
-		return handleSaveError(cfg, err)
-	}
-	if err := clearRebaseState(dir); err != nil {
-		cfg.Errorf("rebase completed but recovery state could not be cleared: %s", err)
-		return ErrSilent
-	}
 	return nil
 }
 
@@ -811,23 +619,24 @@ func loadRebaseState(gitDir string) (*rebaseState, error) {
 	if err := json.Unmarshal(data, &state); err != nil {
 		return nil, err
 	}
+	if err := validateRebaseExecutionMode(&state); err != nil {
+		return nil, err
+	}
+	return &state, nil
+}
+
+func validateRebaseExecutionMode(state *rebaseState) error {
+	if state.ExecutionMode == "" {
+		return nil
+	}
 	origin := "its original worktree"
 	if state.Worktrees != nil && state.Worktrees.Origin.Path != "" {
 		origin = fmt.Sprintf("worktree %q", state.Worktrees.Origin.Path)
 	}
-	switch state.ExecutionMode {
-	case originOnlyRebaseMode:
-		if state.Worktrees == nil {
-			return nil, fmt.Errorf("origin-only rebase journal has no recorded worktree; recovery state was retained")
-		}
-	case "":
-		if state.Worktrees != nil {
-			return nil, fmt.Errorf("this rebase journal uses a different execution lifecycle; use the matching gh-stack build in %s to continue or abort", origin)
-		}
-	default:
-		return nil, fmt.Errorf("unsupported rebase execution mode %q; use the matching gh-stack build in %s to continue or abort", state.ExecutionMode, origin)
+	if state.ExecutionMode == originOnlyRebaseMode {
+		return fmt.Errorf("origin-only rebase journal requires the matching layer3 gh-stack build in %s to continue or abort; recovery state was retained", origin)
 	}
-	return &state, nil
+	return fmt.Errorf("unsupported rebase execution mode %q; use the matching gh-stack build in %s to continue or abort; recovery state was retained", state.ExecutionMode, origin)
 }
 
 func clearRebaseState(gitDir string) error {

@@ -277,6 +277,12 @@ func TestRebase_LaterStartErrorRestoresEarlierBranches(t *testing.T) {
 	var resets []resetCall
 
 	mock := newRebaseMock(tmpDir, currentBranch)
+	mock.CurrentBranchFn = func() (string, error) { return currentBranch, nil }
+	mock.UpdateBranchRefFn = func(branch, sha string) error {
+		resets = append(resets, resetCall{branch, sha})
+		branchSHAs[branch] = sha
+		return nil
+	}
 	mock.BranchExistsFn = func(string) (bool, error) { return true, nil }
 	mock.RevParseFn = func(ref string) (string, error) {
 		if ref == "main" || ref == "origin/main" {
@@ -336,6 +342,11 @@ func TestSync_LaterStartErrorRestoresEarlierBranches(t *testing.T) {
 	pushes := 0
 
 	mock := newSyncMock(tmpDir, currentBranch)
+	mock.CurrentBranchFn = func() (string, error) { return currentBranch, nil }
+	mock.UpdateBranchRefFn = func(branch, sha string) error {
+		branchSHAs[branch] = sha
+		return nil
+	}
 	mock.RevParseFn = func(ref string) (string, error) {
 		if ref == "main" || ref == "origin/main" {
 			return "trunk", nil
@@ -499,7 +510,7 @@ func TestSync_UnstackedCascadeDoesNotPush(t *testing.T) {
 		if a == "local" && d == "remote" {
 			return true, nil
 		}
-		if a == "main" && d == "b1" {
+		if (a == "main" || a == "remote") && d == "b1" {
 			return false, nil
 		}
 		return true, nil

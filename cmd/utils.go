@@ -17,6 +17,7 @@ import (
 	"github.com/github/gh-stack/internal/github"
 	"github.com/github/gh-stack/internal/stack"
 	"github.com/github/gh-stack/internal/theme"
+	"github.com/github/gh-stack/internal/worktree"
 )
 
 // ErrSilent indicates the error has already been printed to the user.
@@ -406,8 +407,9 @@ func handleSaveError(cfg *config.Config, err error) error {
 // resolveStack finds the stack for the given branch, handling ambiguity when
 // a branch (typically a trunk) belongs to multiple stacks. If exactly one
 // stack matches, it is returned directly. If multiple stacks match, the user
-// is prompted to select one. Commands that need rewrite preflight and read-only
-// callers leave checkout unchanged. Returns nil if no stack contains the branch.
+// is prompted to select one and the working tree is switched to the top branch
+// of the selected stack. Returns nil with no error if no stack contains the
+// branch.
 func resolveStack(sf *stack.StackFile, branch string, cfg *config.Config) (*stack.Stack, error) {
 	stacks := sf.FindAllStacksForBranch(branch)
 
@@ -454,12 +456,8 @@ func resolveStack(sf *stack.StackFile, branch string, cfg *config.Config) (*stac
 	if len(s.Branches) == 0 {
 		return nil, fmt.Errorf("selected stack %q has no branches", s.DisplayChain())
 	}
-	// Selection must not mutate a checkout before rewrite ownership preflight.
+	// Read-only selection must remain usable while another operation is paused.
 	if cfg.StackMutation == nil {
-		return s, nil
-	}
-	switch cfg.StackMutation.Kind {
-	case "rebase", "rebase-continue", "rebase-abort", "sync", "modify":
 		return s, nil
 	}
 
@@ -886,8 +884,15 @@ func activeBranchNames(s *stack.Stack) []string {
 // tracking branch when the local branch is strictly behind. Returns the names
 // of branches that were updated. Branches that are up-to-date, diverged, or
 // have no remote tracking branch are silently skipped.
-func fastForwardBranches(cfg *config.Config, s *stack.Stack, remote, currentBranch string) []string {
-	var updated []string
+type branchFastForward struct {
+	Branch    string
+	RemoteRef string
+	OldSHA    string
+	NewSHA    string
+}
+
+func planFastForwardBranches(s *stack.Stack, remote string) []branchFastForward {
+	var planned []branchFastForward
 	for _, br := range s.Branches {
 		if br.IsSkipped() {
 			continue
@@ -912,23 +917,40 @@ func fastForwardBranches(cfg *config.Config, s *stack.Stack, remote, currentBran
 			continue
 		}
 
-		// Local is behind remote — fast-forward.
-		if currentBranch == br.Branch {
-			if err := git.MergeFF(remoteRef); err != nil {
-				cfg.Warningf("Failed to fast-forward %s from remote: %v", br.Branch, err)
-				continue
-			}
-		} else {
-			if err := git.UpdateBranchRef(br.Branch, remoteSHA); err != nil {
-				cfg.Warningf("Failed to fast-forward %s from remote: %v", br.Branch, err)
-				continue
-			}
-		}
-
-		cfg.Successf("Fast-forwarded %s to %s", br.Branch, short(remoteSHA))
-		updated = append(updated, br.Branch)
+		planned = append(planned, branchFastForward{br.Branch, remoteRef, localSHA, remoteSHA})
 	}
-	return updated
+	return planned
+}
+
+func fastForwardBranches(cfg *config.Config, planned []branchFastForward, ctx *worktree.Context) ([]string, error) {
+	var updated []string
+	for _, plan := range planned {
+		ops, err := ctx.Ops(plan.Branch)
+		if err != nil {
+			return updated, err
+		}
+		if sha, err := ops.RevParse(plan.Branch); err != nil || sha != plan.OldSHA {
+			return updated, fmt.Errorf("%s changed since fast-forward preflight; retry the command", plan.Branch)
+		}
+		current, err := ops.CurrentBranch()
+		if err != nil {
+			return updated, err
+		}
+		if current == plan.Branch {
+			if err := worktree.CheckClean(ops, ctx.Location(plan.Branch).Path); err != nil {
+				return updated, err
+			}
+			err = ops.MergeFF(plan.NewSHA)
+		} else {
+			err = ops.UpdateBranchRef(plan.Branch, plan.NewSHA)
+		}
+		if err != nil {
+			return updated, fmt.Errorf("fast-forwarding %s: %w", plan.Branch, err)
+		}
+		cfg.Successf("Fast-forwarded %s to %s", plan.Branch, short(plan.NewSHA))
+		updated = append(updated, plan.Branch)
+	}
+	return updated, nil
 }
 
 // resolveOriginalRefs builds a map from branch name to current SHA for all
@@ -1028,6 +1050,11 @@ type trunkTarget struct {
 	Moved  bool
 }
 
+type trunkResolveOptions struct {
+	Worktrees *worktree.Context
+	Preflight func(string, bool) error
+}
+
 func (t trunkTarget) Describe() string {
 	return fmt.Sprintf("%s (%s)", t.Ref, short(t.SHA))
 }
@@ -1035,7 +1062,19 @@ func (t trunkTarget) Describe() string {
 // resolveTrunkTarget fetches the trunk explicitly, then returns the ref the
 // cascade must use. Updating the local trunk is best-effort; the fetched remote
 // ref remains the source of truth when the local branch is stale or immovable.
-func resolveTrunkTarget(cfg *config.Config, s *stack.Stack, remote, currentBranch string) (trunkTarget, error) {
+func resolveTrunkTarget(cfg *config.Config, s *stack.Stack, remote, currentBranch string, options ...trunkResolveOptions) (trunkTarget, error) {
+	var opts trunkResolveOptions
+	if len(options) > 0 {
+		opts = options[0]
+	}
+	checked := false
+	preflight := func(sha string, moved bool) error {
+		if checked || opts.Preflight == nil {
+			return nil
+		}
+		checked = true
+		return opts.Preflight(sha, moved)
+	}
 	if err := normalizeStackTrunk(cfg, s, remote); err != nil {
 		return trunkTarget{}, err
 	}
@@ -1044,7 +1083,11 @@ func resolveTrunkTarget(cfg *config.Config, s *stack.Stack, remote, currentBranc
 
 	if err := git.FetchBranch(remote, trunk); err != nil {
 		if errors.Is(err, git.ErrRemoteBranchNotFound) {
-			return trunkWithoutRemote(cfg, trunk, remote)
+			target, err := trunkWithoutRemote(cfg, trunk, remote)
+			if err == nil {
+				err = preflight(target.SHA, target.Moved)
+			}
+			return target, err
 		}
 		cfg.Errorf("failed to fetch trunk branch %s from %s: %v", trunk, remote, err)
 		return trunkTarget{}, ErrSilent
@@ -1062,6 +1105,9 @@ func resolveTrunkTarget(cfg *config.Config, s *stack.Stack, remote, currentBranc
 		return trunkTarget{}, fmt.Errorf("checking trunk branch %s: %w", trunk, err)
 	}
 	if !exists {
+		if err := preflight(remoteSHA, true); err != nil {
+			return trunkTarget{}, err
+		}
 		if err := git.CreateBranch(trunk, remoteRef); err != nil {
 			cfg.Errorf("could not create local trunk branch %s from %s: %v", trunk, remoteRef, err)
 			return trunkTarget{}, ErrSilent
@@ -1076,17 +1122,35 @@ func resolveTrunkTarget(cfg *config.Config, s *stack.Stack, remote, currentBranc
 		return trunkTarget{}, ErrSilent
 	}
 	if localSHA == remoteSHA {
+		if err := preflight(localSHA, false); err != nil {
+			return trunkTarget{}, err
+		}
 		cfg.Successf("Trunk %s is already up to date", trunk)
 		return trunkTarget{Branch: trunk, Ref: trunk, SHA: localSHA}, nil
 	}
 
 	canFastForward, ffErr := git.IsAncestor(localSHA, remoteSHA)
 	if ffErr == nil && canFastForward {
+		if err := preflight(remoteSHA, true); err != nil {
+			return trunkTarget{}, err
+		}
 		var updateErr error
-		if currentBranch == trunk {
-			updateErr = git.MergeFF(remoteRef)
-		} else {
-			updateErr = git.UpdateBranchRef(trunk, remoteSHA)
+		ops := git.CurrentOps()
+		if opts.Worktrees != nil {
+			ops, updateErr = opts.Worktrees.Ops(trunk)
+			if updateErr == nil {
+				currentBranch, updateErr = ops.CurrentBranch()
+				if updateErr == nil && currentBranch == trunk {
+					updateErr = worktree.CheckClean(ops, opts.Worktrees.Location(trunk).Path)
+				}
+			}
+		}
+		if updateErr == nil {
+			if currentBranch == trunk {
+				updateErr = ops.MergeFF(remoteRef)
+			} else {
+				updateErr = ops.UpdateBranchRef(trunk, remoteSHA)
+			}
 		}
 		if updateErr == nil {
 			cfg.Successf("Trunk %s fast-forwarded to %s", trunk, short(remoteSHA))
@@ -1098,12 +1162,18 @@ func resolveTrunkTarget(cfg *config.Config, s *stack.Stack, remote, currentBranc
 	} else if isAncestor, ancErr := git.IsAncestor(remoteSHA, localSHA); ancErr == nil && isAncestor {
 		// Keep unpushed local trunk commits when they already contain the
 		// fetched remote tip.
+		if err := preflight(localSHA, false); err != nil {
+			return trunkTarget{}, err
+		}
 		cfg.Successf("Trunk %s is ahead of %s — using the local branch", trunk, remoteRef)
 		return trunkTarget{Branch: trunk, Ref: trunk, SHA: localSHA}, nil
 	} else {
 		cfg.Warningf("Local %s has diverged from %s", trunk, remoteRef)
 	}
 
+	if err := preflight(remoteSHA, false); err != nil {
+		return trunkTarget{}, err
+	}
 	cfg.Printf("  Rebasing the stack onto %s instead; local %s is unchanged.", remoteRef, trunk)
 	return trunkTarget{Branch: trunk, Ref: remoteRef, SHA: remoteSHA}, nil
 }
@@ -1145,6 +1215,10 @@ type cascadeRebaseOpts struct {
 	OntoOldBase               string
 	CommitterDateIsAuthorDate bool
 	TrunkRef                  string
+	TrunkSHA                  string
+	Worktrees                 *worktree.Context
+	State                     *rebaseState
+	StateDir                  string
 }
 
 func (o cascadeRebaseOpts) trunkRef() string {
@@ -1196,6 +1270,76 @@ type cascadeRebaseResult struct {
 	OntoOldBase    string   // ontoOldBase at the conflict point (for --continue)
 }
 
+func rebaseStep(opts cascadeRebaseOpts, branch string, absIdx int, base, oldBase string, useOnto, needsOnto bool) (bool, error) {
+	executionBase := base
+	if opts.TrunkSHA != "" && base == opts.trunkRef() {
+		executionBase = opts.TrunkSHA
+	}
+	if opts.Worktrees != nil {
+		if err := opts.Worktrees.Start(branch, opts.OriginalRefs[branch]); err != nil {
+			return false, err
+		}
+	}
+	if state := opts.State; state != nil {
+		state.Phase = "applying"
+		state.CurrentBranchIndex = absIdx
+		state.ConflictBranch = branch
+		state.RemainingBranches = nil
+		for _, remaining := range opts.Branches {
+			if opts.Stack.IndexOf(remaining.Branch) > absIdx {
+				state.RemainingBranches = append(state.RemainingBranches, remaining.Branch)
+			}
+		}
+		state.UseOnto = needsOnto
+		state.OntoOldBase = opts.OriginalRefs[branch]
+		state.RebaseBase = executionBase
+		state.RebaseOldBase = oldBase
+		state.RebaseOnto = useOnto
+		if err := saveRebaseState(opts.StateDir, state); err != nil {
+			return false, err
+		}
+	}
+	ops := git.CurrentOps()
+	var err error
+	if opts.Worktrees != nil {
+		ops, err = opts.Worktrees.Prepare(branch)
+	} else if !useOnto {
+		err = ops.CheckoutBranch(branch)
+	}
+	if err != nil {
+		return false, fmt.Errorf("preparing %s: %w", branch, err)
+	}
+	rebaseOpts := git.RebaseOpts{CommitterDateIsAuthorDate: opts.CommitterDateIsAuthorDate}
+	if useOnto {
+		err = ops.RebaseOnto(executionBase, oldBase, branch, rebaseOpts)
+	} else {
+		err = ops.Rebase(executionBase, rebaseOpts)
+	}
+	if err != nil {
+		conflicted := !git.IsRebaseStartError(err)
+		if conflicted && opts.State != nil {
+			opts.State.Phase = "conflict"
+			if saveErr := saveRebaseState(opts.StateDir, opts.State); saveErr != nil {
+				return false, errors.Join(err, saveErr)
+			}
+		}
+		return conflicted, err
+	}
+	if opts.Worktrees != nil {
+		if err := opts.Worktrees.Record(branch); err != nil {
+			return false, fmt.Errorf("recording completed rebase of %s: %w", branch, err)
+		}
+	}
+	if opts.State != nil {
+		opts.State.CurrentBranchIndex = absIdx + 1
+		opts.State.ConflictBranch = ""
+		if err := saveRebaseState(opts.StateDir, opts.State); err != nil {
+			return false, err
+		}
+	}
+	return false, nil
+}
+
 // cascadeRebase performs a cascade rebase across the given branch range. It
 // stops at the first conflict and returns a result describing what happened.
 // The caller is responsible for conflict recovery (abort+restore or save state).
@@ -1206,7 +1350,6 @@ func cascadeRebase(opts cascadeRebaseOpts) cascadeRebaseResult {
 	ontoOldBase := opts.OntoOldBase
 	originalRefs := opts.OriginalRefs
 	result := cascadeRebaseResult{}
-	rebaseOpts := git.RebaseOpts{CommitterDateIsAuthorDate: opts.CommitterDateIsAuthorDate}
 	trunkRef := opts.trunkRef()
 
 	for i, br := range opts.Branches {
@@ -1259,8 +1402,8 @@ func cascadeRebase(opts cascadeRebaseOpts) cascadeRebaseResult {
 				}
 			}
 
-			if err := git.RebaseOnto(newBase, actualOldBase, br.Branch, rebaseOpts); err != nil {
-				if git.IsRebaseStartError(err) {
+			if conflicted, err := rebaseStep(opts, br.Branch, absIdx, newBase, actualOldBase, true, true); err != nil {
+				if !conflicted {
 					return cascadeRebaseResult{
 						Rebased: result.Rebased,
 						Err:     fmt.Errorf("could not start rebase of %s onto %s: %w", br.Branch, newBase, err),
@@ -1287,6 +1430,7 @@ func cascadeRebase(opts cascadeRebaseOpts) cascadeRebaseResult {
 			ontoOldBase = originalRefs[br.Branch]
 		} else {
 			var rebaseErr error
+			var conflicted bool
 			if absIdx > 0 {
 				oldBase, err := resolveRebaseOldBase(originalRefs[base], br.Base, base, br.Branch)
 				if err != nil {
@@ -1295,19 +1439,13 @@ func cascadeRebase(opts cascadeRebaseOpts) cascadeRebaseResult {
 						Err:     err,
 					}
 				}
-				rebaseErr = git.RebaseOnto(base, oldBase, br.Branch, rebaseOpts)
+				conflicted, rebaseErr = rebaseStep(opts, br.Branch, absIdx, base, oldBase, true, false)
 			} else {
-				if err := git.CheckoutBranch(br.Branch); err != nil {
-					return cascadeRebaseResult{
-						Rebased: result.Rebased,
-						Err:     fmt.Errorf("checking out %s: %w", br.Branch, err),
-					}
-				}
-				rebaseErr = git.Rebase(base, rebaseOpts)
+				conflicted, rebaseErr = rebaseStep(opts, br.Branch, absIdx, base, "", false, false)
 			}
 
 			if rebaseErr != nil {
-				if git.IsRebaseStartError(rebaseErr) {
+				if !conflicted {
 					return cascadeRebaseResult{
 						Rebased: result.Rebased,
 						Err:     fmt.Errorf("could not start rebase of %s onto %s: %w", br.Branch, base, rebaseErr),
@@ -1670,9 +1808,6 @@ func reconcileRemoteStack(cfg *config.Config, sf *stack.StackFile, s *stack.Stac
 	if err != nil {
 		return res, nil
 	}
-	if err := preflightSyncReconciliation(cfg, s, prs, remote); err != nil {
-		return res, err
-	}
 
 	localActive, remoteActive := activeStackSequences(s, prs)
 
@@ -1689,22 +1824,6 @@ func reconcileRemoteStack(cfg *config.Config, sf *stack.StackFile, s *stack.Stac
 	default:
 		return resolveStackDivergence(cfg, client, sf, s, currentBranch, gitDir, remote, prs, remoteActive)
 	}
-}
-
-func preflightSyncReconciliation(cfg *config.Config, s *stack.Stack, prs []*github.PullRequest, remote string) error {
-	if cfg.StackMutation == nil || cfg.StackMutation.Kind != "sync" {
-		return nil
-	}
-	trunk, err := normalizeTrunkBranch(s.Trunk.Branch, remote)
-	if err != nil {
-		cfg.Errorf("%s", err)
-		return ErrSilent
-	}
-	branches := append(s.BranchNames(), trunk)
-	for _, pr := range prs {
-		branches = append(branches, pr.HeadRefName)
-	}
-	return requireLocalBranches(cfg, branches)
 }
 
 // activeStackSequences returns the ordered active (non-merged) branch-name
@@ -1900,11 +2019,6 @@ func resolveStackDivergence(cfg *config.Config, client github.ClientOps, sf *sta
 		}
 		cfg.Errorf("selection failed: %v", err)
 		return remoteReconcileResult{}, ErrSilent
-	}
-	if selected == 0 || selected == 1 {
-		if err := preflightSyncReconciliation(cfg, s, prs, remote); err != nil {
-			return remoteReconcileResult{}, err
-		}
 	}
 
 	switch selected {

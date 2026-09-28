@@ -37,8 +37,8 @@ No Makefile, no code generation, no external linter config. Standard Go toolchai
 - Load stack files with `stack.Load(dir)` after writing to get correct checksums.
 - Use `stackStateDir(cfg)` for application state and `beginStackMutation` before mutation snapshots; defer cleanup. The clone-wide operation lock is separate from short catalog saves.
 - Recovery must match stack identity, execute in the recorded worktree, and retain journals on partial failures. Native Git markers stay per-worktree.
-- Mutation locks coordinate gh-stack only, not Git commands/editors. Keep affected worktrees quiescent during rewrites. Context-tracked modify passes the snapshot SHA (or prior `Context.Touched` SHA) to `Context.Start`; never claim an external commit as this operation's work during continuation.
-- Rebase/sync currently reject foreign-owned members and writable trunks after prerequisite migration but before requested mutations, including sync reconciliation. Their existing engine remains origin-only; rebase recovery must be invoked in its recorded origin.
+- Finish paused operations before switching preview stages or versions. Reject origin-only and unknown rebase execution modes before routing recovery; use the matching layer3 build in the recorded origin for origin-only journals.
+- Mutation locks coordinate gh-stack only, not Git commands/editors. Keep affected worktrees quiescent during rewrites. Pass the snapshot SHA (or prior `Context.Touched` SHA) to `Context.Start` before ref mutations; never claim an external commit as this operation's work during continuation.
 - Core modify rejects distributed stack branches before TUI/apply; foreign trunk ownership alone is allowed. Do not enable distributed modify until its dependent layer is implemented.
 
 For full architecture details, see [AGENTS.md](../AGENTS.md) in the repository root.

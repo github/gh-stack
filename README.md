@@ -64,13 +64,15 @@ Stack metadata is stored in `<common-dir>/gh-stack` (a JSON file, not committed 
 
 The gh-stack recovery journals, `gh-stack-rebase-state` and `gh-stack-modify-state`, also live in the common directory and record the worktrees involved. Git's own HEAD, index, rebase, and cherry-pick markers remain **per worktree**.
 
-On upgrade, nonconflicting legacy worktree catalogs are consolidated automatically and originals are preserved as backups. Migration is a prerequisite and can complete even if the requested rewrite is subsequently refused. Conflicting definitions stop migration rather than choosing one; the error identifies the files to reconcile. Finish or abort legacy in-progress operations in their original worktree first. Do not mix old and new gh-stack versions within one clone.
+On upgrade, nonconflicting legacy worktree catalogs are consolidated automatically and originals are preserved as backups. Conflicting definitions stop migration rather than choosing one; the error identifies the files to reconcile. Finish or abort legacy in-progress operations in their original worktree first. Do not mix old and new gh-stack versions within one clone.
+
+Complete paused operations before switching preview stages or gh-stack versions. If recovery reports an incompatible execution lifecycle, finish or abort it using the matching build in its recorded original worktree; do not edit or remove the journal.
 
 ### Git worktrees
 
-You can keep independent stacks in linked worktrees or track a stack whose branches are distributed across them. **For now, `rebase` and `sync` require all stack branches to be unoccupied or checked out in the initiating worktree.** They conservatively refuse foreign-owned members, even outside a requested rebase range, before changing refs, checkouts, stack membership, or remote stacks. A foreign-owned trunk is also refused when trunk updates are enabled; `rebase --no-trunk` does not update it.
+You can keep independent stacks in linked worktrees or distribute a stack's branches across them. `rebase` and `sync` automatically update the clean worktree that owns each affected branch. Dirty, busy, missing, or changed owners stop the operation; unrelated worktrees are left alone. A trunk that cannot safely fast-forward can use the existing fetched-remote fallback.
 
-Mutations are serialized across the clone, while read-only views remain available. Paused operations must be continued or aborted before another mutation. Rebase recovery must be invoked in its recorded original worktree; invoking it elsewhere fails without changing either checkout. Modify recovery can be invoked elsewhere and still executes in its recorded origin. gh-stack never automatically stashes changes, creates/removes worktrees, or steals another checkout.
+Mutations are serialized across the clone, while read-only views remain available. Paused operations must be continued or aborted before another mutation. Recovery runs in the recorded worktree even when `--continue` or `--abort` is invoked elsewhere. gh-stack never automatically stashes changes, creates/removes worktrees, or steals another checkout.
 
 Mutation locks coordinate **gh-stack processes only**, not arbitrary Git commands, editors, or other tools. Keep affected worktrees idle while history is being rewritten. During a pause, make only the requested conflict-resolution edits and staging in the reported worktree.
 
