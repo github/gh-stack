@@ -10,6 +10,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	cligit "github.com/cli/cli/v2/git"
 )
 
 // RebaseOpts holds optional parameters for git rebase operations.
@@ -27,6 +29,10 @@ var ErrRemoteBranchNotFound = errors.New("remote branch not found")
 // Tests can substitute a mock via SetOps().
 type Ops interface {
 	GitDir() (string, error)
+	CommonDir() (string, error)
+	Worktrees() ([]Worktree, error)
+	ForWorktree(path string) Ops
+	CheckVersion() error
 	RootDir() (string, error)
 	CurrentBranch() (string, error)
 	BranchExists(name string) bool
@@ -86,7 +92,13 @@ type Ops interface {
 }
 
 // defaultOps implements Ops by delegating to the real git client and helpers.
-type defaultOps struct{}
+type defaultOps struct {
+	client    *cligit.Client
+	scoped    bool
+	scopeErr  error
+	gitDir    os.FileInfo
+	commonDir os.FileInfo
+}
 
 var _ Ops = (*defaultOps)(nil)
 
@@ -108,32 +120,50 @@ func CurrentOps() Ops {
 // --- defaultOps method implementations ---
 
 func (d *defaultOps) GitDir() (string, error) {
-	return client.GitDir(context.Background())
+	return d.path("rev-parse", "--absolute-git-dir")
 }
 
 func (d *defaultOps) RootDir() (string, error) {
-	return run("rev-parse", "--show-toplevel")
+	return d.path("rev-parse", "--show-toplevel")
 }
 
 func (d *defaultOps) CurrentBranch() (string, error) {
-	return client.CurrentBranch(context.Background())
+	branch, err := d.run("symbolic-ref", "--quiet", "HEAD")
+	if err != nil {
+		var gitErr *cligit.GitError
+		if errors.As(err, &gitErr) && gitErr.ExitCode == 1 && gitErr.Stderr == "" {
+			return "", cligit.ErrNotOnAnyBranch
+		}
+		return "", err
+	}
+	return strings.TrimPrefix(branch, "refs/heads/"), nil
 }
 
 func (d *defaultOps) BranchExists(name string) bool {
-	return client.HasLocalBranch(context.Background(), name)
+	_, err := d.run("rev-parse", "--verify", "refs/heads/"+name)
+	return err == nil
 }
 
 func (d *defaultOps) CheckoutBranch(name string) error {
-	return client.CheckoutBranch(context.Background(), name)
+	return d.runSilent("checkout", name)
 }
 
 func (d *defaultOps) Fetch(remote string) error {
-	return client.Fetch(context.Background(), remote, "")
+	c, err := d.gitClient()
+	if err != nil {
+		return err
+	}
+	cmd, err := c.AuthenticatedCommand(context.Background(), cligit.AllMatchingCredentialsPattern, "fetch", remote)
+	if err != nil {
+		return err
+	}
+	d.configureCommand(cmd)
+	return cmd.Run()
 }
 
 func (d *defaultOps) FetchBranch(remote, branch string) error {
 	refspec := fmt.Sprintf("+refs/heads/%s:refs/remotes/%s/%s", branch, remote, branch)
-	if err := runSilent("fetch", remote, refspec); err != nil {
+	if err := d.runSilent("fetch", remote, refspec); err != nil {
 		if isMissingRemoteRefError(err) {
 			return fmt.Errorf("%w: %s/%s", ErrRemoteBranchNotFound, remote, branch)
 		}
@@ -156,7 +186,7 @@ func (d *defaultOps) FetchBranches(remote string, branches []string) error {
 	// Fast path: fetch all branches in a single call.
 	args := []string{"fetch", remote}
 	args = append(args, refspecs...)
-	if err := runSilent(args...); err == nil {
+	if err := d.runSilent(args...); err == nil {
 		return nil
 	}
 	// Fallback: one branch may be absent on the remote or deleted since
@@ -164,7 +194,7 @@ func (d *defaultOps) FetchBranches(remote string, branches []string) error {
 	// block the rest, while still surfacing real fetch failures.
 	var fetchErr error
 	for _, rs := range refspecs {
-		err := runSilent("fetch", remote, rs)
+		err := d.runSilent("fetch", remote, rs)
 		if err == nil || isMissingRemoteRefError(err) {
 			continue
 		}
@@ -180,10 +210,10 @@ func isMissingRemoteRefError(err error) bool {
 }
 
 func (d *defaultOps) DefaultBranch() (string, error) {
-	ref, err := run("symbolic-ref", "refs/remotes/origin/HEAD")
+	ref, err := d.run("symbolic-ref", "refs/remotes/origin/HEAD")
 	if err != nil {
 		for _, name := range []string{"main", "master"} {
-			if BranchExists(name) {
+			if d.BranchExists(name) {
 				return name, nil
 			}
 		}
@@ -193,7 +223,7 @@ func (d *defaultOps) DefaultBranch() (string, error) {
 }
 
 func (d *defaultOps) CreateBranch(name, base string) error {
-	return runSilent("branch", name, base)
+	return d.runSilent("branch", name, base)
 }
 
 func (d *defaultOps) Push(remote string, branches []string, force, atomic bool) error {
@@ -205,7 +235,7 @@ func (d *defaultOps) Push(remote string, branches []string, force, atomic bool) 
 		// was missing before the preceding FetchBranches call.
 		for _, b := range branches {
 			trackingRef := fmt.Sprintf("refs/remotes/%s/%s", remote, b)
-			sha, err := run("rev-parse", "--verify", "--quiet", trackingRef)
+			sha, err := d.run("rev-parse", "--verify", "--quiet", trackingRef)
 			if err == nil && sha != "" {
 				// Tracking ref exists: lease against the known SHA.
 				args = append(args, fmt.Sprintf("--force-with-lease=refs/heads/%s:%s", b, sha))
@@ -228,7 +258,7 @@ func (d *defaultOps) Push(remote string, branches []string, force, atomic bool) 
 	for _, b := range branches {
 		args = append(args, fmt.Sprintf("refs/heads/%s:refs/heads/%s", b, b))
 	}
-	return runSilent(args...)
+	return d.runSilent(args...)
 }
 
 // ResolveRemote determines the remote for pushing a branch. It checks git
@@ -244,7 +274,7 @@ func (d *defaultOps) ResolveRemote(branch string) (string, error) {
 		"branch." + branch + ".remote",
 	}
 	for _, key := range candidates {
-		out, err := run("config", "--get", key)
+		out, err := d.run("config", "--get", key)
 		if err == nil && out != "" {
 			return out, nil
 		}
@@ -255,7 +285,7 @@ func (d *defaultOps) ResolveRemote(branch string) (string, error) {
 		return saved, nil
 	}
 
-	out, err := run("remote")
+	out, err := d.run("remote")
 	if err != nil {
 		return "", fmt.Errorf("could not list remotes: %w", err)
 	}
@@ -270,44 +300,48 @@ func (d *defaultOps) ResolveRemote(branch string) (string, error) {
 }
 
 func (d *defaultOps) Rebase(base string, opts RebaseOpts) error {
-	args := []string{"rebase"}
-	if opts.CommitterDateIsAuthorDate {
-		args = append(args, "--committer-date-is-author-date")
-	}
+	args := rebaseArgs(opts)
 	args = append(args, base)
-	return runRebaseCommand(args, opts)
+	return d.runRebaseCommand(args, opts)
 }
 
 func (d *defaultOps) EnableRerere() error {
-	if err := runSilent("config", "rerere.enabled", "true"); err != nil {
+	if err := d.runSilent("config", "rerere.enabled", "true"); err != nil {
 		return err
 	}
-	return runSilent("config", "rerere.autoupdate", "true")
+	return d.runSilent("config", "rerere.autoupdate", "true")
 }
 
 func (d *defaultOps) IsRerereEnabled() (bool, error) {
-	out, err := run("config", "--get", "rerere.enabled")
+	out, err := d.run("config", "--get", "rerere.enabled")
 	if err != nil {
-		// Missing key — not enabled.
-		return false, nil
+		var gitErr *cligit.GitError
+		if errors.As(err, &gitErr) && gitErr.ExitCode == 1 {
+			return false, nil
+		}
+		return false, err
 	}
 	return strings.EqualFold(strings.TrimSpace(out), "true"), nil
 }
 
 func (d *defaultOps) IsRerereDeclined() (bool, error) {
-	out, err := run("config", "--get", "gh-stack.rerere-declined")
+	out, err := d.run("config", "--get", "gh-stack.rerere-declined")
 	if err != nil {
-		return false, nil
+		var gitErr *cligit.GitError
+		if errors.As(err, &gitErr) && gitErr.ExitCode == 1 {
+			return false, nil
+		}
+		return false, err
 	}
 	return strings.EqualFold(strings.TrimSpace(out), "true"), nil
 }
 
 func (d *defaultOps) SaveRerereDeclined() error {
-	return runSilent("config", "gh-stack.rerere-declined", "true")
+	return d.runSilent("config", "gh-stack.rerere-declined", "true")
 }
 
 func (d *defaultOps) GetSavedRemote() (string, error) {
-	out, err := run("config", "--get", "gh-stack.remote")
+	out, err := d.run("config", "--get", "gh-stack.remote")
 	if err != nil {
 		return "", err
 	}
@@ -315,88 +349,130 @@ func (d *defaultOps) GetSavedRemote() (string, error) {
 }
 
 func (d *defaultOps) SaveRemote(remote string) error {
-	return runSilent("config", "gh-stack.remote", remote)
+	return d.runSilent("config", "gh-stack.remote", remote)
 }
 
 func (d *defaultOps) ClearRemote() error {
-	return runSilent("config", "--unset", "gh-stack.remote")
+	return d.runSilent("config", "--unset", "gh-stack.remote")
 }
 
 func (d *defaultOps) RebaseOnto(newBase, oldBase, branch string, opts RebaseOpts) error {
-	args := []string{"rebase"}
-	if opts.CommitterDateIsAuthorDate {
-		args = append(args, "--committer-date-is-author-date")
-	}
+	args := rebaseArgs(opts)
 	args = append(args, "--onto", newBase, oldBase, branch)
-	return runRebaseCommand(args, opts)
+	return d.runRebaseCommand(args, opts)
 }
 
 func (d *defaultOps) RebaseContinue(opts RebaseOpts) error {
-	err := rebaseContinueOnce(opts)
+	err := d.rebaseContinueOnce(opts)
 	if err == nil {
 		return nil
 	}
-	return tryAutoResolveRebase(err, opts)
+	return d.tryAutoResolveRebase(err, opts)
 }
 
 func (d *defaultOps) RebaseAbort() error {
-	return runSilent("rebase", "--abort")
+	return d.runSilent(append(rebaseArgs(RebaseOpts{}), "--abort")...)
 }
 
 func (d *defaultOps) IsRebaseInProgress() bool {
-	gitDir, err := GitDir()
+	inProgress, _ := d.rebaseInProgress()
+	return inProgress
+}
+
+func (d *defaultOps) rebaseInProgress() (bool, error) {
+	gitDir, err := d.GitDir()
 	if err != nil {
-		return false
+		return false, err
 	}
 	for _, dir := range []string{"rebase-merge", "rebase-apply"} {
 		rebasePath := filepath.Join(gitDir, dir)
-		if info, err := os.Stat(rebasePath); err == nil && info.IsDir() {
-			return true
+		info, err := os.Stat(rebasePath)
+		if err != nil && !errors.Is(err, os.ErrNotExist) {
+			return false, fmt.Errorf("checking rebase state in %q: %w", gitDir, err)
+		}
+		if err == nil && info.IsDir() {
+			return true, nil
 		}
 	}
-	return false
+	return false, nil
 }
 
 func (d *defaultOps) ConflictedFiles() ([]string, error) {
-	output, err := run("diff", "--name-only", "--diff-filter=U")
+	output, err := d.runRaw("diff", "--no-relative", "--name-only", "--diff-filter=U", "-z")
 	if err != nil {
 		return nil, err
 	}
 	if output == "" {
 		return nil, nil
 	}
-	return strings.Split(output, "\n"), nil
+	return strings.Split(strings.TrimSuffix(output, "\x00"), "\x00"), nil
 }
 
 func (d *defaultOps) FindConflictMarkers(filePath string) (*ConflictMarkerInfo, error) {
-	output, err := run("diff", "--check", "--", filePath)
-	if output == "" && err != nil {
+	root, err := d.RootDir()
+	if err != nil {
+		return nil, err
+	}
+	fullPath := filePath
+	if !filepath.IsAbs(fullPath) {
+		fullPath = filepath.Join(root, fullPath)
+	}
+	fullPath, err = filepath.EvalSymlinks(fullPath)
+	if err != nil {
+		return nil, fmt.Errorf("resolving conflict file %q: %w", filePath, err)
+	}
+	relativePath, err := filepath.Rel(root, fullPath)
+	if err != nil {
+		return nil, err
+	}
+	if relativePath == ".." || strings.HasPrefix(relativePath, ".."+string(filepath.Separator)) {
+		return nil, fmt.Errorf("conflict file %q is outside worktree %q", filePath, root)
+	}
+	cmd, err := d.command("diff", "--no-relative", "--check", "--", ":(top,literal)"+filepath.ToSlash(relativePath))
+	if err != nil {
+		return nil, err
+	}
+	cmd.Env = append(cmd.Environ(), "LC_ALL=C")
+	output, err := cmd.Output()
+	var exitErr *exec.ExitError
+	if err != nil && (!errors.As(err, &exitErr) || exitErr.ExitCode() != 2) {
 		return nil, err
 	}
 
 	info := &ConflictMarkerInfo{File: filePath}
-	var currentSection *ConflictSection
-
-	for _, line := range strings.Split(output, "\n") {
-		line = strings.TrimSpace(line)
-		if line == "" {
+	var lines []string
+	for _, line := range strings.Split(string(output), "\n") {
+		marker := strings.LastIndex(line, ": leftover conflict marker")
+		if marker < 0 {
 			continue
 		}
-		parts := strings.SplitN(line, ":", 3)
-		if len(parts) < 3 {
+		// Parse from the right: filenames may contain colons or newlines.
+		prefix := line[:marker]
+		colon := strings.LastIndexByte(prefix, ':')
+		if colon < 0 {
 			continue
 		}
-		lineNo, parseErr := strconv.Atoi(strings.TrimSpace(parts[1]))
-		if parseErr != nil {
-			continue
+		lineNo, err := strconv.Atoi(prefix[colon+1:])
+		if err != nil {
+			return nil, fmt.Errorf("invalid conflict marker location %q: %w", line, err)
 		}
-		marker := strings.TrimSpace(parts[2])
-		if strings.Contains(marker, "leftover conflict marker") {
-			if currentSection == nil || currentSection.EndLine != 0 {
-				currentSection = &ConflictSection{StartLine: lineNo}
-				info.Sections = append(info.Sections, *currentSection)
+		if lines == nil {
+			content, err := os.ReadFile(fullPath)
+			if err != nil {
+				return nil, err
 			}
-			info.Sections[len(info.Sections)-1].EndLine = lineNo
+			lines = strings.Split(string(content), "\n")
+		}
+		if lineNo < 1 || lineNo > len(lines) || lines[lineNo-1] == "" {
+			return nil, fmt.Errorf("conflict file %q changed while reading markers", filePath)
+		}
+		switch lines[lineNo-1][0] {
+		case '<':
+			info.Sections = append(info.Sections, ConflictSection{StartLine: lineNo})
+		case '>':
+			if len(info.Sections) > 0 {
+				info.Sections[len(info.Sections)-1].EndLine = lineNo
+			}
 		}
 	}
 
@@ -404,7 +480,7 @@ func (d *defaultOps) FindConflictMarkers(filePath string) (*ConflictMarkerInfo, 
 }
 
 func (d *defaultOps) IsAncestor(ancestor, descendant string) (bool, error) {
-	err := runSilent("merge-base", "--is-ancestor", ancestor, descendant)
+	err := d.runSilent("merge-base", "--is-ancestor", ancestor, descendant)
 	if err == nil {
 		return true, nil
 	}
@@ -416,7 +492,7 @@ func (d *defaultOps) IsAncestor(ancestor, descendant string) (bool, error) {
 }
 
 func (d *defaultOps) RevParse(ref string) (string, error) {
-	return run("rev-parse", ref)
+	return d.run("rev-parse", ref)
 }
 
 func (d *defaultOps) RevParseMulti(refs []string) ([]string, error) {
@@ -424,7 +500,7 @@ func (d *defaultOps) RevParseMulti(refs []string) ([]string, error) {
 		return nil, nil
 	}
 	args := append([]string{"rev-parse"}, refs...)
-	out, err := run(args...)
+	out, err := d.run(args...)
 	if err != nil {
 		return nil, err
 	}
@@ -436,16 +512,16 @@ func (d *defaultOps) RevParseMulti(refs []string) ([]string, error) {
 }
 
 func (d *defaultOps) MergeBase(a, b string) (string, error) {
-	return run("merge-base", a, b)
+	return d.run("merge-base", a, b)
 }
 
 func (d *defaultOps) MergeBaseForkPoint(ref, branch string) (string, error) {
-	return run("merge-base", "--fork-point", ref, branch)
+	return d.run("merge-base", "--fork-point", ref, branch)
 }
 
 func (d *defaultOps) Log(ref string, maxCount int) ([]CommitInfo, error) {
 	format := "%H\t%s\t%at"
-	output, err := run("log", ref, "--format="+format, "-n", strconv.Itoa(maxCount))
+	output, err := d.run("log", ref, "--format="+format, "-n", strconv.Itoa(maxCount))
 	if err != nil {
 		return nil, err
 	}
@@ -472,7 +548,7 @@ func (d *defaultOps) Log(ref string, maxCount int) ([]CommitInfo, error) {
 func (d *defaultOps) LogRange(base, head string) ([]CommitInfo, error) {
 	format := "%H%x01%B%x01%at%x00"
 	rangeSpec := base + ".." + head
-	output, err := run("log", rangeSpec, "--format="+format)
+	output, err := d.run("log", rangeSpec, "--format="+format)
 	if err != nil {
 		return nil, err
 	}
@@ -516,7 +592,7 @@ func splitCommitMessage(msg string) (subject, body string) {
 }
 
 func (d *defaultOps) DiffStatRange(base, head string) (additions, deletions int, err error) {
-	output, err := run("diff", "--numstat", base+".."+head)
+	output, err := d.run("diff", "--numstat", base+".."+head)
 	if err != nil {
 		return 0, 0, err
 	}
@@ -540,7 +616,7 @@ func (d *defaultOps) DiffStatRange(base, head string) (additions, deletions int,
 }
 
 func (d *defaultOps) DiffStatFiles(base, head string) ([]FileDiffStat, error) {
-	output, err := run("diff", "--numstat", base+".."+head)
+	output, err := d.run("diff", "--numstat", base+".."+head)
 	if err != nil {
 		return nil, err
 	}
@@ -569,86 +645,86 @@ func (d *defaultOps) DeleteBranch(name string, force bool) error {
 	if force {
 		flag = "-D"
 	}
-	return runSilent("branch", flag, name)
+	return d.runSilent("branch", flag, name)
 }
 
 func (d *defaultOps) DeleteRemoteBranch(remote, branch string) error {
 	// Fully-qualify the ref so a branch name is never reinterpreted as
 	// refspec syntax.
-	return runSilent("push", remote, "--delete", "refs/heads/"+branch)
+	return d.runSilent("push", remote, "--delete", "refs/heads/"+branch)
 }
 
 func (d *defaultOps) DeleteTrackingRef(remote, branch string) error {
-	return runSilent("branch", "-dr", remote+"/"+branch)
+	return d.runSilent("branch", "-dr", remote+"/"+branch)
 }
 
 func (d *defaultOps) ResetHard(ref string) error {
-	return runSilent("reset", "--hard", ref)
+	return d.runSilent("reset", "--hard", ref)
 }
 
 func (d *defaultOps) SetUpstreamTracking(branch, remote string) error {
-	return runSilent("branch", "--set-upstream-to="+remote+"/"+branch, branch)
+	return d.runSilent("branch", "--set-upstream-to="+remote+"/"+branch, branch)
 }
 
 func (d *defaultOps) UpstreamRemote(branch string) (string, error) {
-	return run("config", "--get", "branch."+branch+".remote")
+	return d.run("config", "--get", "branch."+branch+".remote")
 }
 
 func (d *defaultOps) MergeFF(target string) error {
-	return runSilent("merge", "--ff-only", target)
+	return d.runSilent("-c", "merge.autoStash=false", "merge", "--ff-only", target)
 }
 
 func (d *defaultOps) UpdateBranchRef(branch, sha string) error {
-	return runSilent("branch", "-f", branch, sha)
+	return d.runSilent("branch", "-f", branch, sha)
 }
 
 func (d *defaultOps) StageAll() error {
-	return runSilent("add", "-A")
+	return d.runSilent("add", "-A")
 }
 
 func (d *defaultOps) StageTracked() error {
-	return runSilent("add", "-u")
+	return d.runSilent("add", "-u")
 }
 
 func (d *defaultOps) HasStagedChanges() bool {
-	err := runSilent("diff", "--cached", "--quiet")
+	err := d.runSilent("diff", "--cached", "--quiet")
 	return err != nil
 }
 
 func (d *defaultOps) Commit(message string) (string, error) {
-	if err := runSilent("commit", "-m", message); err != nil {
+	if err := d.runSilent("commit", "-m", message); err != nil {
 		return "", err
 	}
-	return run("rev-parse", "HEAD")
+	return d.run("rev-parse", "HEAD")
 }
 
 // CommitInteractive launches the user's editor for the commit message.
 func (d *defaultOps) CommitInteractive() (string, error) {
-	if err := runInteractive("commit"); err != nil {
+	if err := d.runInteractive("commit"); err != nil {
 		return "", err
 	}
-	return run("rev-parse", "HEAD")
+	return d.run("rev-parse", "HEAD")
 }
 
 func (d *defaultOps) ValidateRefName(name string) error {
-	_, err := run("check-ref-format", "--branch", name)
+	_, err := d.run("check-ref-format", "--branch", name)
 	return err
 }
 
 func (d *defaultOps) RenameBranch(oldName, newName string) error {
-	return runSilent("branch", "-m", oldName, newName)
+	return d.runSilent("branch", "-m", oldName, newName)
 }
 
 func (d *defaultOps) CherryPick(commits []string) error {
 	args := append([]string{"cherry-pick"}, commits...)
-	return runSilent(args...)
+	return d.runSilent(args...)
 }
 
 // CherryPickQuit clears the in-progress cherry-pick sequencer state without
 // touching the working tree or index (git cherry-pick --quit). Used to clear
 // any stale sequencer state before starting a fresh cherry-pick.
 func (d *defaultOps) CherryPickQuit() error {
-	return runSilent("cherry-pick", "--quit")
+	return d.runSilent("cherry-pick", "--quit")
 }
 
 // CherryPickAbort cancels an in-progress cherry-pick and restores the working
@@ -656,30 +732,44 @@ func (d *defaultOps) CherryPickQuit() error {
 // (git cherry-pick --abort). Errors if no cherry-pick is in progress, so
 // callers should gate this with IsCherryPickInProgress.
 func (d *defaultOps) CherryPickAbort() error {
-	return runSilent("cherry-pick", "--abort")
+	return d.runSilent("cherry-pick", "--abort")
 }
 
 func (d *defaultOps) CherryPickContinue() error {
-	cmd := exec.Command("git", "cherry-pick", "--continue")
-	cmd.Env = append(os.Environ(), "GIT_EDITOR=true")
+	cmd, err := d.command("cherry-pick", "--continue")
+	if err != nil {
+		return err
+	}
+	cmd.Env = append(cmd.Environ(), "GIT_EDITOR=true")
 	return cmd.Run()
 }
 
 // IsCherryPickInProgress reports whether a cherry-pick is currently in progress
-// by checking for the CHERRY_PICK_HEAD marker in the git directory.
+// by checking its native marker and any remaining sequencer picks.
 func (d *defaultOps) IsCherryPickInProgress() bool {
-	gitDir, err := GitDir()
+	gitDir, err := d.GitDir()
 	if err != nil {
 		return false
 	}
 	if _, err := os.Stat(filepath.Join(gitDir, "CHERRY_PICK_HEAD")); err == nil {
 		return true
 	}
+	// A manual commit can clear CHERRY_PICK_HEAD while a multi-commit
+	// cherry-pick still has pending work.
+	todo, err := os.ReadFile(filepath.Join(gitDir, "sequencer", "todo"))
+	if err != nil {
+		return false
+	}
+	for _, line := range strings.Split(string(todo), "\n") {
+		if strings.HasPrefix(line, "pick ") {
+			return true
+		}
+	}
 	return false
 }
 
 func (d *defaultOps) HasUncommittedChanges() (bool, error) {
-	out, err := run("status", "--porcelain")
+	out, err := d.run("status", "--porcelain", "--untracked-files=all")
 	if err != nil {
 		return false, err
 	}
@@ -689,7 +779,7 @@ func (d *defaultOps) HasUncommittedChanges() (bool, error) {
 func (d *defaultOps) LogMerges(base, head string) ([]CommitInfo, error) {
 	format := "%H%x01%B%x01%at%x00"
 	rangeSpec := base + ".." + head
-	output, err := run("log", "--merges", rangeSpec, "--format="+format)
+	output, err := d.run("log", "--merges", rangeSpec, "--format="+format)
 	if err != nil {
 		return nil, err
 	}

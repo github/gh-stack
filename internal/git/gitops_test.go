@@ -1,12 +1,15 @@
 package git
 
 import (
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 
+	cligit "github.com/cli/cli/v2/git"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -666,4 +669,821 @@ func TestIntegration_CherryPickQuitLeavesIndexUnmerged(t *testing.T) {
 	// ... but leaves the unmerged index behind, so checkout still fails.
 	_, coErr := gitExecMayFail(t, cloneDir, "checkout", "feature")
 	require.Error(t, coErr, "checkout should still fail after --quit because the index is unmerged")
+}
+
+// ---------------------------------------------------------------------------
+// Real linked-worktree integration tests
+// ---------------------------------------------------------------------------
+
+func setupWorktreeRepo(t *testing.T) (*defaultOps, string) {
+	t.Helper()
+	_, dir := setupBareAndClone(t)
+	gitExec(t, dir, "config", "user.name", "Test")
+	gitExec(t, dir, "config", "user.email", "test@test.com")
+	gitExec(t, dir, "config", "commit.gpgsign", "false")
+	gitExec(t, dir, "config", "rerere.enabled", "false")
+	gitExec(t, dir, "config", "merge.conflictStyle", "merge")
+	gitExec(t, dir, "config", "rebase.backend", "merge")
+	t.Cleanup(withGitDir(t, dir))
+	return &defaultOps{client: &cligit.Client{RepoDir: dir}}, dir
+}
+
+func canonicalGitTestPath(t *testing.T, path string) string {
+	t.Helper()
+	resolved, err := filepath.EvalSymlinks(path)
+	require.NoError(t, err)
+	return filepath.ToSlash(resolved)
+}
+
+func addTestWorktree(t *testing.T, root *defaultOps, dir, branch string) (Ops, string) {
+	t.Helper()
+	path := filepath.Join(t.TempDir(), branch+" worktree")
+	gitExec(t, dir, "worktree", "add", "-b", branch, path, "main")
+	scoped := root.ForWorktree(path)
+	got, err := scoped.CurrentBranch()
+	require.NoError(t, err)
+	require.Equal(t, branch, got)
+	return scoped, path
+}
+
+func TestIntegration_WorktreeDirectoriesAndDiscovery(t *testing.T) {
+	root, dir := setupWorktreeRepo(t)
+	beforeWD, err := os.Getwd()
+	require.NoError(t, err)
+	beforeClientDir := client.RepoDir
+	beforeOps := CurrentOps()
+
+	linked, linkedPath := addTestWorktree(t, root, dir, "feature-\u03bb")
+	gitExec(t, dir, "worktree", "lock", "--reason", "a reason\nwith newlines", linkedPath)
+	detachedPath := filepath.Join(t.TempDir(), "detached")
+	gitExec(t, dir, "worktree", "add", "--detach", detachedPath, "main")
+	missingPath := filepath.Join(t.TempDir(), "missing")
+	gitExec(t, dir, "worktree", "add", "-b", "missing", missingPath, "main")
+	canonicalMissing := canonicalGitTestPath(t, missingPath)
+	require.NoError(t, os.Rename(missingPath, missingPath+"-moved"))
+
+	common, err := root.CommonDir()
+	require.NoError(t, err)
+	mainGitDir, err := root.GitDir()
+	require.NoError(t, err)
+	assert.Equal(t, canonicalGitTestPath(t, filepath.Join(dir, ".git")), common)
+	assert.Equal(t, common, mainGitDir)
+	linkedCommon, err := linked.CommonDir()
+	require.NoError(t, err)
+	linkedGitDir, err := linked.GitDir()
+	require.NoError(t, err)
+	assert.Equal(t, common, linkedCommon)
+	assert.NotEqual(t, common, linkedGitDir)
+	assert.True(t, filepath.IsAbs(linkedGitDir))
+	assert.True(t, strings.HasPrefix(filepath.Clean(linkedGitDir), filepath.Join(common, "worktrees")+string(filepath.Separator)))
+
+	subdir := filepath.Join(linkedPath, "sub", "directory")
+	require.NoError(t, os.MkdirAll(subdir, 0755))
+	sub := linked.ForWorktree(filepath.Join("sub", "directory"))
+	subRoot, err := sub.RootDir()
+	require.NoError(t, err)
+	assert.Equal(t, canonicalGitTestPath(t, linkedPath), subRoot)
+	subGitDir, err := sub.GitDir()
+	require.NoError(t, err)
+	assert.Equal(t, linkedGitDir, subGitDir)
+	subCommon, err := sub.CommonDir()
+	require.NoError(t, err)
+	assert.Equal(t, common, subCommon)
+
+	worktrees, err := sub.Worktrees()
+	require.NoError(t, err)
+	require.Len(t, worktrees, 4)
+	assert.Equal(t, canonicalGitTestPath(t, dir), worktrees[0].Path, "the main owner must not be omitted")
+	assert.ElementsMatch(t, []Worktree{
+		{Path: canonicalGitTestPath(t, dir), Branch: "main"},
+		{Path: canonicalGitTestPath(t, linkedPath), Branch: "feature-\u03bb", Locked: true},
+		{Path: canonicalGitTestPath(t, detachedPath), Detached: true},
+		{Path: canonicalMissing, Branch: "missing", Prunable: true},
+	}, worktrees)
+
+	main := linked.ForWorktree(dir)
+	branch, err := main.CurrentBranch()
+	require.NoError(t, err)
+	assert.Equal(t, "main", branch)
+	afterWD, err := os.Getwd()
+	require.NoError(t, err)
+	assert.Equal(t, beforeWD, afterWD)
+	assert.Equal(t, beforeClientDir, client.RepoDir)
+	assert.Same(t, beforeOps, CurrentOps())
+}
+
+func TestIntegration_WorktreePathsPreserveWhitespace(t *testing.T) {
+	for _, name := range []string{"space and \u03bb", " leading and trailing ", "embedded\nand trailing\n", `quotes " and backslash \`} {
+		t.Run(name, func(t *testing.T) {
+			if runtime.GOOS == "windows" && (strings.ContainsAny(name, "\n\"\\") || strings.HasSuffix(name, " ")) {
+				t.Skip("these filename characters are not supported on Windows")
+			}
+			root, dir := setupWorktreeRepo(t)
+			mainPath := filepath.Join(filepath.Dir(dir), "main "+name)
+			// Windows cannot rename the process's current directory.
+			require.NoError(t, os.Chdir(filepath.Dir(dir)))
+			require.NoError(t, os.Rename(dir, mainPath))
+			root.client.RepoDir = mainPath
+			linkedPath := filepath.Join(t.TempDir(), name)
+			gitExec(t, mainPath, "worktree", "add", "-b", "feature", linkedPath, "main")
+			linked := root.ForWorktree(linkedPath)
+			gotRoot, err := linked.RootDir()
+			require.NoError(t, err)
+			assert.Equal(t, canonicalGitTestPath(t, linkedPath), gotRoot)
+			common, err := linked.CommonDir()
+			require.NoError(t, err)
+			assert.Equal(t, canonicalGitTestPath(t, filepath.Join(mainPath, ".git")), common)
+			worktrees, err := linked.Worktrees()
+			require.NoError(t, err)
+			assert.ElementsMatch(t, []Worktree{
+				{Path: canonicalGitTestPath(t, mainPath), Branch: "main"},
+				{Path: canonicalGitTestPath(t, linkedPath), Branch: "feature"},
+			}, worktrees)
+		})
+	}
+}
+
+func TestIntegration_BareHostedWorktree(t *testing.T) {
+	t.Setenv("GIT_CONFIG_GLOBAL", os.DevNull)
+	bare, _ := setupBareAndClone(t)
+	linkedPath := filepath.Join(t.TempDir(), "linked")
+	gitExec(t, bare, "-c", "safe.bareRepository=all", "worktree", "add", "-b", "feature", linkedPath, "main")
+	t.Cleanup(withGitDir(t, linkedPath))
+	root := &defaultOps{client: &cligit.Client{RepoDir: linkedPath}}
+	linked := root.ForWorktree(linkedPath)
+	common, err := linked.CommonDir()
+	require.NoError(t, err)
+	assert.Equal(t, canonicalGitTestPath(t, bare), common)
+	gitDir, err := linked.GitDir()
+	require.NoError(t, err)
+	assert.NotEqual(t, common, gitDir)
+	worktrees, err := linked.Worktrees()
+	require.NoError(t, err)
+	assert.ElementsMatch(t, []Worktree{
+		{Path: canonicalGitTestPath(t, bare), Bare: true},
+		{Path: canonicalGitTestPath(t, linkedPath), Branch: "feature"},
+	}, worktrees)
+}
+
+func setupSeparateGitRepo(t *testing.T) (*defaultOps, string, string) {
+	t.Helper()
+	dir := filepath.Join(t.TempDir(), "main")
+	gitDir := filepath.Join(t.TempDir(), "separate git directory")
+	gitExec(t, ".", "init", "-b", "main", "--separate-git-dir", gitDir, dir)
+	writeFile(t, dir, "init.txt", "initial")
+	gitExec(t, dir, "add", ".")
+	gitExec(t, dir, "commit", "-m", "initial")
+	t.Cleanup(withGitDir(t, dir))
+	root := &defaultOps{client: &cligit.Client{RepoDir: dir}}
+	return root, dir, gitDir
+}
+
+func TestIntegration_SeparateGitDirectory(t *testing.T) {
+	root, dir, gitDir := setupSeparateGitRepo(t)
+	linked, linkedPath := addTestWorktree(t, root, dir, "feature")
+	for _, scope := range []Ops{root, linked} {
+		common, err := scope.CommonDir()
+		require.NoError(t, err)
+		assert.Equal(t, canonicalGitTestPath(t, gitDir), common)
+	}
+	mainGitDir, err := root.GitDir()
+	require.NoError(t, err)
+	assert.Equal(t, canonicalGitTestPath(t, gitDir), mainGitDir)
+	linkedRoot, err := linked.RootDir()
+	require.NoError(t, err)
+	assert.Equal(t, canonicalGitTestPath(t, linkedPath), linkedRoot)
+	linkedGitDir, err := linked.GitDir()
+	require.NoError(t, err)
+	assert.NotEqual(t, mainGitDir, linkedGitDir)
+	subdir := filepath.Join(dir, "subdirectory")
+	require.NoError(t, os.MkdirAll(subdir, 0755))
+	for _, scope := range []Ops{root, root.ForWorktree(dir), root.ForWorktree(subdir)} {
+		worktrees, err := scope.Worktrees()
+		require.NoError(t, err)
+		assert.Equal(t, canonicalGitTestPath(t, dir), worktrees[0].Path)
+		assert.Equal(t, "main", worktrees[0].Branch)
+	}
+	main := linked.ForWorktree(dir)
+	mainRoot, err := main.RootDir()
+	require.NoError(t, err)
+	assert.Equal(t, canonicalGitTestPath(t, dir), mainRoot)
+	mainBranch, err := main.CurrentBranch()
+	require.NoError(t, err)
+	assert.Equal(t, "main", mainBranch)
+}
+
+func TestIntegration_SeparateGitDirectoryBacklink(t *testing.T) {
+	tests := []struct {
+		name           string
+		relative       bool
+		worktreeConfig bool
+		newlines       bool
+	}{
+		{name: "common absolute"},
+		{name: "common relative", relative: true},
+		{name: "main config.worktree", worktreeConfig: true},
+		{name: "relative main config.worktree", relative: true, worktreeConfig: true},
+		{name: "newline path", worktreeConfig: true, newlines: true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if tt.newlines && runtime.GOOS == "windows" {
+				t.Skip("Windows does not support newlines in filenames")
+			}
+			root, dir, gitDir := setupSeparateGitRepo(t)
+			if tt.newlines {
+				newPath := dir + " with \u03bb\nand trailing\n"
+				require.NoError(t, os.Rename(dir, newPath))
+				dir = newPath
+				root.client.RepoDir = dir
+			}
+			linked, linkedPath := addTestWorktree(t, root, dir, "feature")
+			backlink := canonicalGitTestPath(t, dir)
+			if tt.relative {
+				var err error
+				backlink, err = filepath.Rel(canonicalGitTestPath(t, gitDir), backlink)
+				require.NoError(t, err)
+			}
+			if tt.worktreeConfig {
+				gitExec(t, dir, "config", "extensions.worktreeConfig", "true")
+				gitExec(t, dir, "config", "--worktree", "core.worktree", backlink)
+				gitExec(t, linkedPath, "config", "--worktree", "core.worktree", canonicalGitTestPath(t, linkedPath))
+			} else {
+				gitExec(t, dir, "config", "core.worktree", backlink)
+			}
+			worktrees, err := linked.Worktrees()
+			require.NoError(t, err)
+			require.Len(t, worktrees, 2)
+			assert.Equal(t, canonicalGitTestPath(t, dir), worktrees[0].Path)
+			assert.Equal(t, "main", worktrees[0].Branch)
+			main := linked.ForWorktree(worktrees[0].Path)
+			mainRoot, err := main.RootDir()
+			require.NoError(t, err)
+			assert.Equal(t, canonicalGitTestPath(t, dir), mainRoot)
+			mainBranch, err := main.CurrentBranch()
+			require.NoError(t, err)
+			assert.Equal(t, "main", mainBranch)
+			linkedBranch, err := linked.CurrentBranch()
+			require.NoError(t, err)
+			assert.Equal(t, "feature", linkedBranch)
+		})
+	}
+}
+
+func TestIntegration_SeparateGitDirectoryMissingBacklink(t *testing.T) {
+	root, dir, gitDir := setupSeparateGitRepo(t)
+	linked, linkedPath := addTestWorktree(t, root, dir, "feature")
+	worktrees, err := linked.Worktrees()
+	require.NoError(t, err, "an unknown main path must not block unrelated worktrees")
+	require.Len(t, worktrees, 2)
+	assert.Equal(t, canonicalGitTestPath(t, gitDir), worktrees[0].Path)
+	assert.Equal(t, "main", worktrees[0].Branch)
+
+	require.NoError(t, linked.CreateBranch("independent", "feature"))
+	require.NoError(t, linked.CheckoutBranch("independent"))
+	assert.Equal(t, "independent", gitExec(t, linkedPath, "branch", "--show-current"))
+	main := linked.ForWorktree(worktrees[0].Path)
+	_, err = main.HasUncommittedChanges()
+	require.ErrorContains(t, err, "main worktree")
+	assert.Contains(t, err.Error(), "core.worktree backlink")
+	require.Error(t, main.StageAll())
+	assert.Equal(t, "main", gitExec(t, dir, "branch", "--show-current"))
+
+	// An explicitly supplied real path is still usable without a backlink.
+	explicit := linked.ForWorktree(dir)
+	current, err := explicit.CurrentBranch()
+	require.NoError(t, err)
+	assert.Equal(t, "main", current)
+}
+
+func TestIntegration_SeparateGitDirectoryUnavailableBacklink(t *testing.T) {
+	for _, foreign := range []bool{false, true} {
+		t.Run(fmt.Sprintf("foreign=%t", foreign), func(t *testing.T) {
+			root, dir, _ := setupSeparateGitRepo(t)
+			linked, _ := addTestWorktree(t, root, dir, "feature")
+			backlink := filepath.Join(t.TempDir(), "missing main worktree")
+			if foreign {
+				_, backlink = setupBareAndClone(t)
+			}
+			gitExec(t, dir, "config", "extensions.worktreeConfig", "true")
+			gitExec(t, dir, "config", "--worktree", "core.worktree", backlink)
+			worktrees, err := linked.Worktrees()
+			require.NoError(t, err, "an unavailable main must not block unrelated worktrees")
+			assert.Equal(t, filepath.ToSlash(filepath.Clean(backlink)), worktrees[0].Path)
+			_, err = linked.ForWorktree(worktrees[0].Path).HasUncommittedChanges()
+			require.Error(t, err)
+			dirty, err := linked.HasUncommittedChanges()
+			require.NoError(t, err)
+			assert.False(t, dirty)
+		})
+	}
+}
+
+func TestIntegration_ForWorktreeRejectsInvalidContext(t *testing.T) {
+	root, dir := setupWorktreeRepo(t)
+	_, other := setupBareAndClone(t)
+	for _, path := range []string{"", filepath.Join(t.TempDir(), "missing"), other} {
+		t.Run(path, func(t *testing.T) {
+			selected := root.ForWorktree(path)
+			_, err := selected.CommonDir()
+			require.Error(t, err)
+			_, err = selected.HasUncommittedChanges()
+			require.Error(t, err)
+			_, err = selected.IsRerereEnabled()
+			require.Error(t, err)
+			require.Error(t, selected.StageAll())
+			require.Error(t, selected.ResetHard("HEAD"))
+			require.True(t, IsRebaseStartError(selected.Rebase("main", RebaseOpts{})))
+		})
+	}
+
+	// Removing a nested checkout's gitfile must not fall back to its parent's
+	// HEAD/index just because Git can still discover the parent repository.
+	nestedPath := filepath.Join(dir, "nested")
+	gitExec(t, dir, "worktree", "add", "-b", "nested", nestedPath, "main")
+	nested := root.ForWorktree(nestedPath)
+	_, err := nested.GitDir()
+	require.NoError(t, err)
+	require.NoError(t, os.Rename(filepath.Join(nestedPath, ".git"), filepath.Join(t.TempDir(), "saved-gitfile")))
+	require.ErrorContains(t, nested.ResetHard("HEAD"), "selected Git directory")
+	_, err = nested.HasUncommittedChanges()
+	require.Error(t, err)
+	assert.Equal(t, "main", gitExec(t, dir, "branch", "--show-current"))
+}
+
+func TestIntegration_ForWorktreeIndependentExecutors(t *testing.T) {
+	root, dir := setupWorktreeRepo(t)
+	first, _ := addTestWorktree(t, root, dir, "first")
+	second, _ := addTestWorktree(t, root, dir, "second")
+	results := make(chan error, 2)
+	for branch, scope := range map[string]Ops{"first": first, "second": second} {
+		go func(branch string, scope Ops) {
+			for i := 0; i < 3; i++ {
+				got, err := scope.CurrentBranch()
+				if err != nil {
+					results <- err
+					return
+				}
+				if got != branch {
+					results <- fmt.Errorf("wanted branch %s, got %s", branch, got)
+					return
+				}
+			}
+			results <- nil
+		}(branch, scope)
+	}
+	require.NoError(t, <-results)
+	require.NoError(t, <-results)
+	assert.Equal(t, "main", gitExec(t, dir, "branch", "--show-current"))
+}
+
+func TestIntegration_WorktreeRebasePreservesOtherRefsAndConfig(t *testing.T) {
+	for _, onto := range []bool{false, true} {
+		for _, dates := range []bool{false, true} {
+			t.Run(fmt.Sprintf("onto=%t/dates=%t", onto, dates), func(t *testing.T) {
+				root, dir := setupWorktreeRepo(t)
+				linked, path := addTestWorktree(t, root, dir, "feature")
+				base := gitExec(t, dir, "rev-parse", "main")
+				writeFile(t, path, "feature.txt", "first")
+				gitExec(t, path, "add", ".")
+				gitExec(t, path, "commit", "--date=2001-01-01T00:00:00Z", "-m", "first")
+				excluded := gitExec(t, path, "rev-parse", "HEAD")
+				gitExec(t, path, "branch", "excluded")
+				writeFile(t, path, "feature.txt", "second")
+				gitExec(t, path, "add", ".")
+				gitExec(t, path, "commit", "--date=2002-01-01T00:00:00Z", "-m", "second")
+				original := gitExec(t, path, "rev-parse", "HEAD")
+				writeFile(t, dir, "main.txt", "updated")
+				gitExec(t, dir, "add", ".")
+				gitExec(t, dir, "commit", "-m", "main update")
+				mainHead := gitExec(t, dir, "rev-parse", "HEAD")
+				writeFile(t, dir, "unrelated.txt", "leave the initiating worktree alone")
+				mainStatus := gitExec(t, dir, "status", "--porcelain")
+				gitExec(t, dir, "worktree", "lock", path)
+				gitExec(t, dir, "config", "rebase.updateRefs", "true")
+				gitExec(t, dir, "config", "rebase.autoStash", "true")
+
+				opts := RebaseOpts{CommitterDateIsAuthorDate: dates}
+				var err error
+				if onto {
+					err = linked.RebaseOnto("main", base, "feature", opts)
+				} else {
+					err = linked.Rebase("main", opts)
+				}
+				require.NoError(t, err)
+				assert.NotEqual(t, original, gitExec(t, path, "rev-parse", "HEAD"))
+				assert.Equal(t, excluded, gitExec(t, dir, "rev-parse", "excluded"))
+				assert.Equal(t, mainHead, gitExec(t, dir, "rev-parse", "HEAD"))
+				assert.Equal(t, mainStatus, gitExec(t, dir, "status", "--porcelain"))
+				assert.Equal(t, "feature", gitExec(t, path, "branch", "--show-current"))
+				assert.Equal(t, "true", gitExec(t, dir, "config", "--get", "rebase.updateRefs"))
+				assert.Equal(t, "true", gitExec(t, dir, "config", "--get", "rebase.autoStash"))
+				timestamps := strings.Fields(gitExec(t, path, "show", "-s", "--format=%at %ct", "HEAD"))
+				require.Len(t, timestamps, 2)
+				assert.Equal(t, dates, timestamps[0] == timestamps[1])
+			})
+		}
+	}
+}
+
+func TestIntegration_WorktreeRebaseNeverAutostashes(t *testing.T) {
+	for _, onto := range []bool{false, true} {
+		for _, staged := range []bool{false, true} {
+			t.Run(fmt.Sprintf("onto=%t/staged=%t", onto, staged), func(t *testing.T) {
+				root, dir := setupWorktreeRepo(t)
+				linked, path := addTestWorktree(t, root, dir, "feature")
+				base := gitExec(t, dir, "rev-parse", "main")
+				writeFile(t, path, "feature.txt", "committed")
+				gitExec(t, path, "add", ".")
+				gitExec(t, path, "commit", "-m", "feature")
+				original := gitExec(t, path, "rev-parse", "HEAD")
+				writeFile(t, dir, "main.txt", "main")
+				gitExec(t, dir, "add", ".")
+				gitExec(t, dir, "commit", "-m", "main")
+				writeFile(t, path, "feature.txt", "uncommitted")
+				if staged {
+					gitExec(t, path, "add", ".")
+				}
+				status := gitExec(t, path, "status", "--porcelain")
+				// Git -c overrides must win over inherited command configuration,
+				// not just repository configuration.
+				t.Setenv("GIT_CONFIG_COUNT", "2")
+				t.Setenv("GIT_CONFIG_KEY_0", "rebase.autoStash")
+				t.Setenv("GIT_CONFIG_VALUE_0", "true")
+				t.Setenv("GIT_CONFIG_KEY_1", "rebase.updateRefs")
+				t.Setenv("GIT_CONFIG_VALUE_1", "true")
+				var err error
+				if onto {
+					err = linked.RebaseOnto("main", base, "feature", RebaseOpts{})
+				} else {
+					err = linked.Rebase("main", RebaseOpts{})
+				}
+				require.Error(t, err)
+				assert.True(t, IsRebaseStartError(err))
+				assert.False(t, linked.IsRebaseInProgress())
+				assert.Equal(t, original, gitExec(t, path, "rev-parse", "HEAD"))
+				assert.Equal(t, status, gitExec(t, path, "status", "--porcelain"))
+				assert.Empty(t, gitExec(t, path, "stash", "list"))
+			})
+		}
+	}
+}
+
+func setupWorktreeConflict(t *testing.T) (*defaultOps, string, Ops, string) {
+	t.Helper()
+	root, dir := setupWorktreeRepo(t)
+	linked, path := addTestWorktree(t, root, dir, "feature")
+	writeFile(t, path, "init.txt", "feature version\n")
+	gitExec(t, path, "add", ".")
+	gitExec(t, path, "commit", "--date=2001-01-01T00:00:00Z", "-m", "feature conflict")
+	writeFile(t, dir, "init.txt", "main version\n")
+	gitExec(t, dir, "add", ".")
+	gitExec(t, dir, "commit", "--date=2002-01-01T00:00:00Z", "-m", "main conflict")
+	return root, dir, linked, path
+}
+
+func forbidGlobalWorktreeQueries(t *testing.T) func() {
+	t.Helper()
+	return SetOps(&MockOps{
+		GitDirFn: func() (string, error) {
+			t.Error("real scoped operations must not query global mock GitDir")
+			return "", fmt.Errorf("global GitDir must not be called")
+		},
+		IsRebaseInProgressFn: func() bool {
+			t.Error("real scoped operations must not query global mock rebase state")
+			return false
+		},
+		ConflictedFilesFn: func() ([]string, error) {
+			t.Error("real scoped operations must not query global mock conflicts")
+			return nil, fmt.Errorf("global ConflictedFiles must not be called")
+		},
+	})
+}
+
+func TestIntegration_WorktreeRebaseRecovery(t *testing.T) {
+	tests := []struct {
+		name    string
+		main    bool
+		abort   bool
+		backend string
+		dates   bool
+	}{
+		{name: "linked continue", backend: "merge", dates: true},
+		{name: "linked abort", abort: true, backend: "merge", dates: true},
+		{name: "main continue", main: true, backend: "merge", dates: true},
+		{name: "main abort", main: true, abort: true, backend: "merge", dates: true},
+		{name: "apply continue", backend: "apply"},
+		{name: "apply abort", abort: true, backend: "apply"},
+		{name: "author dates with configured apply backend", backend: "apply", dates: true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			root, dir, linked, linkedPath := setupWorktreeConflict(t)
+			gitExec(t, dir, "config", "rebase.backend", tt.backend)
+			t.Setenv("GIT_EDITOR", "false")
+			target, observer := linked, root.ForWorktree(dir)
+			targetPath, observerPath := linkedPath, dir
+			branch, base := "feature", "main"
+			if tt.main {
+				target, observer = observer, target
+				targetPath, observerPath = dir, linkedPath
+				branch, base = base, branch
+			}
+			original := gitExec(t, targetPath, "rev-parse", "HEAD")
+			observerHead := gitExec(t, observerPath, "rev-parse", "HEAD")
+			writeFile(t, observerPath, "leave-alone.txt", "dirty unrelated worktree")
+			observerStatus := gitExec(t, observerPath, "status", "--porcelain")
+			restore := forbidGlobalWorktreeQueries(t)
+			defer restore()
+
+			opts := RebaseOpts{CommitterDateIsAuthorDate: tt.dates}
+			err := target.Rebase(base, opts)
+			require.Error(t, err)
+			assert.False(t, IsRebaseStartError(err))
+			require.True(t, target.IsRebaseInProgress())
+			assert.False(t, observer.IsRebaseInProgress())
+			assert.True(t, IsRebaseStartError(target.Rebase(base, opts)))
+			conflicts, err := target.ConflictedFiles()
+			require.NoError(t, err)
+			assert.Equal(t, []string{"init.txt"}, conflicts)
+			markers, err := target.FindConflictMarkers("init.txt")
+			require.NoError(t, err)
+			assert.Equal(t, []ConflictSection{{StartLine: 1, EndLine: 5}}, markers.Sections)
+			worktrees, err := observer.Worktrees()
+			require.NoError(t, err)
+			var reserved Worktree
+			for _, wt := range worktrees {
+				if wt.Path == canonicalGitTestPath(t, targetPath) {
+					reserved = wt
+				}
+			}
+			assert.Equal(t, branch, reserved.Branch)
+			assert.True(t, reserved.Detached)
+
+			if tt.abort {
+				require.NoError(t, target.RebaseAbort())
+				assert.Equal(t, original, gitExec(t, targetPath, "rev-parse", "HEAD"))
+			} else {
+				writeFile(t, targetPath, "init.txt", "resolved\n")
+				require.NoError(t, target.StageAll())
+				require.NoError(t, target.RebaseContinue(opts))
+				assert.NotEqual(t, original, gitExec(t, targetPath, "rev-parse", "HEAD"))
+				dates := strings.Fields(gitExec(t, targetPath, "show", "-s", "--format=%at %ct", "HEAD"))
+				require.Len(t, dates, 2)
+				assert.Equal(t, tt.dates, dates[0] == dates[1])
+			}
+			assert.False(t, target.IsRebaseInProgress())
+			assert.Equal(t, branch, gitExec(t, targetPath, "branch", "--show-current"))
+			assert.Equal(t, observerHead, gitExec(t, observerPath, "rev-parse", "HEAD"))
+			assert.Equal(t, observerStatus, gitExec(t, observerPath, "status", "--porcelain"))
+		})
+	}
+}
+
+func TestIntegration_WorktreeRerereAutoContinuesMultipleCommits(t *testing.T) {
+	root, dir := setupWorktreeRepo(t)
+	for _, file := range []string{"one.txt", "two.txt"} {
+		writeFile(t, dir, file, "initial "+file+"\n")
+	}
+	gitExec(t, dir, "add", ".")
+	gitExec(t, dir, "commit", "-m", "base")
+	linked, path := addTestWorktree(t, root, dir, "feature")
+	for _, file := range []string{"one.txt", "two.txt"} {
+		writeFile(t, path, file, "feature "+file+"\n")
+		gitExec(t, path, "add", ".")
+		gitExec(t, path, "commit", "-m", file)
+		writeFile(t, dir, file, "main "+file+"\n")
+	}
+	gitExec(t, dir, "add", ".")
+	gitExec(t, dir, "commit", "-m", "main changes")
+	original := gitExec(t, path, "rev-parse", "HEAD")
+	mainHead := gitExec(t, dir, "rev-parse", "HEAD")
+	require.NoError(t, linked.EnableRerere())
+	t.Setenv("GIT_EDITOR", "false")
+	restore := forbidGlobalWorktreeQueries(t)
+	defer restore()
+	require.Error(t, linked.Rebase("main", RebaseOpts{}))
+	writeFile(t, path, "one.txt", "resolved one\n")
+	require.NoError(t, linked.StageAll())
+	require.Error(t, linked.RebaseContinue(RebaseOpts{}), "the second commit has an unseen conflict")
+	writeFile(t, path, "two.txt", "resolved two\n")
+	require.NoError(t, linked.StageAll())
+	require.NoError(t, linked.RebaseContinue(RebaseOpts{}))
+	require.NoError(t, linked.ResetHard(original))
+
+	require.NoError(t, linked.Rebase("main", RebaseOpts{}), "rerere must continue both commits in the linked worktree")
+	assert.False(t, linked.IsRebaseInProgress())
+	assert.Equal(t, mainHead, gitExec(t, dir, "rev-parse", "HEAD"))
+	for _, file := range []string{"one.txt", "two.txt"} {
+		data, err := os.ReadFile(filepath.Join(path, file))
+		require.NoError(t, err)
+		assert.Contains(t, string(data), "resolved")
+	}
+}
+
+func TestIntegration_WorktreeRebaseContinueStopsWhenNoProgress(t *testing.T) {
+	_, _, linked, path := setupWorktreeConflict(t)
+	require.Error(t, linked.Rebase("main", RebaseOpts{}))
+	writeFile(t, path, "init.txt", "resolved\n")
+	require.NoError(t, linked.StageAll())
+	t.Setenv("GIT_COMMITTER_NAME", "")
+	tracePath := filepath.Join(t.TempDir(), "trace")
+	t.Setenv("GIT_TRACE", tracePath)
+	require.Error(t, linked.RebaseContinue(RebaseOpts{}))
+	trace, err := os.ReadFile(tracePath)
+	require.NoError(t, err)
+	assert.LessOrEqual(t, strings.Count(string(trace), " rebase --continue"), 2)
+	assert.True(t, linked.IsRebaseInProgress())
+	require.NoError(t, linked.RebaseAbort())
+}
+
+func TestIntegration_WorktreeConflictPathsAndMarkers(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("Windows does not allow colons and newlines in filenames")
+	}
+	root, dir := setupWorktreeRepo(t)
+	file := "conflict:\nname: leftover conflict marker [literal] \u03bb.txt"
+	writeFile(t, dir, file, "initial\n")
+	writeFile(t, dir, ".gitattributes", "* conflict-marker-size=10\n")
+	gitExec(t, dir, "add", ".")
+	gitExec(t, dir, "commit", "-m", "conflict base")
+	linked, path := addTestWorktree(t, root, dir, "feature")
+	writeFile(t, path, file, "feature\n")
+	gitExec(t, path, "add", ".")
+	gitExec(t, path, "commit", "-m", "feature")
+	writeFile(t, dir, file, "main\n")
+	gitExec(t, dir, "add", ".")
+	gitExec(t, dir, "commit", "-m", "main")
+	require.Error(t, linked.Rebase("main", RebaseOpts{}))
+	conflicts, err := linked.ConflictedFiles()
+	require.NoError(t, err)
+	assert.Equal(t, []string{file}, conflicts)
+	// Two marker sections, including diff3's optional base marker, exercise
+	// native marker-size handling and paths that cannot be parsed by colons.
+	writeFile(t, path, file, "<<<<<<<<<< ours\none\n==========\ntwo\n>>>>>>>>>> theirs\nmiddle\n<<<<<<<<<< ours\nthree\n|||||||||| base\nbase\n==========\nfour\n>>>>>>>>>> theirs\n")
+	require.NoError(t, os.MkdirAll(filepath.Join(path, "subdir"), 0755))
+	sub := linked.ForWorktree("subdir")
+	gitExec(t, dir, "config", "diff.relative", "true")
+	subConflicts, err := sub.ConflictedFiles()
+	require.NoError(t, err)
+	assert.Equal(t, []string{file}, subConflicts)
+	for _, name := range []string{file, filepath.Join(path, file)} {
+		markers, err := sub.FindConflictMarkers(name)
+		require.NoError(t, err)
+		assert.Equal(t, name, markers.File)
+		assert.Equal(t, []ConflictSection{{StartLine: 1, EndLine: 5}, {StartLine: 7, EndLine: 13}}, markers.Sections)
+	}
+	require.NoError(t, linked.RebaseAbort())
+}
+
+func TestIntegration_WorktreeRetainedRebaseOwner(t *testing.T) {
+	root, dir, linked, path := setupWorktreeConflict(t)
+	require.Error(t, linked.Rebase("main", RebaseOpts{}))
+	canonicalPath := canonicalGitTestPath(t, path)
+	require.NoError(t, os.Rename(path, path+"-moved"))
+	worktrees, err := root.Worktrees()
+	require.NoError(t, err)
+	assert.Contains(t, worktrees, Worktree{Path: canonicalPath, Branch: "feature", Detached: true, Prunable: true})
+	_, err = linked.HasUncommittedChanges()
+	require.Error(t, err, "a missing checkout must not silently execute elsewhere")
+	gitExec(t, dir, "worktree", "repair", path+"-moved")
+	moved := root.ForWorktree(path + "-moved")
+	require.True(t, moved.IsRebaseInProgress())
+	require.NoError(t, moved.RebaseAbort())
+}
+
+func TestIntegration_WorktreeCherryPickRecovery(t *testing.T) {
+	for _, action := range []string{"continue", "abort", "quit"} {
+		t.Run(action, func(t *testing.T) {
+			root, dir, linked, path := setupWorktreeConflict(t)
+			t.Setenv("GIT_EDITOR", "false")
+			original := gitExec(t, path, "rev-parse", "HEAD")
+			mainHead := gitExec(t, dir, "rev-parse", "HEAD")
+			restore := forbidGlobalWorktreeQueries(t)
+			defer restore()
+			require.Error(t, linked.CherryPick([]string{mainHead}))
+			require.True(t, linked.IsCherryPickInProgress())
+			assert.False(t, root.IsCherryPickInProgress())
+			assert.False(t, linked.IsRebaseInProgress())
+			switch action {
+			case "continue":
+				writeFile(t, path, "init.txt", "resolved\n")
+				require.NoError(t, linked.StageAll())
+				require.NoError(t, linked.CherryPickContinue())
+				assert.NotEqual(t, original, gitExec(t, path, "rev-parse", "HEAD"))
+			case "abort":
+				require.NoError(t, linked.CherryPickAbort())
+				assert.Equal(t, original, gitExec(t, path, "rev-parse", "HEAD"))
+			case "quit":
+				require.NoError(t, linked.CherryPickQuit())
+				conflicts, err := linked.ConflictedFiles()
+				require.NoError(t, err)
+				assert.NotEmpty(t, conflicts)
+				require.NoError(t, linked.ResetHard(original))
+			}
+			assert.False(t, linked.IsCherryPickInProgress())
+			assert.Equal(t, mainHead, gitExec(t, dir, "rev-parse", "HEAD"))
+			assert.Equal(t, "feature", gitExec(t, path, "branch", "--show-current"))
+		})
+	}
+}
+
+func TestIntegration_WorktreeLocalMutations(t *testing.T) {
+	root, dir := setupWorktreeRepo(t)
+	linked, path := addTestWorktree(t, root, dir, "feature")
+	restore := forbidGlobalWorktreeQueries(t)
+	defer restore()
+	defaultBranch, err := linked.DefaultBranch()
+	require.NoError(t, err)
+	assert.Equal(t, "main", defaultBranch)
+	initial := gitExec(t, dir, "rev-parse", "HEAD")
+	writeFile(t, dir, "new.txt", "new main commit\n")
+	gitExec(t, dir, "add", ".")
+	gitExec(t, dir, "commit", "-m", "advance main")
+	mainHead := gitExec(t, dir, "rev-parse", "HEAD")
+	gitExec(t, dir, "config", "merge.autoStash", "true")
+	require.NoError(t, linked.MergeFF("main"))
+	assert.Equal(t, mainHead, gitExec(t, path, "rev-parse", "HEAD"))
+	require.NoError(t, linked.ResetHard(initial))
+	assert.NoFileExists(t, filepath.Join(path, "new.txt"))
+	assert.FileExists(t, filepath.Join(dir, "new.txt"))
+	assert.Equal(t, mainHead, gitExec(t, dir, "rev-parse", "HEAD"))
+	require.Error(t, linked.CheckoutBranch("main"))
+	require.Error(t, linked.UpdateBranchRef("main", initial))
+	require.NoError(t, linked.RenameBranch("feature", "renamed"))
+	branch, err := linked.CurrentBranch()
+	require.NoError(t, err)
+	assert.Equal(t, "renamed", branch)
+
+	writeFile(t, path, "init.txt", "tracked change")
+	writeFile(t, path, "untracked.txt", "untracked change")
+	gitExec(t, dir, "config", "status.showUntrackedFiles", "no")
+	require.NoError(t, linked.StageTracked())
+	assert.Equal(t, "init.txt", gitExec(t, path, "diff", "--cached", "--name-only"))
+	assert.Empty(t, gitExec(t, dir, "diff", "--cached", "--name-only"))
+	require.NoError(t, linked.StageAll())
+	assert.True(t, linked.HasStagedChanges())
+	_, err = linked.Commit("commit only in linked worktree")
+	require.NoError(t, err)
+	assert.False(t, linked.HasStagedChanges())
+	assert.Equal(t, mainHead, gitExec(t, dir, "rev-parse", "HEAD"))
+	writeFile(t, path, "hidden-untracked.txt", "still dirty despite user status configuration")
+	dirty, err := linked.HasUncommittedChanges()
+	require.NoError(t, err)
+	assert.True(t, dirty)
+}
+
+func TestIntegration_WorktreeCherryPickPendingSequencer(t *testing.T) {
+	root, dir, linked, path := setupWorktreeConflict(t)
+	first := gitExec(t, dir, "rev-parse", "HEAD")
+	writeFile(t, dir, "second.txt", "second commit")
+	gitExec(t, dir, "add", ".")
+	gitExec(t, dir, "commit", "-m", "second")
+	second := gitExec(t, dir, "rev-parse", "HEAD")
+	require.Error(t, linked.CherryPick([]string{first, second}))
+	writeFile(t, path, "init.txt", "manual resolution\n")
+	require.NoError(t, linked.StageAll())
+	_, err := linked.Commit("resolve first pick manually")
+	require.NoError(t, err)
+	gitDir, err := linked.GitDir()
+	require.NoError(t, err)
+	assert.NoFileExists(t, filepath.Join(gitDir, "CHERRY_PICK_HEAD"))
+	assert.True(t, linked.IsCherryPickInProgress(), "the remaining sequencer still owns the worktree")
+	assert.False(t, root.IsCherryPickInProgress())
+	require.NoError(t, linked.CherryPickContinue())
+	assert.False(t, linked.IsCherryPickInProgress())
+	assert.FileExists(t, filepath.Join(path, "second.txt"))
+	assert.Equal(t, second, gitExec(t, dir, "rev-parse", "HEAD"))
+}
+
+func TestIntegration_WorktreeIgnoresCallerRepositoryEnvironment(t *testing.T) {
+	root, dir, linked, path := setupWorktreeConflict(t)
+	mainHead := gitExec(t, dir, "rev-parse", "HEAD")
+	gitDir, err := root.GitDir()
+	require.NoError(t, err)
+	t.Setenv("GIT_DIR", gitDir)
+	t.Setenv("GIT_COMMON_DIR", gitDir)
+	t.Setenv("GIT_WORK_TREE", dir)
+	t.Setenv("GIT_INDEX_FILE", filepath.Join(gitDir, "index"))
+	t.Setenv("GIT_EDITOR", "false")
+	// A newly selected scope and an existing one must both ignore the caller's
+	// local repository environment, including during continuation.
+	selected := root.ForWorktree(path)
+	for _, scope := range []Ops{selected, linked} {
+		branch, err := scope.CurrentBranch()
+		require.NoError(t, err)
+		assert.Equal(t, "feature", branch)
+	}
+	err = selected.Rebase("main", RebaseOpts{})
+	require.Error(t, err)
+	assert.False(t, IsRebaseStartError(err))
+	writeFile(t, path, "init.txt", "resolved\n")
+	require.NoError(t, selected.StageAll())
+	require.NoError(t, selected.RebaseContinue(RebaseOpts{}))
+	head, err := root.RevParse("HEAD")
+	require.NoError(t, err)
+	assert.Equal(t, mainHead, head)
+	branch, err := selected.CurrentBranch()
+	require.NoError(t, err)
+	assert.Equal(t, "feature", branch)
 }

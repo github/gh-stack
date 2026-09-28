@@ -7,6 +7,10 @@ import "fmt"
 // Ops method call. When nil, a reasonable default is returned.
 type MockOps struct {
 	GitDirFn                 func() (string, error)
+	CommonDirFn              func() (string, error)
+	WorktreesFn              func() ([]Worktree, error)
+	ForWorktreeFn            func(string) Ops
+	CheckVersionFn           func() error
 	RootDirFn                func() (string, error)
 	CurrentBranchFn          func() (string, error)
 	BranchExistsFn           func(string) bool
@@ -72,6 +76,34 @@ func (m *MockOps) GitDir() (string, error) {
 		return m.GitDirFn()
 	}
 	return "/tmp/fake-git-dir", nil
+}
+
+func (m *MockOps) CommonDir() (string, error) {
+	if m.CommonDirFn != nil {
+		return m.CommonDirFn()
+	}
+	return m.GitDir()
+}
+
+func (m *MockOps) Worktrees() ([]Worktree, error) {
+	if m.WorktreesFn != nil {
+		return m.WorktreesFn()
+	}
+	return nil, nil
+}
+
+func (m *MockOps) ForWorktree(path string) Ops {
+	if m.ForWorktreeFn != nil {
+		return m.ForWorktreeFn(path)
+	}
+	return m
+}
+
+func (m *MockOps) CheckVersion() error {
+	if m.CheckVersionFn != nil {
+		return m.CheckVersionFn()
+	}
+	return nil
 }
 
 func (m *MockOps) RootDir() (string, error) {
