@@ -1,11 +1,13 @@
 package git
 
 import (
+	"encoding/json"
 	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"slices"
 	"strings"
 	"testing"
 
@@ -1429,6 +1431,9 @@ func TestIntegration_WorktreeRerereAutoContinuesMultipleCommits(t *testing.T) {
 	original := gitExec(t, path, "rev-parse", "HEAD")
 	mainHead := gitExec(t, dir, "rev-parse", "HEAD")
 	require.NoError(t, linked.EnableRerere())
+	gitExec(t, dir, "config", "maintenance.auto", "true")
+	tracePath := filepath.Join(t.TempDir(), "rebase-trace")
+	t.Setenv("GIT_TRACE2_EVENT", tracePath)
 	t.Setenv("GIT_EDITOR", "false")
 	restore := forbidGlobalWorktreeQueries(t)
 	defer restore()
@@ -1465,6 +1470,31 @@ func TestIntegration_WorktreeRerereAutoContinuesMultipleCommits(t *testing.T) {
 		require.NoError(t, err)
 		assert.Contains(t, string(data), "resolved")
 	}
+	trace, err := os.ReadFile(tracePath)
+	require.NoError(t, err)
+	var rebaseSessions []string
+	for _, line := range strings.Split(strings.TrimSpace(string(trace)), "\n") {
+		var event struct {
+			Event string   `json:"event"`
+			SID   string   `json:"sid"`
+			Argv  []string `json:"argv"`
+		}
+		require.NoError(t, json.Unmarshal([]byte(line), &event))
+		if event.Event == "start" && slices.Contains(event.Argv, "rebase") {
+			rebaseSessions = append(rebaseSessions, event.SID)
+		}
+		if event.Event != "child_start" || len(event.Argv) < 3 ||
+			event.Argv[1] != "maintenance" || event.Argv[2] != "run" || !slices.Contains(event.Argv, "--auto") {
+			continue
+		}
+		for _, sid := range rebaseSessions {
+			assert.False(t, event.SID == sid || strings.HasPrefix(event.SID, sid+"/"),
+				"automatic maintenance can race the next commit's rerere lock: %v", event.Argv)
+		}
+	}
+	assert.NotEmpty(t, rebaseSessions)
+	assert.Equal(t, "true", gitExec(t, dir, "config", "--local", "--get", "maintenance.auto"),
+		"the rebase must not change the repository's maintenance configuration")
 }
 
 func TestIntegration_WorktreeRebaseContinueStopsWhenNoProgress(t *testing.T) {

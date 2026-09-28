@@ -144,5 +144,6 @@ if errors.As(err, &exitErr) { ... }
 - `git.SetOps()` replaces the **package-level** ops variable. Forgetting `defer restore()` in a test will break every subsequent test in the package.
 - Interrupt detection: Ctrl+C is caught as `terminal.InterruptErr`, wrapped into an `errInterrupt` sentinel, and printed with a friendly message before a silent exit.
 - Rerere: on first rebase conflict, the user is prompted to enable `git rerere`. If declined, a flag file prevents future prompts. `tryAutoResolveRebase()` loops up to 1000 times auto-continuing when rerere resolves conflicts.
+- Rebase commands disable automatic maintenance through command-local configuration so detached `rerere gc` cannot race conflict handling. Repository settings and unrelated Git commands are unchanged.
 - Date-preserving rebase starts use the merge backend so Git persists the date setting across conflicts. Continuations use native saved settings, not start-only date flags.
 - The `.gitignore` ignores `/gh-stack` and `/gh-stack.exe` (the built binary).

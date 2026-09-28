@@ -151,8 +151,9 @@ func (d *defaultOps) runRebaseCommand(args []string, opts RebaseOpts) error {
 
 func rebaseArgs(opts RebaseOpts) []string {
 	// The cascade owns its ref range and must never stash another worktree.
+	// Detached maintenance can race the next commit's rerere lock.
 	// Use configuration overrides rather than flags unavailable in Git 2.36.
-	args := []string{"-c", "rebase.updateRefs=false", "-c", "rebase.autoStash=false", "rebase"}
+	args := []string{"-c", "rebase.updateRefs=false", "-c", "rebase.autoStash=false", "-c", "maintenance.auto=false", "rebase"}
 	if opts.CommitterDateIsAuthorDate {
 		// The apply backend loses this option after a conflict. The merge
 		// backend persists it for continuation and rerere auto-continuation.

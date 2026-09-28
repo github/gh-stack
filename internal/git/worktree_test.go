@@ -209,7 +209,7 @@ func TestStateQueryWrappersDelegateErrors(t *testing.T) {
 func TestRebaseArgs(t *testing.T) {
 	for _, date := range []bool{false, true} {
 		args := rebaseArgs(RebaseOpts{CommitterDateIsAuthorDate: date})
-		want := []string{"-c", "rebase.updateRefs=false", "-c", "rebase.autoStash=false", "rebase"}
+		want := []string{"-c", "rebase.updateRefs=false", "-c", "rebase.autoStash=false", "-c", "maintenance.auto=false", "rebase"}
 		if date {
 			want = append(want, "--merge", "--committer-date-is-author-date")
 		}
