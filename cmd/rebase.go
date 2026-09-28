@@ -536,7 +536,7 @@ func saveRebaseState(gitDir string, state *rebaseState) error {
 	if err != nil {
 		return fmt.Errorf("error serializing rebase state: %w", err)
 	}
-	if err := os.WriteFile(filepath.Join(gitDir, rebaseStateFile), data, 0644); err != nil {
+	if err := stack.WriteAtomic(filepath.Join(gitDir, rebaseStateFile), data); err != nil {
 		return fmt.Errorf("error writing rebase state: %w", err)
 	}
 	return nil

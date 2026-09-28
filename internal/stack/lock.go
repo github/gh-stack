@@ -1,15 +1,19 @@
 package stack
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
 	"time"
 )
 
-const lockFileName = "gh-stack.lock"
+const (
+	lockFileName          = "gh-stack.lock"
+	operationLockFileName = "gh-stack-operation.lock"
+)
 
-// LockError is returned when the stack file lock cannot be acquired.
+// LockError is returned when the catalog or operation lock times out.
 // Callers can check for this with errors.As to distinguish lock failures
 // from other errors.
 type LockError struct {
@@ -29,16 +33,13 @@ type StaleError struct {
 func (e *StaleError) Error() string { return e.Err.Error() }
 func (e *StaleError) Unwrap() error { return e.Err }
 
-// LockTimeout is how long Lock() will wait for the exclusive lock before
-// giving up.  With the lock held only during file writes (milliseconds),
-// this timeout primarily guards against a hung process holding the lock.
+// LockTimeout is how long Lock and LockOperation wait for an exclusive lock.
 var LockTimeout = 5 * time.Second
 
 // lockRetryInterval is the sleep between non-blocking lock attempts.
 const lockRetryInterval = 100 * time.Millisecond
 
-// FileLock provides an exclusive advisory lock on the stack file to prevent
-// concurrent writes between multiple gh-stack processes.
+// FileLock provides an exclusive advisory catalog or operation lock.
 type FileLock struct {
 	f *os.File
 }
@@ -48,29 +49,50 @@ type FileLock struct {
 //
 // Most callers should not use Lock directly — stack.Save() acquires the lock
 // automatically.  Use Lock only when you need to hold the lock across multiple
-// operations (e.g. Load-Modify-Save as an atomic unit).
+// operations (e.g. Load-Modify-SaveWithLock as an atomic unit).
 func Lock(gitDir string) (*FileLock, error) {
-	path := filepath.Join(gitDir, lockFileName)
+	lock, _, err := acquireLock(filepath.Join(gitDir, lockFileName), "stack", true)
+	return lock, err
+}
+
+// LockOperation provides a separate operation lock in the given directory.
+// Callers using it must acquire it before loading mutation state or taking the
+// catalog lock. Save may be used while this lock is held.
+func LockOperation(commonDir string) (*FileLock, error) {
+	lock, _, err := acquireLock(filepath.Join(commonDir, operationLockFileName), "stack operation", true)
+	return lock, err
+}
+
+// TryLockOperation attempts to acquire the operation lock without waiting.
+// A false result with no error means contention; other failures are returned.
+func TryLockOperation(commonDir string) (*FileLock, bool, error) {
+	return acquireLock(filepath.Join(commonDir, operationLockFileName), "stack operation", false)
+}
+
+func acquireLock(path, name string, wait bool) (*FileLock, bool, error) {
 	f, err := os.OpenFile(path, os.O_CREATE|os.O_RDWR, 0644)
 	if err != nil {
-		return nil, fmt.Errorf("opening lock file: %w", err)
+		return nil, false, fmt.Errorf("opening lock file: %w", err)
 	}
 
 	deadline := time.Now().Add(LockTimeout)
 	for {
 		err := tryLockFile(f)
 		if err == nil {
-			return &FileLock{f: f}, nil
+			return &FileLock{f: f}, true, nil
 		}
 		if !isLockBusy(err) {
-			// Unexpected error (e.g. bad fd) — don't retry.
-			f.Close()
-			return nil, fmt.Errorf("locking stack file: %w", err)
+			return nil, false, fmt.Errorf("locking %s file: %w", name, errors.Join(err, f.Close()))
+		}
+		if !wait {
+			if err := f.Close(); err != nil {
+				return nil, false, fmt.Errorf("closing lock file: %w", err)
+			}
+			return nil, false, nil
 		}
 		if time.Now().After(deadline) {
-			f.Close()
-			return nil, &LockError{Err: fmt.Errorf(
-				"timed out waiting for stack lock after %s — another gh-stack process may be running", LockTimeout)}
+			return nil, false, &LockError{Err: errors.Join(fmt.Errorf(
+				"timed out waiting for %s lock after %s — another gh-stack process may be running", name, LockTimeout), f.Close())}
 		}
 		time.Sleep(lockRetryInterval)
 	}
@@ -86,4 +108,5 @@ func (l *FileLock) Unlock() {
 	}
 	unlockFile(l.f)
 	l.f.Close()
+	l.f = nil
 }
