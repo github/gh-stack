@@ -3333,7 +3333,8 @@ func setupDistributedModify(t *testing.T, conflicting bool) distributedModifyRep
 	for _, branch := range []string{"A", "B"} {
 		path := filepath.Join(filepath.Dir(origin), "owner "+branch)
 		runModifyGit(t, root, "worktree", "add", "-q", path, branch)
-		repo.owners[branch] = path
+		// Git expands Windows short paths and uses forward slashes in diagnostics.
+		repo.owners[branch] = runModifyGit(t, path, "rev-parse", "--show-toplevel")
 	}
 	for _, branch := range []string{"A", "B", "C"} {
 		repo.refs[branch] = runModifyGit(t, root, "rev-parse", branch)

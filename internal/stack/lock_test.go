@@ -385,7 +385,9 @@ func TestSaveNonBlocking_OperationAndCatalogGuards(t *testing.T) {
 
 			start := time.Now()
 			SaveNonBlocking(dir, refresh)
-			assert.Less(t, time.Since(start), time.Second)
+			if held != nil {
+				assert.Less(t, time.Since(start), time.Second, "a held lock must not delay an optional refresh")
+			}
 			held.Unlock()
 			got, err := Load(dir)
 			require.NoError(t, err)
