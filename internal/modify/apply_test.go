@@ -4179,7 +4179,7 @@ func TestDistributedModify_FoldUpDropNormalizationRecovery(t *testing.T) {
 				require.NoError(t, os.WriteFile(filepath.Join(repo.origin, "base.txt"), []byte("C\n"), 0644))
 				runModifyGit(t, repo.origin, "add", "base.txt")
 				require.NoError(t, ContinueApply(cfg, repo.common, noopUpdateBaseSHAs))
-				assert.Equal(t, "C", runModifyGit(t, repo.root, "show", "C:base.txt"))
+				assert.Equal(t, "C", runModifyGit(t, repo.root, "show", "C:base.txt", "--"))
 				assert.Equal(t, "A\nC", runModifyGit(t, repo.root, "log", "--reverse", "--format=%s", "main..C"))
 				saved, err = stack.Load(repo.common)
 				require.NoError(t, err)
