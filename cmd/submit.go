@@ -181,8 +181,10 @@ func runSubmit(cfg *config.Config, opts *submitOptions) error {
 
 	// If a modification is pending, delete the old remote stack first so that
 	// PR base updates are allowed and force-pushes don't trigger auto-merges.
+	pendingModify := false
 	if stacksAvailable {
-		if err := handlePendingModify(cfg, client, s, gitDir); err != nil {
+		pendingModify, err = handlePendingModify(cfg, client, s, gitDir)
+		if err != nil {
 			if errors.Is(err, errInterrupt) {
 				return ErrSilent
 			}
@@ -230,6 +232,8 @@ func runSubmit(cfg *config.Config, opts *submitOptions) error {
 	// Sequential pushing ensures each branch's base is up-to-date on the
 	// remote before the next branch is pushed, preventing race conditions.
 	cfg.Printf("Pushing to %s...", remote)
+	allPRsSubmitted := len(queued) == 0
+	submittedPRs := make(map[string]int, len(activeBranches))
 	for i, b := range s.Branches {
 		if s.Branches[i].IsMerged() || s.Branches[i].IsQueued() {
 			continue
@@ -243,7 +247,12 @@ func runSubmit(cfg *config.Config, opts *submitOptions) error {
 
 		// Find or create PR, and fix base if needed
 		baseBranch := s.ActiveBaseBranch(b.Branch)
-		if err := ensurePR(cfg, client, s, i, baseBranch, opts, templateContent, drafts); err != nil {
+		submitted, err := ensurePR(cfg, client, s, i, baseBranch, opts, templateContent, drafts)
+		allPRsSubmitted = allPRsSubmitted && submitted
+		if submitted {
+			submittedPRs[b.Branch] = s.Branches[i].PullRequest.Number
+		}
+		if err != nil {
 			if errors.Is(err, errInterrupt) {
 				printInterrupt(cfg)
 				return ErrSilent
@@ -254,18 +263,29 @@ func runSubmit(cfg *config.Config, opts *submitOptions) error {
 
 	// Create or update the stack on GitHub
 	stackSynced := false
-	if stacksAvailable {
+	if stacksAvailable && (!pendingModify || allPRsSubmitted) {
 		stackSynced = syncStack(cfg, client, s)
 	}
 
 	// Update base commit hashes and sync PR state
 	updateBaseSHAs(s)
 	_ = syncStackPRs(cfg, s)
+	for _, b := range s.Branches {
+		if number, submitted := submittedPRs[b.Branch]; submitted &&
+			(b.PullRequest == nil || b.PullRequest.Number != number) {
+			allPRsSubmitted = false
+		}
+	}
 
 	if err := stack.Save(gitDir, sf); err != nil {
 		return stackSaveError(cfg, err)
 	}
-	if stackSynced {
+	if pendingModify {
+		if !allPRsSubmitted || (!stackSynced && len(s.Branches) != 1) {
+			cfg.Errorf("modify is not fully submitted; recovery state was retained")
+			cfg.Printf("Finish submitting all remaining PRs, then retry `%s`", cfg.ColorCyan("gh stack submit"))
+			return ErrSilent
+		}
 		if err := clearPendingModifyState(cfg, s, gitDir); err != nil {
 			return err
 		}
@@ -342,33 +362,40 @@ func collectPRDrafts(cfg *config.Config, client github.ClientOps, s *stack.Stack
 //
 // drafts holds optional per-branch overrides from the interactive editor. When
 // a NEW branch has been deselected in the editor, it is pushed for stack
-// consistency but no PR is created for it.
-func ensurePR(cfg *config.Config, client github.ClientOps, s *stack.Stack, i int, baseBranch string, opts *submitOptions, templateContent string, drafts map[string]*submitview.PRDraft) error {
+// consistency but no PR is created for it. The returned bool is true only when
+// the PR and all requested updates were submitted successfully.
+func ensurePR(cfg *config.Config, client github.ClientOps, s *stack.Stack, i int, baseBranch string, opts *submitOptions, templateContent string, drafts map[string]*submitview.PRDraft) (bool, error) {
 	b := s.Branches[i]
 
 	pr, err := client.FindPRForBranch(b.Branch)
 	if err != nil {
 		cfg.Warningf("failed to check PR for %s: %v", b.Branch, err)
-		return nil
+		return false, err
 	}
 
 	if pr == nil {
 		// A NEW branch the user deselected in the editor: pushed for stack
 		// consistency, but intentionally left without a PR.
 		if d := drafts[b.Branch]; d != nil && !d.Include {
-			return nil
+			return false, nil
 		}
-		return createPR(cfg, client, s, i, baseBranch, opts, templateContent, drafts)
+		err := createPR(cfg, client, s, i, baseBranch, opts, templateContent, drafts)
+		return err == nil, err
 	}
 
 	// PR exists — record it and fix base if needed.
-	if s.Branches[i].PullRequest == nil {
-		s.Branches[i].PullRequest = &stack.PullRequestRef{
-			Number: pr.Number,
-			ID:     pr.ID,
-			URL:    pr.URL,
-		}
+	if pr.Number <= 0 {
+		err := fmt.Errorf("PR lookup for %s returned no pull request number", b.Branch)
+		cfg.Warningf("%s", err)
+		return false, err
 	}
+	s.Branches[i].PullRequest = &stack.PullRequestRef{
+		Number: pr.Number,
+		ID:     pr.ID,
+		URL:    pr.URL,
+	}
+	complete := true
+	var failures []error
 
 	// Disable auto-merge before adding this PR to a stack. A PR with
 	// auto-merge enabled would merge on its own, breaking the stack.
@@ -376,6 +403,7 @@ func ensurePR(cfg *config.Config, client github.ClientOps, s *stack.Stack, i int
 		if err := client.DisableAutoMerge(pr.ID); err != nil {
 			cfg.Warningf("failed to disable auto-merge for PR %s: %v",
 				cfg.PRLink(pr.Number, pr.URL), err)
+			failures = append(failures, err)
 		} else {
 			cfg.Warningf("Disabled auto-merge for PR %s (incompatible with stacked PRs)",
 				cfg.PRLink(pr.Number, pr.URL))
@@ -387,10 +415,12 @@ func ensurePR(cfg *config.Config, client github.ClientOps, s *stack.Stack, i int
 			// Stack API owns base relationships — can't update directly.
 			cfg.Warningf("PR %s has base %q (expected %q) but cannot update while stacked",
 				cfg.PRLink(pr.Number, pr.URL), pr.BaseRefName, baseBranch)
+			complete = false
 		} else {
 			if err := client.UpdatePRBase(pr.Number, baseBranch); err != nil {
 				cfg.Warningf("failed to update base branch for PR %s: %v",
 					cfg.PRLink(pr.Number, pr.URL), err)
+				failures = append(failures, err)
 			} else {
 				cfg.Successf("Updated base branch for PR %s to %s",
 					cfg.PRLink(pr.Number, pr.URL), baseBranch)
@@ -405,13 +435,14 @@ func ensurePR(cfg *config.Config, client github.ClientOps, s *stack.Stack, i int
 		if err := client.MarkPRReadyForReview(pr.ID); err != nil {
 			cfg.Warningf("failed to mark PR %s as ready for review: %v",
 				cfg.PRLink(pr.Number, pr.URL), err)
+			failures = append(failures, err)
 		} else {
 			cfg.Successf("Marked PR %s as ready for review",
 				cfg.PRLink(pr.Number, pr.URL))
 		}
 	}
 
-	return nil
+	return complete && len(failures) == 0, errors.Join(failures...)
 }
 
 // createPR creates a new PR for the branch at index i.
@@ -448,7 +479,12 @@ func createPR(cfg *config.Config, client github.ClientOps, s *stack.Stack, i int
 	newPR, createErr := client.CreatePR(baseBranch, b.Branch, title, body, isDraft)
 	if createErr != nil {
 		cfg.Warningf("failed to create PR for %s: %v", b.Branch, createErr)
-		return nil
+		return createErr
+	}
+	if newPR == nil || newPR.Number <= 0 {
+		err := fmt.Errorf("creating PR for %s returned no pull request number", b.Branch)
+		cfg.Warningf("%s", err)
+		return err
 	}
 	cfg.Successf("Created PR %s for %s", cfg.PRLink(newPR.Number, newPR.URL), b.Branch)
 	s.Branches[i].PullRequest = &stack.PullRequestRef{
@@ -643,23 +679,23 @@ func mergedPRNumbers(s *stack.Stack) map[int]bool {
 
 // handlePendingModify handles the stack recreation after a modify operation.
 // It deletes the old remote stack and clears s.ID so syncStack creates a new
-// one. The state file is NOT cleared here — it is cleared after syncStack
-// succeeds, ensuring retry safety.
-func handlePendingModify(cfg *config.Config, client github.ClientOps, s *stack.Stack, gitDir string) error {
+// one. The bool identifies a matching pending modification. Its journal is
+// cleared only after the caller verifies all required submission outcomes.
+func handlePendingModify(cfg *config.Config, client github.ClientOps, s *stack.Stack, gitDir string) (bool, error) {
 	state, err := modify.LoadState(gitDir)
 	if err != nil {
 		cfg.Errorf("reading modify recovery state: %s", err)
-		return ErrModifyRecovery
+		return false, ErrModifyRecovery
 	}
 	if state == nil {
-		return nil // No modify state — nothing to do
+		return false, nil // No modify state — nothing to do
 	}
 	if state.Phase != modify.PhasePendingSubmit {
 		cfg.Errorf("a modify session needs recovery; run `gh stack modify --continue` or `gh stack modify --abort`")
-		return ErrModifyRecovery
+		return false, ErrModifyRecovery
 	}
 	if !modify.MatchesStack(state, s) {
-		return nil
+		return false, nil
 	}
 
 	// Prompt for confirmation before overwriting the remote stack
@@ -669,14 +705,14 @@ func handlePendingModify(cfg *config.Config, client github.ClientOps, s *stack.S
 		if promptErr != nil {
 			if isInterruptError(promptErr) {
 				printInterrupt(cfg)
-				return errInterrupt
+				return true, errInterrupt
 			}
-			return promptErr
+			return true, promptErr
 		}
 		if !proceed {
 			cfg.Printf("Skipping stack recreation — run `%s` when ready",
 				cfg.ColorCyan("gh stack submit"))
-			return errInterrupt
+			return true, errInterrupt
 		}
 	}
 
@@ -686,7 +722,7 @@ func handlePendingModify(cfg *config.Config, client github.ClientOps, s *stack.S
 		if lookupErr != nil {
 			cfg.Warningf("Failed to look up existing stack: %v", lookupErr)
 			cfg.Printf("Run `%s` again to retry", cfg.ColorCyan("gh stack submit"))
-			return lookupErr
+			return true, lookupErr
 		}
 		if !found {
 			cfg.Printf("Previous stack already deleted on GitHub")
@@ -697,11 +733,11 @@ func handlePendingModify(cfg *config.Config, client github.ClientOps, s *stack.S
 			} else {
 				cfg.Warningf("Failed to delete existing stack: %v", err)
 				cfg.Printf("Run `%s` again to retry", cfg.ColorCyan("gh stack submit"))
-				return err
+				return true, err
 			}
 		} else if !dissolved {
 			cfg.Errorf("the previous stack still has pull requests queued for merge or with auto-merge enabled; it cannot be recreated yet")
-			return ErrConflict
+			return true, ErrConflict
 		} else {
 			cfg.Successf("Cleared existing stack on GitHub")
 		}
@@ -712,16 +748,16 @@ func handlePendingModify(cfg *config.Config, client github.ClientOps, s *stack.S
 	state.PriorRemoteStackID = ""
 	if err := modify.SaveState(gitDir, state); err != nil {
 		cfg.Errorf("saving modify recovery state: %s", err)
-		return ErrModifyRecovery
+		return true, ErrModifyRecovery
 	}
 	s.ID = ""
 	s.Number = 0
 
-	return nil
+	return true, nil
 }
 
 // clearPendingModifyState clears the modify state file after a successful submit.
-// Called after syncStack succeeds to ensure retry safety.
+// The caller must verify all required PR updates and save the catalog first.
 func clearPendingModifyState(cfg *config.Config, s *stack.Stack, gitDir string) error {
 	state, err := modify.LoadState(gitDir)
 	if err != nil {
@@ -735,7 +771,7 @@ func clearPendingModifyState(cfg *config.Config, s *stack.Stack, gitDir string) 
 		cfg.Errorf("clearing modify recovery state: %s", err)
 		return ErrModifyRecovery
 	}
-	cfg.Successf("Stack recreated on GitHub to match local state")
+	cfg.Successf("Changes from modify submitted to GitHub")
 	return nil
 }
 

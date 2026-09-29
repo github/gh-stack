@@ -94,7 +94,9 @@ If a stack of PRs has been created on GitHub, run:
 gh stack submit
 ```
 
-This pushes the updated branches and recreates the stack. The old stack is automatically replaced.
+This pushes the updated branches and updates their pull requests. With two or more PRs, the old stack is replaced; a single remaining PR is submitted without creating a new stack object.
+
+The pending-modify journal is cleared only after all required PR submissions and updates succeed and the local catalog is saved. Failed updates or deselected branches without PRs leave it pending so you can complete the submission with `gh stack submit`.
 
 ## Aborting
 
