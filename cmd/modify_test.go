@@ -2,9 +2,13 @@ package cmd
 
 import (
 	"encoding/json"
+	"fmt"
 	"io"
 	"os"
 	"path/filepath"
+	"strings"
+	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -107,6 +111,72 @@ func TestModifyStateAtomicWrite(t *testing.T) {
 	// No .tmp file should be left behind
 	_, err = os.Stat(modify.StatePath(gitDir) + ".tmp")
 	assert.True(t, os.IsNotExist(err), "no .tmp file should remain after successful write")
+}
+
+func TestModifyStateReadError(t *testing.T) {
+	dir := t.TempDir()
+	path := modify.StatePath(dir)
+	require.NoError(t, os.Mkdir(path, 0700))
+	got, err := modify.LoadState(dir)
+	require.ErrorContains(t, err, "reading modify state")
+	assert.Nil(t, got)
+	var pathErr *os.PathError
+	require.ErrorAs(t, err, &pathErr)
+	assert.Equal(t, path, pathErr.Path)
+}
+
+func TestModifyStateConcurrentReadWrite(t *testing.T) {
+	dir := t.TempDir()
+	state := &modify.StateFile{
+		SchemaVersion: 1, Phase: modify.PhaseConflict,
+		OriginalBranch: "initial", ConflictBranch: "initial",
+		Snapshot: modify.Snapshot{StackMetadata: json.RawMessage("{}")},
+	}
+	require.NoError(t, modify.SaveState(dir, state))
+	stop := make(chan struct{})
+	errs := make(chan error, 2)
+	var reads atomic.Int64
+	var readers sync.WaitGroup
+	for range 2 {
+		readers.Go(func() {
+			for {
+				select {
+				case <-stop:
+					return
+				default:
+				}
+				got, err := modify.LoadState(dir)
+				if err != nil {
+					errs <- err
+					return
+				}
+				if got == nil || got.OriginalBranch == "" || got.OriginalBranch != got.ConflictBranch {
+					errs <- fmt.Errorf("reader observed an incomplete modify state")
+					return
+				}
+				reads.Add(1)
+			}
+		})
+	}
+	var writeErr error
+	for i := range 50 {
+		branch := strings.Repeat(fmt.Sprintf("%04d", i), 8192)
+		state.OriginalBranch, state.ConflictBranch = branch, branch
+		if writeErr = modify.SaveState(dir, state); writeErr != nil {
+			break
+		}
+	}
+	close(stop)
+	readers.Wait()
+	close(errs)
+	require.NoError(t, writeErr)
+	for err := range errs {
+		require.NoError(t, err)
+	}
+	assert.Positive(t, reads.Load())
+	got, err := modify.LoadState(dir)
+	require.NoError(t, err)
+	assert.Equal(t, state, got)
 }
 
 func TestCheckModifyStateGuard(t *testing.T) {

@@ -9,6 +9,8 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"testing"
 
 	"github.com/github/gh-stack/internal/config"
@@ -951,6 +953,85 @@ func TestRebase_StateRoundTrip(t *testing.T) {
 	assert.Equal(t, original.OriginalRefs, loaded.OriginalRefs)
 	assert.Equal(t, original.UseOnto, loaded.UseOnto)
 	assert.Equal(t, original.OntoOldBase, loaded.OntoOldBase)
+}
+
+func TestRebase_StateReadErrors(t *testing.T) {
+	for _, kind := range []string{"missing", "directory", "invalid JSON"} {
+		t.Run(kind, func(t *testing.T) {
+			dir := t.TempDir()
+			path := filepath.Join(dir, rebaseStateFile)
+			switch kind {
+			case "directory":
+				require.NoError(t, os.Mkdir(path, 0700))
+			case "invalid JSON":
+				require.NoError(t, os.WriteFile(path, []byte("{incomplete"), 0600))
+			}
+			got, err := loadRebaseState(dir)
+			require.Error(t, err)
+			assert.Nil(t, got)
+			switch kind {
+			case "missing":
+				assert.ErrorIs(t, err, os.ErrNotExist)
+			case "directory":
+				var pathErr *os.PathError
+				require.ErrorAs(t, err, &pathErr)
+				assert.Equal(t, path, pathErr.Path)
+			case "invalid JSON":
+				var syntaxErr *json.SyntaxError
+				assert.ErrorAs(t, err, &syntaxErr)
+			}
+		})
+	}
+}
+
+func TestRebase_StateConcurrentReadWrite(t *testing.T) {
+	dir := t.TempDir()
+	state := &rebaseState{OriginalBranch: "initial", ConflictBranch: "initial"}
+	require.NoError(t, saveRebaseState(dir, state))
+	stop := make(chan struct{})
+	errs := make(chan error, 2)
+	var reads atomic.Int64
+	var readers sync.WaitGroup
+	for range 2 {
+		readers.Go(func() {
+			for {
+				select {
+				case <-stop:
+					return
+				default:
+				}
+				got, err := loadRebaseState(dir)
+				if err != nil {
+					errs <- err
+					return
+				}
+				if got == nil || got.OriginalBranch == "" || got.OriginalBranch != got.ConflictBranch {
+					errs <- fmt.Errorf("reader observed an incomplete rebase state")
+					return
+				}
+				reads.Add(1)
+			}
+		})
+	}
+	var writeErr error
+	for i := range 50 {
+		branch := strings.Repeat(fmt.Sprintf("%04d", i), 8192)
+		state.OriginalBranch, state.ConflictBranch = branch, branch
+		if writeErr = saveRebaseState(dir, state); writeErr != nil {
+			break
+		}
+	}
+	close(stop)
+	readers.Wait()
+	close(errs)
+	require.NoError(t, writeErr)
+	for err := range errs {
+		require.NoError(t, err)
+	}
+	assert.Positive(t, reads.Load())
+	got, err := loadRebaseState(dir)
+	require.NoError(t, err)
+	assert.Equal(t, state, got)
 }
 
 // TestRebase_Continue_RebasesRemainingBranches verifies the --continue success

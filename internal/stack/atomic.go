@@ -7,6 +7,12 @@ import (
 	"path/filepath"
 )
 
+// ReadStateFile reads a complete state file, allowing WriteAtomic to replace it
+// while the read is in progress. On Windows, its handle permits delete sharing.
+func ReadStateFile(path string) ([]byte, error) {
+	return readStateFile(path)
+}
+
 // WriteAtomic publishes data at path using a fully written temporary file in
 // the same directory. It preserves an existing regular file's permissions and
 // uses 0644 for a new file. The parent directory must already exist.

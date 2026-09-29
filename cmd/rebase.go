@@ -543,7 +543,7 @@ func saveRebaseState(gitDir string, state *rebaseState) error {
 }
 
 func loadRebaseState(gitDir string) (*rebaseState, error) {
-	data, err := os.ReadFile(filepath.Join(gitDir, rebaseStateFile))
+	data, err := stack.ReadStateFile(filepath.Join(gitDir, rebaseStateFile))
 	if err != nil {
 		return nil, err
 	}

@@ -77,7 +77,7 @@ func StatePath(gitDir string) string {
 // LoadState reads the modify state file from the git directory.
 // Returns nil, nil if the file does not exist.
 func LoadState(gitDir string) (*StateFile, error) {
-	data, err := os.ReadFile(StatePath(gitDir))
+	data, err := stack.ReadStateFile(StatePath(gitDir))
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
 			return nil, nil

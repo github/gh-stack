@@ -504,6 +504,50 @@ func TestAtomicPublication_PreservesExistingFiles(t *testing.T) {
 	})
 }
 
+func TestReadStateFile(t *testing.T) {
+	t.Run("reads complete bytes", func(t *testing.T) {
+		path := filepath.Join(t.TempDir(), "state")
+		for _, want := range [][]byte{
+			{},
+			{0x00, 0xff, 0x0a},
+			[]byte(strings.Repeat("state\x00\xff\n", 16384)),
+		} {
+			require.NoError(t, os.WriteFile(path, want, 0600))
+			got, err := ReadStateFile(path)
+			require.NoError(t, err)
+			assert.Equal(t, want, got)
+		}
+	})
+
+	t.Run("missing file", func(t *testing.T) {
+		path := filepath.Join(t.TempDir(), "missing")
+		_, err := ReadStateFile(path)
+		require.ErrorIs(t, err, os.ErrNotExist)
+		assert.NoFileExists(t, path)
+	})
+
+	t.Run("directory", func(t *testing.T) {
+		path := t.TempDir()
+		_, err := ReadStateFile(path)
+		var pathErr *os.PathError
+		require.ErrorAs(t, err, &pathErr)
+		assert.Equal(t, path, pathErr.Path)
+		assert.DirExists(t, path)
+	})
+
+	t.Run("unreadable file", func(t *testing.T) {
+		if runtime.GOOS == "windows" || os.Geteuid() == 0 {
+			t.Skip("requires Unix permission enforcement")
+		}
+		path := filepath.Join(t.TempDir(), "state")
+		require.NoError(t, os.WriteFile(path, []byte("private state"), 0600))
+		require.NoError(t, os.Chmod(path, 0))
+		t.Cleanup(func() { assert.NoError(t, os.Chmod(path, 0600)) })
+		_, err := ReadStateFile(path)
+		require.ErrorIs(t, err, os.ErrPermission)
+	})
+}
+
 func TestWriteAtomic(t *testing.T) {
 	t.Run("creates and replaces exact bytes", func(t *testing.T) {
 		path := filepath.Join(t.TempDir(), "gh-stack-rebase-state")
