@@ -84,6 +84,8 @@ If a second conflict occurs after continuing, the same options are available.
 
 The conflict message identifies the originating worktree. Edit and stage the files **there**. You can invoke `--continue` or `--abort` from any linked worktree; Git operations still execute in the recorded origin without changing the invoking worktree's checkout.
 
+If Git's recorded rebase or cherry-pick is no longer in progress, for example after an external `git rebase --abort`, `modify --continue` refuses and preserves the journal. Use `gh stack modify --abort` to recover through the saved state; continuation will not claim a new branch tip as completed modify work.
+
 ## After modifying
 
 If a stack of PRs has been created on GitHub, run:

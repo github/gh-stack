@@ -885,8 +885,19 @@ func ContinueApply(
 	if err != nil {
 		return fmt.Errorf("checking rebase state before continuation: %w", err)
 	}
-	if _, err := ops.IsCherryPickInProgress(); err != nil {
+	picking, err := ops.IsCherryPickInProgress()
+	if err != nil {
 		return fmt.Errorf("checking cherry-pick state before continuation: %w", err)
+	}
+	switch state.ConflictType {
+	case "", "rebase":
+		if !inProgress {
+			return fmt.Errorf("the rebase recorded by modify is no longer in progress in %s; recovery state was retained, run `gh stack modify --abort` to recover", ctx.Origin.Path)
+		}
+	case "cherry_pick":
+		if !picking {
+			return fmt.Errorf("the cherry-pick recorded by modify is no longer in progress in %s; recovery state was retained, run `gh stack modify --abort` to recover", ctx.Origin.Path)
+		}
 	}
 	existing, err := recoveryBranchAvailability(state, ops)
 	if err != nil {
@@ -928,10 +939,8 @@ func ContinueApply(
 		}
 	case "", "rebase":
 		// Rebase conflict
-		if inProgress {
-			if err := ops.RebaseContinue(git.RebaseOpts{}); err != nil {
-				return fmt.Errorf("rebase continue failed in %s — resolve remaining conflicts and try again: %w", ctx.Origin.Path, err)
-			}
+		if err := ops.RebaseContinue(git.RebaseOpts{}); err != nil {
+			return fmt.Errorf("rebase continue failed in %s — resolve remaining conflicts and try again: %w", ctx.Origin.Path, err)
 		}
 		if err := ctx.Record(state.ConflictBranch); err != nil {
 			return err

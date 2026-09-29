@@ -248,6 +248,7 @@ func TestModifyRecovery_CheckedQueriesPreserveJournal(t *testing.T) {
 					lookupErr := errors.New("checked query failed")
 					mock := newApplyMock(dir, map[string]string{"A": "original", "main": "trunk"})
 					mock.RootDirFn = func() (string, error) { return origin, nil }
+					mock.IsRebaseInProgressFn = func() (bool, error) { return true, nil }
 					if query == "factory" {
 						mock.ForWorktreeFn = func(string) (git.Ops, error) { return nil, lookupErr }
 					} else if query == "rebase" {
@@ -282,6 +283,99 @@ func TestModifyRecovery_CheckedQueriesPreserveJournal(t *testing.T) {
 					assert.Equal(t, catalog, afterCatalog)
 				})
 			}
+		}
+	}
+}
+
+func TestContinueApply_MissingNativeOperationPreservesJournal(t *testing.T) {
+	for _, recordedOrigin := range []bool{false, true} {
+		for _, conflictType := range []string{"", "rebase", "cherry_pick"} {
+			t.Run(fmt.Sprintf("recorded=%t/type=%s", recordedOrigin, conflictType), func(t *testing.T) {
+				dir, origin := t.TempDir(), t.TempDir()
+				s := stack.Stack{
+					Trunk:    stack.BranchRef{Branch: "main"},
+					Branches: []stack.BranchRef{{Branch: "A"}, {Branch: "B"}},
+				}
+				writeTestStackFile(t, dir, s)
+				metadata, err := json.Marshal(s)
+				require.NoError(t, err)
+				state := &StateFile{
+					SchemaVersion: 1, Phase: PhaseConflict, ConflictType: conflictType,
+					OriginalBranch: "A", ConflictBranch: "A", RemainingBranches: []string{"B"},
+					FoldBranch: "B", FoldTarget: "A",
+					OriginalRefs: map[string]string{"B": "original-A"},
+					Snapshot: Snapshot{
+						Branches:      []BranchSnapshot{{Name: "A", TipSHA: "original-A"}, {Name: "B", TipSHA: "original-B"}},
+						StackMetadata: metadata,
+					},
+				}
+				if recordedOrigin {
+					state.Worktrees = &worktree.Context{
+						Origin:  worktree.Location{Path: origin, ID: "."},
+						Pending: "A", PendingBefore: "original-A",
+					}
+				}
+				require.NoError(t, SaveState(dir, state))
+				before, err := os.ReadFile(StatePath(dir))
+				require.NoError(t, err)
+				catalog, err := os.ReadFile(filepath.Join(dir, "gh-stack"))
+				require.NoError(t, err)
+				refs := map[string]string{"main": "trunk", "A": "original-A", "B": "original-B"}
+				mock := newApplyMock(dir, refs)
+				mock.RootDirFn = func() (string, error) { return origin, nil }
+				mock.CurrentBranchFn = func() (string, error) { return "A", nil }
+				rebasing, picking := conflictType != "cherry_pick", conflictType == "cherry_pick"
+				mock.IsRebaseInProgressFn = func() (bool, error) { return rebasing, nil }
+				mock.IsCherryPickInProgressFn = func() (bool, error) { return picking, nil }
+				mock.RebaseAbortFn = func() error { rebasing = false; return nil }
+				mock.CherryPickAbortFn = func() error { picking = false; return nil }
+				nativeContinues, refReads, mutations := 0, 0, 0
+				mock.RebaseContinueFn = func(git.RebaseOpts) error {
+					nativeContinues++
+					return errors.New("no native rebase in progress")
+				}
+				mock.CherryPickContinueFn = func() error {
+					nativeContinues++
+					return errors.New("no native cherry-pick in progress")
+				}
+				mock.RevParseFn = func(ref string) (string, error) {
+					refReads++
+					return refs[ref], nil
+				}
+				mock.RebaseOntoFn = func(_, _, branch string, _ git.RebaseOpts) error {
+					mutations++
+					refs[branch] = "replayed"
+					return nil
+				}
+				mock.CheckoutBranchFn = func(string) error { mutations++; return nil }
+				restore := git.SetOps(mock)
+				defer restore()
+				// An external abort removes Git's marker, then a new commit appears.
+				if picking {
+					require.NoError(t, mock.CherryPickAbort())
+				} else {
+					require.NoError(t, mock.RebaseAbort())
+				}
+				refs["A"] = "external-commit"
+				cfg, _, _ := config.NewTestConfig()
+				defer cfg.Out.Close()
+				defer cfg.Err.Close()
+
+				err = ContinueApply(cfg, dir, noopUpdateBaseSHAs)
+
+				assert.ErrorContains(t, err, "gh stack modify --abort")
+				assert.Zero(t, nativeContinues)
+				assert.Zero(t, refReads, "must not claim the current tip as completed modify work")
+				assert.Zero(t, mutations)
+				assert.Equal(t, "external-commit", refs["A"])
+				assert.Equal(t, "original-B", refs["B"])
+				after, readErr := os.ReadFile(StatePath(dir))
+				assert.NoError(t, readErr)
+				assert.Equal(t, before, after)
+				afterCatalog, readErr := os.ReadFile(filepath.Join(dir, "gh-stack"))
+				require.NoError(t, readErr)
+				assert.Equal(t, catalog, afterCatalog)
+			})
 		}
 	}
 }
@@ -1514,7 +1608,9 @@ func TestContinueApply_SubsequentConflictBecomesRebase(t *testing.T) {
 		"main": "sha-main", "A": "sha-A", "B": "sha-B", "C": "sha-C",
 	})
 	// The user resolved the cherry-pick; --continue finishes it cleanly.
-	mock.CherryPickContinueFn = func() error { return nil }
+	picking := true
+	mock.IsCherryPickInProgressFn = func() (bool, error) { return picking, nil }
+	mock.CherryPickContinueFn = func() error { picking = false; return nil }
 	// A rebases cleanly onto main; C then conflicts.
 	mock.RebaseOntoFn = func(newBase, oldBase, branch string, opts git.RebaseOpts) error {
 		if branch == "C" {
@@ -1582,7 +1678,9 @@ func TestContinueApply_FoldThenCascadeConflict_DoesNotResurrectFoldedBranch(t *t
 	mock := newApplyMock(gitDir, map[string]string{
 		"main": "sha-main", "A": "sha-A", "B": "sha-B", "C": "sha-C",
 	})
-	mock.CherryPickContinueFn = func() error { return nil }
+	picking := true
+	mock.IsCherryPickInProgressFn = func() (bool, error) { return picking, nil }
+	mock.CherryPickContinueFn = func() error { picking = false; return nil }
 	inProgress := false
 	mock.IsRebaseInProgressFn = func() (bool, error) { return inProgress, nil }
 	mock.RebaseContinueFn = func(git.RebaseOpts) error { inProgress = false; return nil }
@@ -1666,8 +1764,11 @@ func TestContinueApply_RebaseStartErrorPersistsRetryState(t *testing.T) {
 		"main": "sha-main", "A": "sha-A", "B": "sha-B", "C": "sha-C",
 	})
 	cherryPickContinues := 0
+	picking := true
+	mock.IsCherryPickInProgressFn = func() (bool, error) { return picking, nil }
 	mock.CherryPickContinueFn = func() error {
 		cherryPickContinues++
+		picking = false
 		return nil
 	}
 	cRebases := 0
