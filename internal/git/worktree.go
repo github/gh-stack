@@ -36,9 +36,6 @@ func (d *defaultOps) CommonDir() (string, error) {
 }
 
 func (d *defaultOps) gitClient() (*cligit.Client, error) {
-	if d.scopeErr != nil {
-		return nil, d.scopeErr
-	}
 	c := d.client
 	if c == nil {
 		c = client
@@ -75,77 +72,66 @@ func (d *defaultOps) gitClient() (*cligit.Client, error) {
 
 // ForWorktree resolves relative paths against this receiver's execution
 // directory. It never changes the process directory or the shared Git client.
-func (d *defaultOps) ForWorktree(path string) Ops {
-	scoped := &defaultOps{}
+func (d *defaultOps) ForWorktree(path string) (Ops, error) {
 	if path == "" {
-		scoped.scopeErr = errors.New("worktree path must not be empty")
-		return scoped
+		return nil, errors.New("worktree path must not be empty")
 	}
 	c, err := d.gitClient()
 	if err != nil {
-		scoped.scopeErr = err
-		return scoped
+		return nil, err
 	}
 	common, err := d.CommonDir()
 	if err != nil {
-		scoped.scopeErr = fmt.Errorf("locating the source repository: %w", err)
-		return scoped
+		return nil, fmt.Errorf("locating the source repository: %w", err)
 	}
 	expectedCommon, err := os.Stat(common)
 	if err != nil {
-		scoped.scopeErr = err
-		return scoped
+		return nil, err
 	}
 	if !filepath.IsAbs(path) && c.RepoDir != "" {
 		path = filepath.Join(c.RepoDir, path)
 	}
 	path, err = filepath.Abs(path)
 	if err != nil {
-		scoped.scopeErr = err
-		return scoped
+		return nil, err
 	}
-	scoped.client = c.Copy()
+	scoped := &defaultOps{client: c.Copy(), scoped: true}
 	scoped.client.RepoDir = path
-	scoped.scoped = true
 
 	pathInfo, err := os.Stat(path)
 	if err != nil {
-		scoped.scopeErr = fmt.Errorf("opening worktree %q: %w", path, err)
-		return scoped
+		return nil, fmt.Errorf("opening worktree %q: %w", path, err)
 	}
 	if os.SameFile(pathInfo, expectedCommon) {
 		bare, err := scoped.run("--git-dir="+common, "rev-parse", "--is-bare-repository")
 		if err != nil {
-			scoped.scopeErr = err
-			return scoped
+			return nil, err
 		}
 		if bare != "true" {
-			scoped.scopeErr = fmt.Errorf("cannot use Git administration directory %q as the main worktree; run this command from the main worktree or configure its core.worktree backlink", path)
-			return scoped
+			return nil, fmt.Errorf("cannot use Git administration directory %q as the main worktree; run this command from the main worktree or configure its core.worktree backlink", path)
 		}
 	}
 	selectedCommon, err := scoped.CommonDir()
 	if err != nil {
-		scoped.scopeErr = fmt.Errorf("opening worktree %q: %w", path, err)
-		return scoped
+		return nil, fmt.Errorf("opening worktree %q: %w", path, err)
 	}
 	commonInfo, err := os.Stat(selectedCommon)
 	if err != nil {
-		scoped.scopeErr = err
-		return scoped
+		return nil, err
 	}
 	if !os.SameFile(expectedCommon, commonInfo) {
-		scoped.scopeErr = fmt.Errorf("worktree %q belongs to a different Git repository", path)
-		return scoped
+		return nil, fmt.Errorf("worktree %q belongs to a different Git repository", path)
 	}
 	gitDir, err := scoped.GitDir()
 	if err != nil {
-		scoped.scopeErr = err
-		return scoped
+		return nil, err
 	}
-	scoped.gitDir, scoped.scopeErr = os.Stat(gitDir)
+	scoped.gitDir, err = os.Stat(gitDir)
+	if err != nil {
+		return nil, err
+	}
 	scoped.commonDir = commonInfo
-	return scoped
+	return scoped, nil
 }
 
 func (d *defaultOps) CheckVersion() error {

@@ -15,6 +15,30 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+func TestSync_RestoreBranchLookupFailureBeforeMutation(t *testing.T) {
+	lookupErr := fmt.Errorf("branch lookup failed")
+	restore := git.SetOps(&git.MockOps{
+		BranchExistsFn: func(name string) (bool, error) {
+			if name == "bad" {
+				return false, lookupErr
+			}
+			return true, nil
+		},
+		CheckoutBranchFn: func(string) error {
+			t.Fatal("all branch lookups must succeed before checking out any branch")
+			return nil
+		},
+		ResetHardFn: func(string) error {
+			t.Fatal("all branch lookups must succeed before resetting any branch")
+			return nil
+		},
+	})
+	defer restore()
+	restoreErrors, err := restoreBranches(map[string]string{"good": "original-good", "bad": "original-bad"})
+	require.ErrorIs(t, err, lookupErr)
+	assert.Empty(t, restoreErrors)
+}
+
 // pushCall records arguments passed to Push.
 type pushCall struct {
 	remote   string
@@ -30,7 +54,7 @@ func newSyncMock(tmpDir string, currentBranch string) *git.MockOps {
 	return &git.MockOps{
 		GitDirFn:        func() (string, error) { return tmpDir, nil },
 		CurrentBranchFn: func() (string, error) { return currentBranch, nil },
-		BranchExistsFn:  func(name string) bool { return true },
+		BranchExistsFn:  func(name string) (bool, error) { return true, nil },
 		RevParseFn: func(ref string) (string, error) {
 			// Default: origin/<branch> returns same SHA as <branch> (no FF needed)
 			if strings.HasPrefix(ref, "origin/") {
@@ -41,7 +65,7 @@ func newSyncMock(tmpDir string, currentBranch string) *git.MockOps {
 		IsAncestorFn:         func(a, d string) (bool, error) { return true, nil },
 		FetchFn:              func(string) error { return nil },
 		EnableRerereFn:       func() error { return nil },
-		IsRebaseInProgressFn: func() bool { return false },
+		IsRebaseInProgressFn: func() (bool, error) { return false, nil },
 		PushFn:               func(string, []string, bool, bool) error { return nil },
 	}
 }
@@ -429,7 +453,7 @@ func TestSync_NoLocalTrunk_SkipsSilently(t *testing.T) {
 
 	mock := newSyncMock(tmpDir, "b1")
 	// Trunk does not exist locally.
-	mock.BranchExistsFn = func(name string) bool { return name != "main" }
+	mock.BranchExistsFn = func(name string) (bool, error) { return name != "main", nil }
 	mock.PushFn = func(remote string, branches []string, force, atomic bool) error {
 		pushCalls = append(pushCalls, pushCall{remote, branches, force, atomic})
 		return nil
@@ -704,7 +728,7 @@ func TestSync_MergedBranch_UsesOnto(t *testing.T) {
 	}
 
 	mock := newSyncMock(tmpDir, "b2")
-	mock.BranchExistsFn = func(name string) bool { return true }
+	mock.BranchExistsFn = func(name string) (bool, error) { return true, nil }
 	// Trunk behind remote to trigger rebase
 	mock.RevParseFn = func(ref string) (string, error) {
 		if ref == "main" {
@@ -865,7 +889,7 @@ func TestSync_StaleOntoOldBase_UsesForkPoint(t *testing.T) {
 	}
 
 	mock := newSyncMock(tmpDir, "b2")
-	mock.BranchExistsFn = func(name string) bool { return true }
+	mock.BranchExistsFn = func(name string) (bool, error) { return true, nil }
 	mock.RevParseFn = func(ref string) (string, error) {
 		if ref == "main" {
 			return "local-sha", nil
@@ -1174,9 +1198,9 @@ func TestSync_MergedBranchDeletedFromRemote(t *testing.T) {
 	var rebaseOntoCalls []rebaseCall
 
 	mock := newSyncMock(tmpDir, "b2")
-	mock.BranchExistsFn = func(name string) bool {
+	mock.BranchExistsFn = func(name string) (bool, error) {
 		// b1 does not exist locally (deleted from remote after merge)
-		return name != "b1"
+		return name != "b1", nil
 	}
 	mock.RevParseMultiFn = func(refs []string) ([]string, error) {
 		shas := make([]string, len(refs))
@@ -1261,7 +1285,7 @@ func TestSync_Prune_DeletesMergedBranches(t *testing.T) {
 	var deletedTrackingRefs []string
 
 	mock := newSyncMock(tmpDir, "b2")
-	mock.BranchExistsFn = func(name string) bool { return true }
+	mock.BranchExistsFn = func(name string) (bool, error) { return true, nil }
 	mock.DeleteBranchFn = func(name string, force bool) error {
 		deletedBranches = append(deletedBranches, name)
 		assert.True(t, force, "should force-delete merged branch")
@@ -1308,8 +1332,8 @@ func TestSync_Prune_SkipsNonExistentBranches(t *testing.T) {
 	writeStackFile(t, tmpDir, s)
 
 	mock := newSyncMock(tmpDir, "b2")
-	mock.BranchExistsFn = func(name string) bool {
-		return name != "b1" // b1 already deleted
+	mock.BranchExistsFn = func(name string) (bool, error) {
+		return name != "b1", nil // b1 already deleted
 	}
 	mock.DeleteBranchFn = func(string, bool) error {
 		t.Fatal("DeleteBranch should not be called for non-existent branches")
@@ -1361,7 +1385,7 @@ func TestSync_Prune_SwitchesToLowestUnmergedBranch(t *testing.T) {
 	var checkoutTarget string
 
 	mock := newSyncMock(tmpDir, "b1") // currently on merged branch
-	mock.BranchExistsFn = func(name string) bool { return true }
+	mock.BranchExistsFn = func(name string) (bool, error) { return true, nil }
 	mock.CheckoutBranchFn = func(name string) error {
 		checkoutTarget = name
 		return nil
@@ -1410,7 +1434,7 @@ func TestSync_Prune_SwitchesToTrunkWhenAllMerged(t *testing.T) {
 	var checkoutTarget string
 
 	mock := newSyncMock(tmpDir, "b1") // currently on merged branch
-	mock.BranchExistsFn = func(name string) bool { return true }
+	mock.BranchExistsFn = func(name string) (bool, error) { return true, nil }
 	mock.CheckoutBranchFn = func(name string) error {
 		checkoutTarget = name
 		return nil
@@ -1456,7 +1480,7 @@ func TestSync_NoPrune_DoesNotDeleteBranches(t *testing.T) {
 	writeStackFile(t, tmpDir, s)
 
 	mock := newSyncMock(tmpDir, "b2")
-	mock.BranchExistsFn = func(name string) bool { return true }
+	mock.BranchExistsFn = func(name string) (bool, error) { return true, nil }
 	mock.DeleteBranchFn = func(string, bool) error {
 		t.Fatal("DeleteBranch should not be called without --prune")
 		return nil
@@ -1493,7 +1517,7 @@ func TestSync_Prune_DeleteFailureContinues(t *testing.T) {
 	var deletedBranches []string
 
 	mock := newSyncMock(tmpDir, "b3")
-	mock.BranchExistsFn = func(name string) bool { return true }
+	mock.BranchExistsFn = func(name string) (bool, error) { return true, nil }
 	mock.DeleteBranchFn = func(name string, force bool) error {
 		if name == "b1" {
 			return fmt.Errorf("permission denied")
@@ -1543,7 +1567,7 @@ func TestSync_InteractivePrune_PromptsAndPrunes(t *testing.T) {
 	var promptShown string
 
 	mock := newSyncMock(tmpDir, "b2")
-	mock.BranchExistsFn = func(name string) bool { return true }
+	mock.BranchExistsFn = func(name string) (bool, error) { return true, nil }
 	mock.DeleteBranchFn = func(name string, force bool) error {
 		deletedBranches = append(deletedBranches, name)
 		return nil
@@ -1591,7 +1615,7 @@ func TestSync_InteractivePrune_UserDeclines(t *testing.T) {
 	writeStackFile(t, tmpDir, s)
 
 	mock := newSyncMock(tmpDir, "b2")
-	mock.BranchExistsFn = func(name string) bool { return true }
+	mock.BranchExistsFn = func(name string) (bool, error) { return true, nil }
 	mock.DeleteBranchFn = func(string, bool) error {
 		t.Fatal("DeleteBranch should not be called when user declines")
 		return nil
@@ -1629,7 +1653,7 @@ func TestSync_NonInteractive_NoPrunePrompt(t *testing.T) {
 	writeStackFile(t, tmpDir, s)
 
 	mock := newSyncMock(tmpDir, "b2")
-	mock.BranchExistsFn = func(name string) bool { return true }
+	mock.BranchExistsFn = func(name string) (bool, error) { return true, nil }
 	mock.DeleteBranchFn = func(string, bool) error {
 		t.Fatal("DeleteBranch should not be called in non-interactive mode without --prune")
 		return nil
@@ -1666,7 +1690,7 @@ func TestSync_ExplicitPrune_SkipsPrompt(t *testing.T) {
 	var deletedBranches []string
 
 	mock := newSyncMock(tmpDir, "b2")
-	mock.BranchExistsFn = func(name string) bool { return true }
+	mock.BranchExistsFn = func(name string) (bool, error) { return true, nil }
 	mock.DeleteBranchFn = func(name string, force bool) error {
 		deletedBranches = append(deletedBranches, name)
 		return nil
@@ -2047,7 +2071,7 @@ func TestSync_RemoteAhead_PullsNewBranches(t *testing.T) {
 
 	var created, fetched []string
 	mock := newSyncMockNoRebase(tmpDir, "b1")
-	mock.BranchExistsFn = func(name string) bool { return name != "b4" && name != "b5" }
+	mock.BranchExistsFn = func(name string) (bool, error) { return name != "b4" && name != "b5", nil }
 	mock.CreateBranchFn = func(name, base string) error { created = append(created, name); return nil }
 	mock.FetchBranchesFn = func(_ string, branches []string) error { fetched = append(fetched, branches...); return nil }
 	mock.SetUpstreamTrackingFn = func(string, string) error { return nil }
@@ -2096,7 +2120,7 @@ func TestSync_RemoteAhead_QueuedBranchNotPushed(t *testing.T) {
 	var created []string
 	var pushes []pushCall
 	mock := newSyncMockNoRebase(tmpDir, "b1")
-	mock.BranchExistsFn = func(name string) bool { return name != "b3" }
+	mock.BranchExistsFn = func(name string) (bool, error) { return name != "b3", nil }
 	mock.CreateBranchFn = func(name, base string) error { created = append(created, name); return nil }
 	mock.SetUpstreamTrackingFn = func(string, string) error { return nil }
 	mock.PushFn = func(remote string, branches []string, force, atomic bool) error {
@@ -2325,7 +2349,7 @@ func TestSync_Divergent_UseRemote(t *testing.T) {
 	ghMock := divergentRemoteMock()
 	var created []string
 	mock := newSyncMockNoRebase(tmpDir, "b1")
-	mock.BranchExistsFn = func(name string) bool { return name != "b4" }
+	mock.BranchExistsFn = func(name string) (bool, error) { return name != "b4", nil }
 	mock.CreateBranchFn = func(name, base string) error { created = append(created, name); return nil }
 	mock.SetUpstreamTrackingFn = func(string, string) error { return nil }
 	mock.HasUncommittedChangesFn = func() (bool, error) { return false, nil }
@@ -2388,7 +2412,7 @@ func TestSync_Divergent_UseRemote_SwitchesOffDroppedBranch(t *testing.T) {
 	mock := newSyncMockNoRebase(tmpDir, "b3")
 	mock.CurrentBranchFn = func() (string, error) { return current, nil }
 	mock.CheckoutBranchFn = func(name string) error { current = name; checkouts = append(checkouts, name); return nil }
-	mock.BranchExistsFn = func(name string) bool { return name != "b4" }
+	mock.BranchExistsFn = func(name string) (bool, error) { return name != "b4", nil }
 	mock.CreateBranchFn = func(string, string) error { return nil }
 	mock.SetUpstreamTrackingFn = func(string, string) error { return nil }
 	mock.HasUncommittedChangesFn = func() (bool, error) { return false, nil }

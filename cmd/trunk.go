@@ -43,7 +43,12 @@ func runTrunk(cfg *config.Config) error {
 	}
 
 	// Ensure trunk exists locally before checkout.
-	if !git.BranchExists(trunk) {
+	exists, err := git.BranchExists(trunk)
+	if err != nil {
+		cfg.Errorf("failed to check trunk branch %s: %s", trunk, err)
+		return ErrSilent
+	}
+	if !exists {
 		remote, err := pickRemote(cfg, currentBranch, "")
 		if err != nil {
 			if !errors.Is(err, errInterrupt) {

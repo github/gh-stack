@@ -24,13 +24,76 @@ func newLinkGitMock(branches ...string) *git.MockOps {
 		branchSet[b] = true
 	}
 	return &git.MockOps{
-		BranchExistsFn:  func(name string) bool { return branchSet[name] },
+		BranchExistsFn:  func(name string) (bool, error) { return branchSet[name], nil },
 		PushFn:          func(string, []string, bool, bool) error { return nil },
 		ResolveRemoteFn: func(string) (string, error) { return "origin", nil },
 	}
 }
 
 // --- PR-number tests ---
+
+func TestLink_PRIdentifiersOutsideRepository(t *testing.T) {
+	for _, urls := range []bool{false, true} {
+		t.Run(fmt.Sprintf("urls=%t", urls), func(t *testing.T) {
+			t.Chdir(t.TempDir())
+			_, err := git.BranchExists("10")
+			require.ErrorIs(t, err, git.ErrNotInRepository)
+			var linked []int
+			cfg, outR, errR := config.NewTestConfig()
+			cfg.GitHubClientOverride = &github.MockClient{
+				FindPRByNumberFn: func(n int) (*github.PullRequest, error) {
+					return &github.PullRequest{
+						Number: n, HeadRefName: fmt.Sprintf("branch-%d", n),
+						BaseRefName: "main", URL: fmt.Sprintf("https://github.com/o/r/pull/%d", n),
+					}, nil
+				},
+				CreateStackFn: func(prs []int) (*github.RemoteStack, error) {
+					linked = prs
+					return &github.RemoteStack{ID: 42, Number: 42}, nil
+				},
+			}
+			args := []string{"10", "20"}
+			if urls {
+				args = []string{"https://github.com/o/r/pull/10", "https://github.com/o/r/pull/20"}
+			}
+			err = runLink(cfg, &linkOptions{base: "main"}, args)
+			require.NoError(t, err, collectOutput(cfg, outR, errR))
+			assert.Equal(t, []int{10, 20}, linked)
+		})
+	}
+}
+
+func TestLink_UnexpectedBranchLookupFailureStopsBeforePush(t *testing.T) {
+	lookupErr := fmt.Errorf("selected Git directory changed")
+	restore := git.SetOps(&git.MockOps{
+		BranchExistsFn: func(string) (bool, error) { return false, lookupErr },
+		PushFn: func(string, []string, bool, bool) error {
+			t.Fatal("must not push after a failed lookup")
+			return nil
+		},
+	})
+	defer restore()
+	cfg, outR, errR := config.NewTestConfig()
+	cfg.GitHubClientOverride = &github.MockClient{
+		CreateStackFn: func([]int) (*github.RemoteStack, error) {
+			t.Fatal("must not create a stack after a failed lookup")
+			return nil, nil
+		},
+	}
+	err := runLink(cfg, &linkOptions{base: "main"}, []string{"10", "20"})
+	require.ErrorIs(t, err, ErrSilent)
+	assert.Contains(t, collectOutput(cfg, outR, errR), lookupErr.Error())
+}
+
+func TestLink_NonRepositoryBranchNameStillFails(t *testing.T) {
+	restore := git.SetOps(&git.MockOps{
+		BranchExistsFn: func(string) (bool, error) { return false, git.ErrNotInRepository },
+	})
+	defer restore()
+	exists, err := linkBranchExists("feature")
+	require.ErrorIs(t, err, git.ErrNotInRepository)
+	assert.False(t, exists)
+}
 
 func TestLink_PRNumbers_CreateNewStack(t *testing.T) {
 	restore := git.SetOps(newLinkGitMock())
@@ -1322,7 +1385,7 @@ func TestLink_FixesBaseBranches(t *testing.T) {
 func TestLink_DefaultBase_RetargetsBottomPRToDefaultBranch(t *testing.T) {
 	defaultBranchCalled := false
 	restore := git.SetOps(&git.MockOps{
-		BranchExistsFn: func(string) bool { return false },
+		BranchExistsFn: func(string) (bool, error) { return false, nil },
 		DefaultBranchFn: func() (string, error) {
 			defaultBranchCalled = true
 			return "develop", nil
@@ -1387,7 +1450,7 @@ func TestLink_DefaultBase_RetargetsBottomPRToDefaultBranch(t *testing.T) {
 // omitted, rather than a hardcoded "main".
 func TestLink_DefaultBase_CreatesBottomPROnDefaultBranch(t *testing.T) {
 	restore := git.SetOps(&git.MockOps{
-		BranchExistsFn:  func(name string) bool { return name == "feat-a" || name == "feat-b" },
+		BranchExistsFn:  func(name string) (bool, error) { return name == "feat-a" || name == "feat-b", nil },
 		PushFn:          func(string, []string, bool, bool) error { return nil },
 		ResolveRemoteFn: func(string) (string, error) { return "origin", nil },
 		DefaultBranchFn: func() (string, error) { return "develop", nil },
@@ -1432,7 +1495,7 @@ func TestLink_DefaultBase_CreatesBottomPROnDefaultBranch(t *testing.T) {
 // determined.
 func TestLink_DefaultBase_ErrorWhenUnresolvable(t *testing.T) {
 	restore := git.SetOps(&git.MockOps{
-		BranchExistsFn:  func(string) bool { return false },
+		BranchExistsFn:  func(string) (bool, error) { return false, nil },
 		DefaultBranchFn: func() (string, error) { return "", fmt.Errorf("no default branch") },
 	})
 	defer restore()
@@ -1466,7 +1529,7 @@ func TestLink_DefaultBase_ErrorWhenUnresolvable(t *testing.T) {
 func TestLink_ExplicitBase_SkipsDefaultBranchResolution(t *testing.T) {
 	defaultBranchCalled := false
 	restore := git.SetOps(&git.MockOps{
-		BranchExistsFn: func(string) bool { return false },
+		BranchExistsFn: func(string) (bool, error) { return false, nil },
 		DefaultBranchFn: func() (string, error) {
 			defaultBranchCalled = true
 			return "develop", nil
@@ -1593,7 +1656,7 @@ func TestLink_PushesBranchesBeforeResolution(t *testing.T) {
 	var pushedRemote string
 
 	restore := git.SetOps(&git.MockOps{
-		BranchExistsFn:  func(name string) bool { return name == "feat-a" || name == "feat-b" },
+		BranchExistsFn:  func(name string) (bool, error) { return name == "feat-a" || name == "feat-b", nil },
 		ResolveRemoteFn: func(string) (string, error) { return "origin", nil },
 		PushFn: func(remote string, branches []string, force, atomic bool) error {
 			pushedRemote = remote
@@ -1640,7 +1703,7 @@ func TestLink_RemoteFlag(t *testing.T) {
 	var pushedRemote string
 
 	restore := git.SetOps(&git.MockOps{
-		BranchExistsFn: func(string) bool { return true },
+		BranchExistsFn: func(string) (bool, error) { return true, nil },
 		PushFn: func(remote string, branches []string, force, atomic bool) error {
 			pushedRemote = remote
 			return nil
@@ -1679,7 +1742,7 @@ func TestLink_SkipsPushForPRNumbersOnly(t *testing.T) {
 	pushCalled := false
 
 	restore := git.SetOps(&git.MockOps{
-		BranchExistsFn: func(string) bool { return false }, // PR numbers aren't local branches
+		BranchExistsFn: func(string) (bool, error) { return false, nil }, // PR numbers aren't local branches
 		PushFn: func(string, []string, bool, bool) error {
 			pushCalled = true
 			return nil

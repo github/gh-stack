@@ -108,7 +108,12 @@ func runInit(cfg *config.Config, opts *initOptions) error {
 
 	// The repository's default branch may only exist on the remote if the
 	// initial local branch was renamed before starting the stack.
-	if currentBranch != trunk && !git.BranchExists(trunk) {
+	trunkExists, err := git.BranchExists(trunk)
+	if err != nil {
+		cfg.Errorf("failed to check trunk branch %s: %s", trunk, err)
+		return ErrSilent
+	}
+	if currentBranch != trunk && !trunkExists {
 		remote, err := pickRemote(cfg, currentBranch, "")
 		if err != nil {
 			if !errors.Is(err, errInterrupt) {
@@ -245,7 +250,11 @@ func resolveArgBranches(cfg *config.Config, opts *initOptions, sf *stack.StackFi
 			return nil, nil, ErrInvalidArgs
 		}
 
-		exists := git.BranchExists(b)
+		exists, err := git.BranchExists(b)
+		if err != nil {
+			cfg.Errorf("failed to check branch %s: %s", b, err)
+			return nil, nil, ErrSilent
+		}
 
 		if err := sf.ValidateNoDuplicateBranch(b); err != nil {
 			cfg.Errorf("branch %q already exists in a stack", b)
@@ -345,7 +354,12 @@ func runInteractiveInit(cfg *config.Config, sf *stack.StackFile, trunk, trunkRef
 		cfg.Errorf("branch %q already exists in a stack", branchName)
 		return nil, false, ErrInvalidArgs
 	}
-	if git.BranchExists(branchName) {
+	exists, err := git.BranchExists(branchName)
+	if err != nil {
+		cfg.Errorf("failed to check branch %s: %s", branchName, err)
+		return nil, false, ErrSilent
+	}
+	if exists {
 		wasAdopted = true
 	} else {
 		if err := git.CreateBranch(branchName, trunkRef); err != nil {

@@ -1,14 +1,43 @@
 package modifyview
 
 import (
+	"errors"
 	"testing"
 
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/github/gh-stack/internal/git"
 	"github.com/github/gh-stack/internal/stack"
 	"github.com/github/gh-stack/internal/tui/stackview"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
+
+func TestBranchLookupFailureDoesNotStageAction(t *testing.T) {
+	for _, action := range []string{"rename", "insert"} {
+		t.Run(action, func(t *testing.T) {
+			lookupErr := errors.New("branch lookup failed")
+			restore := git.SetOps(&git.MockOps{
+				BranchExistsFn: func(string) (bool, error) { return false, lookupErr },
+			})
+			defer restore()
+			m := New([]ModifyBranchNode{makeNode("feature", true, 0)}, testTrunk, "1.0.0")
+			before := append([]ModifyBranchNode(nil), m.nodes...)
+			if action == "rename" {
+				m.renameMode = true
+				m.renameInput.SetValue("new-name")
+			} else {
+				m.insertMode = true
+				m.insertDirection = ActionInsertBelow
+				m.insertInput.SetValue("new-name")
+			}
+			m = sendKey(t, m, tea.KeyMsg{Type: tea.KeyEnter})
+			assert.True(t, m.statusIsError)
+			assert.Contains(t, m.statusMessage, lookupErr.Error())
+			assert.Empty(t, m.actionStack)
+			assert.Equal(t, before, m.nodes)
+		})
+	}
+}
 
 // makeNode creates a test ModifyBranchNode with sensible defaults.
 func makeNode(branch string, isCurrent bool, pos int) ModifyBranchNode {

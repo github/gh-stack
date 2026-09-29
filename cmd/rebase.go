@@ -227,7 +227,9 @@ func runRebase(cfg *config.Config, opts *rebaseOptions) error {
 	if rebaseResult.Err != nil {
 		cfg.Errorf("%v", rebaseResult.Err)
 		if rebaseResult.Rebased {
-			restoreRebaseRefs(cfg, currentBranch, originalRefs)
+			if err := restoreRebaseRefs(cfg, currentBranch, originalRefs); err != nil {
+				return err
+			}
 		} else {
 			_ = git.CheckoutBranch(currentBranch)
 		}
@@ -271,7 +273,9 @@ func runRebase(cfg *config.Config, opts *rebaseOptions) error {
 	if unstacked := verifyStacked(s, trunk.Ref, startIdx, endIdx); len(unstacked) > 0 {
 		reportUnstacked(cfg, trunk.Ref, unstacked)
 		if rebaseResult.Rebased {
-			restoreRebaseRefs(cfg, currentBranch, originalRefs)
+			if err := restoreRebaseRefs(cfg, currentBranch, originalRefs); err != nil {
+				return err
+			}
 		}
 		return ErrSilent
 	}
@@ -358,7 +362,11 @@ func continueRebase(cfg *config.Config, gitDir string) error {
 	cfg.Printf("Continuing rebase of stack, resuming from %s to %s",
 		conflictBranch, s.Branches[len(s.Branches)-1].Branch)
 
-	if git.IsRebaseInProgress() {
+	inProgress, err := git.IsRebaseInProgress()
+	if err != nil {
+		return fmt.Errorf("checking rebase state: %w", err)
+	}
+	if inProgress {
 		rebaseOpts := git.RebaseOpts{CommitterDateIsAuthorDate: state.CommitterDateIsAuthorDate}
 		if err := git.RebaseContinue(rebaseOpts); err != nil {
 			return fmt.Errorf("rebase continue failed — resolve remaining conflicts and try again: %w", err)
@@ -415,7 +423,9 @@ func continueRebase(cfg *config.Config, gitDir string) error {
 
 		if result.Err != nil {
 			cfg.Errorf("%v", result.Err)
-			restoreRebaseRefs(cfg, state.OriginalBranch, state.OriginalRefs)
+			if err := restoreRebaseRefs(cfg, state.OriginalBranch, state.OriginalRefs); err != nil {
+				return err
+			}
 			clearRebaseState(gitDir)
 			return ErrSilent
 		}
@@ -453,7 +463,9 @@ func continueRebase(cfg *config.Config, gitDir string) error {
 	}
 	if unstacked := verifyStacked(s, trunkBase, verifyStart, verifyEnd); len(unstacked) > 0 {
 		reportUnstacked(cfg, trunkRef, unstacked)
-		restoreRebaseRefs(cfg, state.OriginalBranch, state.OriginalRefs)
+		if err := restoreRebaseRefs(cfg, state.OriginalBranch, state.OriginalRefs); err != nil {
+			return err
+		}
 		clearRebaseState(gitDir)
 		return ErrSilent
 	}
@@ -485,7 +497,11 @@ func abortRebase(cfg *config.Config, gitDir string) error {
 		return ErrSilent
 	}
 
-	if git.IsRebaseInProgress() {
+	inProgress, err := git.IsRebaseInProgress()
+	if err != nil {
+		return fmt.Errorf("checking rebase state: %w", err)
+	}
+	if inProgress {
 		_ = git.RebaseAbort()
 	}
 

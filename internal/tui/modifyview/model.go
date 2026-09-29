@@ -291,7 +291,13 @@ func (m Model) updateRename(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		}
 
 		// Validate: not already used by another local branch
-		if git.BranchExists(newName) {
+		exists, err := git.BranchExists(newName)
+		if err != nil {
+			m.statusMessage = fmt.Sprintf("Failed to check branch %q: %s", newName, err)
+			m.statusIsError = true
+			return m, nil
+		}
+		if exists {
 			m.statusMessage = fmt.Sprintf("Branch %q already exists locally", newName)
 			m.statusIsError = true
 			return m, nil
@@ -375,7 +381,13 @@ func (m Model) updateInsert(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		}
 
 		// Validate: not already used by another local branch
-		if git.BranchExists(newName) {
+		exists, err := git.BranchExists(newName)
+		if err != nil {
+			m.statusMessage = fmt.Sprintf("Failed to check branch %q: %s", newName, err)
+			m.statusIsError = true
+			return m, nil
+		}
+		if exists {
 			m.statusMessage = fmt.Sprintf("Branch %q already exists locally", newName)
 			m.statusIsError = true
 			return m, nil

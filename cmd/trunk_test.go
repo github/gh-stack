@@ -227,9 +227,9 @@ func TestTrunk_MissingLocallyCreatedFromRemote(t *testing.T) {
 	mock := &git.MockOps{
 		GitDirFn:        func() (string, error) { return tmpDir, nil },
 		CurrentBranchFn: func() (string, error) { return "b1", nil },
-		BranchExistsFn: func(name string) bool {
+		BranchExistsFn: func(name string) (bool, error) {
 			// trunk does not exist locally
-			return name != "main"
+			return name != "main", nil
 		},
 		ResolveRemoteFn: func(branch string) (string, error) {
 			return "origin", nil

@@ -440,7 +440,7 @@ func TestSubmit_ForksWhenRemoteStackFullyMerged(t *testing.T) {
 			}
 			mock.MergeBaseFn = func(a, b string) (string, error) { return "basesha", nil }
 			mock.RevParseFn = func(ref string) (string, error) { return "sha-" + ref, nil }
-			mock.BranchExistsFn = func(string) bool { return tt.branchesExist }
+			mock.BranchExistsFn = func(string) (bool, error) { return tt.branchesExist, nil }
 			restore := git.SetOps(mock)
 			defer restore()
 
@@ -555,7 +555,7 @@ func TestSubmit_NoForkWhenRemoteStackHasOpenPR(t *testing.T) {
 	}
 	mock.MergeBaseFn = func(a, b string) (string, error) { return "basesha", nil }
 	mock.RevParseFn = func(ref string) (string, error) { return "sha-" + ref, nil }
-	mock.BranchExistsFn = func(string) bool { return true }
+	mock.BranchExistsFn = func(string) (bool, error) { return true, nil }
 	restore := git.SetOps(mock)
 	defer restore()
 

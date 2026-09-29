@@ -300,7 +300,7 @@ func TestCheckout_NoTarget_ConfirmedRemoteMatch(t *testing.T) {
 	restore := git.SetOps(&git.MockOps{
 		GitDirFn:        func() (string, error) { return gitDir, nil },
 		CurrentBranchFn: func() (string, error) { return currentBranch, nil },
-		BranchExistsFn:  func(name string) bool { return branches[name] },
+		BranchExistsFn:  func(name string) (bool, error) { return branches[name], nil },
 		FetchFn:         func(string) error { return nil },
 		ResolveRemoteFn: func(string) (string, error) { return "origin", nil },
 		CreateBranchFn: func(name, _ string) error {
@@ -393,7 +393,7 @@ func TestResolveCheckoutSelection_RemoteRoutesToClone(t *testing.T) {
 	restore := git.SetOps(&git.MockOps{
 		GitDirFn:        func() (string, error) { return gitDir, nil },
 		CurrentBranchFn: func() (string, error) { return "main", nil },
-		BranchExistsFn:  func(name string) bool { return name == "main" },
+		BranchExistsFn:  func(name string) (bool, error) { return name == "main", nil },
 		FetchFn:         func(remote string) error { return nil },
 		CreateBranchFn: func(name, base string) error {
 			createdBranches = append(createdBranches, name)

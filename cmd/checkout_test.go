@@ -67,7 +67,7 @@ func TestCheckout_ByRemoteBranchName(t *testing.T) {
 			restore := git.SetOps(&git.MockOps{
 				GitDirFn:        func() (string, error) { return gitDir, nil },
 				CurrentBranchFn: func() (string, error) { return "main", nil },
-				BranchExistsFn:  func(name string) bool { return name == "main" },
+				BranchExistsFn:  func(name string) (bool, error) { return name == "main", nil },
 				FetchFn:         func(string) error { return nil },
 				CreateBranchFn: func(name, _ string) error {
 					createdBranches = append(createdBranches, name)
@@ -407,8 +407,8 @@ func TestCheckout_NumericTarget_NewStack(t *testing.T) {
 	restore := git.SetOps(&git.MockOps{
 		GitDirFn:        func() (string, error) { return gitDir, nil },
 		CurrentBranchFn: func() (string, error) { return "main", nil },
-		BranchExistsFn: func(name string) bool {
-			return name == "main" // only trunk exists
+		BranchExistsFn: func(name string) (bool, error) {
+			return name == "main", nil // only trunk exists
 		},
 		FetchFn: func(remote string) error { return nil },
 		CreateBranchFn: func(name, base string) error {
@@ -494,7 +494,7 @@ func TestCheckout_ByStackNumber(t *testing.T) {
 	restore := git.SetOps(&git.MockOps{
 		GitDirFn:        func() (string, error) { return gitDir, nil },
 		CurrentBranchFn: func() (string, error) { return "main", nil },
-		BranchExistsFn:  func(name string) bool { return name == "main" },
+		BranchExistsFn:  func(name string) (bool, error) { return name == "main", nil },
 		FetchFn:         func(remote string) error { return nil },
 		CreateBranchFn: func(name, base string) error {
 			createdBranches = append(createdBranches, name)
@@ -563,7 +563,7 @@ func TestCheckout_ByStackNumber_404FallsThroughToPR(t *testing.T) {
 	restore := git.SetOps(&git.MockOps{
 		GitDirFn:              func() (string, error) { return gitDir, nil },
 		CurrentBranchFn:       func() (string, error) { return "main", nil },
-		BranchExistsFn:        func(name string) bool { return name == "main" },
+		BranchExistsFn:        func(name string) (bool, error) { return name == "main", nil },
 		FetchFn:               func(string) error { return nil },
 		CreateBranchFn:        func(string, string) error { return nil },
 		SetUpstreamTrackingFn: func(string, string) error { return nil },
@@ -611,9 +611,9 @@ func TestCheckout_NumericTarget_BranchExistsNoStack(t *testing.T) {
 	restore := git.SetOps(&git.MockOps{
 		GitDirFn:        func() (string, error) { return gitDir, nil },
 		CurrentBranchFn: func() (string, error) { return "main", nil },
-		BranchExistsFn: func(name string) bool {
+		BranchExistsFn: func(name string) (bool, error) {
 			// feat-1 exists locally but feat-2 does not
-			return name == "main" || name == "feat-1"
+			return name == "main" || name == "feat-1", nil
 		},
 		FetchFn: func(remote string) error { return nil },
 		CreateBranchFn: func(name, base string) error {
@@ -723,8 +723,8 @@ func TestCheckout_NumericTarget_LocalMiss_RemoteMatch(t *testing.T) {
 	restore := git.SetOps(&git.MockOps{
 		GitDirFn:        func() (string, error) { return gitDir, nil },
 		CurrentBranchFn: func() (string, error) { return "main", nil },
-		BranchExistsFn: func(name string) bool {
-			return name == "main"
+		BranchExistsFn: func(name string) (bool, error) {
+			return name == "main", nil
 		},
 		FetchFn:               func(remote string) error { return nil },
 		CreateBranchFn:        func(name, base string) error { return nil },
@@ -870,8 +870,8 @@ func TestCheckout_NumericTarget_ClosedMergedPR(t *testing.T) {
 	restore := git.SetOps(&git.MockOps{
 		GitDirFn:        func() (string, error) { return gitDir, nil },
 		CurrentBranchFn: func() (string, error) { return "main", nil },
-		BranchExistsFn: func(name string) bool {
-			return name == "main"
+		BranchExistsFn: func(name string) (bool, error) {
+			return name == "main", nil
 		},
 		FetchFn:               func(remote string) error { return nil },
 		CreateBranchFn:        func(name, base string) error { return nil },
@@ -934,8 +934,8 @@ func TestCheckout_NumericTarget_MergedBranchDeletedFromRemote(t *testing.T) {
 	restore := git.SetOps(&git.MockOps{
 		GitDirFn:        func() (string, error) { return gitDir, nil },
 		CurrentBranchFn: func() (string, error) { return "main", nil },
-		BranchExistsFn: func(name string) bool {
-			return name == "main"
+		BranchExistsFn: func(name string) (bool, error) {
+			return name == "main", nil
 		},
 		FetchFn: func(remote string) error { return nil },
 		CreateBranchFn: func(name, base string) error {
@@ -1251,7 +1251,7 @@ func TestCheckout_ByPRURL_Remote(t *testing.T) {
 	restore := git.SetOps(&git.MockOps{
 		GitDirFn:              func() (string, error) { return gitDir, nil },
 		CurrentBranchFn:       func() (string, error) { return "main", nil },
-		BranchExistsFn:        func(name string) bool { return name == "main" },
+		BranchExistsFn:        func(name string) (bool, error) { return name == "main", nil },
 		FetchFn:               func(string) error { return nil },
 		CreateBranchFn:        func(string, string) error { return nil },
 		SetUpstreamTrackingFn: func(string, string) error { return nil },

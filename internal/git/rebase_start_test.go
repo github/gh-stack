@@ -37,7 +37,7 @@ func TestIntegration_RebaseRefusedBeforeStart(t *testing.T) {
 	err := Rebase("main", RebaseOpts{})
 	require.Error(t, err)
 	assert.True(t, IsRebaseStartError(err))
-	assert.False(t, IsRebaseInProgress())
+	assert.False(t, requireGitState(t, IsRebaseInProgress))
 }
 
 func TestIntegration_RebaseConflictIsNotStartError(t *testing.T) {
@@ -58,7 +58,7 @@ func TestIntegration_RebaseConflictIsNotStartError(t *testing.T) {
 	err := Rebase("main", RebaseOpts{})
 	require.Error(t, err)
 	assert.False(t, IsRebaseStartError(err))
-	assert.True(t, IsRebaseInProgress())
+	assert.True(t, requireGitState(t, IsRebaseInProgress))
 	gitExec(t, clone, "rebase", "--abort")
 }
 

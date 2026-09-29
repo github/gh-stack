@@ -118,7 +118,11 @@ func runLink(cfg *config.Config, opts *linkOptions, args []string) error {
 	// matches an existing stack, the remaining arguments are appended to the
 	// top of that stack. Stack, PR, and issue numbers share one repo-scoped
 	// numberspace, so a number that names a stack never also names a PR.
-	targetStack, prArgs := detectAddMode(args, stacks)
+	targetStack, prArgs, err := detectAddMode(args, stacks)
+	if err != nil {
+		cfg.Errorf("%s", err)
+		return ErrSilent
+	}
 
 	// Phase 1: Push branch args to the remote so PRs can be found/created.
 	if err := pushBranchArgs(cfg, opts, prArgs); err != nil {
@@ -157,20 +161,27 @@ func runLink(cfg *config.Config, opts *linkOptions, args []string) error {
 // stack. Stack, PR, and issue numbers share one repo-scoped numberspace (so a
 // number never doubles as a PR), but branch names don't — a branch literally
 // named like a stack number is kept as a branch.
-func detectAddMode(args []string, stacks []github.RemoteStack) (*github.RemoteStack, []string) {
+func detectAddMode(args []string, stacks []github.RemoteStack) (*github.RemoteStack, []string, error) {
 	if len(args) < 2 {
-		return nil, args
+		return nil, args, nil
 	}
 	n, err := strconv.Atoi(args[0])
-	if err != nil || n <= 0 || git.BranchExists(args[0]) {
-		return nil, args
+	if err != nil || n <= 0 {
+		return nil, args, nil
+	}
+	exists, err := linkBranchExists(args[0])
+	if err != nil {
+		return nil, nil, fmt.Errorf("checking branch %s: %w", args[0], err)
+	}
+	if exists {
+		return nil, args, nil
 	}
 	for i := range stacks {
 		if stacks[i].Number == n {
-			return &stacks[i], args[1:]
+			return &stacks[i], args[1:], nil
 		}
 	}
-	return nil, args
+	return nil, args, nil
 }
 
 // runLinkCreateOrUpdate creates a new stack from the resolved PR args, or
@@ -408,7 +419,12 @@ func addToStack(cfg *config.Config, client github.ClientOps, stackNumber int, de
 func pushBranchArgs(cfg *config.Config, opts *linkOptions, args []string) error {
 	var branches []string
 	for _, arg := range args {
-		if git.BranchExists(arg) {
+		exists, err := linkBranchExists(arg)
+		if err != nil {
+			cfg.Errorf("failed to check branch %s: %s", arg, err)
+			return ErrSilent
+		}
+		if exists {
 			branches = append(branches, arg)
 		}
 	}
@@ -433,6 +449,21 @@ func pushBranchArgs(cfg *config.Config, opts *linkOptions, args []string) error 
 	}
 
 	return nil
+}
+
+// PR identifiers can be linked without a local repository. Other lookup errors
+// must still stop linking before any push or remote stack change.
+func linkBranchExists(arg string) (bool, error) {
+	if _, ok := parsePRURL(arg); ok {
+		return false, nil
+	}
+	exists, err := git.BranchExists(arg)
+	if errors.Is(err, git.ErrNotInRepository) {
+		if n, parseErr := strconv.Atoi(arg); parseErr == nil && n > 0 {
+			return false, nil
+		}
+	}
+	return exists, err
 }
 
 // validateArgs checks for duplicates in the arg list.

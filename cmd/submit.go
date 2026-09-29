@@ -146,7 +146,11 @@ func runSubmit(cfg *config.Config, opts *submitOptions) error {
 	// longer extend the existing remote stack. Fork them into a fresh stack
 	// rooted at the trunk and continue the submit with that new stack.
 	if stacksAvailable {
-		s = maybeForkFromMergedBase(cfg, client, sf, s, gitDir)
+		s, err = maybeForkFromMergedBase(cfg, client, sf, s, gitDir)
+		if err != nil {
+			cfg.Errorf("%s", err)
+			return ErrSilent
+		}
 	}
 
 	// Resolve remote for pushing
@@ -501,18 +505,18 @@ func humanize(s string) string {
 //
 // It returns the stack submit should continue with: the new forked stack when a
 // fork happens, or the original stack otherwise.
-func maybeForkFromMergedBase(cfg *config.Config, client github.ClientOps, sf *stack.StackFile, s *stack.Stack, gitDir string) *stack.Stack {
+func maybeForkFromMergedBase(cfg *config.Config, client github.ClientOps, sf *stack.StackFile, s *stack.Stack, gitDir string) (*stack.Stack, error) {
 	// Only meaningful when there is a tracked remote stack to evaluate. A fork
 	// can only happen if every remote-stack PR is merged, which implies at least
 	// one locally tracked branch is merged — checking that first avoids an extra
 	// ListStacks call on the common path.
 	if s.ID == "" || len(s.MergedBranches()) == 0 {
-		return s
+		return s, nil
 	}
 
 	remotePRs := remoteStackPRs(client, s.ID)
 	if len(remotePRs) == 0 {
-		return s
+		return s, nil
 	}
 
 	// Every PR officially in the remote stack must be merged. Open PRs that are
@@ -520,13 +524,13 @@ func maybeForkFromMergedBase(cfg *config.Config, client github.ClientOps, sf *st
 	merged := mergedPRNumbers(s)
 	for _, n := range remotePRs {
 		if !merged[n] {
-			return s // a remote-stack PR is still open — not a fork situation
+			return s, nil // a remote-stack PR is still open — not a fork situation
 		}
 	}
 
 	stackIdx := sf.IndexOfStack(s)
 	if stackIdx < 0 {
-		return s
+		return s, nil
 	}
 
 	// Partition the local branches: those that are part of the merged remote
@@ -545,7 +549,7 @@ func maybeForkFromMergedBase(cfg *config.Config, client github.ClientOps, sf *st
 		}
 	}
 	if len(forkBranches) == 0 {
-		return s // nothing new to fork — the whole stack is merged and done
+		return s, nil // nothing new to fork — the whole stack is merged and done
 	}
 
 	// Capture trunk before mutating sf.Stacks (RemoveStack/AddStack can
@@ -566,7 +570,11 @@ func maybeForkFromMergedBase(cfg *config.Config, client github.ClientOps, sf *st
 	// it. The merged stack is left intact on GitHub either way.
 	removeOld := true
 	for _, b := range keepBranches {
-		if git.BranchExists(b.Branch) {
+		exists, err := git.BranchExists(b.Branch)
+		if err != nil {
+			return nil, fmt.Errorf("checking merged branch %s: %w", b.Branch, err)
+		}
+		if exists {
 			removeOld = false
 			break
 		}
@@ -589,7 +597,7 @@ func maybeForkFromMergedBase(cfg *config.Config, client github.ClientOps, sf *st
 		_ = handleSaveError(cfg, err)
 	}
 
-	return &sf.Stacks[len(sf.Stacks)-1]
+	return &sf.Stacks[len(sf.Stacks)-1], nil
 }
 
 // remoteStackPRs returns the PR numbers that are officially part of the remote

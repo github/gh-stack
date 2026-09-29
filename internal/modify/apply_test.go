@@ -45,7 +45,7 @@ func newApplyMock(gitDir string, branchSHAs map[string]string) *git.MockOps {
 	return &git.MockOps{
 		GitDirFn:        func() (string, error) { return gitDir, nil },
 		CurrentBranchFn: func() (string, error) { return "main", nil },
-		BranchExistsFn:  func(name string) bool { return true },
+		BranchExistsFn:  func(name string) (bool, error) { return true, nil },
 		RevParseFn: func(ref string) (string, error) {
 			if sha, ok := branchSHAs[ref]; ok {
 				return sha, nil
@@ -56,7 +56,7 @@ func newApplyMock(gitDir string, branchSHAs map[string]string) *git.MockOps {
 		MergeBaseFn:          func(a, b string) (string, error) { return "merge-base", nil },
 		CheckoutBranchFn:     func(string) error { return nil },
 		RebaseOntoFn:         func(string, string, string, git.RebaseOpts) error { return nil },
-		IsRebaseInProgressFn: func() bool { return false },
+		IsRebaseInProgressFn: func() (bool, error) { return false, nil },
 		RenameBranchFn:       func(string, string) error { return nil },
 		LogRangeFn: func(base, head string) ([]git.CommitInfo, error) {
 			return []git.CommitInfo{{SHA: "commit-1"}, {SHA: "commit-2"}}, nil
@@ -84,6 +84,110 @@ func makeNodes(s *stack.Stack) []modifyview.ModifyBranchNode {
 }
 
 func noopUpdateBaseSHAs(s *stack.Stack) {}
+
+func TestApplyPlan_BranchLookupFailureBeforeMutation(t *testing.T) {
+	gitDir := t.TempDir()
+	sf := writeTestStackFile(t, gitDir, stack.Stack{
+		Trunk:    stack.BranchRef{Branch: "main"},
+		Branches: []stack.BranchRef{{Branch: "A"}, {Branch: "B"}},
+	})
+	lookupErr := errors.New("branch lookup failed")
+	mock := newApplyMock(gitDir, map[string]string{"A": "original-a", "B": "original-b"})
+	mock.BranchExistsFn = func(name string) (bool, error) {
+		if name == "B" {
+			return false, lookupErr
+		}
+		return true, nil
+	}
+	mock.RenameBranchFn = func(string, string) error {
+		t.Fatal("must not rename after a failed lookup")
+		return nil
+	}
+	mock.CheckoutBranchFn = func(string) error {
+		t.Fatal("must not unwind untouched branches after a failed lookup")
+		return nil
+	}
+	restore := git.SetOps(mock)
+	defer restore()
+	nodes := makeNodes(&sf.Stacks[0])
+	nodes[0].PendingAction = &modifyview.PendingAction{Type: modifyview.ActionRename, NewName: "renamed"}
+	cfg, _, _ := config.NewTestConfig()
+	defer cfg.Out.Close()
+	defer cfg.Err.Close()
+	result, conflict, err := ApplyPlan(cfg, gitDir, &sf.Stacks[0], sf, nodes, "A", noopUpdateBaseSHAs)
+	require.ErrorIs(t, err, lookupErr)
+	assert.Nil(t, result)
+	assert.Nil(t, conflict)
+	assert.False(t, StateExists(gitDir), "no recovery journal should be written before state checks succeed")
+	loaded, err := stack.Load(gitDir)
+	require.NoError(t, err)
+	assert.Equal(t, sf.Stacks, loaded.Stacks)
+}
+
+func TestUnwind_StateLookupFailurePreservesJournal(t *testing.T) {
+	for _, query := range []string{"rebase", "cherry-pick", "snapshot branch", "cleanup branch"} {
+		t.Run(query, func(t *testing.T) {
+			gitDir := t.TempDir()
+			sf := writeTestStackFile(t, gitDir, stack.Stack{
+				Trunk:    stack.BranchRef{Branch: "main"},
+				Branches: []stack.BranchRef{{Branch: "A"}},
+			})
+			metadata, err := json.Marshal(sf.Stacks[0])
+			require.NoError(t, err)
+			snapshot := Snapshot{
+				Branches:      []BranchSnapshot{{Name: "A", TipSHA: "original"}},
+				StackMetadata: metadata,
+			}
+			state := &StateFile{SchemaVersion: 1, Phase: PhaseConflict, Snapshot: snapshot}
+			require.NoError(t, SaveState(gitDir, state))
+			before, err := os.ReadFile(StatePath(gitDir))
+			require.NoError(t, err)
+			lookupErr := errors.New("state lookup failed")
+			mock := &git.MockOps{
+				IsRebaseInProgressFn: func() (bool, error) {
+					if query == "rebase" {
+						return false, lookupErr
+					}
+					return true, nil
+				},
+				IsCherryPickInProgressFn: func() (bool, error) {
+					if query == "cherry-pick" {
+						return false, lookupErr
+					}
+					return false, nil
+				},
+				BranchExistsFn: func(name string) (bool, error) {
+					if (query == "snapshot branch" && name == "A") || (query == "cleanup branch" && name == "renamed") {
+						return false, lookupErr
+					}
+					return true, nil
+				},
+				RebaseAbortFn: func() error {
+					t.Fatal("must not abort before all state checks succeed")
+					return nil
+				},
+				CheckoutBranchFn: func(string) error {
+					t.Fatal("must not restore branches after a failed state lookup")
+					return nil
+				},
+				DeleteBranchFn: func(string, bool) error {
+					t.Fatal("must not clean up branches after a failed state lookup")
+					return nil
+				},
+			}
+			restore := git.SetOps(mock)
+			defer restore()
+			cfg, _, _ := config.NewTestConfig()
+			defer cfg.Out.Close()
+			defer cfg.Err.Close()
+			err = Unwind(cfg, gitDir, snapshot, 0, sf, []Action{{Type: "rename", Branch: "A", NewName: "renamed"}})
+			require.ErrorIs(t, err, lookupErr)
+			after, err := os.ReadFile(StatePath(gitDir))
+			require.NoError(t, err)
+			assert.Equal(t, before, after)
+		})
+	}
+}
 
 // ─── BuildSnapshot ───────────────────────────────────────────────────────────
 
@@ -810,7 +914,7 @@ func TestContinueApply_MultiStackFindsCorrectStack(t *testing.T) {
 	mock := newApplyMock(gitDir, map[string]string{
 		"main": "sha-main", "A": "sha-A", "B": "sha-B", "C": "sha-C",
 	})
-	mock.IsRebaseInProgressFn = func() bool { return true }
+	mock.IsRebaseInProgressFn = func() (bool, error) { return true, nil }
 	mock.RebaseContinueFn = func(opts git.RebaseOpts) error { return nil }
 
 	var rebasedBranches []string
@@ -885,8 +989,8 @@ func TestUnwind(t *testing.T) {
 	currentBranch := "A"
 
 	mock := &git.MockOps{
-		IsRebaseInProgressFn: func() bool { return false },
-		BranchExistsFn:       func(name string) bool { return true },
+		IsRebaseInProgressFn: func() (bool, error) { return false, nil },
+		BranchExistsFn:       func(name string) (bool, error) { return true, nil },
 		CheckoutBranchFn: func(name string) error {
 			checkoutCalls = append(checkoutCalls, name)
 			currentBranch = name
@@ -1067,8 +1171,8 @@ func TestContinueApply(t *testing.T) {
 	mock := &git.MockOps{
 		GitDirFn:             func() (string, error) { return gitDir, nil },
 		CurrentBranchFn:      func() (string, error) { return "B", nil },
-		BranchExistsFn:       func(string) bool { return true },
-		IsRebaseInProgressFn: func() bool { return true },
+		BranchExistsFn:       func(string) (bool, error) { return true, nil },
+		IsRebaseInProgressFn: func() (bool, error) { return true, nil },
 		RebaseContinueFn: func(git.RebaseOpts) error {
 			rebaseContinueCalled = true
 			return nil
@@ -1180,12 +1284,12 @@ func TestUnwind_AbortsActiveRebase(t *testing.T) {
 
 	var rebaseAbortCalled bool
 	mock := &git.MockOps{
-		IsRebaseInProgressFn: func() bool { return true },
+		IsRebaseInProgressFn: func() (bool, error) { return true, nil },
 		RebaseAbortFn: func() error {
 			rebaseAbortCalled = true
 			return nil
 		},
-		BranchExistsFn:   func(string) bool { return true },
+		BranchExistsFn:   func(string) (bool, error) { return true, nil },
 		CheckoutBranchFn: func(string) error { return nil },
 		ResetHardFn:      func(string) error { return nil },
 		CreateBranchFn:   func(string, string) error { return nil },
@@ -1235,11 +1339,11 @@ func TestUnwind_AbortsActiveCherryPick(t *testing.T) {
 	var cherryPickAbortCalled bool
 	var rebaseAbortCalled bool
 	mock := &git.MockOps{
-		IsRebaseInProgressFn:     func() bool { return false },
-		IsCherryPickInProgressFn: func() bool { return true },
+		IsRebaseInProgressFn:     func() (bool, error) { return false, nil },
+		IsCherryPickInProgressFn: func() (bool, error) { return true, nil },
 		RebaseAbortFn:            func() error { rebaseAbortCalled = true; return nil },
 		CherryPickAbortFn:        func() error { cherryPickAbortCalled = true; return nil },
-		BranchExistsFn:           func(string) bool { return true },
+		BranchExistsFn:           func(string) (bool, error) { return true, nil },
 		CheckoutBranchFn:         func(string) error { return nil },
 		ResetHardFn:              func(string) error { return nil },
 		CreateBranchFn:           func(string, string) error { return nil },
@@ -1370,7 +1474,7 @@ func TestContinueApply_FoldThenCascadeConflict_DoesNotResurrectFoldedBranch(t *t
 		"main": "sha-main", "A": "sha-A", "B": "sha-B", "C": "sha-C",
 	})
 	mock.CherryPickContinueFn = func() error { return nil }
-	mock.IsRebaseInProgressFn = func() bool { return true }
+	mock.IsRebaseInProgressFn = func() (bool, error) { return true, nil }
 	mock.RebaseContinueFn = func(git.RebaseOpts) error { return nil }
 	// C conflicts on its first rebase attempt, then succeeds (user resolved it).
 	cRebases := 0
@@ -1518,9 +1622,9 @@ func TestUnwind_RestoresRenamedBranch(t *testing.T) {
 	// Simulate: A was renamed to new-A, so A no longer exists
 	var createdBranches []struct{ name, sha string }
 	mock := &git.MockOps{
-		IsRebaseInProgressFn: func() bool { return false },
-		BranchExistsFn: func(name string) bool {
-			return name != "A" // A was renamed away
+		IsRebaseInProgressFn: func() (bool, error) { return false, nil },
+		BranchExistsFn: func(name string) (bool, error) {
+			return name != "A", nil // A was renamed away
 		},
 		CreateBranchFn: func(name, sha string) error {
 			createdBranches = append(createdBranches, struct{ name, sha string }{name, sha})

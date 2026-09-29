@@ -89,6 +89,21 @@ func withGitDir(t *testing.T, dir string) func() {
 	return func() { _ = os.Chdir(old) }
 }
 
+func requireGitState(t *testing.T, query func() (bool, error)) bool {
+	t.Helper()
+	value, err := query()
+	require.NoError(t, err)
+	return value
+}
+
+func requireWorktree(t *testing.T, parent Ops, path string) Ops {
+	t.Helper()
+	scoped, err := parent.ForWorktree(path)
+	require.NoError(t, err)
+	require.NotNil(t, scoped)
+	return scoped
+}
+
 // remoteBranchSHA returns the SHA of a branch on the bare remote.
 func remoteBranchSHA(t *testing.T, bareDir, branch string) string {
 	t.Helper()
@@ -614,12 +629,12 @@ func TestIntegration_CherryPickInProgressAndAbort(t *testing.T) {
 	gitExec(t, cloneDir, "commit", "-m", "main edit")
 
 	// No cherry-pick in progress before we start.
-	assert.False(t, IsCherryPickInProgress(), "no cherry-pick should be in progress initially")
+	assert.False(t, requireGitState(t, IsCherryPickInProgress), "no cherry-pick should be in progress initially")
 
 	// Cherry-picking feature onto main conflicts.
 	err := CherryPick([]string{featureSHA})
 	require.Error(t, err, "cherry-pick should conflict")
-	assert.True(t, IsCherryPickInProgress(), "cherry-pick should be in progress after a conflict")
+	assert.True(t, requireGitState(t, IsCherryPickInProgress), "cherry-pick should be in progress after a conflict")
 
 	// While mid-conflict, a plain checkout must fail (unmerged index).
 	_, coErr := gitExecMayFail(t, cloneDir, "checkout", "feature")
@@ -627,7 +642,7 @@ func TestIntegration_CherryPickInProgressAndAbort(t *testing.T) {
 
 	// Aborting must fully restore: no longer in progress, clean tree, checkout works.
 	require.NoError(t, CherryPickAbort())
-	assert.False(t, IsCherryPickInProgress(), "cherry-pick should not be in progress after abort")
+	assert.False(t, requireGitState(t, IsCherryPickInProgress), "cherry-pick should not be in progress after abort")
 
 	status, err := gitExecMayFail(t, cloneDir, "status", "--porcelain")
 	require.NoError(t, err)
@@ -660,11 +675,11 @@ func TestIntegration_CherryPickQuitLeavesIndexUnmerged(t *testing.T) {
 	gitExec(t, cloneDir, "commit", "-m", "main edit")
 
 	require.Error(t, CherryPick([]string{featureSHA}))
-	require.True(t, IsCherryPickInProgress())
+	require.True(t, requireGitState(t, IsCherryPickInProgress))
 
 	// --quit clears sequencer state (no longer "in progress") ...
 	CherryPickQuit()
-	assert.False(t, IsCherryPickInProgress(), "quit should clear cherry-pick sequencer state")
+	assert.False(t, requireGitState(t, IsCherryPickInProgress), "quit should clear cherry-pick sequencer state")
 
 	// ... but leaves the unmerged index behind, so checkout still fails.
 	_, coErr := gitExecMayFail(t, cloneDir, "checkout", "feature")
@@ -699,7 +714,7 @@ func addTestWorktree(t *testing.T, root *defaultOps, dir, branch string) (Ops, s
 	t.Helper()
 	path := filepath.Join(t.TempDir(), branch+" worktree")
 	gitExec(t, dir, "worktree", "add", "-b", branch, path, "main")
-	scoped := root.ForWorktree(path)
+	scoped := requireWorktree(t, root, path)
 	got, err := scoped.CurrentBranch()
 	require.NoError(t, err)
 	require.Equal(t, branch, got)
@@ -739,7 +754,7 @@ func TestIntegration_WorktreeDirectoriesAndDiscovery(t *testing.T) {
 
 	subdir := filepath.Join(linkedPath, "sub", "directory")
 	require.NoError(t, os.MkdirAll(subdir, 0755))
-	sub := linked.ForWorktree(filepath.Join("sub", "directory"))
+	sub := requireWorktree(t, linked, filepath.Join("sub", "directory"))
 	subRoot, err := sub.RootDir()
 	require.NoError(t, err)
 	assert.Equal(t, canonicalGitTestPath(t, linkedPath), subRoot)
@@ -761,7 +776,7 @@ func TestIntegration_WorktreeDirectoriesAndDiscovery(t *testing.T) {
 		{Path: canonicalMissing, Branch: "missing", Prunable: true},
 	}, worktrees)
 
-	main := linked.ForWorktree(dir)
+	main := requireWorktree(t, linked, dir)
 	branch, err := main.CurrentBranch()
 	require.NoError(t, err)
 	assert.Equal(t, "main", branch)
@@ -786,7 +801,7 @@ func TestIntegration_WorktreePathsPreserveWhitespace(t *testing.T) {
 			root.client.RepoDir = mainPath
 			linkedPath := filepath.Join(t.TempDir(), name)
 			gitExec(t, mainPath, "worktree", "add", "-b", "feature", linkedPath, "main")
-			linked := root.ForWorktree(linkedPath)
+			linked := requireWorktree(t, root, linkedPath)
 			gotRoot, err := linked.RootDir()
 			require.NoError(t, err)
 			assert.Equal(t, canonicalGitTestPath(t, linkedPath), gotRoot)
@@ -810,7 +825,7 @@ func TestIntegration_BareHostedWorktree(t *testing.T) {
 	gitExec(t, bare, "-c", "safe.bareRepository=all", "worktree", "add", "-b", "feature", linkedPath, "main")
 	t.Cleanup(withGitDir(t, linkedPath))
 	root := &defaultOps{client: &cligit.Client{RepoDir: linkedPath}}
-	linked := root.ForWorktree(linkedPath)
+	linked := requireWorktree(t, root, linkedPath)
 	common, err := linked.CommonDir()
 	require.NoError(t, err)
 	assert.Equal(t, canonicalGitTestPath(t, bare), common)
@@ -857,13 +872,13 @@ func TestIntegration_SeparateGitDirectory(t *testing.T) {
 	assert.NotEqual(t, mainGitDir, linkedGitDir)
 	subdir := filepath.Join(dir, "subdirectory")
 	require.NoError(t, os.MkdirAll(subdir, 0755))
-	for _, scope := range []Ops{root, root.ForWorktree(dir), root.ForWorktree(subdir)} {
+	for _, scope := range []Ops{root, requireWorktree(t, root, dir), requireWorktree(t, root, subdir)} {
 		worktrees, err := scope.Worktrees()
 		require.NoError(t, err)
 		assert.Equal(t, canonicalGitTestPath(t, dir), worktrees[0].Path)
 		assert.Equal(t, "main", worktrees[0].Branch)
 	}
-	main := linked.ForWorktree(dir)
+	main := requireWorktree(t, linked, dir)
 	mainRoot, err := main.RootDir()
 	require.NoError(t, err)
 	assert.Equal(t, canonicalGitTestPath(t, dir), mainRoot)
@@ -916,7 +931,7 @@ func TestIntegration_SeparateGitDirectoryBacklink(t *testing.T) {
 			require.Len(t, worktrees, 2)
 			assert.Equal(t, canonicalGitTestPath(t, dir), worktrees[0].Path)
 			assert.Equal(t, "main", worktrees[0].Branch)
-			main := linked.ForWorktree(worktrees[0].Path)
+			main := requireWorktree(t, linked, worktrees[0].Path)
 			mainRoot, err := main.RootDir()
 			require.NoError(t, err)
 			assert.Equal(t, canonicalGitTestPath(t, dir), mainRoot)
@@ -942,15 +957,14 @@ func TestIntegration_SeparateGitDirectoryMissingBacklink(t *testing.T) {
 	require.NoError(t, linked.CreateBranch("independent", "feature"))
 	require.NoError(t, linked.CheckoutBranch("independent"))
 	assert.Equal(t, "independent", gitExec(t, linkedPath, "branch", "--show-current"))
-	main := linked.ForWorktree(worktrees[0].Path)
-	_, err = main.HasUncommittedChanges()
+	main, err := linked.ForWorktree(worktrees[0].Path)
 	require.ErrorContains(t, err, "main worktree")
 	assert.Contains(t, err.Error(), "core.worktree backlink")
-	require.Error(t, main.StageAll())
+	assert.Nil(t, main)
 	assert.Equal(t, "main", gitExec(t, dir, "branch", "--show-current"))
 
 	// An explicitly supplied real path is still usable without a backlink.
-	explicit := linked.ForWorktree(dir)
+	explicit := requireWorktree(t, linked, dir)
 	current, err := explicit.CurrentBranch()
 	require.NoError(t, err)
 	assert.Equal(t, "main", current)
@@ -970,8 +984,9 @@ func TestIntegration_SeparateGitDirectoryUnavailableBacklink(t *testing.T) {
 			worktrees, err := linked.Worktrees()
 			require.NoError(t, err, "an unavailable main must not block unrelated worktrees")
 			assert.Equal(t, filepath.ToSlash(filepath.Clean(backlink)), worktrees[0].Path)
-			_, err = linked.ForWorktree(worktrees[0].Path).HasUncommittedChanges()
+			selected, err := linked.ForWorktree(worktrees[0].Path)
 			require.Error(t, err)
+			assert.Nil(t, selected)
 			dirty, err := linked.HasUncommittedChanges()
 			require.NoError(t, err)
 			assert.False(t, dirty)
@@ -984,16 +999,9 @@ func TestIntegration_ForWorktreeRejectsInvalidContext(t *testing.T) {
 	_, other := setupBareAndClone(t)
 	for _, path := range []string{"", filepath.Join(t.TempDir(), "missing"), other} {
 		t.Run(path, func(t *testing.T) {
-			selected := root.ForWorktree(path)
-			_, err := selected.CommonDir()
+			selected, err := root.ForWorktree(path)
 			require.Error(t, err)
-			_, err = selected.HasUncommittedChanges()
-			require.Error(t, err)
-			_, err = selected.IsRerereEnabled()
-			require.Error(t, err)
-			require.Error(t, selected.StageAll())
-			require.Error(t, selected.ResetHard("HEAD"))
-			require.True(t, IsRebaseStartError(selected.Rebase("main", RebaseOpts{})))
+			assert.Nil(t, selected)
 		})
 	}
 
@@ -1001,7 +1009,7 @@ func TestIntegration_ForWorktreeRejectsInvalidContext(t *testing.T) {
 	// HEAD/index just because Git can still discover the parent repository.
 	nestedPath := filepath.Join(dir, "nested")
 	gitExec(t, dir, "worktree", "add", "-b", "nested", nestedPath, "main")
-	nested := root.ForWorktree(nestedPath)
+	nested := requireWorktree(t, root, nestedPath)
 	_, err := nested.GitDir()
 	require.NoError(t, err)
 	require.NoError(t, os.Rename(filepath.Join(nestedPath, ".git"), filepath.Join(t.TempDir(), "saved-gitfile")))
@@ -1035,6 +1043,168 @@ func TestIntegration_ForWorktreeIndependentExecutors(t *testing.T) {
 	require.NoError(t, <-results)
 	require.NoError(t, <-results)
 	assert.Equal(t, "main", gitExec(t, dir, "branch", "--show-current"))
+}
+
+func TestIntegration_WorktreeMissingCheckoutDoesNotReportStagedChanges(t *testing.T) {
+	root, dir := setupWorktreeRepo(t)
+	linked, path := addTestWorktree(t, root, dir, "feature")
+	require.NoError(t, os.Rename(path, path+"-moved"))
+
+	staged, err := linked.HasStagedChanges()
+	require.Error(t, err)
+	assert.False(t, staged, "a failed state lookup must not report staged changes")
+}
+
+func TestIntegration_WorktreeStateQueriesRejectChangedScope(t *testing.T) {
+	for _, change := range []string{"missing checkout", "removed gitfile", "replaced gitfile"} {
+		t.Run(change, func(t *testing.T) {
+			root, dir := setupWorktreeRepo(t)
+			path := filepath.Join(dir, "nested")
+			gitExec(t, dir, "worktree", "add", "-b", "nested", path, "main")
+			selected := requireWorktree(t, root, path)
+			_, otherPath := addTestWorktree(t, root, dir, "other")
+			head := gitExec(t, dir, "rev-parse", "HEAD")
+			index := gitExec(t, dir, "diff", "--cached", "--name-only")
+			switch change {
+			case "missing checkout":
+				require.NoError(t, os.Rename(path, path+"-moved"))
+			case "removed gitfile":
+				require.NoError(t, os.Rename(filepath.Join(path, ".git"), filepath.Join(t.TempDir(), "gitfile")))
+			case "replaced gitfile":
+				data, err := os.ReadFile(filepath.Join(otherPath, ".git"))
+				require.NoError(t, err)
+				require.NoError(t, os.WriteFile(filepath.Join(path, ".git"), data, 0644))
+			}
+
+			queries := map[string]func() (bool, error){
+				"branch":      func() (bool, error) { return selected.BranchExists("nested") },
+				"staged":      selected.HasStagedChanges,
+				"rebase":      selected.IsRebaseInProgress,
+				"cherry-pick": selected.IsCherryPickInProgress,
+				"dirty":       selected.HasUncommittedChanges,
+			}
+			for name, query := range queries {
+				t.Run(name, func(t *testing.T) {
+					value, err := query()
+					require.Error(t, err)
+					assert.NotErrorIs(t, err, ErrNotInRepository)
+					assert.False(t, value)
+				})
+			}
+			child, err := selected.ForWorktree(otherPath)
+			require.Error(t, err)
+			assert.Nil(t, child)
+			require.Error(t, selected.StageAll())
+			require.Error(t, selected.ResetHard("HEAD"))
+			require.True(t, IsRebaseStartError(selected.Rebase("main", RebaseOpts{})))
+			assert.Equal(t, head, gitExec(t, dir, "rev-parse", "HEAD"))
+			assert.Equal(t, index, gitExec(t, dir, "diff", "--cached", "--name-only"))
+		})
+	}
+}
+
+func TestIntegration_GitStateQueriesDistinguishAbsenceAndErrors(t *testing.T) {
+	t.Run("normal false and true results", func(t *testing.T) {
+		root, dir := setupWorktreeRepo(t)
+		linked, path := addTestWorktree(t, root, dir, "feature")
+		for _, scope := range []Ops{root, linked} {
+			exists, err := scope.BranchExists("feature")
+			require.NoError(t, err)
+			assert.True(t, exists)
+			exists, err = scope.BranchExists("missing")
+			require.NoError(t, err)
+			assert.False(t, exists)
+			assert.False(t, requireGitState(t, scope.HasStagedChanges))
+			assert.False(t, requireGitState(t, scope.IsRebaseInProgress))
+			assert.False(t, requireGitState(t, scope.IsCherryPickInProgress))
+		}
+		writeFile(t, path, "new.txt", "staged change\n")
+		require.NoError(t, linked.StageAll())
+		assert.True(t, requireGitState(t, linked.HasStagedChanges))
+		assert.False(t, requireGitState(t, root.HasStagedChanges))
+	})
+	t.Run("broken ref is not absent", func(t *testing.T) {
+		root, dir := setupWorktreeRepo(t)
+		require.NoError(t, os.WriteFile(filepath.Join(dir, ".git", "refs", "heads", "broken"), []byte("invalid object id\n"), 0644))
+		exists, err := root.BranchExists("broken")
+		require.Error(t, err)
+		assert.False(t, exists)
+	})
+	t.Run("corrupt index is not staged changes", func(t *testing.T) {
+		root, dir := setupWorktreeRepo(t)
+		linked, _ := addTestWorktree(t, root, dir, "feature")
+		gitDir, err := linked.GitDir()
+		require.NoError(t, err)
+		require.NoError(t, os.WriteFile(filepath.Join(gitDir, "index"), []byte("invalid index\n"), 0644))
+		staged, err := linked.HasStagedChanges()
+		require.Error(t, err)
+		assert.False(t, staged)
+	})
+	t.Run("missing executable", func(t *testing.T) {
+		root, dir := setupWorktreeRepo(t)
+		root.client.GitPath = filepath.Join(dir, "missing-git")
+		exists, err := root.BranchExists("missing")
+		require.Error(t, err)
+		assert.False(t, exists)
+		staged, err := root.HasStagedChanges()
+		require.Error(t, err)
+		assert.False(t, staged)
+		scoped, err := root.ForWorktree(dir)
+		require.Error(t, err)
+		assert.Nil(t, scoped)
+	})
+	t.Run("non-repository directory", func(t *testing.T) {
+		root := &defaultOps{client: &cligit.Client{RepoDir: t.TempDir()}}
+		exists, err := root.BranchExists("missing")
+		require.ErrorIs(t, err, ErrNotInRepository)
+		assert.False(t, exists)
+		staged, err := root.HasStagedChanges()
+		require.Error(t, err)
+		assert.False(t, staged)
+	})
+	t.Run("invalid explicit Git directory is not optional absence", func(t *testing.T) {
+		dir := t.TempDir()
+		root := &defaultOps{client: &cligit.Client{RepoDir: dir}}
+		t.Setenv("GIT_DIR", filepath.Join(dir, "missing"))
+		exists, err := root.BranchExists("missing")
+		require.Error(t, err)
+		assert.NotErrorIs(t, err, ErrNotInRepository)
+		assert.False(t, exists)
+	})
+}
+
+func TestIntegration_GitStateQueriesSurfaceFilesystemErrors(t *testing.T) {
+	t.Run("unreadable sequencer", func(t *testing.T) {
+		root, dir := setupWorktreeRepo(t)
+		linked, _ := addTestWorktree(t, root, dir, "feature")
+		gitDir, err := linked.GitDir()
+		require.NoError(t, err)
+		require.NoError(t, os.MkdirAll(filepath.Join(gitDir, "sequencer", "todo"), 0755))
+		picking, err := linked.IsCherryPickInProgress()
+		require.ErrorContains(t, err, "cherry-pick sequencer")
+		assert.False(t, picking)
+	})
+	for _, marker := range []string{"rebase-merge", "CHERRY_PICK_HEAD"} {
+		t.Run(marker+" stat failure", func(t *testing.T) {
+			root, dir := setupWorktreeRepo(t)
+			linked, _ := addTestWorktree(t, root, dir, "feature")
+			gitDir, err := linked.GitDir()
+			require.NoError(t, err)
+			path := filepath.Join(gitDir, marker)
+			err = os.Symlink(path, path)
+			if err != nil && runtime.GOOS == "windows" {
+				t.Skip("creating symlinks requires privileges on Windows")
+			}
+			require.NoError(t, err)
+			query := linked.IsRebaseInProgress
+			if marker == "CHERRY_PICK_HEAD" {
+				query = linked.IsCherryPickInProgress
+			}
+			inProgress, err := query()
+			require.Error(t, err)
+			assert.False(t, inProgress)
+		})
+	}
 }
 
 func TestIntegration_WorktreeRebasePreservesOtherRefsAndConfig(t *testing.T) {
@@ -1120,7 +1290,7 @@ func TestIntegration_WorktreeRebaseNeverAutostashes(t *testing.T) {
 				}
 				require.Error(t, err)
 				assert.True(t, IsRebaseStartError(err))
-				assert.False(t, linked.IsRebaseInProgress())
+				assert.False(t, requireGitState(t, linked.IsRebaseInProgress))
 				assert.Equal(t, original, gitExec(t, path, "rev-parse", "HEAD"))
 				assert.Equal(t, status, gitExec(t, path, "status", "--porcelain"))
 				assert.Empty(t, gitExec(t, path, "stash", "list"))
@@ -1149,9 +1319,9 @@ func forbidGlobalWorktreeQueries(t *testing.T) func() {
 			t.Error("real scoped operations must not query global mock GitDir")
 			return "", fmt.Errorf("global GitDir must not be called")
 		},
-		IsRebaseInProgressFn: func() bool {
+		IsRebaseInProgressFn: func() (bool, error) {
 			t.Error("real scoped operations must not query global mock rebase state")
-			return false
+			return false, nil
 		},
 		ConflictedFilesFn: func() ([]string, error) {
 			t.Error("real scoped operations must not query global mock conflicts")
@@ -1181,7 +1351,7 @@ func TestIntegration_WorktreeRebaseRecovery(t *testing.T) {
 			root, dir, linked, linkedPath := setupWorktreeConflict(t)
 			gitExec(t, dir, "config", "rebase.backend", tt.backend)
 			t.Setenv("GIT_EDITOR", "false")
-			target, observer := linked, root.ForWorktree(dir)
+			target, observer := linked, requireWorktree(t, root, dir)
 			targetPath, observerPath := linkedPath, dir
 			branch, base := "feature", "main"
 			if tt.main {
@@ -1200,8 +1370,8 @@ func TestIntegration_WorktreeRebaseRecovery(t *testing.T) {
 			err := target.Rebase(base, opts)
 			require.Error(t, err)
 			assert.False(t, IsRebaseStartError(err))
-			require.True(t, target.IsRebaseInProgress())
-			assert.False(t, observer.IsRebaseInProgress())
+			require.True(t, requireGitState(t, target.IsRebaseInProgress))
+			assert.False(t, requireGitState(t, observer.IsRebaseInProgress))
 			assert.True(t, IsRebaseStartError(target.Rebase(base, opts)))
 			conflicts, err := target.ConflictedFiles()
 			require.NoError(t, err)
@@ -1232,7 +1402,7 @@ func TestIntegration_WorktreeRebaseRecovery(t *testing.T) {
 				require.Len(t, dates, 2)
 				assert.Equal(t, tt.dates, dates[0] == dates[1])
 			}
-			assert.False(t, target.IsRebaseInProgress())
+			assert.False(t, requireGitState(t, target.IsRebaseInProgress))
 			assert.Equal(t, branch, gitExec(t, targetPath, "branch", "--show-current"))
 			assert.Equal(t, observerHead, gitExec(t, observerPath, "rev-parse", "HEAD"))
 			assert.Equal(t, observerStatus, gitExec(t, observerPath, "status", "--porcelain"))
@@ -1272,7 +1442,7 @@ func TestIntegration_WorktreeRerereAutoContinuesMultipleCommits(t *testing.T) {
 	require.NoError(t, linked.ResetHard(original))
 
 	require.NoError(t, linked.Rebase("main", RebaseOpts{}), "rerere must continue both commits in the linked worktree")
-	assert.False(t, linked.IsRebaseInProgress())
+	assert.False(t, requireGitState(t, linked.IsRebaseInProgress))
 	assert.Equal(t, mainHead, gitExec(t, dir, "rev-parse", "HEAD"))
 	for _, file := range []string{"one.txt", "two.txt"} {
 		data, err := os.ReadFile(filepath.Join(path, file))
@@ -1293,7 +1463,7 @@ func TestIntegration_WorktreeRebaseContinueStopsWhenNoProgress(t *testing.T) {
 	trace, err := os.ReadFile(tracePath)
 	require.NoError(t, err)
 	assert.LessOrEqual(t, strings.Count(string(trace), " rebase --continue"), 2)
-	assert.True(t, linked.IsRebaseInProgress())
+	assert.True(t, requireGitState(t, linked.IsRebaseInProgress))
 	require.NoError(t, linked.RebaseAbort())
 }
 
@@ -1322,7 +1492,7 @@ func TestIntegration_WorktreeConflictPathsAndMarkers(t *testing.T) {
 	// native marker-size handling and paths that cannot be parsed by colons.
 	writeFile(t, path, file, "<<<<<<<<<< ours\none\n==========\ntwo\n>>>>>>>>>> theirs\nmiddle\n<<<<<<<<<< ours\nthree\n|||||||||| base\nbase\n==========\nfour\n>>>>>>>>>> theirs\n")
 	require.NoError(t, os.MkdirAll(filepath.Join(path, "subdir"), 0755))
-	sub := linked.ForWorktree("subdir")
+	sub := requireWorktree(t, linked, "subdir")
 	gitExec(t, dir, "config", "diff.relative", "true")
 	subConflicts, err := sub.ConflictedFiles()
 	require.NoError(t, err)
@@ -1347,8 +1517,8 @@ func TestIntegration_WorktreeRetainedRebaseOwner(t *testing.T) {
 	_, err = linked.HasUncommittedChanges()
 	require.Error(t, err, "a missing checkout must not silently execute elsewhere")
 	gitExec(t, dir, "worktree", "repair", path+"-moved")
-	moved := root.ForWorktree(path + "-moved")
-	require.True(t, moved.IsRebaseInProgress())
+	moved := requireWorktree(t, root, path+"-moved")
+	require.True(t, requireGitState(t, moved.IsRebaseInProgress))
 	require.NoError(t, moved.RebaseAbort())
 }
 
@@ -1362,9 +1532,9 @@ func TestIntegration_WorktreeCherryPickRecovery(t *testing.T) {
 			restore := forbidGlobalWorktreeQueries(t)
 			defer restore()
 			require.Error(t, linked.CherryPick([]string{mainHead}))
-			require.True(t, linked.IsCherryPickInProgress())
-			assert.False(t, root.IsCherryPickInProgress())
-			assert.False(t, linked.IsRebaseInProgress())
+			require.True(t, requireGitState(t, linked.IsCherryPickInProgress))
+			assert.False(t, requireGitState(t, root.IsCherryPickInProgress))
+			assert.False(t, requireGitState(t, linked.IsRebaseInProgress))
 			switch action {
 			case "continue":
 				writeFile(t, path, "init.txt", "resolved\n")
@@ -1381,7 +1551,7 @@ func TestIntegration_WorktreeCherryPickRecovery(t *testing.T) {
 				assert.NotEmpty(t, conflicts)
 				require.NoError(t, linked.ResetHard(original))
 			}
-			assert.False(t, linked.IsCherryPickInProgress())
+			assert.False(t, requireGitState(t, linked.IsCherryPickInProgress))
 			assert.Equal(t, mainHead, gitExec(t, dir, "rev-parse", "HEAD"))
 			assert.Equal(t, "feature", gitExec(t, path, "branch", "--show-current"))
 		})
@@ -1422,10 +1592,10 @@ func TestIntegration_WorktreeLocalMutations(t *testing.T) {
 	assert.Equal(t, "init.txt", gitExec(t, path, "diff", "--cached", "--name-only"))
 	assert.Empty(t, gitExec(t, dir, "diff", "--cached", "--name-only"))
 	require.NoError(t, linked.StageAll())
-	assert.True(t, linked.HasStagedChanges())
+	assert.True(t, requireGitState(t, linked.HasStagedChanges))
 	_, err = linked.Commit("commit only in linked worktree")
 	require.NoError(t, err)
-	assert.False(t, linked.HasStagedChanges())
+	assert.False(t, requireGitState(t, linked.HasStagedChanges))
 	assert.Equal(t, mainHead, gitExec(t, dir, "rev-parse", "HEAD"))
 	writeFile(t, path, "hidden-untracked.txt", "still dirty despite user status configuration")
 	dirty, err := linked.HasUncommittedChanges()
@@ -1448,10 +1618,10 @@ func TestIntegration_WorktreeCherryPickPendingSequencer(t *testing.T) {
 	gitDir, err := linked.GitDir()
 	require.NoError(t, err)
 	assert.NoFileExists(t, filepath.Join(gitDir, "CHERRY_PICK_HEAD"))
-	assert.True(t, linked.IsCherryPickInProgress(), "the remaining sequencer still owns the worktree")
-	assert.False(t, root.IsCherryPickInProgress())
+	assert.True(t, requireGitState(t, linked.IsCherryPickInProgress), "the remaining sequencer still owns the worktree")
+	assert.False(t, requireGitState(t, root.IsCherryPickInProgress))
 	require.NoError(t, linked.CherryPickContinue())
-	assert.False(t, linked.IsCherryPickInProgress())
+	assert.False(t, requireGitState(t, linked.IsCherryPickInProgress))
 	assert.FileExists(t, filepath.Join(path, "second.txt"))
 	assert.Equal(t, second, gitExec(t, dir, "rev-parse", "HEAD"))
 }
@@ -1468,7 +1638,7 @@ func TestIntegration_WorktreeIgnoresCallerRepositoryEnvironment(t *testing.T) {
 	t.Setenv("GIT_EDITOR", "false")
 	// A newly selected scope and an existing one must both ignore the caller's
 	// local repository environment, including during continuation.
-	selected := root.ForWorktree(path)
+	selected := requireWorktree(t, root, path)
 	for _, scope := range []Ops{selected, linked} {
 		branch, err := scope.CurrentBranch()
 		require.NoError(t, err)

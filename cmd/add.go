@@ -167,7 +167,11 @@ func runAdd(cfg *config.Config, opts *addOptions, args []string) error {
 
 	// If the branch already exists in git but is not part of any stack,
 	// adopt it instead of erroring. This mirrors the init command's behavior.
-	adopted := git.BranchExists(branchName)
+	adopted, err := git.BranchExists(branchName)
+	if err != nil {
+		cfg.Errorf("failed to check branch %s: %s", branchName, err)
+		return ErrSilent
+	}
 	var adoptedBase string
 	if adopted {
 		adoptedBase, err = git.MergeBase(currentBranch, branchName)
@@ -331,7 +335,12 @@ func stageAndValidate(cfg *config.Config, opts *addOptions) error {
 		}
 	}
 
-	if !git.HasStagedChanges() {
+	staged, err := git.HasStagedChanges()
+	if err != nil {
+		cfg.Errorf("failed to check staged changes: %s", err)
+		return err
+	}
+	if !staged {
 		if opts.stageAll || opts.stageTracked {
 			cfg.Errorf("no changes to commit after staging")
 		} else {

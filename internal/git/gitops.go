@@ -24,6 +24,11 @@ type RebaseOpts struct {
 // failures.
 var ErrRemoteBranchNotFound = errors.New("remote branch not found")
 
+// ErrNotInRepository is returned by an unscoped branch lookup when Git cannot
+// discover a repository. Scoped identity and invalid explicit Git paths are
+// never classified as optional repository absence.
+var ErrNotInRepository = errors.New("not in a Git repository")
+
 // Ops defines the interface for git operations used by commands.
 // The package-level functions are the default production implementation.
 // Tests can substitute a mock via SetOps().
@@ -31,11 +36,11 @@ type Ops interface {
 	GitDir() (string, error)
 	CommonDir() (string, error)
 	Worktrees() ([]Worktree, error)
-	ForWorktree(path string) Ops
+	ForWorktree(path string) (Ops, error)
 	CheckVersion() error
 	RootDir() (string, error)
 	CurrentBranch() (string, error)
-	BranchExists(name string) bool
+	BranchExists(name string) (bool, error)
 	CheckoutBranch(name string) error
 	Fetch(remote string) error
 	FetchBranch(remote, branch string) error
@@ -55,7 +60,7 @@ type Ops interface {
 	RebaseOnto(newBase, oldBase, branch string, opts RebaseOpts) error
 	RebaseContinue(opts RebaseOpts) error
 	RebaseAbort() error
-	IsRebaseInProgress() bool
+	IsRebaseInProgress() (bool, error)
 	ConflictedFiles() ([]string, error)
 	FindConflictMarkers(filePath string) (*ConflictMarkerInfo, error)
 	IsAncestor(ancestor, descendant string) (bool, error)
@@ -77,7 +82,7 @@ type Ops interface {
 	UpdateBranchRef(branch, sha string) error
 	StageAll() error
 	StageTracked() error
-	HasStagedChanges() bool
+	HasStagedChanges() (bool, error)
 	Commit(message string) (string, error)
 	CommitInteractive() (string, error)
 	ValidateRefName(name string) error
@@ -86,7 +91,7 @@ type Ops interface {
 	CherryPickQuit() error
 	CherryPickAbort() error
 	CherryPickContinue() error
-	IsCherryPickInProgress() bool
+	IsCherryPickInProgress() (bool, error)
 	HasUncommittedChanges() (bool, error)
 	LogMerges(base, head string) ([]CommitInfo, error)
 }
@@ -95,7 +100,6 @@ type Ops interface {
 type defaultOps struct {
 	client    *cligit.Client
 	scoped    bool
-	scopeErr  error
 	gitDir    os.FileInfo
 	commonDir os.FileInfo
 }
@@ -139,9 +143,25 @@ func (d *defaultOps) CurrentBranch() (string, error) {
 	return strings.TrimPrefix(branch, "refs/heads/"), nil
 }
 
-func (d *defaultOps) BranchExists(name string) bool {
-	_, err := d.run("rev-parse", "--verify", "refs/heads/"+name)
-	return err == nil
+func (d *defaultOps) BranchExists(name string) (bool, error) {
+	cmd, err := d.command("rev-parse", "--verify", "--quiet", "refs/heads/"+name)
+	if err != nil {
+		return false, err
+	}
+	cmd.Env = append(cmd.Environ(), "LC_ALL=C")
+	if err := cmd.Run(); err != nil {
+		var gitErr *cligit.GitError
+		if errors.As(err, &gitErr) {
+			if gitErr.ExitCode == 1 && gitErr.Stderr == "" {
+				return false, nil
+			}
+			if !d.scoped && gitErr.ExitCode == 128 && strings.HasPrefix(gitErr.Stderr, "fatal: not a git repository (or any ") {
+				return false, fmt.Errorf("%w: %w", ErrNotInRepository, err)
+			}
+		}
+		return false, err
+	}
+	return true, nil
 }
 
 func (d *defaultOps) CheckoutBranch(name string) error {
@@ -210,10 +230,18 @@ func isMissingRemoteRefError(err error) bool {
 }
 
 func (d *defaultOps) DefaultBranch() (string, error) {
-	ref, err := d.run("symbolic-ref", "refs/remotes/origin/HEAD")
+	ref, err := d.run("symbolic-ref", "--quiet", "refs/remotes/origin/HEAD")
 	if err != nil {
+		var gitErr *cligit.GitError
+		if !errors.As(err, &gitErr) || gitErr.ExitCode != 1 || gitErr.Stderr != "" {
+			return "", err
+		}
 		for _, name := range []string{"main", "master"} {
-			if d.BranchExists(name) {
+			exists, lookupErr := d.BranchExists(name)
+			if lookupErr != nil {
+				return "", lookupErr
+			}
+			if exists {
 				return name, nil
 			}
 		}
@@ -374,9 +402,8 @@ func (d *defaultOps) RebaseAbort() error {
 	return d.runSilent(append(rebaseArgs(RebaseOpts{}), "--abort")...)
 }
 
-func (d *defaultOps) IsRebaseInProgress() bool {
-	inProgress, _ := d.rebaseInProgress()
-	return inProgress
+func (d *defaultOps) IsRebaseInProgress() (bool, error) {
+	return d.rebaseInProgress()
 }
 
 func (d *defaultOps) rebaseInProgress() (bool, error) {
@@ -686,9 +713,19 @@ func (d *defaultOps) StageTracked() error {
 	return d.runSilent("add", "-u")
 }
 
-func (d *defaultOps) HasStagedChanges() bool {
-	err := d.runSilent("diff", "--cached", "--quiet")
-	return err != nil
+func (d *defaultOps) HasStagedChanges() (bool, error) {
+	cmd, err := d.command("diff", "--cached", "--quiet")
+	if err != nil {
+		return false, err
+	}
+	if err := cmd.Run(); err != nil {
+		var gitErr *cligit.GitError
+		if errors.As(err, &gitErr) && gitErr.ExitCode == 1 && gitErr.Stderr == "" {
+			return true, nil
+		}
+		return false, err
+	}
+	return false, nil
 }
 
 func (d *defaultOps) Commit(message string) (string, error) {
@@ -746,26 +783,31 @@ func (d *defaultOps) CherryPickContinue() error {
 
 // IsCherryPickInProgress reports whether a cherry-pick is currently in progress
 // by checking its native marker and any remaining sequencer picks.
-func (d *defaultOps) IsCherryPickInProgress() bool {
+func (d *defaultOps) IsCherryPickInProgress() (bool, error) {
 	gitDir, err := d.GitDir()
 	if err != nil {
-		return false
+		return false, err
 	}
 	if _, err := os.Stat(filepath.Join(gitDir, "CHERRY_PICK_HEAD")); err == nil {
-		return true
+		return true, nil
+	} else if !errors.Is(err, os.ErrNotExist) {
+		return false, fmt.Errorf("checking cherry-pick state in %q: %w", gitDir, err)
 	}
 	// A manual commit can clear CHERRY_PICK_HEAD while a multi-commit
 	// cherry-pick still has pending work.
 	todo, err := os.ReadFile(filepath.Join(gitDir, "sequencer", "todo"))
 	if err != nil {
-		return false
+		if errors.Is(err, os.ErrNotExist) {
+			return false, nil
+		}
+		return false, fmt.Errorf("checking cherry-pick sequencer in %q: %w", gitDir, err)
 	}
 	for _, line := range strings.Split(string(todo), "\n") {
 		if strings.HasPrefix(line, "pick ") {
-			return true
+			return true, nil
 		}
 	}
-	return false
+	return false, nil
 }
 
 func (d *defaultOps) HasUncommittedChanges() (bool, error) {

@@ -132,7 +132,9 @@ func TestMockWorktreeDefaults(t *testing.T) {
 	common, err := m.CommonDir()
 	require.NoError(t, err)
 	assert.Equal(t, "/fixture/git", common)
-	assert.Same(t, m, m.ForWorktree("/fixture/linked"))
+	scoped, err := m.ForWorktree("/fixture/linked")
+	require.NoError(t, err)
+	assert.Same(t, m, scoped)
 	worktrees, err := m.Worktrees()
 	require.NoError(t, err)
 	assert.Nil(t, worktrees)
@@ -151,9 +153,9 @@ func TestWorktreeWrappersDelegate(t *testing.T) {
 	m := &MockOps{
 		CommonDirFn: func() (string, error) { return "/common", wantErr },
 		WorktreesFn: func() ([]Worktree, error) { return wantWorktrees, wantErr },
-		ForWorktreeFn: func(path string) Ops {
+		ForWorktreeFn: func(path string) (Ops, error) {
 			assert.Equal(t, "/linked", path)
-			return child
+			return child, nil
 		},
 		CheckVersionFn: func() error { return wantErr },
 	}
@@ -166,9 +168,42 @@ func TestWorktreeWrappersDelegate(t *testing.T) {
 	worktrees, err := Worktrees()
 	assert.Equal(t, wantWorktrees, worktrees)
 	require.ErrorIs(t, err, wantErr)
-	assert.Same(t, child, ForWorktree("/linked"))
+	scoped, err := ForWorktree("/linked")
+	require.NoError(t, err)
+	assert.Same(t, child, scoped)
+	m.ForWorktreeFn = func(string) (Ops, error) { return nil, wantErr }
+	scoped, err = ForWorktree("/linked")
+	require.ErrorIs(t, err, wantErr)
+	assert.Nil(t, scoped)
 	require.ErrorIs(t, CheckVersion(), wantErr)
 	assert.Same(t, m, CurrentOps())
+}
+
+func TestStateQueryWrappersDelegateErrors(t *testing.T) {
+	wantErr := errors.New("state lookup failed")
+	m := &MockOps{
+		BranchExistsFn: func(name string) (bool, error) {
+			assert.Equal(t, "feature", name)
+			return false, wantErr
+		},
+		HasStagedChangesFn:       func() (bool, error) { return false, wantErr },
+		IsRebaseInProgressFn:     func() (bool, error) { return false, wantErr },
+		IsCherryPickInProgressFn: func() (bool, error) { return false, wantErr },
+	}
+	restore := SetOps(m)
+	defer restore()
+	for name, query := range map[string]func() (bool, error){
+		"branch":      func() (bool, error) { return BranchExists("feature") },
+		"staged":      HasStagedChanges,
+		"rebase":      IsRebaseInProgress,
+		"cherry-pick": IsCherryPickInProgress,
+	} {
+		t.Run(name, func(t *testing.T) {
+			value, err := query()
+			require.ErrorIs(t, err, wantErr)
+			assert.False(t, value)
+		})
+	}
 }
 
 func TestRebaseArgs(t *testing.T) {

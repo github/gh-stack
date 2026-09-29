@@ -552,7 +552,7 @@ func TestCheckModifyPreconditions_RebaseInProgress(t *testing.T) {
 	mock := &git.MockOps{
 		GitDirFn:                func() (string, error) { return tmpDir, nil },
 		CurrentBranchFn:         func() (string, error) { return "b1", nil },
-		IsRebaseInProgressFn:    func() bool { return true },
+		IsRebaseInProgressFn:    func() (bool, error) { return true, nil },
 		HasUncommittedChangesFn: func() (bool, error) { return false, nil },
 	}
 	restore := git.SetOps(mock)
@@ -581,7 +581,7 @@ func TestCheckModifyPreconditions_DirtyWorkingTree(t *testing.T) {
 	mock := &git.MockOps{
 		GitDirFn:                func() (string, error) { return tmpDir, nil },
 		CurrentBranchFn:         func() (string, error) { return "b1", nil },
-		IsRebaseInProgressFn:    func() bool { return false },
+		IsRebaseInProgressFn:    func() (bool, error) { return false, nil },
 		HasUncommittedChangesFn: func() (bool, error) { return true, nil },
 	}
 	restore := git.SetOps(mock)
@@ -611,7 +611,7 @@ func TestCheckModifyPreconditions_AllPass(t *testing.T) {
 	mock := &git.MockOps{
 		GitDirFn:                func() (string, error) { return tmpDir, nil },
 		CurrentBranchFn:         func() (string, error) { return "b1", nil },
-		IsRebaseInProgressFn:    func() bool { return false },
+		IsRebaseInProgressFn:    func() (bool, error) { return false, nil },
 		HasUncommittedChangesFn: func() (bool, error) { return false, nil },
 		IsAncestorFn:            func(a, d string) (bool, error) { return true, nil },
 		LogMergesFn:             func(base, head string) ([]git.CommitInfo, error) { return nil, nil },
@@ -652,9 +652,9 @@ func TestRunModify_FullyMergedStack_ShortCircuits(t *testing.T) {
 	mock := &git.MockOps{
 		GitDirFn:                func() (string, error) { return tmpDir, nil },
 		CurrentBranchFn:         func() (string, error) { return "b1", nil },
-		IsRebaseInProgressFn:    func() bool { return false },
+		IsRebaseInProgressFn:    func() (bool, error) { return false, nil },
 		HasUncommittedChangesFn: func() (bool, error) { return false, nil },
-		BranchExistsFn:          func(string) bool { return true },
+		BranchExistsFn:          func(string) (bool, error) { return true, nil },
 		IsAncestorFn:            func(a, d string) (bool, error) { return true, nil },
 		LogMergesFn:             func(base, head string) ([]git.CommitInfo, error) { return nil, nil },
 	}
@@ -820,10 +820,10 @@ func TestRunModifyAbort_ConflictPhase_Unwinds(t *testing.T) {
 	current := ""
 	mock := &git.MockOps{
 		GitDirFn:                 func() (string, error) { return tmpDir, nil },
-		IsRebaseInProgressFn:     func() bool { return true },
-		IsCherryPickInProgressFn: func() bool { return false },
+		IsRebaseInProgressFn:     func() (bool, error) { return true, nil },
+		IsCherryPickInProgressFn: func() (bool, error) { return false, nil },
 		RebaseAbortFn:            func() error { rebaseAborted = true; return nil },
-		BranchExistsFn:           func(string) bool { return true },
+		BranchExistsFn:           func(string) (bool, error) { return true, nil },
 		CheckoutBranchFn:         func(name string) error { current = name; return nil },
 		ResetHardFn: func(sha string) error {
 			resetCalls = append(resetCalls, struct{ branch, sha string }{current, sha})

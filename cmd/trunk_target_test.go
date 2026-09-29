@@ -16,7 +16,7 @@ import (
 
 func trunkTargetMock(localSHA, remoteSHA string) *git.MockOps {
 	return &git.MockOps{
-		BranchExistsFn: func(string) bool { return true },
+		BranchExistsFn: func(string) (bool, error) { return true, nil },
 		RevParseFn: func(ref string) (string, error) {
 			switch ref {
 			case "main":
@@ -33,27 +33,31 @@ func trunkTargetMock(localSHA, remoteSHA string) *git.MockOps {
 func TestNormalizeTrunkBranch(t *testing.T) {
 	t.Run("strips the selected remote prefix", func(t *testing.T) {
 		restore := git.SetOps(&git.MockOps{
-			BranchExistsFn: func(string) bool { return false },
+			BranchExistsFn: func(string) (bool, error) { return false, nil },
 		})
 		defer restore()
 
-		assert.Equal(t, "main", normalizeTrunkBranch("origin/main", "origin"))
+		trunk, err := normalizeTrunkBranch("origin/main", "origin")
+		require.NoError(t, err)
+		assert.Equal(t, "main", trunk)
 	})
 
 	t.Run("preserves a real local branch with the remote prefix", func(t *testing.T) {
 		restore := git.SetOps(&git.MockOps{
-			BranchExistsFn: func(name string) bool { return name == "origin/main" },
+			BranchExistsFn: func(name string) (bool, error) { return name == "origin/main", nil },
 		})
 		defer restore()
 
-		assert.Equal(t, "origin/main", normalizeTrunkBranch("origin/main", "origin"))
+		trunk, err := normalizeTrunkBranch("origin/main", "origin")
+		require.NoError(t, err)
+		assert.Equal(t, "origin/main", trunk)
 	})
 }
 
 func TestResolveTrunkTarget(t *testing.T) {
 	t.Run("normalizes a remote-qualified trunk before fetching", func(t *testing.T) {
 		mock := trunkTargetMock("same", "same")
-		mock.BranchExistsFn = func(name string) bool { return name == "main" }
+		mock.BranchExistsFn = func(name string) (bool, error) { return name == "main", nil }
 		var fetchedBranch string
 		mock.FetchBranchFn = func(remote, branch string) error {
 			assert.Equal(t, "origin", remote)
@@ -211,7 +215,7 @@ func TestRebase_FetchFailureStopsBeforeCascade(t *testing.T) {
 
 	rebaseCalls := 0
 	mock := newRebaseMock(tmpDir, "b1")
-	mock.BranchExistsFn = func(string) bool { return true }
+	mock.BranchExistsFn = func(string) (bool, error) { return true, nil }
 	mock.FetchBranchFn = func(string, string) error { return errors.New("network unavailable") }
 	mock.RebaseFn = func(string, git.RebaseOpts) error { rebaseCalls++; return nil }
 	restore := git.SetOps(mock)
@@ -239,7 +243,7 @@ func TestRebase_StartErrorDoesNotWriteRecoveryState(t *testing.T) {
 	})
 
 	mock := newRebaseMock(tmpDir, "b1")
-	mock.BranchExistsFn = func(string) bool { return true }
+	mock.BranchExistsFn = func(string) (bool, error) { return true, nil }
 	mock.CheckoutBranchFn = func(string) error { return nil }
 	mock.RebaseFn = func(string, git.RebaseOpts) error {
 		return &git.RebaseStartError{Err: errors.New("branch is checked out elsewhere")}
@@ -273,7 +277,7 @@ func TestRebase_LaterStartErrorRestoresEarlierBranches(t *testing.T) {
 	var resets []resetCall
 
 	mock := newRebaseMock(tmpDir, currentBranch)
-	mock.BranchExistsFn = func(string) bool { return true }
+	mock.BranchExistsFn = func(string) (bool, error) { return true, nil }
 	mock.RevParseFn = func(ref string) (string, error) {
 		if ref == "main" || ref == "origin/main" {
 			return "trunk", nil
@@ -420,14 +424,14 @@ func TestRebase_ContinueVerificationFailureRestoresAndClearsState(t *testing.T) 
 	cascadeDone := false
 
 	mock := newRebaseMock(tmpDir, currentBranch)
-	mock.BranchExistsFn = func(string) bool { return true }
+	mock.BranchExistsFn = func(string) (bool, error) { return true, nil }
 	mock.RevParseFn = func(ref string) (string, error) {
 		if sha, ok := branchSHAs[ref]; ok {
 			return sha, nil
 		}
 		return "sha-" + ref, nil
 	}
-	mock.IsRebaseInProgressFn = func() bool { return rebaseInProgress }
+	mock.IsRebaseInProgressFn = func() (bool, error) { return rebaseInProgress, nil }
 	mock.RebaseContinueFn = func(git.RebaseOpts) error {
 		rebaseInProgress = false
 		branchSHAs["b2"] = "rebased-b2"

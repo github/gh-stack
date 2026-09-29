@@ -892,9 +892,17 @@ func fastForwardBranches(cfg *config.Config, s *stack.Stack, remote, currentBran
 // for cascade rebases and conflict recovery.
 func resolveOriginalRefs(s *stack.Stack) (map[string]string, error) {
 	branchNames := make([]string, 0, len(s.Branches))
+	deletedMerged := make(map[string]string)
 	for _, b := range s.Branches {
-		if b.IsMerged() && !git.BranchExists(b.Branch) {
-			continue
+		if b.IsMerged() {
+			exists, err := git.BranchExists(b.Branch)
+			if err != nil {
+				return nil, fmt.Errorf("checking branch %s: %w", b.Branch, err)
+			}
+			if !exists {
+				deletedMerged[b.Branch] = b.Head
+				continue
+			}
 		}
 		branchNames = append(branchNames, b.Branch)
 	}
@@ -904,11 +912,9 @@ func resolveOriginalRefs(s *stack.Stack) (map[string]string, error) {
 	}
 
 	// Backfill merged branches that were deleted locally.
-	for _, b := range s.Branches {
-		if b.IsMerged() && !git.BranchExists(b.Branch) {
-			if b.Head != "" {
-				originalRefs[b.Branch] = b.Head
-			}
+	for branch, head := range deletedMerged {
+		if head != "" {
+			originalRefs[branch] = head
 		}
 	}
 	return originalRefs, nil
@@ -919,7 +925,11 @@ func resolveOriginalRefs(s *stack.Stack) (map[string]string, error) {
 // This handles the case where a user started their stack after renaming their
 // initial branch (e.g. `git branch -m newbranch`), leaving no local trunk.
 func ensureLocalTrunk(cfg *config.Config, trunk, remote string) error {
-	if git.BranchExists(trunk) {
+	exists, err := git.BranchExists(trunk)
+	if err != nil {
+		return fmt.Errorf("checking trunk branch %s: %w", trunk, err)
+	}
+	if exists {
 		return nil
 	}
 
@@ -936,23 +946,34 @@ func ensureLocalTrunk(cfg *config.Config, trunk, remote string) error {
 	return nil
 }
 
-func normalizeTrunkBranch(trunk, remote string) string {
-	if remote == "" || git.BranchExists(trunk) {
-		return trunk
+func normalizeTrunkBranch(trunk, remote string) (string, error) {
+	if remote == "" {
+		return trunk, nil
+	}
+	exists, err := git.BranchExists(trunk)
+	if err != nil {
+		return "", fmt.Errorf("checking trunk branch %s: %w", trunk, err)
+	}
+	if exists {
+		return trunk, nil
 	}
 	if stripped, ok := strings.CutPrefix(trunk, remote+"/"); ok && stripped != "" {
-		return stripped
+		return stripped, nil
 	}
-	return trunk
+	return trunk, nil
 }
 
-func normalizeStackTrunk(cfg *config.Config, s *stack.Stack, remote string) {
-	trunk := normalizeTrunkBranch(s.Trunk.Branch, remote)
+func normalizeStackTrunk(cfg *config.Config, s *stack.Stack, remote string) error {
+	trunk, err := normalizeTrunkBranch(s.Trunk.Branch, remote)
+	if err != nil {
+		return err
+	}
 	if trunk == s.Trunk.Branch {
-		return
+		return nil
 	}
 	cfg.Warningf("Stack trunk %q is remote-qualified — using %q", s.Trunk.Branch, trunk)
 	s.Trunk.Branch = trunk
+	return nil
 }
 
 type trunkTarget struct {
@@ -970,7 +991,9 @@ func (t trunkTarget) Describe() string {
 // cascade must use. Updating the local trunk is best-effort; the fetched remote
 // ref remains the source of truth when the local branch is stale or immovable.
 func resolveTrunkTarget(cfg *config.Config, s *stack.Stack, remote, currentBranch string) (trunkTarget, error) {
-	normalizeStackTrunk(cfg, s, remote)
+	if err := normalizeStackTrunk(cfg, s, remote); err != nil {
+		return trunkTarget{}, err
+	}
 	trunk := s.Trunk.Branch
 	remoteRef := remote + "/" + trunk
 
@@ -989,7 +1012,11 @@ func resolveTrunkTarget(cfg *config.Config, s *stack.Stack, remote, currentBranc
 	}
 	cfg.Successf("Fetched latest %s from %s", trunk, remote)
 
-	if !git.BranchExists(trunk) {
+	exists, err := git.BranchExists(trunk)
+	if err != nil {
+		return trunkTarget{}, fmt.Errorf("checking trunk branch %s: %w", trunk, err)
+	}
+	if !exists {
 		if err := git.CreateBranch(trunk, remoteRef); err != nil {
 			cfg.Errorf("could not create local trunk branch %s from %s: %v", trunk, remoteRef, err)
 			return trunkTarget{}, ErrSilent
@@ -1037,7 +1064,11 @@ func resolveTrunkTarget(cfg *config.Config, s *stack.Stack, remote, currentBranc
 }
 
 func trunkWithoutRemote(cfg *config.Config, trunk, remote string) (trunkTarget, error) {
-	if !git.BranchExists(trunk) {
+	exists, err := git.BranchExists(trunk)
+	if err != nil {
+		return trunkTarget{}, fmt.Errorf("checking trunk branch %s: %w", trunk, err)
+	}
+	if !exists {
 		cfg.Errorf("trunk branch %s exists neither locally nor on %s", trunk, remote)
 		return trunkTarget{}, ErrSilent
 	}
@@ -1500,7 +1531,12 @@ func confirmSaveRemote(cfg *config.Config, remote string) (bool, error) {
 // and the sync remote-ahead pull.
 func ensureLocalBranchFromRemote(cfg *config.Config, remote string, pr *github.PullRequest) (skipped bool, err error) {
 	branch := pr.HeadRefName
-	if git.BranchExists(branch) {
+	exists, err := git.BranchExists(branch)
+	if err != nil {
+		cfg.Errorf("failed to check branch %s: %s", branch, err)
+		return false, ErrSilent
+	}
+	if exists {
 		return false, nil
 	}
 	remoteRef := remote + "/" + branch
@@ -1704,7 +1740,12 @@ func pullRemoteAdditions(cfg *config.Config, sf *stack.StackFile, s *stack.Stack
 			cfg.Errorf("Cannot pull %s from the remote stack: %s", pr.HeadRefName, err)
 			return res, ErrSilent
 		}
-		if git.BranchExists(pr.HeadRefName) {
+		exists, err := git.BranchExists(pr.HeadRefName)
+		if err != nil {
+			cfg.Errorf("failed to check branch %s: %s", pr.HeadRefName, err)
+			return res, ErrSilent
+		}
+		if exists {
 			cfg.Errorf("Cannot pull %s from the remote stack: a local branch with that name already exists", pr.HeadRefName)
 			return res, ErrSilent
 		}

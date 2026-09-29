@@ -14,6 +14,29 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+func TestInit_BranchLookupFailureBeforeCreation(t *testing.T) {
+	lookupErr := fmt.Errorf("branch lookup failed")
+	restore := git.SetOps(&git.MockOps{
+		BranchExistsFn: func(name string) (bool, error) {
+			if name == "second" {
+				return false, lookupErr
+			}
+			return false, nil
+		},
+		CreateBranchFn: func(string, string) error {
+			t.Fatal("all branch lookups must succeed before creating any branch")
+			return nil
+		},
+	})
+	defer restore()
+	cfg, outR, errR := config.NewTestConfig()
+	branches, adopted, err := resolveArgBranches(cfg, &initOptions{branches: []string{"first", "second"}}, &stack.StackFile{}, "main")
+	require.ErrorIs(t, err, ErrSilent)
+	assert.Nil(t, branches)
+	assert.Nil(t, adopted)
+	assert.Contains(t, collectOutput(cfg, outR, errR), lookupErr.Error())
+}
+
 // collectOutput closes the write ends of the test config pipes and returns
 // the captured stderr content. Shared across cmd test files.
 func collectOutput(cfg *config.Config, outR, errR *os.File) string {
@@ -81,8 +104,8 @@ func TestInit_RestoresMissingLocalTrunkWhenTagResolves(t *testing.T) {
 		DefaultBranchFn:   func() (string, error) { return "main", nil },
 		CurrentBranchFn:   func() (string, error) { return "renamed-branch", nil },
 		IsRerereEnabledFn: func() (bool, error) { return true, nil },
-		BranchExistsFn: func(name string) bool {
-			return name == "renamed-branch" || (name == "main" && trunkExists)
+		BranchExistsFn: func(name string) (bool, error) {
+			return name == "renamed-branch" || (name == "main" && trunkExists), nil
 		},
 		ResolveRemoteFn: func(branch string) (string, error) {
 			assert.Equal(t, "renamed-branch", branch)
@@ -134,7 +157,7 @@ func TestInit_AdoptExistingBranches(t *testing.T) {
 		GitDirFn:        func() (string, error) { return gitDir, nil },
 		DefaultBranchFn: func() (string, error) { return "main", nil },
 		CurrentBranchFn: func() (string, error) { return "main", nil },
-		BranchExistsFn:  func(string) bool { return true },
+		BranchExistsFn:  func(string) (bool, error) { return true, nil },
 	})
 	defer restore()
 
@@ -186,7 +209,7 @@ func TestInit_AdoptFlagShowsDeprecationWarning(t *testing.T) {
 		GitDirFn:        func() (string, error) { return gitDir, nil },
 		DefaultBranchFn: func() (string, error) { return "main", nil },
 		CurrentBranchFn: func() (string, error) { return "main", nil },
-		BranchExistsFn:  func(string) bool { return true },
+		BranchExistsFn:  func(string) (bool, error) { return true, nil },
 	})
 	defer restore()
 
@@ -255,7 +278,7 @@ func TestInit_AdoptNonexistentBranch_CreatesIt(t *testing.T) {
 		GitDirFn:        func() (string, error) { return gitDir, nil },
 		DefaultBranchFn: func() (string, error) { return "main", nil },
 		CurrentBranchFn: func() (string, error) { return "main", nil },
-		BranchExistsFn:  func(string) bool { return false },
+		BranchExistsFn:  func(string) (bool, error) { return false, nil },
 		CreateBranchFn: func(name, base string) error {
 			created = append(created, name)
 			return nil
@@ -304,7 +327,7 @@ func TestInit_AdoptWithExistingOpenPR(t *testing.T) {
 		GitDirFn:        func() (string, error) { return gitDir, nil },
 		DefaultBranchFn: func() (string, error) { return "main", nil },
 		CurrentBranchFn: func() (string, error) { return "main", nil },
-		BranchExistsFn:  func(string) bool { return true },
+		BranchExistsFn:  func(string) (bool, error) { return true, nil },
 	})
 	defer restore()
 
@@ -354,7 +377,7 @@ func TestInit_AdoptIgnoresClosedAndMergedPRs(t *testing.T) {
 		GitDirFn:        func() (string, error) { return gitDir, nil },
 		DefaultBranchFn: func() (string, error) { return "main", nil },
 		CurrentBranchFn: func() (string, error) { return "main", nil },
-		BranchExistsFn:  func(string) bool { return true },
+		BranchExistsFn:  func(string) (bool, error) { return true, nil },
 	})
 	defer restore()
 
@@ -395,7 +418,7 @@ func TestInit_ImplicitAdopt_AllExist(t *testing.T) {
 		GitDirFn:        func() (string, error) { return gitDir, nil },
 		DefaultBranchFn: func() (string, error) { return "main", nil },
 		CurrentBranchFn: func() (string, error) { return "main", nil },
-		BranchExistsFn:  func(string) bool { return true },
+		BranchExistsFn:  func(string) (bool, error) { return true, nil },
 	})
 	defer restore()
 
@@ -457,7 +480,7 @@ func TestInit_ImplicitAdopt_Mixed(t *testing.T) {
 		GitDirFn:        func() (string, error) { return gitDir, nil },
 		DefaultBranchFn: func() (string, error) { return "main", nil },
 		CurrentBranchFn: func() (string, error) { return "main", nil },
-		BranchExistsFn:  func(name string) bool { return existing[name] },
+		BranchExistsFn:  func(name string) (bool, error) { return existing[name], nil },
 		CreateBranchFn: func(name, base string) error {
 			created = append(created, name)
 			return nil
@@ -510,7 +533,7 @@ func TestInit_WhatsNext_AdoptedWithPRs(t *testing.T) {
 		GitDirFn:        func() (string, error) { return gitDir, nil },
 		DefaultBranchFn: func() (string, error) { return "main", nil },
 		CurrentBranchFn: func() (string, error) { return "main", nil },
-		BranchExistsFn:  func(string) bool { return true },
+		BranchExistsFn:  func(string) (bool, error) { return true, nil },
 	})
 	defer restore()
 
@@ -543,7 +566,7 @@ func TestInit_WhatsNext_AdoptedNoPRs(t *testing.T) {
 		GitDirFn:        func() (string, error) { return gitDir, nil },
 		DefaultBranchFn: func() (string, error) { return "main", nil },
 		CurrentBranchFn: func() (string, error) { return "main", nil },
-		BranchExistsFn:  func(string) bool { return true },
+		BranchExistsFn:  func(string) (bool, error) { return true, nil },
 	})
 	defer restore()
 
@@ -568,7 +591,7 @@ func TestInit_WhatsNext_MixedWithPR(t *testing.T) {
 		GitDirFn:        func() (string, error) { return gitDir, nil },
 		DefaultBranchFn: func() (string, error) { return "main", nil },
 		CurrentBranchFn: func() (string, error) { return "main", nil },
-		BranchExistsFn:  func(name string) bool { return name == "existing" },
+		BranchExistsFn:  func(name string) (bool, error) { return name == "existing", nil },
 		CreateBranchFn:  func(name, base string) error { return nil },
 	})
 	defer restore()
@@ -618,7 +641,7 @@ func TestInit_Interactive_OnFeatureBranch_UseCurrent(t *testing.T) {
 		GitDirFn:        func() (string, error) { return gitDir, nil },
 		DefaultBranchFn: func() (string, error) { return "main", nil },
 		CurrentBranchFn: func() (string, error) { return "feat/auth", nil },
-		BranchExistsFn:  func(name string) bool { return name == "feat/auth" },
+		BranchExistsFn:  func(name string) (bool, error) { return name == "feat/auth", nil },
 	})
 	defer restore()
 

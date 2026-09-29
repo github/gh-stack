@@ -19,6 +19,59 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+func TestRebase_RecoveryStateLookupFailurePreservesJournal(t *testing.T) {
+	for _, action := range []string{"continue", "abort"} {
+		t.Run(action, func(t *testing.T) {
+			gitDir := t.TempDir()
+			writeStackFile(t, gitDir, stack.Stack{
+				Trunk:    stack.BranchRef{Branch: "main"},
+				Branches: []stack.BranchRef{{Branch: "b1"}},
+			})
+			state := &rebaseState{
+				OriginalBranch: "b1",
+				ConflictBranch: "b1",
+				OriginalRefs:   map[string]string{"b1": "original"},
+			}
+			require.NoError(t, saveRebaseState(gitDir, state))
+			lookupErr := fmt.Errorf("rebase state lookup failed")
+			mock := newRebaseMock(gitDir, "b1")
+			mock.IsRebaseInProgressFn = func() (bool, error) { return true, lookupErr }
+			mock.RebaseContinueFn = func(git.RebaseOpts) error {
+				t.Fatal("must not continue after a failed state lookup")
+				return nil
+			}
+			mock.RebaseAbortFn = func() error {
+				t.Fatal("must not abort after a failed state lookup")
+				return nil
+			}
+			mock.CheckoutBranchFn = func(string) error {
+				t.Fatal("must not check out branches after a failed state lookup")
+				return nil
+			}
+			mock.ResetHardFn = func(string) error {
+				t.Fatal("must not reset branches after a failed state lookup")
+				return nil
+			}
+			restore := git.SetOps(mock)
+			defer restore()
+			cfg, _, _ := config.NewTestConfig()
+			defer cfg.Out.Close()
+			defer cfg.Err.Close()
+			cfg.GitHubClientOverride = &github.MockClient{}
+			var err error
+			if action == "continue" {
+				err = continueRebase(cfg, gitDir)
+			} else {
+				err = abortRebase(cfg, gitDir)
+			}
+			require.ErrorIs(t, err, lookupErr)
+			loaded, err := loadRebaseState(gitDir)
+			require.NoError(t, err)
+			assert.Equal(t, state, loaded)
+		})
+	}
+}
+
 // rebaseCall records arguments passed to RebaseOnto or Rebase.
 type rebaseCall struct {
 	newBase string
@@ -49,7 +102,7 @@ func newRebaseMock(tmpDir string, currentBranch string) *git.MockOps {
 		IsAncestorFn:         func(a, d string) (bool, error) { return true, nil },
 		FetchFn:              func(string) error { return nil },
 		EnableRerereFn:       func() error { return nil },
-		IsRebaseInProgressFn: func() bool { return false },
+		IsRebaseInProgressFn: func() (bool, error) { return false, nil },
 	}
 }
 
@@ -137,7 +190,7 @@ func TestRebase_MergedBranch_UsesOnto(t *testing.T) {
 	}
 
 	mock := newRebaseMock(tmpDir, "b2")
-	mock.BranchExistsFn = func(name string) bool { return true }
+	mock.BranchExistsFn = func(name string) (bool, error) { return true, nil }
 	mock.RevParseFn = func(ref string) (string, error) {
 		if sha, ok := branchSHAs[ref]; ok {
 			return sha, nil
@@ -202,7 +255,7 @@ func TestRebase_OntoPropagatesToSubsequentBranches(t *testing.T) {
 	}
 
 	mock := newRebaseMock(tmpDir, "b3")
-	mock.BranchExistsFn = func(name string) bool { return true }
+	mock.BranchExistsFn = func(name string) (bool, error) { return true, nil }
 	mock.RevParseFn = func(ref string) (string, error) {
 		if sha, ok := branchSHAs[ref]; ok {
 			return sha, nil
@@ -274,7 +327,7 @@ func TestRebase_StaleOntoOldBase_UsesForkPoint(t *testing.T) {
 	}
 
 	mock := newRebaseMock(tmpDir, "b2")
-	mock.BranchExistsFn = func(name string) bool { return true }
+	mock.BranchExistsFn = func(name string) (bool, error) { return true, nil }
 	mock.RevParseFn = func(ref string) (string, error) {
 		if sha, ok := branchSHAs[ref]; ok {
 			return sha, nil
@@ -601,7 +654,7 @@ func TestRebase_UpstackWithMergedBranchBelow(t *testing.T) {
 		currentCheckedOut = name
 		return nil
 	}
-	mock.BranchExistsFn = func(name string) bool { return true }
+	mock.BranchExistsFn = func(name string) (bool, error) { return true, nil }
 	mock.RebaseFn = func(base string, opts git.RebaseOpts) error {
 		allRebaseCalls = append(allRebaseCalls, rebaseCall{newBase: base, oldBase: "", branch: currentCheckedOut})
 		return nil
@@ -726,7 +779,7 @@ func TestRebase_QueuedBranch_DownstreamStaysStacked(t *testing.T) {
 	var rebaseCalls []rebaseCall
 
 	mock := newRebaseMock(tmpDir, "b2")
-	mock.BranchExistsFn = func(name string) bool { return true }
+	mock.BranchExistsFn = func(name string) (bool, error) { return true, nil }
 	mock.RebaseOntoFn = func(newBase, oldBase, branch string, opts git.RebaseOpts) error {
 		rebaseCalls = append(rebaseCalls, rebaseCall{newBase, oldBase, branch})
 		return nil
@@ -780,7 +833,7 @@ func TestRebase_MergedBelowQueued_KeepsStackedOnQueued(t *testing.T) {
 	var rebaseCalls []rebaseCall
 
 	mock := newRebaseMock(tmpDir, "b3")
-	mock.BranchExistsFn = func(name string) bool { return true }
+	mock.BranchExistsFn = func(name string) (bool, error) { return true, nil }
 	mock.RebaseOntoFn = func(newBase, oldBase, branch string, opts git.RebaseOpts) error {
 		rebaseCalls = append(rebaseCalls, rebaseCall{newBase, oldBase, branch})
 		return nil
@@ -834,7 +887,7 @@ func TestRebase_UpstackAboveQueuedBranch(t *testing.T) {
 	var rebaseCalls []rebaseCall
 
 	mock := newRebaseMock(tmpDir, "b2")
-	mock.BranchExistsFn = func(name string) bool { return true }
+	mock.BranchExistsFn = func(name string) (bool, error) { return true, nil }
 	mock.RebaseOntoFn = func(newBase, oldBase, branch string, opts git.RebaseOpts) error {
 		rebaseCalls = append(rebaseCalls, rebaseCall{newBase, oldBase, branch})
 		return nil
@@ -937,7 +990,7 @@ func TestRebase_Continue_RebasesRemainingBranches(t *testing.T) {
 	var checkouts []string
 
 	mock := newRebaseMock(tmpDir, "b2")
-	mock.IsRebaseInProgressFn = func() bool { return true }
+	mock.IsRebaseInProgressFn = func() (bool, error) { return true, nil }
 	mock.RebaseContinueFn = func(opts git.RebaseOpts) error {
 		rebaseContinueCalled = true
 		return nil
@@ -1013,8 +1066,8 @@ func TestRebase_Continue_QueuedBranchBelowConflict(t *testing.T) {
 	var rebaseCalls []rebaseCall
 
 	mock := newRebaseMock(tmpDir, "b1")
-	mock.BranchExistsFn = func(name string) bool { return true }
-	mock.IsRebaseInProgressFn = func() bool { return true }
+	mock.BranchExistsFn = func(name string) (bool, error) { return true, nil }
+	mock.IsRebaseInProgressFn = func() (bool, error) { return true, nil }
 	mock.RebaseContinueFn = func(opts git.RebaseOpts) error { return nil }
 	mock.RebaseOntoFn = func(newBase, oldBase, branch string, opts git.RebaseOpts) error {
 		rebaseCalls = append(rebaseCalls, rebaseCall{newBase, oldBase, branch})
@@ -1087,7 +1140,7 @@ func TestRebase_Continue_OntoMode(t *testing.T) {
 	var rebaseContinueCalled bool
 
 	mock := newRebaseMock(tmpDir, "b3")
-	mock.IsRebaseInProgressFn = func() bool { return true }
+	mock.IsRebaseInProgressFn = func() (bool, error) { return true, nil }
 	mock.RebaseContinueFn = func(opts git.RebaseOpts) error {
 		rebaseContinueCalled = true
 		return nil
@@ -1146,7 +1199,7 @@ func TestRebase_Continue_ConflictOnRemaining(t *testing.T) {
 	require.NoError(t, os.WriteFile(filepath.Join(tmpDir, "gh-stack-rebase-state"), stateData, 0644))
 
 	mock := newRebaseMock(tmpDir, "b2")
-	mock.IsRebaseInProgressFn = func() bool { return true }
+	mock.IsRebaseInProgressFn = func() (bool, error) { return true, nil }
 	mock.RebaseContinueFn = func(opts git.RebaseOpts) error { return nil }
 	mock.RebaseOntoFn = func(newBase, oldBase, branch string, opts git.RebaseOpts) error {
 		if branch == "b3" {
@@ -1209,7 +1262,7 @@ func TestRebase_Abort_WithActiveRebase(t *testing.T) {
 	currentBranch := "b2"
 
 	mock := newRebaseMock(tmpDir, currentBranch)
-	mock.IsRebaseInProgressFn = func() bool { return true }
+	mock.IsRebaseInProgressFn = func() (bool, error) { return true, nil }
 	mock.RebaseAbortFn = func() error {
 		rebaseAbortCalled = true
 		return nil
@@ -1460,9 +1513,9 @@ func TestRebase_SkipsMergedBranchesNotExistingLocally(t *testing.T) {
 	var rebaseCalls []rebaseCall
 
 	mock := newRebaseMock(tmpDir, "b2")
-	mock.BranchExistsFn = func(name string) bool {
+	mock.BranchExistsFn = func(name string) (bool, error) {
 		// b1 does not exist locally (deleted from remote after merge)
-		return name != "b1"
+		return name != "b1", nil
 	}
 	mock.RevParseMultiFn = func(refs []string) ([]string, error) {
 		// Only resolve refs that exist — b1 should not be in the list
@@ -1666,7 +1719,7 @@ func TestRebase_Continue_PreservesCommitterDateFlag(t *testing.T) {
 
 	mock := newRebaseMock(tmpDir, "b2")
 	mock.CheckoutBranchFn = func(string) error { return nil }
-	mock.IsRebaseInProgressFn = func() bool { return continueCalled == false }
+	mock.IsRebaseInProgressFn = func() (bool, error) { return continueCalled == false, nil }
 	mock.RebaseContinueFn = func(opts git.RebaseOpts) error {
 		continueCalled = true
 		continueOpts = opts

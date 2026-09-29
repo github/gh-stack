@@ -250,8 +250,8 @@ func Worktrees() ([]Worktree, error) {
 }
 
 // ForWorktree returns operations scoped to a worktree in the same repository.
-// Invalid contexts return errors from the resulting operations.
-func ForWorktree(path string) Ops {
+// Invalid contexts return no executor. Each operation rechecks its Git directories.
+func ForWorktree(path string) (Ops, error) {
 	return ops.ForWorktree(path)
 }
 
@@ -271,7 +271,7 @@ func CurrentBranch() (string, error) {
 }
 
 // BranchExists returns whether a local branch with the given name exists.
-func BranchExists(name string) bool {
+func BranchExists(name string) (bool, error) {
 	return ops.BranchExists(name)
 }
 
@@ -390,7 +390,7 @@ func RebaseAbort() error {
 }
 
 // IsRebaseInProgress checks whether a rebase is currently in progress.
-func IsRebaseInProgress() bool {
+func IsRebaseInProgress() (bool, error) {
 	return ops.IsRebaseInProgress()
 }
 
@@ -536,7 +536,7 @@ func StageTracked() error {
 }
 
 // HasStagedChanges returns true if there are staged changes ready to commit.
-func HasStagedChanges() bool {
+func HasStagedChanges() (bool, error) {
 	return ops.HasStagedChanges()
 }
 
@@ -581,7 +581,7 @@ func CherryPickAbort() error {
 }
 
 // IsCherryPickInProgress reports whether a cherry-pick is currently in progress.
-func IsCherryPickInProgress() bool {
+func IsCherryPickInProgress() (bool, error) {
 	return ops.IsCherryPickInProgress()
 }
 

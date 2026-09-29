@@ -292,7 +292,12 @@ func checkModifyPreconditions(cfg *config.Config) (*loadStackResult, error) {
 	}
 
 	// No rebase in progress
-	if git.IsRebaseInProgress() {
+	inProgress, err := git.IsRebaseInProgress()
+	if err != nil {
+		cfg.Errorf("failed to check rebase state: %s", err)
+		return nil, ErrSilent
+	}
+	if inProgress {
 		cfg.Errorf("a rebase is currently in progress")
 		cfg.Printf("Complete the rebase with `%s` or abort with `%s`",
 			cfg.ColorCyan("gh stack rebase --continue"),
@@ -312,7 +317,12 @@ func checkModifyPreconditions(cfg *config.Config) (*loadStackResult, error) {
 
 	// Ensure trunk branch exists locally (it may be absent if the user
 	// renamed their initial branch before starting the stack).
-	if !git.BranchExists(s.Trunk.Branch) {
+	exists, err := git.BranchExists(s.Trunk.Branch)
+	if err != nil {
+		cfg.Errorf("failed to check trunk branch %s: %s", s.Trunk.Branch, err)
+		return nil, ErrSilent
+	}
+	if !exists {
 		remote, err := pickRemote(cfg, result.CurrentBranch, "")
 		if err != nil {
 			if !errors.Is(err, errInterrupt) {

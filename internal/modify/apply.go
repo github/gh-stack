@@ -122,6 +122,26 @@ func ApplyPlan(
 	}
 	defer lock.Unlock()
 
+	// Check branch availability before writing recovery state or changing refs.
+	branchNames := make([]string, 0, len(s.Branches)+1)
+	branchNames = append(branchNames, s.Trunk.Branch)
+	for _, b := range s.Branches {
+		if b.IsMerged() {
+			continue
+		}
+		exists, err := git.BranchExists(b.Branch)
+		if err != nil {
+			return nil, nil, fmt.Errorf("checking branch %s: %w", b.Branch, err)
+		}
+		if exists {
+			branchNames = append(branchNames, b.Branch)
+		}
+	}
+	originalRefs, err := git.RevParseMap(branchNames)
+	if err != nil {
+		return nil, nil, fmt.Errorf("failed to resolve branch SHAs: %w", err)
+	}
+
 	plan := BuildPlan(nodes)
 
 	// Find the index of this stack in the stack file for reliable identification
@@ -152,23 +172,6 @@ func ApplyPlan(
 
 	// Track whether any action affects a branch with a PR.
 	affectsPRs := false
-	// Collect original refs for rebase --onto, including trunk
-	branchNames := make([]string, 0, len(s.Branches)+1)
-	branchNames = append(branchNames, s.Trunk.Branch)
-	for _, b := range s.Branches {
-		if !b.IsMerged() && git.BranchExists(b.Branch) {
-			branchNames = append(branchNames, b.Branch)
-		}
-	}
-	originalRefs, err := git.RevParseMap(branchNames)
-	if err != nil {
-		// Unwind on failure
-		unwindErr := Unwind(cfg, gitDir, snapshot, stackIndex, sf, plan)
-		if unwindErr != nil {
-			return nil, nil, fmt.Errorf("failed to resolve refs (%v) and unwind failed (%v)", err, unwindErr)
-		}
-		return nil, nil, fmt.Errorf("failed to resolve branch SHAs: %w", err)
-	}
 
 	// Build a map of each branch's original parent tip SHA for accurate --onto rebase
 	originalParentTips := make(map[string]string)
@@ -840,7 +843,11 @@ func ContinueApply(
 		}
 	case "", "rebase":
 		// Rebase conflict
-		if git.IsRebaseInProgress() {
+		inProgress, err := git.IsRebaseInProgress()
+		if err != nil {
+			return fmt.Errorf("checking rebase state: %w", err)
+		}
+		if inProgress {
 			if err := git.RebaseContinue(git.RebaseOpts{}); err != nil {
 				return fmt.Errorf("rebase continue failed — resolve remaining conflicts and try again: %w", err)
 			}
@@ -1022,18 +1029,44 @@ func Unwind(cfg *config.Config, gitDir string, snapshot Snapshot, stackIndex int
 	// index are clean before we restore branch tips. A fold-down conflict
 	// leaves an in-progress cherry-pick with an unmerged index; without
 	// aborting it first, the restore checkouts below would fail.
-	if git.IsRebaseInProgress() {
+	rebasing, err := git.IsRebaseInProgress()
+	if err != nil {
+		return fmt.Errorf("checking rebase state before unwind: %w", err)
+	}
+	picking, err := git.IsCherryPickInProgress()
+	if err != nil {
+		return fmt.Errorf("checking cherry-pick state before unwind: %w", err)
+	}
+	snapshotNames := make(map[string]bool, len(snapshot.Branches))
+	branchExists := make(map[string]bool)
+	for _, bs := range snapshot.Branches {
+		snapshotNames[bs.Name] = true
+		exists, err := git.BranchExists(bs.Name)
+		if err != nil {
+			return fmt.Errorf("checking branch %s before unwind: %w", bs.Name, err)
+		}
+		branchExists[bs.Name] = exists
+	}
+	for _, action := range plan {
+		if action.NewName != "" && !snapshotNames[action.NewName] &&
+			(action.Type == "rename" || action.Type == "insert_below" || action.Type == "insert_above") {
+			exists, err := git.BranchExists(action.NewName)
+			if err != nil {
+				return fmt.Errorf("checking branch %s before cleanup: %w", action.NewName, err)
+			}
+			branchExists[action.NewName] = exists
+		}
+	}
+	if rebasing {
 		_ = git.RebaseAbort()
 	}
-	if git.IsCherryPickInProgress() {
+	if picking {
 		_ = git.CherryPickAbort()
 	}
 
 	// Restore branch tips
-	snapshotNames := make(map[string]bool, len(snapshot.Branches))
 	for _, bs := range snapshot.Branches {
-		snapshotNames[bs.Name] = true
-		if !git.BranchExists(bs.Name) {
+		if !branchExists[bs.Name] {
 			// Branch was renamed — try to find it by SHA and recreate
 			if err := git.CreateBranch(bs.Name, bs.TipSHA); err != nil {
 				cfg.Warningf("failed to restore branch %s: %v", bs.Name, err)
@@ -1054,7 +1087,7 @@ func Unwind(cfg *config.Config, gitDir string, snapshot Snapshot, stackIndex int
 	// Clean up branches created by renames or inserts during the partial apply
 	for _, action := range plan {
 		if action.NewName != "" && (action.Type == "rename" || action.Type == "insert_below" || action.Type == "insert_above") {
-			if !snapshotNames[action.NewName] && git.BranchExists(action.NewName) {
+			if !snapshotNames[action.NewName] && branchExists[action.NewName] {
 				_ = git.DeleteBranch(action.NewName, true)
 			}
 		}

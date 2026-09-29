@@ -107,7 +107,10 @@ func runSync(cfg *config.Config, opts *syncOptions) error {
 
 	// Fetch trunk + active branches so tracking refs are current for
 	// fast-forward detection (Step 2) and --force-with-lease (Step 4).
-	normalizeStackTrunk(cfg, s, remote)
+	if err := normalizeStackTrunk(cfg, s, remote); err != nil {
+		cfg.Errorf("%s", err)
+		return ErrSilent
+	}
 	if err := git.FetchBranches(remote, activeBranchNames(s)); err != nil {
 		cfg.Errorf("failed to fetch stack branches from %s: %v", remote, err)
 		return ErrSilent
@@ -163,7 +166,8 @@ func runSync(cfg *config.Config, opts *syncOptions) error {
 
 		originalRefs, err = resolveOriginalRefs(s)
 		if err != nil {
-			cfg.Warningf("Could not resolve branch SHAs — skipping rebase: %v", err)
+			cfg.Errorf("Could not resolve branch SHAs: %v", err)
+			return ErrSilent
 		} else {
 			result := cascadeRebase(cascadeRebaseOpts{
 				Cfg:          cfg,
@@ -177,7 +181,9 @@ func runSync(cfg *config.Config, opts *syncOptions) error {
 			if result.Err != nil {
 				cfg.Errorf("%v", result.Err)
 				if result.Rebased {
-					restoreRebaseRefs(cfg, currentBranch, originalRefs)
+					if err := restoreRebaseRefs(cfg, currentBranch, originalRefs); err != nil {
+						return err
+					}
 				} else {
 					_ = git.CheckoutBranch(currentBranch)
 				}
@@ -187,10 +193,19 @@ func runSync(cfg *config.Config, opts *syncOptions) error {
 
 			if result.Conflicted {
 				// Abort and restore everything — sync is non-interactive.
-				if git.IsRebaseInProgress() {
+				inProgress, err := git.IsRebaseInProgress()
+				if err != nil {
+					cfg.Errorf("failed to check rebase state: %s", err)
+					return ErrSilent
+				}
+				if inProgress {
 					_ = git.RebaseAbort()
 				}
-				restoreErrors := restoreBranches(originalRefs)
+				restoreErrors, err := restoreBranches(originalRefs)
+				if err != nil {
+					cfg.Errorf("%s", err)
+					return ErrSilent
+				}
 				_ = git.CheckoutBranch(currentBranch)
 
 				cfg.Errorf("Conflict detected rebasing %s onto %s", result.ConflictBranch, result.ConflictBase)
@@ -215,7 +230,9 @@ func runSync(cfg *config.Config, opts *syncOptions) error {
 		_ = git.CheckoutBranch(currentBranch)
 		reportUnstacked(cfg, trunk.Ref, unstacked)
 		if rebased && originalRefs != nil {
-			restoreRebaseRefs(cfg, currentBranch, originalRefs)
+			if err := restoreRebaseRefs(cfg, currentBranch, originalRefs); err != nil {
+				return err
+			}
 		}
 		stack.SaveNonBlocking(gitDir, sf)
 		return ErrSilent
@@ -305,7 +322,12 @@ func runSync(cfg *config.Config, opts *syncOptions) error {
 		merged := s.MergedBranches()
 		var prunableCount int
 		for _, b := range merged {
-			if git.BranchExists(b.Branch) {
+			exists, err := git.BranchExists(b.Branch)
+			if err != nil {
+				cfg.Errorf("failed to check branch %s for pruning: %s", b.Branch, err)
+				return ErrSilent
+			}
+			if exists {
 				prunableCount++
 			}
 		}
@@ -331,7 +353,12 @@ func runSync(cfg *config.Config, opts *syncOptions) error {
 		merged := s.MergedBranches()
 		var prunable []string
 		for _, b := range merged {
-			if git.BranchExists(b.Branch) {
+			exists, err := git.BranchExists(b.Branch)
+			if err != nil {
+				cfg.Errorf("failed to check branch %s for pruning: %s", b.Branch, err)
+				return ErrSilent
+			}
+			if exists {
 				prunable = append(prunable, b.Branch)
 			}
 		}
@@ -406,13 +433,22 @@ func runSync(cfg *config.Config, opts *syncOptions) error {
 	return nil
 }
 
-// restoreBranches resets each branch to its original SHA, collecting any errors.
-func restoreBranches(originalRefs map[string]string) []string {
-	var errors []string
-	for branch, sha := range originalRefs {
-		if !git.BranchExists(branch) {
-			continue
+// restoreBranches checks branch availability before resetting any tips.
+// Lookup failures stop restoration; individual mutation failures are collected.
+func restoreBranches(originalRefs map[string]string) ([]string, error) {
+	var branches []string
+	for branch := range originalRefs {
+		exists, err := git.BranchExists(branch)
+		if err != nil {
+			return nil, fmt.Errorf("checking branch %s before restoring: %w", branch, err)
 		}
+		if exists {
+			branches = append(branches, branch)
+		}
+	}
+	var errors []string
+	for _, branch := range branches {
+		sha := originalRefs[branch]
 		if currentSHA, err := git.RevParse(branch); err == nil && currentSHA == sha {
 			continue
 		}
@@ -424,13 +460,18 @@ func restoreBranches(originalRefs map[string]string) []string {
 			errors = append(errors, fmt.Sprintf("reset %s: %s", branch, err))
 		}
 	}
-	return errors
+	return errors, nil
 }
 
-func restoreRebaseRefs(cfg *config.Config, originalBranch string, originalRefs map[string]string) {
-	restoreErrors := restoreBranches(originalRefs)
+func restoreRebaseRefs(cfg *config.Config, originalBranch string, originalRefs map[string]string) error {
+	restoreErrors, err := restoreBranches(originalRefs)
+	if err != nil {
+		cfg.Errorf("%s", err)
+		return ErrSilent
+	}
 	_ = git.CheckoutBranch(originalBranch)
 	reportRestoreStatus(cfg, restoreErrors)
+	return nil
 }
 
 // reportRestoreStatus prints whether branch restoration succeeded or partially failed.

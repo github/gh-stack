@@ -23,6 +23,55 @@ func saveStack(t *testing.T, gitDir string, s stack.Stack) {
 	require.NoError(t, stack.Save(gitDir, sf), "saving seed stack")
 }
 
+func TestAdd_StateLookupFailureDoesNotMutate(t *testing.T) {
+	for _, query := range []string{"branch", "staged"} {
+		t.Run(query, func(t *testing.T) {
+			gitDir := t.TempDir()
+			s := stack.Stack{
+				Trunk:    stack.BranchRef{Branch: "main"},
+				Branches: []stack.BranchRef{{Branch: "b1"}},
+			}
+			saveStack(t, gitDir, s)
+			lookupErr := fmt.Errorf("state lookup failed")
+			mock := &git.MockOps{
+				GitDirFn:        func() (string, error) { return gitDir, nil },
+				CurrentBranchFn: func() (string, error) { return "b1", nil },
+				RevParseMultiFn: func([]string) ([]string, error) {
+					return []string{"parent", "head"}, nil
+				},
+				CreateBranchFn: func(string, string) error {
+					t.Fatal("must not create a branch after a failed lookup")
+					return nil
+				},
+				CheckoutBranchFn: func(string) error {
+					t.Fatal("must not check out a branch after a failed lookup")
+					return nil
+				},
+				CommitFn: func(string) (string, error) {
+					t.Fatal("must not commit after a failed lookup")
+					return "", nil
+				},
+			}
+			if query == "branch" {
+				mock.BranchExistsFn = func(string) (bool, error) { return true, lookupErr }
+			} else {
+				mock.HasStagedChangesFn = func() (bool, error) { return true, lookupErr }
+			}
+			restore := git.SetOps(mock)
+			defer restore()
+			cfg, outR, errR := config.NewTestConfig()
+			err := runAdd(cfg, &addOptions{message: "new commit"}, []string{"new-branch"})
+			require.ErrorIs(t, err, ErrSilent)
+			output := collectOutput(cfg, outR, errR)
+			assert.Contains(t, output, lookupErr.Error())
+			assert.NotContains(t, output, "nothing to commit")
+			sf, err := stack.Load(gitDir)
+			require.NoError(t, err)
+			assert.Equal(t, s, sf.Stacks[0])
+		})
+	}
+}
+
 func TestAdd_CreatesNewBranch(t *testing.T) {
 	gitDir := t.TempDir()
 	saveStack(t, gitDir, stack.Stack{
@@ -113,7 +162,7 @@ func TestAdd_StagingWithoutMessageUsesEditor(t *testing.T) {
 		CreateBranchFn:     func(name, base string) error { return nil },
 		CheckoutBranchFn:   func(name string) error { return nil },
 		StageAllFn:         func() error { return nil },
-		HasStagedChangesFn: func() bool { return true },
+		HasStagedChangesFn: func() (bool, error) { return true, nil },
 		CommitInteractiveFn: func() (string, error) {
 			interactiveCalled = true
 			return "def1234567890", nil
@@ -149,7 +198,7 @@ func TestAdd_EmptyBranchCommitsInPlace(t *testing.T) {
 			stageAllCalled = true
 			return nil
 		},
-		HasStagedChangesFn: func() bool { return true },
+		HasStagedChangesFn: func() (bool, error) { return true, nil },
 		CommitFn: func(msg string) (string, error) {
 			commitCalled = true
 			return "abc1234567890", nil
@@ -197,7 +246,7 @@ func TestAdd_BranchWithCommitsCreatesNew(t *testing.T) {
 			checkoutCalled = true
 			return nil
 		},
-		HasStagedChangesFn: func() bool { return true },
+		HasStagedChangesFn: func() (bool, error) { return true, nil },
 		CommitFn: func(msg string) (string, error) {
 			commitCalled = true
 			return "def1234567890", nil
@@ -259,7 +308,7 @@ func TestAdd_MessageAutoGeneratesDateSlug(t *testing.T) {
 			createdBranch = name
 			return nil
 		},
-		HasStagedChangesFn: func() bool { return true },
+		HasStagedChangesFn: func() (bool, error) { return true, nil },
 		CommitFn: func(msg string) (string, error) {
 			return "def1234567890", nil
 		},
@@ -312,7 +361,7 @@ func TestAdd_NothingToCommit(t *testing.T) {
 			return []string{"aaa", "aaa"}, nil // same SHA = empty branch
 		},
 		StageAllFn:         func() error { return nil },
-		HasStagedChangesFn: func() bool { return false },
+		HasStagedChangesFn: func() (bool, error) { return false, nil },
 	})
 	defer restore()
 
@@ -447,7 +496,7 @@ func TestAdd_AdoptsExistingBranch(t *testing.T) {
 	restore := git.SetOps(&git.MockOps{
 		GitDirFn:        func() (string, error) { return gitDir, nil },
 		CurrentBranchFn: func() (string, error) { return "b1", nil },
-		BranchExistsFn:  func(name string) bool { return name == "existing-branch" },
+		BranchExistsFn:  func(name string) (bool, error) { return name == "existing-branch", nil },
 		MergeBaseFn: func(parent, branch string) (string, error) {
 			assert.Equal(t, "b1", parent)
 			assert.Equal(t, "existing-branch", branch)
@@ -504,7 +553,7 @@ func TestAdd_RejectsExistingBranchInStack(t *testing.T) {
 	restore := git.SetOps(&git.MockOps{
 		GitDirFn:        func() (string, error) { return gitDir, nil },
 		CurrentBranchFn: func() (string, error) { return "b1", nil },
-		BranchExistsFn:  func(name string) bool { return name == "taken-branch" },
+		BranchExistsFn:  func(name string) (bool, error) { return name == "taken-branch", nil },
 	})
 	defer restore()
 
@@ -528,7 +577,7 @@ func TestAdd_AdoptsExistingBranchWithCommit(t *testing.T) {
 	restore := git.SetOps(&git.MockOps{
 		GitDirFn:        func() (string, error) { return gitDir, nil },
 		CurrentBranchFn: func() (string, error) { return "b1", nil },
-		BranchExistsFn:  func(name string) bool { return name == "existing-branch" },
+		BranchExistsFn:  func(name string) (bool, error) { return name == "existing-branch", nil },
 		MergeBaseFn:     func(string, string) (string, error) { return "common-base", nil },
 		RevParseMultiFn: func(refs []string) ([]string, error) {
 			return []string{"aaa", "bbb"}, nil // different SHAs = branch has commits
@@ -540,7 +589,7 @@ func TestAdd_AdoptsExistingBranchWithCommit(t *testing.T) {
 		CheckoutBranchFn:   func(name string) error { return nil },
 		RevParseFn:         func(ref string) (string, error) { return "abc", nil },
 		StageAllFn:         func() error { return nil },
-		HasStagedChangesFn: func() bool { return true },
+		HasStagedChangesFn: func() (bool, error) { return true, nil },
 		CommitFn: func(msg string) (string, error) {
 			commitCalled = true
 			return "def1234567890", nil
@@ -570,7 +619,7 @@ func TestAdd_AdoptExistingBranchWithoutCommonBaseFails(t *testing.T) {
 	restore := git.SetOps(&git.MockOps{
 		GitDirFn:        func() (string, error) { return gitDir, nil },
 		CurrentBranchFn: func() (string, error) { return "b1", nil },
-		BranchExistsFn:  func(name string) bool { return name == "unrelated" },
+		BranchExistsFn:  func(name string) (bool, error) { return name == "unrelated", nil },
 		MergeBaseFn:     func(string, string) (string, error) { return "", assert.AnError },
 		CheckoutBranchFn: func(string) error {
 			checkedOut = true
@@ -602,7 +651,7 @@ func TestAdd_InitializesStackWithExplicitBranch(t *testing.T) {
 		CurrentBranchFn:   func() (string, error) { return "unstacked", nil },
 		DefaultBranchFn:   func() (string, error) { return "main", nil },
 		IsRerereEnabledFn: func() (bool, error) { return true, nil },
-		BranchExistsFn:    func(name string) bool { return name == "main" && trunkExists },
+		BranchExistsFn:    func(name string) (bool, error) { return name == "main" && trunkExists, nil },
 		RevParseFn: func(ref string) (string, error) {
 			if ref == "main" && !trunkExists {
 				return "", fmt.Errorf("unknown revision %s", ref)
@@ -697,7 +746,7 @@ func TestAdd_InitializesGeneratedBranchAndCommits(t *testing.T) {
 		CurrentBranchFn:   func() (string, error) { return currentBranch, nil },
 		DefaultBranchFn:   func() (string, error) { return "main", nil },
 		IsRerereEnabledFn: func() (bool, error) { return true, nil },
-		BranchExistsFn:    func(name string) bool { return name == "main" },
+		BranchExistsFn:    func(name string) (bool, error) { return name == "main", nil },
 		CreateBranchFn: func(name, base string) error {
 			assert.Equal(t, expectedBranch, name)
 			assert.Equal(t, "refs/heads/main", base)
@@ -712,7 +761,7 @@ func TestAdd_InitializesGeneratedBranchAndCommits(t *testing.T) {
 			stageAllCalled = true
 			return nil
 		},
-		HasStagedChangesFn: func() bool { return true },
+		HasStagedChangesFn: func() (bool, error) { return true, nil },
 		CommitFn: func(message string) (string, error) {
 			assert.Equal(t, "First layer", message)
 			assert.Equal(t, expectedBranch, currentBranch)

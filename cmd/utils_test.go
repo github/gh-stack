@@ -747,8 +747,8 @@ func TestWarnStacksUnavailable_ShowsNotEnabled(t *testing.T) {
 
 func TestEnsureLocalTrunk_AlreadyExists(t *testing.T) {
 	mock := &git.MockOps{
-		BranchExistsFn: func(name string) bool {
-			return name == "main"
+		BranchExistsFn: func(name string) (bool, error) {
+			return name == "main", nil
 		},
 	}
 	restore := git.SetOps(mock)
@@ -759,13 +759,42 @@ func TestEnsureLocalTrunk_AlreadyExists(t *testing.T) {
 	assert.NoError(t, err)
 }
 
+func TestTrunkLookupFailureStopsBeforeMutation(t *testing.T) {
+	lookupErr := fmt.Errorf("branch lookup failed")
+	restore := git.SetOps(&git.MockOps{
+		BranchExistsFn: func(string) (bool, error) { return false, lookupErr },
+		FetchBranchFn: func(string, string) error {
+			t.Fatal("must not fetch after a failed lookup")
+			return nil
+		},
+		FetchBranchesFn: func(string, []string) error {
+			t.Fatal("must not fetch after a failed lookup")
+			return nil
+		},
+		CreateBranchFn: func(string, string) error {
+			t.Fatal("must not create a trunk after a failed lookup")
+			return nil
+		},
+	})
+	defer restore()
+	cfg, _, _ := config.NewTestConfig()
+	defer cfg.Out.Close()
+	defer cfg.Err.Close()
+	require.ErrorIs(t, ensureLocalTrunk(cfg, "main", "origin"), lookupErr)
+	s := &stack.Stack{Trunk: stack.BranchRef{Branch: "origin/main"}}
+	require.ErrorIs(t, normalizeStackTrunk(cfg, s, "origin"), lookupErr)
+	assert.Equal(t, "origin/main", s.Trunk.Branch)
+	_, err := resolveTrunkTarget(cfg, s, "origin", "feature")
+	require.ErrorIs(t, err, lookupErr)
+}
+
 func TestEnsureLocalTrunk_FetchesAndCreates(t *testing.T) {
 	var fetchedBranches []string
 	var createdBranch, createdBase string
 
 	mock := &git.MockOps{
-		BranchExistsFn: func(name string) bool {
-			return false
+		BranchExistsFn: func(name string) (bool, error) {
+			return false, nil
 		},
 		FetchBranchesFn: func(remote string, branches []string) error {
 			fetchedBranches = branches
@@ -791,8 +820,8 @@ func TestEnsureLocalTrunk_FetchesAndCreates(t *testing.T) {
 
 func TestEnsureLocalTrunk_FetchFails(t *testing.T) {
 	mock := &git.MockOps{
-		BranchExistsFn: func(name string) bool {
-			return false
+		BranchExistsFn: func(name string) (bool, error) {
+			return false, nil
 		},
 		FetchBranchesFn: func(remote string, branches []string) error {
 			return fmt.Errorf("network error")
@@ -810,8 +839,8 @@ func TestEnsureLocalTrunk_FetchFails(t *testing.T) {
 
 func TestEnsureLocalTrunk_CreateFails(t *testing.T) {
 	mock := &git.MockOps{
-		BranchExistsFn: func(name string) bool {
-			return false
+		BranchExistsFn: func(name string) (bool, error) {
+			return false, nil
 		},
 		FetchBranchesFn: func(remote string, branches []string) error {
 			return nil
