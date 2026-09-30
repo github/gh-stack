@@ -7,7 +7,7 @@ description: >
   branch layers, dependent PRs, or gh stack; or when a stack is checked out.
 metadata:
   author: github
-  version: "0.1.0"
+  version: "0.2.0"
 ---
 
 # gh-stack
