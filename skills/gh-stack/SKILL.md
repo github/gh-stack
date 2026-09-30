@@ -171,8 +171,7 @@ an ancestor of the branch.
 - `rebase` and `sync` currently require all members and writable trunks to be unoccupied or owned
   by the invoking worktree. They refuse distributed rewrites before requested changes, after
   prerequisite catalog migration. They never auto-stash or create/remove worktrees. Mutations
-  serialize across the clone; rebase recovery must run in its recorded origin. Legacy recovery
-  must finish in its original worktree before migration.
+  serialize across the clone; rebase recovery must run in its recorded origin.
 - Core `modify` temporarily rejects distributed stack branches before TUI/apply. Linked-worktree
   use is allowed when all member branches are unoccupied or owned here; trunk ownership alone is
   not a blocker. Its recovery flags still use the recorded origin from any linked worktree.
