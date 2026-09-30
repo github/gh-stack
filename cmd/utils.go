@@ -407,9 +407,9 @@ func handleSaveError(cfg *config.Config, err error) error {
 // resolveStack finds the stack for the given branch, handling ambiguity when
 // a branch (typically a trunk) belongs to multiple stacks. If exactly one
 // stack matches, it is returned directly. If multiple stacks match, the user
-// is prompted to select one and the working tree is switched to the top branch
-// of the selected stack. Returns nil with no error if no stack contains the
-// branch.
+// is prompted to select one. Read-only and rewrite callers preserve their
+// checkout; other mutating callers switch to the selected stack's top branch.
+// Returns nil with no error if no stack contains the branch.
 func resolveStack(sf *stack.StackFile, branch string, cfg *config.Config) (*stack.Stack, error) {
 	stacks := sf.FindAllStacksForBranch(branch)
 
@@ -456,8 +456,9 @@ func resolveStack(sf *stack.StackFile, branch string, cfg *config.Config) (*stac
 	if len(s.Branches) == 0 {
 		return nil, fmt.Errorf("selected stack %q has no branches", s.DisplayChain())
 	}
-	// Read-only selection must remain usable while another operation is paused.
-	if cfg.StackMutation == nil {
+	// Selection must not change a rewrite's origin or bypass its preflight.
+	// Read-only selection also remains available while an operation is paused.
+	if cfg.StackMutation == nil || cfg.StackMutation.NoCheckoutOnSelect {
 		return s, nil
 	}
 

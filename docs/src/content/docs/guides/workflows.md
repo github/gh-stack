@@ -67,6 +67,8 @@ gh-stack does not install shell functions or change your shell's directory. Do n
 
 `rebase` and `sync` automatically operate in each affected branch's clean owning worktree. Unoccupied branches are processed in the initiating worktree, whose original checkout is restored afterward. Dirty, busy, missing, or changed affected owners block mutation; unrelated worktrees are left alone. A clean trunk owner can be fast-forwarded, while an unsafe local trunk retains the fetched-remote fallback. gh-stack never auto-stashes, transfers ownership, or creates/removes worktrees.
 
+When a trunk belongs to multiple stacks, selecting one for `rebase`, `sync`, or `modify` does not switch branches. Rebase ranges use the caller's original checkout unless an explicit branch is supplied.
+
 Resolve and stage conflicts in the worktree named by the diagnostic. You can run `gh stack rebase --continue` or `--abort` from any linked worktree: the shared journal routes recovery to the recorded owners. `sync` still restores its cascade on conflicts rather than pushing partial results; completed fetches and earlier fast-forwards are outside that rollback boundary. Recovery retains state and reports any partial failure rather than discarding later edits or claiming a full restoration. Pruning skips branches still occupied in other worktrees.
 
 Finish paused operations before changing gh-stack versions or preview stages. Origin-only journals are explicitly marked; a build that cannot interpret a journal's execution lifecycle must leave it intact. If recovery reports an incompatible lifecycle, use the matching build in the recorded origin to finish or abort it instead of editing or removing the journal.

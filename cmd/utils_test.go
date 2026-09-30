@@ -78,6 +78,86 @@ func TestResolveStack_ReadOnlySelectionDoesNotCheckout(t *testing.T) {
 	commandOutput(t, cfg, outR, errR)
 }
 
+func TestResolveStack_RewriteSelectionPreservesCheckout(t *testing.T) {
+	for _, kind := range []string{"rebase", "rebase-continue", "rebase-abort", "sync", "modify", "modify-continue", "modify-abort", "add", "checkout", "submit"} {
+		t.Run(kind, func(t *testing.T) {
+			dir := t.TempDir()
+			writeStackFileMulti(t, dir,
+				stack.Stack{Trunk: stack.BranchRef{Branch: "main"}, Branches: []stack.BranchRef{{Branch: "b1"}, {Branch: "b2"}}},
+				stack.Stack{Trunk: stack.BranchRef{Branch: "main"}, Branches: []stack.BranchRef{{Branch: "independent"}}},
+			)
+			current := "main"
+			var checkouts []string
+			mock := newRebaseMock(dir, current)
+			mock.CurrentBranchFn = func() (string, error) { return current, nil }
+			mock.CheckoutBranchFn = func(branch string) error {
+				checkouts = append(checkouts, branch)
+				current = branch
+				return nil
+			}
+			restore := git.SetOps(mock)
+			defer restore()
+			cfg := issue250TestConfig(t)
+			cfg.ForceInteractive = true
+			cfg.SelectFn = func(_, _ string, choices []string) (int, error) {
+				require.Len(t, choices, 2)
+				return 0, nil
+			}
+			release, err := beginStackMutation(cfg, kind)
+			require.NoError(t, err)
+			defer release()
+
+			result, err := loadStackOptional(cfg, "")
+
+			require.NoError(t, err)
+			assert.Equal(t, []string{"b1", "b2"}, result.Stack.BranchNames())
+			if kind == "add" || kind == "checkout" || kind == "submit" {
+				assert.Equal(t, []string{"b2"}, checkouts, "intentional selection checkout must remain available")
+				assert.Equal(t, "b2", result.CurrentBranch)
+			} else {
+				assert.Empty(t, checkouts, "rewrite selection must not move the origin before preflight")
+				assert.Equal(t, "main", result.CurrentBranch)
+			}
+			assert.Equal(t, result.CurrentBranch, current)
+		})
+	}
+}
+
+func TestStackSelection_RewritePreflightPreservesCheckout(t *testing.T) {
+	for _, command := range []struct {
+		name string
+		run  func(*config.Config) error
+	}{
+		{"rebase", func(cfg *config.Config) error { return runRebase(cfg, &rebaseOptions{remote: "origin"}) }},
+		{"sync", func(cfg *config.Config) error { return runSync(cfg, &syncOptions{remote: "origin"}) }},
+		{"modify", runModify},
+	} {
+		t.Run(command.name, func(t *testing.T) {
+			repo := setupSharedTrunkRebaseRepo(t, false)
+			issue250WriteFile(t, repo.parentDir, "unfinished.txt", "preserve this work\n")
+			beforeRefs := issue250Git(t, repo.dir, "show-ref")
+			beforeCatalog, err := os.ReadFile(filepath.Join(repo.gitDir, "gh-stack"))
+			require.NoError(t, err)
+			withIssue250Repo(t, repo.dir)
+			cfg := issue250TestConfig(t)
+			cfg.ForceInteractive = true
+			cfg.SelectFn = func(_, _ string, _ []string) (int, error) { return 0, nil }
+			cfg.ConfirmFn = func(string, bool) (bool, error) { return false, nil }
+
+			require.Error(t, command.run(cfg))
+
+			assert.Equal(t, "main", issue250Git(t, repo.dir, "branch", "--show-current"))
+			assert.Equal(t, "parent", issue250Git(t, repo.parentDir, "branch", "--show-current"))
+			assert.Equal(t, beforeRefs, issue250Git(t, repo.dir, "show-ref"))
+			afterCatalog, err := os.ReadFile(filepath.Join(repo.gitDir, "gh-stack"))
+			require.NoError(t, err)
+			assert.Equal(t, beforeCatalog, afterCatalog)
+			assert.FileExists(t, filepath.Join(repo.parentDir, "unfinished.txt"))
+			assert.NoFileExists(t, filepath.Join(repo.gitDir, rebaseStateFile))
+		})
+	}
+}
+
 func TestStackMutation_NestedAndReadOnly(t *testing.T) {
 	common := t.TempDir()
 	restore := git.SetOps(&git.MockOps{GitDirFn: func() (string, error) { return common, nil }})

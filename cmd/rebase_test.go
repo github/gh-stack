@@ -2491,6 +2491,97 @@ func setupWorktreeRebaseRepo(t *testing.T, conflict bool) worktreeRebaseRepo {
 	return worktreeRebaseRepo{repo, parentDir, childDir}
 }
 
+func setupSharedTrunkRebaseRepo(t *testing.T, conflict bool) worktreeRebaseRepo {
+	t.Helper()
+	repo := setupWorktreeRebaseRepo(t, conflict)
+	issue250Git(t, repo.childDir, "checkout", "--detach")
+	issue250Git(t, repo.dir, "branch", "independent", "main")
+	sf, err := stack.Load(repo.gitDir)
+	require.NoError(t, err)
+	sf.AddStack(stack.Stack{Trunk: stack.BranchRef{Branch: "main"}, Branches: []stack.BranchRef{{Branch: "independent"}}})
+	require.NoError(t, stack.Save(repo.gitDir, sf))
+	return repo
+}
+
+func TestRebase_SharedTrunkSelectionPreservesOriginAndRange(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		opts rebaseOptions
+		want []string
+	}{
+		{name: "whole stack", want: []string{"b1", "b2", "b3"}},
+		{name: "upstack from trunk", opts: rebaseOptions{upstack: true}, want: []string{"b1", "b2", "b3"}},
+		{name: "downstack from trunk", opts: rebaseOptions{downstack: true}, want: []string{"b1"}},
+		{name: "explicit upstack", opts: rebaseOptions{branch: "b2", upstack: true}, want: []string{"b2", "b3"}},
+		{name: "explicit downstack", opts: rebaseOptions{branch: "b2", downstack: true}, want: []string{"b1", "b2"}},
+		{name: "without trunk", opts: rebaseOptions{noTrunk: true}, want: []string{"b2", "b3"}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			dir := t.TempDir()
+			writeStackFileMulti(t, dir,
+				stack.Stack{Trunk: stack.BranchRef{Branch: "main"}, Branches: []stack.BranchRef{{Branch: "b1"}, {Branch: "b2"}, {Branch: "b3"}}},
+				stack.Stack{Trunk: stack.BranchRef{Branch: "main"}, Branches: []stack.BranchRef{{Branch: "independent"}}},
+			)
+			current := "main"
+			var rebased []string
+			mock := newRebaseMock(dir, current)
+			mock.CurrentBranchFn = func() (string, error) { return current, nil }
+			mock.BranchExistsFn = func(string) (bool, error) { return true, nil }
+			mock.CheckoutBranchFn = func(branch string) error { current = branch; return nil }
+			mock.RebaseFn = func(string, git.RebaseOpts) error { rebased = append(rebased, current); return nil }
+			mock.RebaseOntoFn = func(_, _, branch string, _ git.RebaseOpts) error {
+				rebased = append(rebased, branch)
+				return nil
+			}
+			mock.IsRerereEnabledFn = func() (bool, error) { return true, nil }
+			restore := git.SetOps(mock)
+			defer restore()
+			cfg := issue250TestConfig(t)
+			cfg.ForceInteractive = true
+			cfg.SelectFn = func(_, _ string, _ []string) (int, error) { return 0, nil }
+			tc.opts.remote = "origin"
+
+			require.NoError(t, runRebase(cfg, &tc.opts))
+
+			assert.Equal(t, tc.want, rebased)
+			assert.Equal(t, "main", current)
+			assert.NoFileExists(t, filepath.Join(dir, rebaseStateFile))
+		})
+	}
+}
+
+func TestRebase_SharedTrunkSelectionRecoveryPreservesOrigin(t *testing.T) {
+	for _, abort := range []bool{false, true} {
+		t.Run(fmt.Sprintf("abort=%t", abort), func(t *testing.T) {
+			repo := setupSharedTrunkRebaseRepo(t, true)
+			observerHead := issue250Git(t, repo.childDir, "rev-parse", "HEAD")
+			withIssue250Repo(t, repo.dir)
+			cfg := issue250TestConfig(t)
+			cfg.ForceInteractive = true
+			selections := 0
+			cfg.SelectFn = func(_, _ string, _ []string) (int, error) { selections++; return 0, nil }
+			cfg.ConfirmFn = func(string, bool) (bool, error) { return false, nil }
+			require.ErrorIs(t, runRebase(cfg, &rebaseOptions{remote: "origin"}), ErrConflict)
+			state, err := loadRebaseState(repo.gitDir)
+			require.NoError(t, err)
+			assert.Equal(t, "main", state.OriginalBranch)
+			if !abort {
+				issue250WriteFile(t, repo.dir, "base.txt", "resolved\n")
+				issue250Git(t, repo.dir, "add", "base.txt")
+			}
+			withIssue250Repo(t, repo.parentDir)
+
+			require.NoError(t, runRebase(cfg, &rebaseOptions{abort: abort, cont: !abort}))
+
+			assert.Equal(t, "main", issue250Git(t, repo.dir, "branch", "--show-current"))
+			assert.Equal(t, "parent", issue250Git(t, repo.parentDir, "branch", "--show-current"))
+			assert.Equal(t, observerHead, issue250Git(t, repo.childDir, "rev-parse", "HEAD"))
+			assert.Equal(t, 1, selections)
+			assert.NoFileExists(t, filepath.Join(repo.gitDir, rebaseStateFile))
+		})
+	}
+}
+
 func TestRebase_WorktreesPreserveCheckouts(t *testing.T) {
 	repo := setupWorktreeRebaseRepo(t, false)
 	issue250WriteFile(t, repo.dir, "unrelated.txt", "leave main alone\n")

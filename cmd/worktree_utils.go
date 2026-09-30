@@ -78,6 +78,10 @@ func beginStackMutation(cfg *config.Config, kind string) (func(), error) {
 		return nil, err
 	}
 	cfg.StackMutation = &config.StackMutationContext{CommonDir: commonDir, StateDir: stateDir}
+	switch kind {
+	case "rebase", "rebase-continue", "rebase-abort", "sync", "modify", "modify-continue", "modify-abort":
+		cfg.StackMutation.NoCheckoutOnSelect = true
+	}
 	released := false
 	return func() {
 		if !released {

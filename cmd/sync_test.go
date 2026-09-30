@@ -2634,6 +2634,23 @@ func TestSync_WorktreesPublishesFromLinkedWorktree(t *testing.T) {
 	require.NoError(t, issue250GitMayFail(t, repo.dir, "merge-base", "--is-ancestor", "parent", "child"))
 }
 
+func TestSync_SharedTrunkSelectionRestoresOrigin(t *testing.T) {
+	repo := setupSharedTrunkRebaseRepo(t, false)
+	observerHead := issue250Git(t, repo.childDir, "rev-parse", "HEAD")
+	withIssue250Repo(t, repo.dir)
+	cfg := issue250TestConfig(t)
+	cfg.ForceInteractive = true
+	cfg.SelectFn = func(_, _ string, _ []string) (int, error) { return 0, nil }
+	cfg.ConfirmFn = func(string, bool) (bool, error) { return false, nil }
+
+	require.NoError(t, runSync(cfg, &syncOptions{remote: "origin"}))
+
+	assert.Equal(t, "main", issue250Git(t, repo.dir, "branch", "--show-current"))
+	assert.Equal(t, "parent", issue250Git(t, repo.parentDir, "branch", "--show-current"))
+	assert.Equal(t, observerHead, issue250Git(t, repo.childDir, "rev-parse", "HEAD"))
+	assert.Equal(t, issue250Git(t, repo.dir, "rev-parse", "child"), issue250Git(t, repo.dir, "rev-parse", "origin/child"))
+}
+
 func TestSync_WorktreesConflictRestoresWithoutPush(t *testing.T) {
 	repo := setupWorktreeRebaseRepo(t, true)
 	beforeParent := issue250Git(t, repo.dir, "rev-parse", "parent")

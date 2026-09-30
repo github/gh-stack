@@ -67,6 +67,9 @@ type Config struct {
 type StackMutationContext struct {
 	CommonDir string
 	StateDir  string
+
+	// NoCheckoutOnSelect preserves rewrite origins and range anchors.
+	NoCheckoutOnSelect bool
 }
 
 // New creates a new Config with terminal-aware output and color support.
