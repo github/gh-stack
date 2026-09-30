@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"strings"
 
+	cligit "github.com/cli/cli/v2/git"
 	"github.com/github/gh-stack/internal/config"
 	"github.com/github/gh-stack/internal/git"
 	"github.com/github/gh-stack/internal/modify"
@@ -350,6 +351,9 @@ func continueRebase(cfg *config.Config, gitDir string) error {
 	if state.Worktrees != nil {
 		return continueWorktreeRebase(cfg, gitDir, state)
 	}
+	if err := validateLegacyRebasePhase(state, true); err != nil {
+		return err
+	}
 
 	sf, err := stack.Load(gitDir)
 	if err != nil {
@@ -365,6 +369,9 @@ func continueRebase(cfg *config.Config, gitDir string) error {
 	}
 	if s == nil {
 		return fmt.Errorf("no stack found for branch %s", state.OriginalBranch)
+	}
+	if state.Phase == "complete" {
+		return finishLegacyRebase(cfg, gitDir, state, sf, s)
 	}
 	trunkRef := state.TrunkRef
 	if trunkRef == "" {
@@ -454,10 +461,7 @@ func continueRebase(cfg *config.Config, gitDir string) error {
 
 		if result.Err != nil {
 			cfg.Errorf("%v", result.Err)
-			if err := restoreRebaseRefs(cfg, state.OriginalBranch, state.OriginalRefs); err != nil {
-				return err
-			}
-			if err := clearRebaseState(gitDir); err != nil {
+			if err := rollbackLegacyRebase(cfg, gitDir, state); err != nil {
 				return err
 			}
 			return ErrSilent
@@ -466,13 +470,15 @@ func continueRebase(cfg *config.Config, gitDir string) error {
 		if result.Conflicted {
 			cfg.Warningf("Rebasing %s onto %s — conflict", result.ConflictBranch, result.ConflictBase)
 
+			state.Phase = "conflict"
 			state.CurrentBranchIndex = result.ConflictIdx
 			state.ConflictBranch = result.ConflictBranch
 			state.RemainingBranches = result.Remaining
 			state.UseOnto = result.NeedsOnto
 			state.OntoOldBase = result.OntoOldBase
 			if err := saveRebaseState(gitDir, state); err != nil {
-				cfg.Warningf("failed to save rebase state: %s", err)
+				cfg.Errorf("failed to save rebase state: %s", err)
+				return errors.Join(ErrSilent, err)
 			}
 
 			printConflictDetails(cfg, result.ConflictBase)
@@ -485,8 +491,6 @@ func continueRebase(cfg *config.Config, gitDir string) error {
 		}
 	}
 
-	_ = git.CheckoutBranch(state.OriginalBranch)
-
 	verifyStart, verifyEnd := state.StartIndex, state.EndIndex
 	if verifyEnd <= verifyStart {
 		verifyStart, verifyEnd = 0, len(s.Branches)
@@ -496,38 +500,13 @@ func continueRebase(cfg *config.Config, gitDir string) error {
 	}
 	if unstacked := verifyStacked(s, trunkBase, verifyStart, verifyEnd); len(unstacked) > 0 {
 		reportUnstacked(cfg, trunkRef, unstacked)
-		if err := restoreRebaseRefs(cfg, state.OriginalBranch, state.OriginalRefs); err != nil {
-			return err
-		}
-		if err := clearRebaseState(gitDir); err != nil {
+		if err := rollbackLegacyRebase(cfg, gitDir, state); err != nil {
 			return err
 		}
 		return ErrSilent
 	}
 
-	updateBaseSHAsWithTrunk(s, state.TrunkSHA)
-
-	_ = syncStackPRs(cfg, s)
-
-	if err := stack.Save(gitDir, sf); err != nil {
-		return handleSaveError(cfg, err)
-	}
-	if err := clearRebaseState(gitDir); err != nil {
-		cfg.Errorf("rebase completed but recovery state could not be cleared: %v", err)
-		return ErrSilent
-	}
-
-	if state.NoTrunk {
-		cfg.Printf("All branches in stack rebased locally (without trunk)")
-	} else if state.TrunkSHA != "" {
-		cfg.Printf("All branches in stack rebased locally with %s (%s)", trunkRef, short(state.TrunkSHA))
-	} else {
-		cfg.Printf("All branches in stack rebased locally with %s", trunkRef)
-	}
-	cfg.Printf("To push up your changes and open/update the stack of PRs, run `%s`",
-		cfg.ColorCyan("gh stack submit"))
-
-	return nil
+	return finishLegacyRebase(cfg, gitDir, state, sf, s)
 }
 
 func abortRebase(cfg *config.Config, gitDir string) error {
@@ -547,15 +526,58 @@ func abortRebase(cfg *config.Config, gitDir string) error {
 		cfg.Successf("Rebase aborted and branches restored")
 		return nil
 	}
+	if err := validateLegacyRebasePhase(state, false); err != nil {
+		return err
+	}
+	if err := rollbackLegacyRebase(cfg, gitDir, state); err != nil {
+		return err
+	}
+	cfg.Successf("Rebase aborted and branches restored")
+	return nil
+}
 
+func validateLegacyRebasePhase(state *rebaseState, cont bool) error {
+	switch state.Phase {
+	case "", "conflict", "complete":
+		return nil
+	case "applying", "restoring":
+		if !cont {
+			return nil
+		}
+		return fmt.Errorf("legacy rebase is in phase %q; run `gh stack rebase --abort` to restore the stack", state.Phase)
+	default:
+		return fmt.Errorf("unknown legacy rebase phase %q; recovery state was retained", state.Phase)
+	}
+}
+
+func rollbackLegacyRebase(cfg *config.Config, gitDir string, state *rebaseState) error {
 	inProgress, err := git.IsRebaseInProgress()
 	if err != nil {
 		return fmt.Errorf("checking rebase state: %w", err)
 	}
 	for branch := range state.OriginalRefs {
-		if _, err := git.BranchExists(branch); err != nil {
+		exists, err := git.BranchExists(branch)
+		if err != nil {
 			return fmt.Errorf("checking branch %s before restoring: %w", branch, err)
 		}
+		if exists {
+			if _, err := git.RevParse(branch); err != nil {
+				return fmt.Errorf("reading branch %s before restoring: %w", branch, err)
+			}
+		}
+	}
+	root, err := git.RootDir()
+	if err != nil {
+		return fmt.Errorf("finding recovery worktree: %w", err)
+	}
+	if !inProgress || state.Phase == "complete" {
+		if err := worktree.CheckClean(git.CurrentOps(), root); err != nil {
+			return err
+		}
+	}
+	state.Phase = "restoring"
+	if err := saveRebaseState(gitDir, state); err != nil {
+		return err
 	}
 	if inProgress {
 		if err := git.RebaseAbort(); err != nil {
@@ -563,39 +585,71 @@ func abortRebase(cfg *config.Config, gitDir string) error {
 			return errors.Join(ErrSilent, err)
 		}
 	}
-	root, err := git.RootDir()
-	if err != nil {
-		cfg.Errorf("finding recovery worktree: %s", err)
-		return ErrSilent
-	}
 	if err := worktree.CheckClean(git.CurrentOps(), root); err != nil {
 		cfg.Errorf("recovery state was retained: %s", err)
 		return errors.Join(ErrSilent, err)
 	}
 
-	var restoreErrors []string
-	for branch, sha := range state.OriginalRefs {
-		if err := git.CheckoutBranch(branch); err != nil {
-			restoreErrors = append(restoreErrors, fmt.Sprintf("checkout %s: %s", branch, err))
-			continue
-		}
-		if err := git.ResetHard(sha); err != nil {
-			restoreErrors = append(restoreErrors, fmt.Sprintf("reset %s: %s", branch, err))
+	if err := restoreRebaseRefs(cfg, state.OriginalBranch, state.OriginalRefs); err != nil {
+		return err
+	}
+	return clearRebaseState(gitDir)
+}
+
+func restoreRebaseCheckout(branch string) error {
+	current, err := git.CurrentBranch()
+	if err != nil && !errors.Is(err, cligit.ErrNotOnAnyBranch) {
+		return fmt.Errorf("reading original checkout: %w", err)
+	}
+	if err == nil && current == branch {
+		return nil
+	}
+	root, err := git.RootDir()
+	if err != nil {
+		return err
+	}
+	if err := worktree.CheckClean(git.CurrentOps(), root); err != nil {
+		return err
+	}
+	if err := git.CheckoutBranch(branch); err != nil {
+		return fmt.Errorf("restoring original checkout %s: %w", branch, err)
+	}
+	return nil
+}
+
+func finishLegacyRebase(cfg *config.Config, gitDir string, state *rebaseState, sf *stack.StackFile, s *stack.Stack) error {
+	if state.Phase != "complete" {
+		state.Phase = "complete"
+		state.RemainingBranches = nil
+		if err := saveRebaseState(gitDir, state); err != nil {
+			return err
 		}
 	}
-
-	_ = git.CheckoutBranch(state.OriginalBranch)
-	clearRebaseState(gitDir)
-
-	if len(restoreErrors) > 0 {
-		cfg.Warningf("Rebase aborted but some branches could not be fully restored:")
-		for _, e := range restoreErrors {
-			cfg.Printf("  %s", e)
-		}
-		return ErrSilent
+	if err := restoreRebaseCheckout(state.OriginalBranch); err != nil {
+		return err
+	}
+	updateBaseSHAsWithTrunk(s, state.TrunkSHA)
+	_ = syncStackPRs(cfg, s)
+	if err := stack.Save(gitDir, sf); err != nil {
+		return handleSaveError(cfg, err)
+	}
+	if err := clearRebaseState(gitDir); err != nil {
+		return fmt.Errorf("rebase completed but recovery state could not be cleared: %w", err)
 	}
 
-	cfg.Successf("Rebase aborted and branches restored")
+	trunkRef := state.TrunkRef
+	if trunkRef == "" {
+		trunkRef = s.Trunk.Branch
+	}
+	if state.NoTrunk {
+		cfg.Printf("All branches in stack rebased locally (without trunk)")
+	} else if state.TrunkSHA != "" {
+		cfg.Printf("All branches in stack rebased locally with %s (%s)", trunkRef, short(state.TrunkSHA))
+	} else {
+		cfg.Printf("All branches in stack rebased locally with %s", trunkRef)
+	}
+	cfg.Printf("To push up your changes and open/update the stack of PRs, run `%s`",
+		cfg.ColorCyan("gh stack submit"))
 	return nil
 }
 

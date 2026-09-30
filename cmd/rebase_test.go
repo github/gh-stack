@@ -546,6 +546,8 @@ func TestRebase_Abort_RestoresBranches(t *testing.T) {
 	currentBranch := "b2" // simulating we're on the conflict branch
 
 	mock := newRebaseMock(tmpDir, currentBranch)
+	mock.BranchExistsFn = func(string) (bool, error) { return true, nil }
+	mock.CurrentBranchFn = func() (string, error) { return currentBranch, nil }
 	mock.CheckoutBranchFn = func(name string) error {
 		checkouts = append(checkouts, name)
 		currentBranch = name
@@ -1133,7 +1135,7 @@ func TestRebase_Continue_RebasesRemainingBranches(t *testing.T) {
 	var checkouts []string
 
 	mock := newRebaseMock(tmpDir, "b2")
-	mock.IsRebaseInProgressFn = func() (bool, error) { return true, nil }
+	mock.IsRebaseInProgressFn = func() (bool, error) { return !rebaseContinueCalled, nil }
 	mock.RebaseContinueFn = func(opts git.RebaseOpts) error {
 		rebaseContinueCalled = true
 		return nil
@@ -1210,8 +1212,9 @@ func TestRebase_Continue_QueuedBranchBelowConflict(t *testing.T) {
 
 	mock := newRebaseMock(tmpDir, "b1")
 	mock.BranchExistsFn = func(name string) (bool, error) { return true, nil }
-	mock.IsRebaseInProgressFn = func() (bool, error) { return true, nil }
-	mock.RebaseContinueFn = func(opts git.RebaseOpts) error { return nil }
+	inProgress := true
+	mock.IsRebaseInProgressFn = func() (bool, error) { return inProgress, nil }
+	mock.RebaseContinueFn = func(opts git.RebaseOpts) error { inProgress = false; return nil }
 	mock.RebaseOntoFn = func(newBase, oldBase, branch string, opts git.RebaseOpts) error {
 		rebaseCalls = append(rebaseCalls, rebaseCall{newBase, oldBase, branch})
 		return nil
@@ -1283,7 +1286,7 @@ func TestRebase_Continue_OntoMode(t *testing.T) {
 	var rebaseContinueCalled bool
 
 	mock := newRebaseMock(tmpDir, "b3")
-	mock.IsRebaseInProgressFn = func() (bool, error) { return true, nil }
+	mock.IsRebaseInProgressFn = func() (bool, error) { return !rebaseContinueCalled, nil }
 	mock.RebaseContinueFn = func(opts git.RebaseOpts) error {
 		rebaseContinueCalled = true
 		return nil
@@ -1406,6 +1409,8 @@ func TestRebase_Abort_WithActiveRebase(t *testing.T) {
 	currentBranch := "b2"
 
 	mock := newRebaseMock(tmpDir, currentBranch)
+	mock.BranchExistsFn = func(string) (bool, error) { return true, nil }
+	mock.CurrentBranchFn = func() (string, error) { return currentBranch, nil }
 	mock.IsRebaseInProgressFn = func() (bool, error) { return inProgress, nil }
 	mock.RebaseAbortFn = func() error {
 		rebaseAbortCalled = true
@@ -2970,4 +2975,283 @@ func TestRebase_LegacyContinuePersistsCatalogUnderOperationLock(t *testing.T) {
 	assert.Equal(t, "sha-main", sf.Stacks[0].Branches[0].Base)
 	_, err = os.Stat(filepath.Join(dir, rebaseStateFile))
 	assert.ErrorIs(t, err, os.ErrNotExist)
+}
+
+func TestRebase_LegacyPhaseGuards(t *testing.T) {
+	for _, tc := range []struct {
+		phase string
+		abort bool
+	}{
+		{phase: "applying"},
+		{phase: "restoring"},
+		{phase: "unknown"},
+		{phase: "unknown", abort: true},
+	} {
+		t.Run(fmt.Sprintf("%s/abort=%t", tc.phase, tc.abort), func(t *testing.T) {
+			dir := t.TempDir()
+			writeStackFile(t, dir, stack.Stack{
+				Trunk: stack.BranchRef{Branch: "main"}, Branches: []stack.BranchRef{{Branch: "b1"}},
+			})
+			state := &rebaseState{
+				Phase: tc.phase, OriginalBranch: "b1", ConflictBranch: "b1",
+				OriginalRefs: map[string]string{"b1": "before"},
+			}
+			require.NoError(t, saveRebaseState(dir, state))
+			before, err := os.ReadFile(filepath.Join(dir, rebaseStateFile))
+			require.NoError(t, err)
+			mock := newRebaseMock(dir, "b1")
+			forbidRewriteMutations(t, mock)
+			mock.IsRebaseInProgressFn = func() (bool, error) {
+				t.Error("phase rejection must precede native state queries")
+				return false, nil
+			}
+			mock.RebaseContinueFn = func(git.RebaseOpts) error { t.Error("unexpected native continuation"); return nil }
+			mock.RebaseAbortFn = func() error { t.Error("unexpected native abort"); return nil }
+			restore := git.SetOps(mock)
+			defer restore()
+
+			err = runRebase(issue250TestConfig(t), &rebaseOptions{cont: !tc.abort, abort: tc.abort})
+
+			require.Error(t, err)
+			assert.Contains(t, err.Error(), tc.phase)
+			if tc.phase != "unknown" {
+				assert.Contains(t, err.Error(), "gh stack rebase --abort")
+			}
+			after, err := os.ReadFile(filepath.Join(dir, rebaseStateFile))
+			require.NoError(t, err)
+			assert.Equal(t, before, after)
+		})
+	}
+}
+
+func TestRebase_LegacyCompleteOnlyPublishes(t *testing.T) {
+	dir := t.TempDir()
+	writeStackFile(t, dir, stack.Stack{
+		Trunk: stack.BranchRef{Branch: "main"}, Branches: []stack.BranchRef{{Branch: "b1"}, {Branch: "b2"}},
+	})
+	state := &rebaseState{
+		Phase: "complete", OriginalBranch: "b1", ConflictBranch: "b1",
+		RemainingBranches: []string{"b2"}, OriginalRefs: map[string]string{"b1": "old-b1", "b2": "old-b2"},
+	}
+	require.NoError(t, saveRebaseState(dir, state))
+	mock := newRebaseMock(dir, "b1")
+	forbidRewriteMutations(t, mock)
+	mock.IsRebaseInProgressFn = func() (bool, error) { return true, nil }
+	mock.RebaseContinueFn = func(git.RebaseOpts) error {
+		t.Error("must not continue a new unrelated native operation")
+		return assert.AnError
+	}
+	restore := git.SetOps(mock)
+	defer restore()
+
+	require.NoError(t, runRebase(issue250TestConfig(t), &rebaseOptions{cont: true}))
+
+	assert.True(t, requireGitState(t, mock.IsRebaseInProgress))
+	assert.NoFileExists(t, filepath.Join(dir, rebaseStateFile))
+}
+
+func TestRebase_LegacyCompleteAbortPreservesNewNativeOperation(t *testing.T) {
+	dir := t.TempDir()
+	state := &rebaseState{
+		Phase: "complete", OriginalBranch: "b1", OriginalRefs: map[string]string{"b1": "before"},
+	}
+	require.NoError(t, saveRebaseState(dir, state))
+	before, err := os.ReadFile(filepath.Join(dir, rebaseStateFile))
+	require.NoError(t, err)
+	mock := newRebaseMock(dir, "b1")
+	forbidRewriteMutations(t, mock)
+	mock.IsRebaseInProgressFn = func() (bool, error) { return true, nil }
+	mock.RebaseAbortFn = func() error {
+		t.Fatal("must not abort a native operation started after completion")
+		return nil
+	}
+	restore := git.SetOps(mock)
+	defer restore()
+
+	require.Error(t, runRebase(issue250TestConfig(t), &rebaseOptions{abort: true}))
+
+	after, err := os.ReadFile(filepath.Join(dir, rebaseStateFile))
+	require.NoError(t, err)
+	assert.Equal(t, before, after)
+}
+
+func TestRebase_LegacyAbortRetainsFailures(t *testing.T) {
+	for _, failure := range []string{"native abort", "branch checkout", "reset", "original checkout", "branch lookup"} {
+		t.Run(failure, func(t *testing.T) {
+			dir := t.TempDir()
+			refs := map[string]string{"b1": "new-b1", "b2": "new-b2"}
+			state := &rebaseState{
+				Phase: "conflict", OriginalBranch: "main", ConflictBranch: "b2",
+				OriginalRefs: map[string]string{"b1": "old-b1", "b2": "old-b2"},
+			}
+			require.NoError(t, saveRebaseState(dir, state))
+			current, failing := "b2", true
+			inProgress := failure == "native abort"
+			mock := newRebaseMock(dir, current)
+			mock.CurrentBranchFn = func() (string, error) { return current, nil }
+			mock.BranchExistsFn = func(branch string) (bool, error) {
+				if failing && failure == "branch lookup" && branch == "b2" {
+					return false, assert.AnError
+				}
+				return true, nil
+			}
+			mock.RevParseFn = func(ref string) (string, error) { return refs[ref], nil }
+			mock.IsRebaseInProgressFn = func() (bool, error) { return inProgress, nil }
+			mock.RebaseAbortFn = func() error {
+				if failing && failure == "native abort" {
+					return assert.AnError
+				}
+				inProgress = false
+				return nil
+			}
+			mock.CheckoutBranchFn = func(branch string) error {
+				if failing && ((failure == "branch checkout" && branch == "b2") || (failure == "original checkout" && branch == "main")) {
+					return assert.AnError
+				}
+				current = branch
+				return nil
+			}
+			mock.ResetHardFn = func(sha string) error {
+				if failing && failure == "reset" && current == "b2" {
+					return assert.AnError
+				}
+				refs[current] = sha
+				return nil
+			}
+			restore := git.SetOps(mock)
+			defer restore()
+			cfg := issue250TestConfig(t)
+
+			require.Error(t, runRebase(cfg, &rebaseOptions{abort: true}))
+			retained, err := loadRebaseState(dir)
+			require.NoError(t, err, "failure must retain recovery state")
+			assert.Equal(t, state.OriginalRefs, retained.OriginalRefs)
+			if failure == "branch lookup" {
+				assert.Equal(t, state, retained, "query errors must precede journal changes")
+			} else {
+				assert.Equal(t, "restoring", retained.Phase)
+			}
+
+			failing = false
+			require.NoError(t, runRebase(cfg, &rebaseOptions{abort: true}))
+			assert.Equal(t, state.OriginalRefs, refs)
+			assert.Equal(t, "main", current)
+			assert.NoFileExists(t, filepath.Join(dir, rebaseStateFile))
+		})
+	}
+}
+
+func TestRebase_LegacyContinueRollbackRetainsJournal(t *testing.T) {
+	for _, reason := range []string{"cascade error", "verification failure"} {
+		t.Run(reason, func(t *testing.T) {
+			dir := t.TempDir()
+			writeStackFile(t, dir, stack.Stack{
+				Trunk: stack.BranchRef{Branch: "main"}, Branches: []stack.BranchRef{{Branch: "b1"}, {Branch: "b2"}},
+			})
+			state := &rebaseState{
+				OriginalBranch: "b1", ConflictBranch: "b1", RemainingBranches: []string{"b2"},
+				OriginalRefs: map[string]string{"b1": "old-b1", "b2": "old-b2"},
+			}
+			require.NoError(t, saveRebaseState(dir, state))
+			refs := map[string]string{"b1": "new-b1", "b2": "new-b2"}
+			current, failing := "b1", true
+			mock := newRebaseMock(dir, current)
+			mock.CurrentBranchFn = func() (string, error) { return current, nil }
+			mock.BranchExistsFn = func(string) (bool, error) { return true, nil }
+			mock.RevParseFn = func(ref string) (string, error) { return refs[ref], nil }
+			mock.CheckoutBranchFn = func(branch string) error { current = branch; return nil }
+			mock.ResetHardFn = func(sha string) error {
+				if failing && current == "b2" {
+					return assert.AnError
+				}
+				refs[current] = sha
+				return nil
+			}
+			mock.RebaseOntoFn = func(_, _, branch string, _ git.RebaseOpts) error {
+				current = branch
+				if reason == "cascade error" {
+					return &git.RebaseStartError{Err: assert.AnError}
+				}
+				return nil
+			}
+			mock.IsAncestorFn = func(base, branch string) (bool, error) {
+				return !(reason == "verification failure" && base == "main" && branch == "b1"), nil
+			}
+			restore := git.SetOps(mock)
+			defer restore()
+			cfg := issue250TestConfig(t)
+
+			require.Error(t, runRebase(cfg, &rebaseOptions{cont: true}))
+			retained, err := loadRebaseState(dir)
+			require.NoError(t, err)
+			assert.Equal(t, "restoring", retained.Phase)
+			assert.Equal(t, "old-b1", refs["b1"])
+			assert.Equal(t, "new-b2", refs["b2"])
+
+			failing = false
+			require.NoError(t, runRebase(cfg, &rebaseOptions{abort: true}))
+			assert.Equal(t, state.OriginalRefs, refs)
+			assert.NoFileExists(t, filepath.Join(dir, rebaseStateFile))
+		})
+	}
+}
+
+func TestRebase_LegacyCompletionRetainsRetryState(t *testing.T) {
+	for _, failure := range []string{"catalog save", "original checkout"} {
+		t.Run(failure, func(t *testing.T) {
+			dir := t.TempDir()
+			writeStackFile(t, dir, stack.Stack{
+				Trunk: stack.BranchRef{Branch: "main"}, Branches: []stack.BranchRef{{Branch: "b1"}},
+			})
+			require.NoError(t, saveRebaseState(dir, &rebaseState{
+				OriginalBranch: "main", ConflictBranch: "b1", OriginalRefs: map[string]string{"b1": "before"},
+			}))
+			current, failing, inProgress := "b1", true, true
+			continues := 0
+			mock := newRebaseMock(dir, current)
+			mock.CurrentBranchFn = func() (string, error) { return current, nil }
+			mock.IsRebaseInProgressFn = func() (bool, error) { return inProgress, nil }
+			mock.RebaseContinueFn = func(git.RebaseOpts) error {
+				continues++
+				inProgress = false
+				return nil
+			}
+			mock.CheckoutBranchFn = func(branch string) error {
+				if failing && failure == "original checkout" {
+					return assert.AnError
+				}
+				current = branch
+				return nil
+			}
+			restore := git.SetOps(mock)
+			defer restore()
+			oldTimeout := stack.LockTimeout
+			stack.LockTimeout = 0
+			defer func() { stack.LockTimeout = oldTimeout }()
+			var lock *stack.FileLock
+			if failure == "catalog save" {
+				var err error
+				lock, err = stack.Lock(dir)
+				require.NoError(t, err)
+				defer lock.Unlock()
+			}
+			cfg := issue250TestConfig(t)
+
+			require.Error(t, runRebase(cfg, &rebaseOptions{cont: true}))
+			retained, err := loadRebaseState(dir)
+			require.NoError(t, err)
+			assert.Equal(t, "complete", retained.Phase)
+			assert.Equal(t, 1, continues)
+			if lock != nil {
+				lock.Unlock()
+				inProgress = true
+			}
+			failing = false
+
+			require.NoError(t, runRebase(cfg, &rebaseOptions{cont: true}))
+			assert.Equal(t, 1, continues, "completed publication must not repeat native continuation")
+			assert.Equal(t, "main", current)
+			assert.NoFileExists(t, filepath.Join(dir, rebaseStateFile))
+		})
+	}
 }

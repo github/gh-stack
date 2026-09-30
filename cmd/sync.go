@@ -501,15 +501,18 @@ func restoreBranches(originalRefs map[string]string) ([]string, error) {
 			return nil, fmt.Errorf("checking branch %s before restoring: %w", branch, err)
 		}
 		if exists {
-			branches = append(branches, branch)
+			sha, err := git.RevParse(branch)
+			if err != nil {
+				return nil, fmt.Errorf("reading branch %s before restoring: %w", branch, err)
+			}
+			if sha != originalRefs[branch] {
+				branches = append(branches, branch)
+			}
 		}
 	}
 	var errors []string
 	for _, branch := range branches {
 		sha := originalRefs[branch]
-		if currentSHA, err := git.RevParse(branch); err == nil && currentSHA == sha {
-			continue
-		}
 		if err := git.CheckoutBranch(branch); err != nil {
 			errors = append(errors, fmt.Sprintf("checkout %s: %s", branch, err))
 			continue
@@ -525,10 +528,16 @@ func restoreRebaseRefs(cfg *config.Config, originalBranch string, originalRefs m
 	restoreErrors, err := restoreBranches(originalRefs)
 	if err != nil {
 		cfg.Errorf("%s", err)
-		return ErrSilent
+		return errors.Join(ErrSilent, err)
 	}
-	_ = git.CheckoutBranch(originalBranch)
+	checkoutErr := restoreRebaseCheckout(originalBranch)
+	if checkoutErr != nil {
+		restoreErrors = append(restoreErrors, checkoutErr.Error())
+	}
 	reportRestoreStatus(cfg, restoreErrors)
+	if len(restoreErrors) > 0 {
+		return errors.Join(ErrSilent, errors.New(strings.Join(restoreErrors, "\n")), checkoutErr)
+	}
 	return nil
 }
 

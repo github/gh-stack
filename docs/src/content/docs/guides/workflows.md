@@ -71,6 +71,8 @@ Resolve and stage conflicts in the worktree named by the diagnostic. You can run
 
 Finish paused operations before changing gh-stack versions or preview stages. Origin-only journals are explicitly marked; a build that cannot interpret a journal's execution lifecycle must leave it intact. If recovery reports an incompatible lifecycle, use the matching build in the recorded origin to finish or abort it instead of editing or removing the journal.
 
+Legacy recovery remains in its original worktree. Interrupted application or restoration must be aborted; a completed operation retries only its original checkout and catalog publication. Failed restoration, checkout, or publication retains the journal for recovery rather than replaying completed work.
+
 gh-stack serializes mutations across the clone, including independent stacks. Read-only views remain available. A paused rebase or modify journal blocks new gh-stack mutations until recovery. These locks coordinate **gh-stack only**, not arbitrary Git commands, editors, or other tools. Keep affected worktrees quiescent while history is being rewritten. During a pause, make only the requested conflict-resolution edits and staging in the reported worktree; avoid unrelated commits or checkout changes on participating branches.
 
 **Core modify limitation:** `modify` works inside a linked worktree only when every stack branch is unoccupied or checked out there. Distributed modify is temporarily rejected before the TUI or apply changes. Trunk ownership alone is allowed. Its `--continue` and `--abort` use the recorded origin even when invoked elsewhere; see [Restructuring stacks](/gh-stack/guides/modify/).
