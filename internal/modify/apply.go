@@ -385,22 +385,27 @@ func resolveCheckoutBranch(originalBranch string, plan []Action, snapshot Snapsh
 				return a.NewName
 			}
 
-		case "fold_down":
-			// Fold-down merges into the branch below in the original order.
-			if target := adjacentSnapshotBranch(snapshot, originalBranch, -1); target != "" {
-				resolved := resolvedName(target)
-				if s.IndexOf(resolved) >= 0 {
-					return resolved
-				}
+		case "fold_down", "fold_up":
+			if target := resolvedName(a.Target); target != "" && s.IndexOf(target) >= 0 {
+				return target
 			}
-
-		case "fold_up":
-			// Fold-up merges into the branch above in the original order.
-			if target := adjacentSnapshotBranch(snapshot, originalBranch, +1); target != "" {
-				resolved := resolvedName(target)
-				if s.IndexOf(resolved) >= 0 {
-					return resolved
+			// Legacy plans have no compiled receiver. Skip removed neighbors
+			// in the fold direction rather than selecting the topmost branch.
+			direction := -1
+			if a.Type == "fold_up" {
+				direction = 1
+			}
+			for i, branch := range snapshot.Branches {
+				if branch.Name != originalBranch {
+					continue
 				}
+				for j := i + direction; j >= 0 && j < len(snapshot.Branches); j += direction {
+					target := resolvedName(snapshot.Branches[j].Name)
+					if index := s.IndexOf(target); index >= 0 && !s.Branches[index].IsMerged() {
+						return target
+					}
+				}
+				break
 			}
 
 		case "drop":
@@ -417,21 +422,6 @@ func resolveCheckoutBranch(originalBranch string, plan []Action, snapshot Snapsh
 		return s.Branches[len(s.Branches)-1].Branch
 	}
 	return originalBranch
-}
-
-// adjacentSnapshotBranch returns the branch adjacent to target in the snapshot.
-// direction -1 means below (toward trunk), +1 means above (away from trunk).
-func adjacentSnapshotBranch(snapshot Snapshot, target string, direction int) string {
-	for i, bs := range snapshot.Branches {
-		if bs.Name == target {
-			adj := i + direction
-			if adj >= 0 && adj < len(snapshot.Branches) {
-				return snapshot.Branches[adj].Name
-			}
-			return ""
-		}
-	}
-	return ""
 }
 
 // nearestSurvivingBranch finds the closest branch to the dropped branch that

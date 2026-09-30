@@ -396,7 +396,11 @@ func restoreCheckout(cfg *config.Config, state *StateFile, s *stack.Stack, abort
 	}
 	target := original
 	if !aborting {
-		target = resolveCheckoutBranch(state.OriginalBranch, state.Plan, state.Snapshot, s)
+		plan := state.Execution
+		if plan == nil {
+			plan = state.Plan
+		}
+		target = resolveCheckoutBranch(state.OriginalBranch, plan, state.Snapshot, s)
 	}
 	owner, err := foreignCheckoutOwner(ctx, target)
 	if err != nil {

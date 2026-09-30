@@ -73,7 +73,7 @@ Reverses the most recent staged action. You can undo multiple times to step back
 
 Press `Ctrl+S` to apply all staged changes. Nothing is modified until you save. The apply phase renames branches, inserts new branches, folds/drops branches, and runs a cascading rebase to create a linear commit history with the desired stack state.
 
-Other worktrees retain their branch choices throughout the operation. The initiating worktree returns to its original branch, using the new name if renamed. When that layer was dropped or folded, modify chooses the nearest surviving branch only if it is available here. If it is checked out elsewhere, the initiating worktree keeps the preserved original branch and reports the survivor's owning path instead. No worktrees are created, removed, or detached.
+Other worktrees retain their branch choices throughout the operation. The initiating worktree returns to its original branch, using the new name if renamed. If that layer was folded, modify selects the branch that received its commits, even across dropped layers or a receiver rename. If it was dropped, modify selects the nearest surviving branch. This changes the initiating checkout only if the selected branch is available here; otherwise it keeps the preserved original branch and reports the survivor's owning path instead. No worktrees are created, removed, or detached.
 
 ### Handling conflicts
 

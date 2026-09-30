@@ -2177,6 +2177,134 @@ func TestResolveCheckoutBranch_FoldUp(t *testing.T) {
 	assert.Equal(t, "C", result)
 }
 
+func TestResolveCheckoutBranch_FoldReceiverAcrossRemovedBranches(t *testing.T) {
+	snapshot := Snapshot{Branches: []BranchSnapshot{
+		{Name: "A"}, {Name: "B"}, {Name: "C"}, {Name: "D"}, {Name: "E"},
+	}}
+	for _, tt := range []struct {
+		name, original, kind, target, renamed, want string
+		branches                                    []string
+	}{
+		{"compiled fold up", "B", "fold_up", "D", "", "D", []string{"A", "D", "E"}},
+		{"compiled fold down", "D", "fold_down", "B", "", "B", []string{"A", "B", "E"}},
+		{"compiled renamed receiver", "B", "fold_up", "new-D", "", "new-D", []string{"A", "new-D", "E"}},
+		{"legacy fold up", "B", "fold_up", "", "", "D", []string{"A", "D", "E"}},
+		{"legacy fold down", "D", "fold_down", "", "", "B", []string{"A", "B", "E"}},
+		{"legacy renamed receiver", "B", "fold_up", "", "D", "new-D", []string{"A", "new-D", "E"}},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			s := &stack.Stack{Trunk: stack.BranchRef{Branch: "main"}}
+			for _, name := range tt.branches {
+				s.Branches = append(s.Branches, stack.BranchRef{Branch: name})
+			}
+			plan := []Action{{Type: tt.kind, Branch: tt.original, Target: tt.target}}
+			if tt.renamed != "" {
+				plan = append(plan, Action{Type: "rename", Branch: tt.renamed, NewName: tt.want})
+			}
+			assert.Equal(t, tt.want, resolveCheckoutBranch(tt.original, plan, snapshot, s))
+		})
+	}
+}
+
+func TestRestoreCheckout_UsesCompiledFoldReceiver(t *testing.T) {
+	for _, tt := range []struct {
+		name              string
+		foreign, aborting bool
+		receiver, want    string
+	}{
+		{"available receiver", false, false, "D", "D"},
+		{"foreign receiver", true, false, "D", "B"},
+		{"renamed foreign receiver", true, false, "new-D", "B"},
+		{"abort restores original", true, true, "D", "B"},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			common, origin, foreign := t.TempDir(), t.TempDir(), t.TempDir()
+			current := "A"
+			var checkouts []string
+			originOps := &git.MockOps{
+				CommonDirFn:     func() (string, error) { return common, nil },
+				GitDirFn:        func() (string, error) { return common, nil },
+				RootDirFn:       func() (string, error) { return origin, nil },
+				CurrentBranchFn: func() (string, error) { return current, nil },
+				CheckoutBranchFn: func(name string) error {
+					checkouts = append(checkouts, name)
+					current = name
+					return nil
+				},
+			}
+			foreignOps := &git.MockOps{
+				CommonDirFn: func() (string, error) { return common, nil },
+				GitDirFn:    func() (string, error) { return filepath.Join(common, "worktrees", "receiver"), nil },
+				RootDirFn:   func() (string, error) { return foreign, nil },
+				CheckoutBranchFn: func(string) error {
+					t.Fatal("must not switch the receiver's worktree")
+					return nil
+				},
+			}
+			originOps.ForWorktreeFn = func(path string) (git.Ops, error) {
+				if worktree.SamePath(path, foreign) {
+					return foreignOps, nil
+				}
+				require.True(t, worktree.SamePath(path, origin))
+				return originOps, nil
+			}
+			originOps.WorktreesFn = func() ([]git.Worktree, error) {
+				trees := []git.Worktree{{Path: origin, Branch: current}}
+				if tt.foreign {
+					trees = append(trees, git.Worktree{Path: foreign, Branch: tt.receiver})
+				}
+				return trees, nil
+			}
+			restore := git.SetOps(originOps)
+			defer restore()
+			original := stack.Stack{Trunk: stack.BranchRef{Branch: "main"}, Branches: []stack.BranchRef{
+				{Branch: "A"}, {Branch: "B"}, {Branch: "C"}, {Branch: "D"}, {Branch: "E"},
+			}}
+			nodes := makeNodes(&original)
+			nodes[1].PendingAction = &modifyview.PendingAction{Type: modifyview.ActionFoldUp}
+			nodes[1].Removed = true
+			nodes[2].PendingAction = &modifyview.PendingAction{Type: modifyview.ActionDrop}
+			nodes[2].Removed = true
+			if tt.receiver != "D" {
+				nodes[3].PendingAction = &modifyview.PendingAction{Type: modifyview.ActionRename, NewName: tt.receiver}
+			}
+			execution, desired, err := compileActions(&original, nodes)
+			require.NoError(t, err)
+			require.Contains(t, execution, Action{Type: "fold_up", Branch: "B", Target: tt.receiver})
+			state := &StateFile{
+				OriginalBranch: "B", Plan: BuildPlan(nodes), Execution: execution, DesiredOrder: desired,
+				Worktrees: &worktree.Context{Origin: worktree.Location{Path: origin}},
+			}
+			for _, branch := range original.Branches {
+				state.Snapshot.Branches = append(state.Snapshot.Branches, BranchSnapshot{Name: branch.Branch})
+			}
+			require.NoError(t, SaveState(common, state))
+			state, err = LoadState(common)
+			require.NoError(t, err)
+			require.NotNil(t, state)
+			s := &stack.Stack{Trunk: original.Trunk, Branches: []stack.BranchRef{
+				{Branch: "A"}, {Branch: tt.receiver}, {Branch: "E"},
+			}}
+			cfg, outR, errR := config.NewTestConfig()
+			defer outR.Close()
+			defer errR.Close()
+			err = restoreCheckout(cfg, state, s, tt.aborting)
+			require.NoError(t, cfg.Out.Close())
+			require.NoError(t, cfg.Err.Close())
+			require.NoError(t, err)
+			output, err := io.ReadAll(errR)
+			require.NoError(t, err)
+			assert.Equal(t, []string{tt.want}, checkouts)
+			assert.Equal(t, tt.want, current)
+			if tt.foreign && !tt.aborting {
+				assert.Contains(t, string(output), "surviving branch "+tt.receiver)
+				assert.Contains(t, string(output), foreign)
+			}
+			assert.NotContains(t, string(output), "surviving branch E")
+		})
+	}
+}
+
 func TestResolveCheckoutBranch_Dropped_HasAbove(t *testing.T) {
 	// B is dropped. Stack has [A, C]. Should pick C (above B).
 	s := &stack.Stack{
