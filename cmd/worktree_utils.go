@@ -409,8 +409,18 @@ func requireLocalBranches(cfg *config.Config, branches []string) error {
 }
 
 func reportWorktreeOwner(cfg *config.Config, target, path string) {
-	cfg.Infof("Branch %q is checked out in worktree %s; the current checkout was left unchanged", target, path)
-	cfg.Printf("To work there, run: cd -- '%s'", strings.ReplaceAll(path, "'", "'\\''"))
+	commandPath := path
+	if strings.ContainsFunc(path, func(r rune) bool {
+		return !((r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z') ||
+			(r >= '0' && r <= '9') || strings.ContainsRune("/._-+@%=,:", r))
+	}) {
+		commandPath = "'" + strings.ReplaceAll(path, "'", "'\\''") + "'"
+	}
+	cfg.Infof("Branch %q is already checked out in another worktree.", target)
+	cfg.Printf("  Your current checkout is unchanged.")
+	cfg.Printf("")
+	cfg.Printf("To work on this branch, run:")
+	cfg.Printf("  %s", cfg.ColorCyan("cd "+commandPath))
 }
 
 func checkoutWorktreeBranch(cfg *config.Config, target string, printPath bool) error {

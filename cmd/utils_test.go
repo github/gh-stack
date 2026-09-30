@@ -500,6 +500,54 @@ func TestStackLookupError_CommandCallerMapping(t *testing.T) {
 	}
 }
 
+func TestReportWorktreeOwner_Command(t *testing.T) {
+	for _, tt := range []struct {
+		name, path, quoted string
+	}{
+		{"clean path", "/Users/skarim/github/copilot-worktrees/gh-stack/skarim-solid-dollop", "/Users/skarim/github/copilot-worktrees/gh-stack/skarim-solid-dollop"},
+		{"safe punctuation", "/tmp/worktree_1.2-3+tag@org=branch%20,:", "/tmp/worktree_1.2-3+tag@org=branch%20,:"},
+		{"spaces", "/tmp/my worktree", "'/tmp/my worktree'"},
+		{"apostrophe", "/tmp/owner's worktree", `'/tmp/owner'\''s worktree'`},
+		{"double quotes", `/tmp/"quoted"`, `'/tmp/"quoted"'`},
+		{"dollar expansion", "/tmp/$HOME", "'/tmp/$HOME'"},
+		{"command substitution", "/tmp/$(pwd)", "'/tmp/$(pwd)'"},
+		{"backticks", "/tmp/`pwd`", "'/tmp/`pwd`'"},
+		{"operators", "/tmp/a;b&c|d<e>f", "'/tmp/a;b&c|d<e>f'"},
+		{"globs", "/tmp/[abc]*?{x,y}", "'/tmp/[abc]*?{x,y}'"},
+		{"shell specials", "/tmp/!^~#(name)", "'/tmp/!^~#(name)'"},
+		{"backslash", `/tmp/a\b`, `'/tmp/a\b'`},
+		{"tab", "/tmp/a\tb", "'/tmp/a\tb'"},
+		{"newline", "/tmp/a\nb", "'/tmp/a\nb'"},
+	} {
+		for _, colored := range []bool{false, true} {
+			t.Run(fmt.Sprintf("%s/colored=%t", tt.name, colored), func(t *testing.T) {
+				cfg, outR, errR := config.NewTestConfig()
+				color := func(s string) string { return s }
+				if colored {
+					color = func(s string) string { return "\x1b[36m" + s + "\x1b[0m" }
+				}
+				cfg.ColorCyan = color
+				target := "skarim/worktrees-distributed-rebase-sync"
+
+				reportWorktreeOwner(cfg, target, tt.path)
+
+				out, diagnostics := commandOutput(t, cfg, outR, errR)
+				assert.Empty(t, out)
+				assert.Equal(t, fmt.Sprintf(
+					"%s Branch %q is already checked out in another worktree.\n"+
+						"  Your current checkout is unchanged.\n\n"+
+						"To work on this branch, run:\n  %s\n",
+					color("\u2139"), target, color("cd "+tt.quoted),
+				), diagnostics)
+				assert.Equal(t, 1, strings.Count(diagnostics, tt.quoted), "show the complete path only in the command")
+				assert.NotContains(t, diagnostics, "cd --")
+				assert.NotContains(t, diagnostics, "$ cd")
+				assert.NotContains(t, diagnostics, "Switched")
+			})
+		}
+	}
+}
+
 func TestCheckoutWorktreeBranch_OutputContract(t *testing.T) {
 	tests := []struct {
 		name, current     string
@@ -565,10 +613,12 @@ func TestCheckoutWorktreeBranch_OutputContract(t *testing.T) {
 			}
 			if tt.foreign && !tt.pathMode {
 				assert.ErrorIs(t, err, ErrInvalidArgs)
-				assert.Contains(t, diagnostics, owner)
-				assert.Contains(t, diagnostics, "cd -- '")
-				assert.Contains(t, diagnostics, "'\\''")
+				quotedOwner := "'" + strings.ReplaceAll(owner, "'", "'\\''") + "'"
+				assert.Contains(t, diagnostics, "\n  cd "+quotedOwner+"\n")
+				assert.Equal(t, 1, strings.Count(diagnostics, quotedOwner))
 				assert.NotContains(t, diagnostics, "Switched")
+			} else if tt.foreign {
+				assert.Empty(t, diagnostics, "path mode must not print ownership guidance")
 			}
 		})
 	}

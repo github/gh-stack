@@ -34,7 +34,7 @@ func TestSwitch_ForeignOwnerGuidance(t *testing.T) {
 	out, diagnostics := commandOutput(t, cfg, outR, errR)
 	assert.Empty(t, out)
 	assert.Contains(t, diagnostics, owner)
-	assert.Contains(t, diagnostics, "cd --")
+	assert.Contains(t, diagnostics, "\n  cd ")
 	assert.NotContains(t, diagnostics, "Switched to")
 }
 

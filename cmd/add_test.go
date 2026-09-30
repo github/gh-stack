@@ -91,7 +91,7 @@ func TestAdd_ForeignAdoptionAndCommitPreflight(t *testing.T) {
 				assert.Equal(t, []string{"b1", "b2"}, sf.Stacks[0].BranchNames())
 				assert.Equal(t, "adopted-base", sf.Stacks[0].Branches[1].Base)
 				assert.Contains(t, diagnostics, "Adopted")
-				assert.Contains(t, diagnostics, "left unchanged")
+				assert.Contains(t, diagnostics, "Your current checkout is unchanged.")
 			}
 		})
 	}

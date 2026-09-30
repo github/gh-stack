@@ -59,7 +59,7 @@ func TestInit_AdoptsForeignBranchInSharedCatalog(t *testing.T) {
 	out, diagnostics := commandOutput(t, cfg, outR, errR)
 	assert.Empty(t, out)
 	assert.Contains(t, diagnostics, owner)
-	assert.Contains(t, diagnostics, "left unchanged")
+	assert.Contains(t, diagnostics, "Your current checkout is unchanged.")
 	assert.NotContains(t, diagnostics, "You're on foreign")
 	sf, err := stack.Load(common)
 	require.NoError(t, err)

@@ -5,6 +5,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/cli/go-gh/v2/pkg/api"
@@ -105,7 +106,9 @@ func TestCheckout_RealLinkedWorktreeFromSubdirectory(t *testing.T) {
 	assert.ErrorIs(t, runCheckout(cfg, &checkoutOptions{target: "foreign"}), ErrInvalidArgs)
 	out, diagnostics := commandOutput(t, cfg, outR, errR)
 	assert.Empty(t, out)
-	assert.Contains(t, diagnostics, actualOwner)
+	quotedOwner := "'" + strings.ReplaceAll(actualOwner, "'", "'\\''") + "'"
+	assert.Contains(t, diagnostics, "\n  cd "+quotedOwner+"\n")
+	assert.Equal(t, 1, strings.Count(diagnostics, quotedOwner))
 	assert.Equal(t, "local", issue250Git(t, root, "branch", "--show-current"))
 	assert.Equal(t, "foreign", issue250Git(t, owner, "branch", "--show-current"))
 
