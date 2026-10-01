@@ -40,7 +40,7 @@ body:
     validations:
       required: true
 
-  - type: textarea
+  - type: input
     id: gh-version
     attributes:
       label: GitHub CLI version
