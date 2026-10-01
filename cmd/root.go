@@ -150,6 +150,10 @@ locally, then push to GitHub to create your stack of PRs.`,
 	feedbackCmd.GroupID = "utils"
 	root.AddCommand(feedbackCmd)
 
+	upgradeCmd := UpgradeCmd(cfg)
+	upgradeCmd.GroupID = "utils"
+	root.AddCommand(upgradeCmd)
+
 	return root
 }
 
