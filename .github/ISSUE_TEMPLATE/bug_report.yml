@@ -36,7 +36,6 @@ body:
     attributes:
       label: gh-stack version
       description: Paste the exact output from `gh stack --version`.
-      render: shell
     validations:
       required: true
 
@@ -45,7 +44,6 @@ body:
     attributes:
       label: GitHub CLI version
       description: Paste the exact output from `gh --version`.
-      render: shell
     validations:
       required: true
 
@@ -100,7 +98,6 @@ body:
     attributes:
       label: Terminal output
       description: Paste relevant output or write `N/A`. Redact credentials and other sensitive information.
-      render: shell
     validations:
       required: true
 
