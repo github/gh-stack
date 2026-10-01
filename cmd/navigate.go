@@ -7,6 +7,8 @@ import (
 	"github.com/spf13/cobra"
 )
 
+const navigationPrintPathHelp = "Print the target worktree path without switching a branch held elsewhere"
+
 func UpCmd(cfg *config.Config) *cobra.Command {
 	var printPath bool
 	cmd := &cobra.Command{
@@ -33,7 +35,7 @@ Merged branches are automatically skipped.`,
 			return runNavigateWithPath(cfg, n, printPath)
 		},
 	}
-	cmd.Flags().BoolVar(&printPath, "print-path", false, "Print the target worktree path without switching a branch held elsewhere")
+	cmd.Flags().BoolVar(&printPath, "print-path", false, navigationPrintPathHelp)
 	return cmd
 }
 
@@ -63,7 +65,7 @@ Merged branches are automatically skipped.`,
 			return runNavigateWithPath(cfg, -n, printPath)
 		},
 	}
-	cmd.Flags().BoolVar(&printPath, "print-path", false, "Print the target worktree path without switching a branch held elsewhere")
+	cmd.Flags().BoolVar(&printPath, "print-path", false, navigationPrintPathHelp)
 	return cmd
 }
 
@@ -81,7 +83,7 @@ Merged branches are automatically skipped.`,
 			return runNavigateToEndWithPath(cfg, true, printPath)
 		},
 	}
-	cmd.Flags().BoolVar(&printPath, "print-path", false, "Print the target worktree path without switching a branch held elsewhere")
+	cmd.Flags().BoolVar(&printPath, "print-path", false, navigationPrintPathHelp)
 	return cmd
 }
 
@@ -99,7 +101,7 @@ Merged branches are automatically skipped.`,
 			return runNavigateToEndWithPath(cfg, false, printPath)
 		},
 	}
-	cmd.Flags().BoolVar(&printPath, "print-path", false, "Print the target worktree path without switching a branch held elsewhere")
+	cmd.Flags().BoolVar(&printPath, "print-path", false, navigationPrintPathHelp)
 	return cmd
 }
 
