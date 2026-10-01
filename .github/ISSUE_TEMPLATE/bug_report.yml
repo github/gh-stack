@@ -31,7 +31,7 @@ body:
     validations:
       required: true
 
-  - type: textarea
+  - type: input
     id: gh-stack-version
     attributes:
       label: gh-stack version
