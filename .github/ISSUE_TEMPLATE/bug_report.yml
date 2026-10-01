@@ -1,0 +1,115 @@
+name: Bug report
+description: Report a bug or unexpected behavior in gh-stack
+title: "[Bug]: "
+labels:
+  - bug
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thank you for taking the time to report a bug. Please complete the fields below so we can investigate efficiently.
+
+        Before filing, run `gh extension upgrade stack` and confirm the problem still occurs on the latest stable release.
+
+        For security vulnerabilities, follow the instructions in our [security policy](https://github.com/github/gh-stack/security/policy) instead of opening a public issue.
+
+  - type: textarea
+    id: description
+    attributes:
+      label: Describe the bug
+      description: Clearly describe what went wrong.
+      placeholder: What happened?
+    validations:
+      required: true
+
+  - type: input
+    id: affected-command
+    attributes:
+      label: Affected command
+      description: Which gh-stack command triggered the problem?
+      placeholder: gh stack rebase
+    validations:
+      required: true
+
+  - type: textarea
+    id: gh-stack-version
+    attributes:
+      label: gh-stack version
+      description: Paste the exact output from `gh stack version`.
+      render: shell
+    validations:
+      required: true
+
+  - type: textarea
+    id: gh-version
+    attributes:
+      label: GitHub CLI version
+      description: Paste the exact output from `gh --version`.
+      render: shell
+    validations:
+      required: true
+
+  - type: input
+    id: operating-system
+    attributes:
+      label: Operating system
+      description: Include the operating system and version.
+      placeholder: macOS 26.0, Ubuntu 24.04, or Windows 11
+    validations:
+      required: true
+
+  - type: input
+    id: shell
+    attributes:
+      label: Shell
+      description: Which shell were you using?
+      placeholder: zsh, bash, fish, or PowerShell
+    validations:
+      required: true
+
+  - type: textarea
+    id: steps-to-reproduce
+    attributes:
+      label: Steps to reproduce
+      description: List the commands and steps needed to reproduce the problem.
+      placeholder: |
+        1. Run `gh stack ...`
+        2. Select ...
+        3. Observe ...
+    validations:
+      required: true
+
+  - type: textarea
+    id: expected-behavior
+    attributes:
+      label: Expected behavior
+      description: What did you expect to happen?
+    validations:
+      required: true
+
+  - type: textarea
+    id: actual-behavior
+    attributes:
+      label: Actual behavior
+      description: What happened instead?
+    validations:
+      required: true
+
+  - type: textarea
+    id: terminal-output
+    attributes:
+      label: Terminal output
+      description: Paste relevant output or write `N/A`. Redact credentials and other sensitive information.
+      render: shell
+    validations:
+      required: true
+
+  - type: checkboxes
+    id: preflight
+    attributes:
+      label: Preflight checks
+      options:
+        - label: I searched the existing issues for duplicates.
+          required: true
+        - label: I ran `gh extension upgrade stack` and reproduced this issue on the latest stable release.
+          required: true
