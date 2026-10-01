@@ -35,7 +35,7 @@ body:
     id: gh-stack-version
     attributes:
       label: gh-stack version
-      description: Paste the exact output from `gh stack version`.
+      description: Paste the exact output from `gh stack --version`.
       render: shell
     validations:
       required: true
