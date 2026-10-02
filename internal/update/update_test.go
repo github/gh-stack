@@ -370,7 +370,12 @@ func TestCheck_ReleaseMetadata(t *testing.T) {
 			assert.Equal(t, tt.wantNotice, notice != nil)
 			s, err := readState(c.statePath, c.now())
 			require.NoError(t, err)
-			assert.Equal(t, c.now(), s.LastCheckedAt)
+			assert.Equal(t, c.now(), s.LastAttemptedAt)
+			if tt.wantErr {
+				assert.True(t, s.LastCheckedAt.IsZero())
+			} else {
+				assert.Equal(t, c.now(), s.LastCheckedAt)
+			}
 			if !tt.wantNotice {
 				assert.Empty(t, s.LatestVersion)
 			}
@@ -382,8 +387,11 @@ func TestCheck_FailedAttemptsAreThrottled(t *testing.T) {
 	for _, status := range []int{0, http.StatusUnauthorized, http.StatusForbidden, http.StatusNotFound, http.StatusTooManyRequests, http.StatusInternalServerError} {
 		t.Run(fmt.Sprint(status), func(t *testing.T) {
 			c := newTestChecker(t)
+			now := c.now()
+			start := now
+			c.now = func() time.Time { return now }
 			require.NoError(t, writeState(c.statePath, state{
-				LastCheckedAt: c.now().Add(-checkInterval),
+				LastCheckedAt: start.Add(-checkInterval),
 				LatestVersion: "v0.1.2",
 			}))
 			requests := 0
@@ -399,19 +407,42 @@ func TestCheck_FailedAttemptsAreThrottled(t *testing.T) {
 			assert.Nil(t, notice)
 			s, err := readState(c.statePath, c.now())
 			require.NoError(t, err)
-			assert.Equal(t, c.now(), s.LastCheckedAt)
-			assert.Empty(t, s.LatestVersion, "failed checks must not make expired metadata appear fresh")
+			assert.Equal(t, start, s.LastAttemptedAt)
+			assert.Equal(t, start.Add(-checkInterval), s.LastCheckedAt)
+			assert.Equal(t, "v0.1.2", s.LatestVersion)
 
+			for _, elapsed := range []time.Duration{0, retryInterval - time.Nanosecond} {
+				now = start.Add(elapsed)
+				notice, err = c.check(context.Background(), "0.1.1")
+				require.NoError(t, err)
+				assert.Nil(t, notice, "expired metadata must not be delivered while waiting to retry")
+				assert.Equal(t, 1, requests)
+			}
+
+			now = start.Add(retryInterval)
+			c.client.Transport = roundTripFunc(func(*http.Request) (*http.Response, error) {
+				requests++
+				now = now.Add(time.Second)
+				return releaseResponse("v0.2.0"), nil
+			})
 			notice, err = c.check(context.Background(), "0.1.1")
 			require.NoError(t, err)
-			assert.Nil(t, notice)
-			assert.Equal(t, 1, requests)
+			require.NotNil(t, notice)
+			assert.Equal(t, 2, requests)
+			s, err = readState(c.statePath, now)
+			require.NoError(t, err)
+			assert.Equal(t, start.Add(retryInterval), s.LastAttemptedAt)
+			assert.Equal(t, now, s.LastCheckedAt, "record completion, not the start of the request")
+			assert.Equal(t, "v0.2.0", s.LatestVersion)
+			require.NoError(t, notice(io.Discard))
 		})
 	}
 }
 
 func TestCheck_CanceledAttemptIsThrottled(t *testing.T) {
 	c := newTestChecker(t)
+	now := c.now()
+	c.now = func() time.Time { return now }
 	started := make(chan struct{})
 	c.client.Transport = roundTripFunc(func(req *http.Request) (*http.Response, error) {
 		close(started)
@@ -444,12 +475,25 @@ func TestCheck_CanceledAttemptIsThrottled(t *testing.T) {
 	notice, err := c.check(context.Background(), "0.1.1")
 	require.NoError(t, err)
 	assert.Nil(t, notice)
+	s, err := readState(c.statePath, now)
+	require.NoError(t, err)
+	assert.Equal(t, now, s.LastAttemptedAt)
+	assert.True(t, s.LastCheckedAt.IsZero())
+
+	now = now.Add(retryInterval)
+	c.client.Transport = roundTripFunc(func(*http.Request) (*http.Response, error) {
+		return releaseResponse("v0.2.0"), nil
+	})
+	notice, err = c.check(context.Background(), "0.1.1")
+	require.NoError(t, err)
+	require.NotNil(t, notice)
 }
 
 func TestCheck_InvalidStateRecovery(t *testing.T) {
 	for _, data := range []string{
 		"last_checked_at: [",
 		"last_checked_at: invalid\n",
+		"last_attempted_at: 2030-01-01T00:00:00Z\n",
 		"last_checked_at: 2030-01-01T00:00:00Z\n",
 		"last_notified_at: 2030-01-01T00:00:00Z\n",
 		"latest_version: v0.2.0\n",
@@ -509,28 +553,30 @@ func TestReadState_YAML(t *testing.T) {
 	c := newTestChecker(t)
 	require.NoError(t, os.MkdirAll(filepath.Dir(c.statePath), 0700))
 	require.NoError(t, os.WriteFile(c.statePath, []byte(
-		"last_checked_at: 2026-01-15T12:00:00Z\n"+
+		"last_attempted_at: 2026-01-15T11:59:00Z\n"+
+			"last_checked_at: 2026-01-15T12:00:00Z\n"+
 			"last_notified_at: 2026-01-15T11:00:00Z\n"+
 			"latest_version: v0.2.0\n"), 0600))
 
 	got, err := readState(c.statePath, c.now())
 	require.NoError(t, err)
 	assert.Equal(t, state{
-		LastCheckedAt:  c.now(),
-		LastNotifiedAt: c.now().Add(-time.Hour),
-		LatestVersion:  "v0.2.0",
+		LastAttemptedAt: c.now().Add(-time.Minute),
+		LastCheckedAt:   c.now(),
+		LastNotifiedAt:  c.now().Add(-time.Hour),
+		LatestVersion:   "v0.2.0",
 	}, got)
 }
 
 func TestWriteState_ReplacesAndCleansUp(t *testing.T) {
 	c := newTestChecker(t)
 	for _, version := range []string{"v0.2.0", "v0.3.0"} {
-		s := state{LastCheckedAt: c.now(), LatestVersion: version}
+		s := state{LastAttemptedAt: c.now(), LastCheckedAt: c.now(), LatestVersion: version}
 		require.NoError(t, writeState(c.statePath, s))
 		data, err := os.ReadFile(c.statePath)
 		require.NoError(t, err)
 		assert.Equal(t, fmt.Sprintf(
-			"last_checked_at: 2026-01-15T12:00:00Z\nlast_notified_at: 0001-01-01T00:00:00Z\nlatest_version: %s\n",
+			"last_attempted_at: 2026-01-15T12:00:00Z\nlast_checked_at: 2026-01-15T12:00:00Z\nlast_notified_at: 0001-01-01T00:00:00Z\nlatest_version: %s\n",
 			version), string(data))
 		got, err := readState(c.statePath, c.now())
 		require.NoError(t, err)

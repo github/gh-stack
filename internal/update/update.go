@@ -21,6 +21,7 @@ import (
 
 const (
 	checkInterval    = 24 * time.Hour
+	retryInterval    = 15 * time.Minute
 	requestTimeout   = 2 * time.Second
 	latestReleaseURL = "https://api.github.com/repos/github/gh-stack/releases/latest"
 )
@@ -68,9 +69,10 @@ type checker struct {
 }
 
 type state struct {
-	LastCheckedAt  time.Time `yaml:"last_checked_at"`
-	LastNotifiedAt time.Time `yaml:"last_notified_at"`
-	LatestVersion  string    `yaml:"latest_version,omitempty"`
+	LastAttemptedAt time.Time `yaml:"last_attempted_at,omitempty"`
+	LastCheckedAt   time.Time `yaml:"last_checked_at"`
+	LastNotifiedAt  time.Time `yaml:"last_notified_at"`
+	LatestVersion   string    `yaml:"latest_version,omitempty"`
 }
 
 var errInvalidState = errors.New("invalid update notification state")
@@ -106,11 +108,11 @@ func (c checker) check(ctx context.Context, version string) (Notification, error
 		return nil, err
 	}
 
-	if s.LastCheckedAt.IsZero() || now.Sub(s.LastCheckedAt) >= checkInterval {
-		// Reserve the daily attempt before the request, including attempts
-		// interrupted when a short command exits.
-		s.LastCheckedAt = now
-		s.LatestVersion = ""
+	if (s.LastCheckedAt.IsZero() || now.Sub(s.LastCheckedAt) >= checkInterval) &&
+		(s.LastAttemptedAt.IsZero() || now.Sub(s.LastAttemptedAt) >= retryInterval) {
+		// Throttle interrupted attempts without refreshing or discarding
+		// the last successful result.
+		s.LastAttemptedAt = now
 		if err := writeState(c.statePath, s); err != nil {
 			return nil, errors.Join(diagnostic, err)
 		}
@@ -118,6 +120,8 @@ func (c checker) check(ctx context.Context, version string) (Notification, error
 		if err != nil {
 			return nil, errors.Join(diagnostic, err)
 		}
+		now = c.now()
+		s.LastCheckedAt = now
 		s.LatestVersion = latest
 		if err := writeState(c.statePath, s); err != nil {
 			return nil, errors.Join(diagnostic, err)
@@ -254,7 +258,7 @@ func readState(path string, now time.Time) (state, error) {
 	if err := yaml.Unmarshal(data, &s); err != nil {
 		return state{}, fmt.Errorf("%w: %w", errInvalidState, err)
 	}
-	if s.LastCheckedAt.After(now) || s.LastNotifiedAt.After(now) {
+	if s.LastAttemptedAt.After(now) || s.LastCheckedAt.After(now) || s.LastNotifiedAt.After(now) {
 		return state{}, fmt.Errorf("%w: timestamp is in the future", errInvalidState)
 	}
 	if s.LatestVersion != "" && (stableVersion(s.LatestVersion) != s.LatestVersion || s.LastCheckedAt.IsZero()) {

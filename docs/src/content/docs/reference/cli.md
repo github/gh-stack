@@ -31,8 +31,8 @@ gh extension upgrade stack
 
 Official, unpinned stable release installations check the
 [latest gh-stack release](https://github.com/github/gh-stack/releases/latest)
-in the background, at most once every 24 hours. Commands can append an upgrade
-notice to stderr after success or an operational failure, also at most once every
+in the background, caching successful checks for 24 hours. Commands can append an
+upgrade notice to stderr after success or an operational failure, also at most once every
 24 hours, until you upgrade. On failure, the original error appears first and the
 exit code is unchanged.
 The timestamps are stored per user and shared across repositories, independently
@@ -44,8 +44,8 @@ The YAML state file is `gh-stack/state.yml` beneath GitHub CLI's state directory
 Notices also appear in non-interactive use, including CI. Stdout and JSON output
 remain unchanged. No upgrade happens automatically, and commands never wait for
 the check: a short command may finish before a notice is ready. Completed checks
-are cached for later commands; failed or interrupted attempts still count toward
-the daily check limit.
+are cached for later commands; failed or interrupted attempts can retry after a
+15-minute cooldown instead of waiting a full day.
 
 Development builds, locally linked installations, prereleases, and pinned
 installations are excluded. Help, version, and shell completion commands do not
