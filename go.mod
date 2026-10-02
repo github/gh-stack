@@ -12,6 +12,7 @@ require (
 	github.com/cli/cli/v2 v2.93.0
 	github.com/cli/go-gh/v2 v2.13.0
 	github.com/cli/shurcooL-graphql v0.0.4
+	github.com/hashicorp/go-version v1.9.0
 	github.com/muesli/termenv v0.16.0
 	github.com/spf13/cobra v1.10.2
 	github.com/stretchr/testify v1.11.1

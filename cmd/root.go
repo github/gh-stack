@@ -1,14 +1,25 @@
 package cmd
 
 import (
+	"context"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 
 	"github.com/github/gh-stack/internal/config"
 	"github.com/github/gh-stack/internal/theme"
+	stackupdate "github.com/github/gh-stack/internal/update"
 	"github.com/spf13/cobra"
+	"golang.org/x/term"
 )
+
+type updateCheck interface {
+	Result() *stackupdate.Notice
+	MarkNotified(stackupdate.Notice)
+}
+
+var startUpdateCheck = beginUpdateCheck
 
 func RootCmd() *cobra.Command {
 	cfg := config.New()
@@ -161,12 +172,74 @@ func Execute() {
 	wrapCmd.AddCommand(cmd)
 	wrapCmd.SetArgs(append([]string{"stack"}, os.Args[1:]...))
 
-	if err := wrapCmd.Execute(); err != nil {
+	check := startUpdateCheck(context.Background(), Version, os.Args[1:], cmd.OutOrStdout(), cmd.ErrOrStderr())
+	if exitCode := finalizeExecution(wrapCmd.Execute(), check, cmd.ErrOrStderr()); exitCode != 0 {
+		os.Exit(exitCode)
+	}
+}
+
+func beginUpdateCheck(ctx context.Context, currentVersion string, args []string, stdout, stderr io.Writer) updateCheck {
+	if !eligibleUpdateInvocation(args) {
+		return nil
+	}
+	eligibility := stackupdate.Eligibility{
+		CurrentVersion: currentVersion,
+		StdoutTTY:      writerIsTerminal(stdout),
+		StderrTTY:      writerIsTerminal(stderr),
+		CI:             os.Getenv("CI") != "",
+		Codespaces:     os.Getenv("CODESPACES") != "",
+		Disabled:       os.Getenv("GH_NO_EXTENSION_UPDATE_NOTIFIER") != "",
+	}
+	if !stackupdate.ShouldCheck(eligibility) {
+		return nil
+	}
+	statePath, err := stackupdate.DefaultStatePath()
+	if err != nil {
+		return nil
+	}
+	return stackupdate.Start(ctx, stackupdate.NewChecker(stackupdate.Options{
+		CurrentVersion: currentVersion,
+		StatePath:      statePath,
+		FetchLatest:    stackupdate.FetchLatestRelease,
+	}))
+}
+
+func eligibleUpdateInvocation(args []string) bool {
+	if len(args) == 0 {
+		return false
+	}
+	for _, arg := range args {
+		switch arg {
+		case "-h", "--help", "--version", "help", "version":
+			return false
+		}
+	}
+	return true
+}
+
+func writerIsTerminal(w io.Writer) bool {
+	file, ok := w.(*os.File)
+	return ok && term.IsTerminal(int(file.Fd()))
+}
+
+func finalizeExecution(err error, check updateCheck, stderr io.Writer) int {
+	exitCode := 0
+	failed := err != nil
+	if err != nil {
 		var exitErr *ExitError
 		if errors.As(err, &exitErr) {
-			os.Exit(exitErr.Code)
+			exitCode = exitErr.Code
+		} else {
+			fmt.Fprintln(stderr, err)
+			exitCode = 1
 		}
-		fmt.Fprintln(cmd.ErrOrStderr(), err)
-		os.Exit(1)
 	}
+
+	if failed && check != nil {
+		if notice := check.Result(); notice != nil {
+			fmt.Fprint(stderr, stackupdate.FormatNotice(*notice))
+			check.MarkNotified(*notice)
+		}
+	}
+	return exitCode
 }
