@@ -133,6 +133,7 @@ func runSubmit(cfg *config.Config, opts *submitOptions) error {
 					return ErrStacksUnavailable
 				}
 				if !proceed {
+					cfg.Canceled = true
 					return ErrStacksUnavailable
 				}
 			} else {
@@ -222,6 +223,7 @@ func runSubmit(cfg *config.Config, opts *submitOptions) error {
 			return ErrSilent
 		}
 		if cancelled {
+			cfg.Canceled = true
 			cfg.Printf("Submit cancelled — no branches were pushed")
 			return nil
 		}
@@ -710,6 +712,7 @@ func handlePendingModify(cfg *config.Config, client github.ClientOps, s *stack.S
 			return true, promptErr
 		}
 		if !proceed {
+			cfg.Canceled = true
 			cfg.Printf("Skipping stack recreation — run `%s` when ready",
 				cfg.ColorCyan("gh stack submit"))
 			return true, errInterrupt

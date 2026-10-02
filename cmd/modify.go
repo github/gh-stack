@@ -134,11 +134,8 @@ func runModify(cfg *config.Config) error {
 	}
 
 	// Handle TUI result
-	if m.Cancelled() {
-		return nil
-	}
-
-	if !m.ApplyRequested() {
+	if m.Cancelled() || !m.ApplyRequested() {
+		cfg.Canceled = true
 		return nil
 	}
 

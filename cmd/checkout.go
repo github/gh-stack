@@ -660,6 +660,7 @@ func handleCompositionConflict(
 
 	default:
 		// Cancel
+		cfg.Canceled = true
 		cfg.Infof("Checkout cancelled")
 		return nil, ErrSilent
 	}
@@ -805,6 +806,7 @@ func interactiveCheckout(cfg *config.Config, sf *stack.StackFile, gitDir string)
 	}
 	if !ok {
 		// The user dismissed the picker without selecting.
+		cfg.Canceled = true
 		return nil, "", nil
 	}
 

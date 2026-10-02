@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/AlecAivazis/survey/v2/terminal"
 	"github.com/github/gh-stack/internal/config"
 	"github.com/spf13/cobra"
 	"github.com/stretchr/testify/assert"
@@ -47,7 +48,7 @@ func TestRootCmd_HelpOutput(t *testing.T) {
 	assert.Contains(t, output, "https://gh.io/stacks")
 }
 
-func newUpdateTestRoot(t *testing.T, startCheck func(context.Context, string) <-chan updateResult) (*cobra.Command, *bytes.Buffer, *bytes.Buffer) {
+func newUpdateTestRoot(t *testing.T, startCheck func(context.Context, string) <-chan updateResult) (*rootCommand, *bytes.Buffer, *bytes.Buffer) {
 	t.Helper()
 	t.Setenv("GH_STACK_NO_UPDATE_NOTIFIER", "")
 	t.Setenv("GH_DEBUG", "")
@@ -162,14 +163,23 @@ func TestRootCmd_UpdateNoticeExcludedCommands(t *testing.T) {
 }
 
 func TestRootCmd_UpdateNoticePreservesCommandErrors(t *testing.T) {
-	for _, commandErr := range []error{
-		errors.New("command failed"),
-		ErrConflict,
-		fmt.Errorf("wrapped: %w", ErrInvalidArgs),
-		ErrSilent,
-		context.Canceled,
+	for _, tt := range []struct {
+		name       string
+		commandErr error
+		errorText  string
+		wantNotice bool
+	}{
+		{"untyped failure", errors.New("command failed"), "command failed\n", true},
+		{"conflict", ErrConflict, "", true},
+		{"API failure", ErrAPIFailure, "", true},
+		{"wrapped failure", fmt.Errorf("wrapped: %w", ErrAPIFailure), "", true},
+		{"already reported failure", ErrSilent, "", true},
+		{"usage error", fmt.Errorf("wrapped: %w", ErrInvalidArgs), "", false},
+		{"canceled context", context.Canceled, "context canceled\n", false},
+		{"interrupt", errInterrupt, "interrupt\n", false},
+		{"terminal interrupt", terminal.InterruptErr, terminal.InterruptErr.Error() + "\n", false},
 	} {
-		t.Run(commandErr.Error(), func(t *testing.T) {
+		t.Run(tt.name, func(t *testing.T) {
 			var checkContext context.Context
 			root, stdout, stderr := newUpdateTestRoot(t, func(ctx context.Context, _ string) <-chan updateResult {
 				checkContext = ctx
@@ -179,14 +189,62 @@ func TestRootCmd_UpdateNoticePreservesCommandErrors(t *testing.T) {
 				Use: "probe",
 				RunE: func(cmd *cobra.Command, _ []string) error {
 					fmt.Fprintln(cmd.ErrOrStderr(), "Original diagnostic.")
-					return commandErr
+					return tt.commandErr
 				},
 			})
 			err := execute(root, []string{"probe"})
-			require.ErrorIs(t, err, commandErr)
+			require.ErrorIs(t, err, tt.commandErr)
 			assert.Empty(t, stdout.String())
-			assert.Equal(t, "Original diagnostic.\n", stderr.String())
+			var want bytes.Buffer
+			fmt.Fprint(&want, "Original diagnostic.\n"+tt.errorText)
+			if tt.wantNotice {
+				require.NoError(t, testUpdateNotification(&want))
+			}
+			assert.Equal(t, want.String(), stderr.String())
 			require.ErrorIs(t, checkContext.Err(), context.Canceled)
+		})
+	}
+}
+
+func TestRootCmd_CanceledCommandSuppressesNotice(t *testing.T) {
+	for _, tt := range []struct {
+		name      string
+		interrupt bool
+		err       error
+	}{
+		{"successful cancellation", false, nil},
+		{"silent cancellation", false, ErrSilent},
+		{"reported interrupt", true, ErrSilent},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Setenv("GH_STACK_NO_UPDATE_NOTIFIER", "")
+			cfg, outR, errR := config.NewTestConfig()
+			root := newRootCmd(cfg, func(context.Context, string) <-chan updateResult {
+				return readyUpdate(updateResult{notify: testUpdateNotification})
+			})
+			root.Version = "0.1.1"
+			root.AddCommand(&cobra.Command{
+				Use: "probe",
+				RunE: func(*cobra.Command, []string) error {
+					if tt.interrupt {
+						printInterrupt(cfg)
+					} else {
+						cfg.Canceled = true
+					}
+					return tt.err
+				},
+			})
+			err := execute(root, []string{"probe"})
+			if tt.err == nil {
+				require.NoError(t, err)
+			} else {
+				require.ErrorIs(t, err, tt.err)
+			}
+			output := collectOutput(cfg, outR, errR)
+			assert.NotContains(t, output, "gh extension upgrade stack")
+			if tt.interrupt {
+				assert.Contains(t, output, "Received interrupt, aborting operation")
+			}
 		})
 	}
 }
@@ -258,7 +316,7 @@ func TestRootCmd_DoesNotWaitForUpdate(t *testing.T) {
 					require.NoError(t, err)
 				}
 			case <-time.After(5 * time.Second):
-				// Unblock a regressed post-run hook before failing the test.
+				// Unblock a regressed finalizer before failing the test.
 				results <- updateResult{}
 				<-done
 				<-workerDone

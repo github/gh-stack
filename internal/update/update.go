@@ -25,7 +25,7 @@ const (
 	latestReleaseURL = "https://api.github.com/repos/github/gh-stack/releases/latest"
 )
 
-// Notification records and writes a pending notice when a command succeeds.
+// Notification records and writes a pending notice after a command finishes.
 type Notification func(io.Writer) error
 
 // Enabled excludes opt-outs and builds that cannot be compared to stable releases.

@@ -69,6 +69,7 @@ func isInterruptError(err error) bool {
 // per interrupted operation.  The leading newline ensures the message starts
 // on its own line even if the cursor was mid-prompt.
 func printInterrupt(cfg *config.Config) {
+	cfg.Canceled = true
 	fmt.Fprintln(cfg.Err)
 	cfg.Infof("Received interrupt, aborting operation")
 }
@@ -2029,6 +2030,7 @@ func resolveStackDivergence(cfg *config.Config, client github.ClientOps, sf *sta
 		return resolveDivergenceDeleteRemote(cfg, client, sf, s, gitDir)
 	default:
 		// Cancel: stop the sync without touching branches or PRs.
+		cfg.Canceled = true
 		cfg.Infof("Sync aborted — no changes were made")
 		return remoteReconcileResult{stop: true}, nil
 	}

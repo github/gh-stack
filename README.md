@@ -20,9 +20,11 @@ gh extension upgrade stack
 
 Official, unpinned stable release installations check for a newer
 [latest release](https://github.com/github/gh-stack/releases/latest) in the
-background, at most once every 24 hours. When an update is available, successful
-commands can append an upgrade notice to stderr, also at most once every 24
-hours. This includes non-interactive use; stdout and JSON output are unchanged.
+background, at most once every 24 hours. When an update is available, commands
+can append an upgrade notice to stderr after success or an operational failure,
+also at most once every 24 hours. On failure, the original error appears first
+and the exit code is unchanged. This includes non-interactive use; stdout and
+JSON output are unchanged.
 The check and reminder timestamps are shared across repositories for your user.
 They are stored as YAML in `gh-stack/state.yml` beneath GitHub CLI's state
 directory (`~/.local/state/gh` by default on macOS/Linux).
@@ -33,6 +35,7 @@ check limit. Completed checks are cached so a later command can show the notice.
 No upgrades happen automatically, and development, locally linked, prerelease,
 and pinned installations are excluded. Help, version, and completion commands
 do not run the notifier.
+Usage errors and explicit user cancellations do not show upgrade notices.
 
 Set `GH_STACK_NO_UPDATE_NOTIFIER=1` to disable these checks and notices, including
 in CI or scripts. Any non-empty value disables the notifier. Optional check

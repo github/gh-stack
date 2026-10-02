@@ -1029,6 +1029,7 @@ func TestPrintInterrupt_Output(t *testing.T) {
 	printInterrupt(cfg)
 	output := collectOutput(cfg, outR, errR)
 
+	assert.True(t, cfg.Canceled)
 	if !strings.Contains(output, "Received interrupt, aborting operation") {
 		t.Errorf("expected interrupt message, got: %s", output)
 	}

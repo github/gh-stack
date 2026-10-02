@@ -364,10 +364,12 @@ func runMergeInteractive(cfg *config.Config, client github.ClientOps, stackNumbe
 		cfg.Printf("Stack merges are atomic, so nothing was merged.")
 		return mergeFailureExit(out.Message)
 	case out.WatchStopped:
+		cfg.Canceled = true
 		cfg.Infof("Stopped watching. Merge is still in progress. Check the pull requests on GitHub.")
 		return ErrSilent
 	default:
 		// Cancelled via esc/ctrl+c before submitting.
+		cfg.Canceled = true
 		cfg.Infof("Cancelled operation, nothing merged")
 		return ErrSilent
 	}

@@ -40,6 +40,9 @@ type Config struct {
 	// NonInteractive suppresses prompts even when stdout is a terminal.
 	NonInteractive bool
 
+	// Canceled records explicit user cancellation even when a command returns ErrSilent.
+	Canceled bool
+
 	// WorktreePathOnly makes checkout resolution skip imports for foreign owners.
 	WorktreePathOnly bool
 
