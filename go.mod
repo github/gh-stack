@@ -10,7 +10,7 @@ require (
 	github.com/charmbracelet/glamour v0.10.0
 	github.com/charmbracelet/lipgloss v1.1.1-0.20250404203927-76690c660834
 	github.com/cli/cli/v2 v2.93.0
-	github.com/cli/go-gh/v2 v2.16.1
+	github.com/cli/go-gh/v2 v2.16.2
 	github.com/cli/shurcooL-graphql v0.0.4
 	github.com/muesli/termenv v0.16.0
 	github.com/spf13/cobra v1.10.2
