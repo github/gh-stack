@@ -63,6 +63,10 @@ func setupBareAndClone(t *testing.T) (string, string) {
 	out, err := cmd.CombinedOutput()
 	require.NoError(t, err, "git init --bare: %s", string(out))
 
+	cfgCmd := exec.Command("git", "-c", "safe.bareRepository=all", "-C", bareDir, "config", "receive.advertisePushOptions", "true")
+	out, err = cfgCmd.CombinedOutput()
+	require.NoError(t, err, "git config: %s", string(out))
+
 	cloneDir := filepath.Join(t.TempDir(), "clone")
 	gitExec(t, ".", "clone", bareDir, cloneDir)
 
@@ -1702,4 +1706,63 @@ func TestIntegration_WorktreeIgnoresCallerRepositoryEnvironment(t *testing.T) {
 	branch, err := selected.CurrentBranch()
 	require.NoError(t, err)
 	assert.Equal(t, "feature", branch)
+}
+
+// Every push must send the "pull.stacked" push option, for both forced and atomic pushes.
+// TODO send option on force push rebase only?
+func TestIntegration_Push_SendsStackPushOption(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("uses a shell pre-receive hook")
+	}
+
+	for _, tc := range []struct {
+		name          string
+		force, atomic bool
+	}{
+		{"force", true, false},
+		{"atomic", false, true},
+		{"plain", false, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			bareDir, cloneDir := setupBareAndClone(t)
+			restore := withGitDir(t, cloneDir)
+			defer restore()
+
+			optsFile := filepath.Join(t.TempDir(), "opts")
+			hook := fmt.Sprintf("#!/bin/sh\nenv | grep '^GIT_PUSH_OPTION' | sort > %q\n", optsFile)
+			require.NoError(t, os.WriteFile(filepath.Join(bareDir, "hooks", "pre-receive"), []byte(hook), 0o755))
+
+			gitExec(t, cloneDir, "checkout", "-b", "b1")
+			writeFile(t, cloneDir, "b1.txt", "v1")
+			gitExec(t, cloneDir, "add", ".")
+			gitExec(t, cloneDir, "commit", "-m", "b1")
+
+			d := &defaultOps{}
+			require.NoError(t, d.Push("origin", []string{"b1"}, tc.force, tc.atomic))
+
+			got, err := os.ReadFile(optsFile)
+			require.NoError(t, err)
+			assert.Equal(t, "GIT_PUSH_OPTION_0=pull.stacked\nGIT_PUSH_OPTION_COUNT=1\n", string(got))
+		})
+	}
+}
+
+// Remotes that don't advertise push options must still accept pushes.
+func TestIntegration_Push_FallsBackWithoutPushOptionSupport(t *testing.T) {
+	bareDir, cloneDir := setupBareAndClone(t)
+	restore := withGitDir(t, cloneDir)
+	defer restore()
+
+	out, err := exec.Command("git", "-c", "safe.bareRepository=all", "-C", bareDir,
+		"config", "receive.advertisePushOptions", "false").CombinedOutput()
+	require.NoError(t, err, string(out))
+
+	gitExec(t, cloneDir, "checkout", "-b", "b1")
+	writeFile(t, cloneDir, "b1.txt", "v1")
+	gitExec(t, cloneDir, "add", ".")
+	gitExec(t, cloneDir, "commit", "-m", "b1")
+
+	d := &defaultOps{}
+	require.NoError(t, d.Push("origin", []string{"b1"}, true, true))
+	assert.Equal(t, gitExec(t, cloneDir, "rev-parse", "b1"), remoteBranchSHA(t, bareDir, "b1"))
 }

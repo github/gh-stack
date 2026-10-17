@@ -2273,6 +2273,7 @@ func setupAmendedParentRepo(t *testing.T, corruptBase bool) amendedParentRepo {
 	cloneDir := filepath.Join(t.TempDir(), "clone")
 
 	issue250Git(t, ".", "-c", "safe.bareRepository=all", "init", "--bare", "-b", "main", remoteDir)
+	issue250Git(t, ".", "-c", "safe.bareRepository=all", "-C", remoteDir, "config", "receive.advertisePushOptions", "true")
 	issue250Git(t, ".", "clone", remoteDir, cloneDir)
 	issue250Git(t, cloneDir, "config", "user.name", "Test")
 	issue250Git(t, cloneDir, "config", "user.email", "test@example.com")
@@ -2410,6 +2411,7 @@ func TestIntegration_AdoptedBranchRebasesFromCommonAncestor(t *testing.T) {
 	cloneDir := filepath.Join(t.TempDir(), "clone")
 
 	issue250Git(t, ".", "-c", "safe.bareRepository=all", "init", "--bare", "-b", "main", remoteDir)
+	issue250Git(t, ".", "-c", "safe.bareRepository=all", "-C", remoteDir, "config", "receive.advertisePushOptions", "true")
 	issue250Git(t, ".", "clone", remoteDir, cloneDir)
 	issue250Git(t, cloneDir, "config", "user.name", "Test")
 	issue250Git(t, cloneDir, "config", "user.email", "test@example.com")

@@ -254,6 +254,7 @@ func (d *defaultOps) CreateBranch(name, base string) error {
 	return d.runSilent("branch", name, base)
 }
 
+// TODO send pull.stacked option on force push after rebase only?
 func (d *defaultOps) Push(remote string, branches []string, force, atomic bool) error {
 	args := []string{"push", remote}
 	if force {
@@ -286,7 +287,14 @@ func (d *defaultOps) Push(remote string, branches []string, force, atomic bool) 
 	for _, b := range branches {
 		args = append(args, fmt.Sprintf("refs/heads/%s:refs/heads/%s", b, b))
 	}
-	return d.runSilent(args...)
+	// Send the "pull.stacked" push option, falling back to a plain push for
+	// remotes that don't support push options.
+	withOpt := append([]string{"push", "-o", "pull.stacked"}, args[1:]...)
+	err := d.runSilent(withOpt...)
+	if err != nil && strings.Contains(err.Error(), "does not support push options") {
+		return d.runSilent(args...)
+	}
+	return err
 }
 
 // ResolveRemote determines the remote for pushing a branch. It checks git
