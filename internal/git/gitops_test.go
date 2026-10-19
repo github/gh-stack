@@ -1708,8 +1708,7 @@ func TestIntegration_WorktreeIgnoresCallerRepositoryEnvironment(t *testing.T) {
 	assert.Equal(t, "feature", branch)
 }
 
-// Every push must send the "pull.stacked" push option, for both forced and atomic pushes.
-// TODO send option on force push rebase only?
+// If remote supports push options, send the "pull.stacked" push option only for force pushes.
 func TestIntegration_Push_SendsStackPushOption(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("uses a shell pre-receive hook")
@@ -1720,6 +1719,7 @@ func TestIntegration_Push_SendsStackPushOption(t *testing.T) {
 		force, atomic bool
 	}{
 		{"force", true, false},
+		{"force atomic", true, true},
 		{"atomic", false, true},
 		{"plain", false, false},
 	} {
@@ -1742,7 +1742,11 @@ func TestIntegration_Push_SendsStackPushOption(t *testing.T) {
 
 			got, err := os.ReadFile(optsFile)
 			require.NoError(t, err)
-			assert.Equal(t, "GIT_PUSH_OPTION_0=pull.stacked\nGIT_PUSH_OPTION_COUNT=1\n", string(got))
+			want := "GIT_PUSH_OPTION_COUNT=0\n"
+			if tc.force {
+				want = "GIT_PUSH_OPTION_0=pull.stacked\nGIT_PUSH_OPTION_COUNT=1\n"
+			}
+			assert.Equal(t, want, string(got))
 		})
 	}
 }
