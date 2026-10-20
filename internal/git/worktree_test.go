@@ -1,11 +1,14 @@
 package git
 
 import (
+	"context"
 	"errors"
+	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	cligit "github.com/cli/cli/v2/git"
 	"github.com/stretchr/testify/assert"
@@ -125,6 +128,24 @@ func TestCheckVersionWithoutRepository(t *testing.T) {
 	require.ErrorContains(t, err, "cannot determine Git version")
 	assert.Contains(t, err.Error(), "install Git 2.36 or newer")
 	assert.Contains(t, err.Error(), "PATH")
+}
+
+func TestGitClientValidationHonorsContext(t *testing.T) {
+	gitDir, err := os.Stat(t.TempDir())
+	require.NoError(t, err)
+	commonDir, err := os.Stat(t.TempDir())
+	require.NoError(t, err)
+	d := &defaultOps{
+		client:    &cligit.Client{RepoDir: t.TempDir()},
+		gitDir:    gitDir,
+		commonDir: commonDir,
+	}
+	ctx, cancel := context.WithDeadline(context.Background(), time.Now().Add(-time.Second))
+	defer cancel()
+
+	err = d.validateGitClient(ctx, d.client)
+	require.ErrorIs(t, err, context.DeadlineExceeded)
+	assert.ErrorContains(t, err, "inspecting worktree")
 }
 
 func TestMockWorktreeDefaults(t *testing.T) {

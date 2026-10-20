@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"time"
 
 	cligit "github.com/cli/cli/v2/git"
 )
@@ -21,6 +22,8 @@ type Worktree struct {
 	Locked   bool
 	Prunable bool
 }
+
+const gitClientValidationTimeout = 30 * time.Second
 
 func (d *defaultOps) path(args ...string) (string, error) {
 	out, err := d.runRaw(args...)
@@ -40,6 +43,15 @@ func (d *defaultOps) gitClient() (*cligit.Client, error) {
 	if c == nil {
 		c = client
 	}
+	ctx, cancel := context.WithTimeout(context.Background(), gitClientValidationTimeout)
+	defer cancel()
+	if err := d.validateGitClient(ctx, c); err != nil {
+		return nil, err
+	}
+	return c, nil
+}
+
+func (d *defaultOps) validateGitClient(ctx context.Context, c *cligit.Client) error {
 	for _, directory := range []struct {
 		option string
 		info   os.FileInfo
@@ -50,24 +62,24 @@ func (d *defaultOps) gitClient() (*cligit.Client, error) {
 		if directory.info == nil {
 			continue
 		}
-		cmd, err := c.Command(context.Background(), "rev-parse", "--path-format=absolute", directory.option)
+		cmd, err := c.Command(ctx, "rev-parse", "--path-format=absolute", directory.option)
 		if err != nil {
-			return nil, err
+			return err
 		}
 		d.configureCommand(cmd)
 		out, err := cmd.Output()
 		if err != nil {
-			return nil, fmt.Errorf("inspecting worktree %q: %w", c.RepoDir, err)
+			return fmt.Errorf("inspecting worktree %q: %w", c.RepoDir, err)
 		}
 		info, err := os.Stat(strings.TrimSuffix(string(out), "\n"))
 		if err != nil {
-			return nil, fmt.Errorf("inspecting worktree %q: %w", c.RepoDir, err)
+			return fmt.Errorf("inspecting worktree %q: %w", c.RepoDir, err)
 		}
 		if !os.SameFile(directory.info, info) {
-			return nil, fmt.Errorf("worktree %q no longer refers to the selected Git directory; rediscover worktrees before continuing", c.RepoDir)
+			return fmt.Errorf("worktree %q no longer refers to the selected Git directory; rediscover worktrees before continuing", c.RepoDir)
 		}
 	}
-	return c, nil
+	return nil
 }
 
 // ForWorktree resolves relative paths against this receiver's execution
