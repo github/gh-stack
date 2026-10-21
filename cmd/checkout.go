@@ -538,24 +538,10 @@ func findLocalStackForRemotePRs(sf *stack.StackFile, prs []*github.PullRequest) 
 	return nil
 }
 
-// stackCompositionMatches checks if a local stack's PR numbers match
-// the remote stack's PR numbers in the same order.
+// stackCompositionMatches ignores merged history that belongs to a previous stack.
 func stackCompositionMatches(localStack *stack.Stack, remotePRNumbers []int) bool {
-	var localPRNumbers []int
-	for _, b := range localStack.Branches {
-		if b.PullRequest != nil {
-			localPRNumbers = append(localPRNumbers, b.PullRequest.Number)
-		}
-	}
-	if len(localPRNumbers) != len(remotePRNumbers) {
-		return false
-	}
-	for i := range localPRNumbers {
-		if localPRNumbers[i] != remotePRNumbers[i] {
-			return false
-		}
-	}
-	return true
+	localPRNumbers := stackPRNumbers(localStack, &github.RemoteStack{PullRequests: remotePRNumbers})
+	return slicesEqual(localPRNumbers, remotePRNumbers)
 }
 
 // handleCompositionConflict prompts the user to resolve a mismatch between

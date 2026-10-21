@@ -1342,6 +1342,28 @@ func TestStackCompositionMatches(t *testing.T) {
 			matches: true,
 		},
 		{
+			name: "merged history from a previous stack",
+			local: &stack.Stack{
+				Branches: []stack.BranchRef{
+					{Branch: "a", PullRequest: &stack.PullRequestRef{Number: 10, Merged: true}},
+					{Branch: "b", PullRequest: &stack.PullRequestRef{Number: 11}},
+				},
+			},
+			remote:  []int{11},
+			matches: true,
+		},
+		{
+			name: "merged member of the current stack",
+			local: &stack.Stack{
+				Branches: []stack.BranchRef{
+					{Branch: "a", PullRequest: &stack.PullRequestRef{Number: 10, Merged: true}},
+					{Branch: "b", PullRequest: &stack.PullRequestRef{Number: 11}},
+				},
+			},
+			remote:  []int{10, 11},
+			matches: true,
+		},
+		{
 			name: "different order",
 			local: &stack.Stack{
 				Branches: []stack.BranchRef{
