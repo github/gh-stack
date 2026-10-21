@@ -3464,8 +3464,11 @@ func setupDistributedModify(t *testing.T, conflicting bool) distributedModifyRep
 		// Git expands Windows short paths and uses forward slashes in diagnostics.
 		repo.owners[branch] = runModifyGit(t, path, "rev-parse", "--show-toplevel")
 	}
-	for _, branch := range []string{"A", "B", "C"} {
-		repo.refs[branch] = runModifyGit(t, root, "rev-parse", branch)
+	branches := []string{"A", "B", "C"}
+	refs := strings.Fields(runModifyGit(t, root, append([]string{"rev-parse"}, branches...)...))
+	require.Len(t, refs, len(branches))
+	for i, branch := range branches {
+		repo.refs[branch] = refs[i]
 	}
 	return repo
 }
@@ -3479,141 +3482,163 @@ func insertedModifyNode(name string) modifyview.ModifyBranchNode {
 	}
 }
 
-func TestDistributedModify_AllActions(t *testing.T) {
-	tests := []struct {
-		name     string
-		nodes    func([]modifyview.ModifyBranchNode) []modifyview.ModifyBranchNode
-		order    []string
-		files    []string
-		renamedA bool
-		renamedB bool
-	}{
-		{
-			name: "rename",
-			nodes: func(nodes []modifyview.ModifyBranchNode) []modifyview.ModifyBranchNode {
-				nodes[0].PendingAction = &modifyview.PendingAction{Type: modifyview.ActionRename, NewName: "new-A"}
-				return nodes
-			},
-			order: []string{"new-A", "B", "C"}, files: []string{"a.txt", "b.txt", "base.txt", "c.txt"}, renamedA: true,
+type distributedModifyActionCase struct {
+	name     string
+	nodes    func([]modifyview.ModifyBranchNode) []modifyview.ModifyBranchNode
+	order    []string
+	files    []string
+	renamedA bool
+	renamedB bool
+}
+
+func TestDistributedModify_Rename(t *testing.T) {
+	testDistributedModifyAction(t, distributedModifyActionCase{
+		name: "rename",
+		nodes: func(nodes []modifyview.ModifyBranchNode) []modifyview.ModifyBranchNode {
+			nodes[0].PendingAction = &modifyview.PendingAction{Type: modifyview.ActionRename, NewName: "new-A"}
+			return nodes
 		},
-		{
-			name: "insert",
-			nodes: func(nodes []modifyview.ModifyBranchNode) []modifyview.ModifyBranchNode {
-				return []modifyview.ModifyBranchNode{nodes[0], insertedModifyNode("inserted"), nodes[1], nodes[2]}
-			},
-			order: []string{"A", "inserted", "B", "C"}, files: []string{"a.txt", "b.txt", "base.txt", "c.txt"},
+		order: []string{"new-A", "B", "C"}, files: []string{"a.txt", "b.txt", "base.txt", "c.txt"}, renamedA: true,
+	})
+}
+
+func TestDistributedModify_Insert(t *testing.T) {
+	testDistributedModifyAction(t, distributedModifyActionCase{
+		name: "insert",
+		nodes: func(nodes []modifyview.ModifyBranchNode) []modifyview.ModifyBranchNode {
+			return []modifyview.ModifyBranchNode{nodes[0], insertedModifyNode("inserted"), nodes[1], nodes[2]}
 		},
-		{
-			name: "drop",
-			nodes: func(nodes []modifyview.ModifyBranchNode) []modifyview.ModifyBranchNode {
-				nodes[0].PendingAction = &modifyview.PendingAction{Type: modifyview.ActionDrop}
-				nodes[0].Removed = true
-				return nodes
-			},
-			order: []string{"B", "C"}, files: []string{"b.txt", "base.txt", "c.txt"},
+		order: []string{"A", "inserted", "B", "C"}, files: []string{"a.txt", "b.txt", "base.txt", "c.txt"},
+	})
+}
+
+func TestDistributedModify_Drop(t *testing.T) {
+	testDistributedModifyAction(t, distributedModifyActionCase{
+		name: "drop",
+		nodes: func(nodes []modifyview.ModifyBranchNode) []modifyview.ModifyBranchNode {
+			nodes[0].PendingAction = &modifyview.PendingAction{Type: modifyview.ActionDrop}
+			nodes[0].Removed = true
+			return nodes
 		},
-		{
-			name: "fold down",
-			nodes: func(nodes []modifyview.ModifyBranchNode) []modifyview.ModifyBranchNode {
-				nodes[1].PendingAction = &modifyview.PendingAction{Type: modifyview.ActionFoldDown}
-				nodes[1].Removed = true
-				return nodes
-			},
-			order: []string{"A", "C"}, files: []string{"a.txt", "b.txt", "base.txt", "c.txt"},
+		order: []string{"B", "C"}, files: []string{"b.txt", "base.txt", "c.txt"},
+	})
+}
+
+func TestDistributedModify_FoldDown(t *testing.T) {
+	testDistributedModifyAction(t, distributedModifyActionCase{
+		name: "fold down",
+		nodes: func(nodes []modifyview.ModifyBranchNode) []modifyview.ModifyBranchNode {
+			nodes[1].PendingAction = &modifyview.PendingAction{Type: modifyview.ActionFoldDown}
+			nodes[1].Removed = true
+			return nodes
 		},
-		{
-			name: "fold up",
-			nodes: func(nodes []modifyview.ModifyBranchNode) []modifyview.ModifyBranchNode {
-				nodes[1].PendingAction = &modifyview.PendingAction{Type: modifyview.ActionFoldUp}
-				nodes[1].Removed = true
-				return nodes
-			},
-			order: []string{"A", "C"}, files: []string{"a.txt", "b.txt", "base.txt", "c.txt"},
+		order: []string{"A", "C"}, files: []string{"a.txt", "b.txt", "base.txt", "c.txt"},
+	})
+}
+
+func TestDistributedModify_FoldUp(t *testing.T) {
+	testDistributedModifyAction(t, distributedModifyActionCase{
+		name: "fold up",
+		nodes: func(nodes []modifyview.ModifyBranchNode) []modifyview.ModifyBranchNode {
+			nodes[1].PendingAction = &modifyview.PendingAction{Type: modifyview.ActionFoldUp}
+			nodes[1].Removed = true
+			return nodes
 		},
-		{
-			name: "reorder",
-			nodes: func(nodes []modifyview.ModifyBranchNode) []modifyview.ModifyBranchNode {
-				return []modifyview.ModifyBranchNode{nodes[2], nodes[1], nodes[0]}
-			},
-			order: []string{"C", "B", "A"}, files: []string{"a.txt", "b.txt", "base.txt", "c.txt"},
+		order: []string{"A", "C"}, files: []string{"a.txt", "b.txt", "base.txt", "c.txt"},
+	})
+}
+
+func TestDistributedModify_Reorder(t *testing.T) {
+	testDistributedModifyAction(t, distributedModifyActionCase{
+		name: "reorder",
+		nodes: func(nodes []modifyview.ModifyBranchNode) []modifyview.ModifyBranchNode {
+			return []modifyview.ModifyBranchNode{nodes[2], nodes[1], nodes[0]}
 		},
-		{
-			name: "rename insert and drop",
-			nodes: func(nodes []modifyview.ModifyBranchNode) []modifyview.ModifyBranchNode {
-				nodes[0].PendingAction = &modifyview.PendingAction{Type: modifyview.ActionDrop}
-				nodes[0].Removed = true
-				nodes[1].PendingAction = &modifyview.PendingAction{Type: modifyview.ActionRename, NewName: "new-B"}
-				return []modifyview.ModifyBranchNode{nodes[0], nodes[1], insertedModifyNode("inserted"), nodes[2]}
-			},
-			order: []string{"new-B", "inserted", "C"}, files: []string{"b.txt", "base.txt", "c.txt"}, renamedB: true,
+		order: []string{"C", "B", "A"}, files: []string{"a.txt", "b.txt", "base.txt", "c.txt"},
+	})
+}
+
+func TestDistributedModify_RenameInsertAndDrop(t *testing.T) {
+	testDistributedModifyAction(t, distributedModifyActionCase{
+		name: "rename insert and drop",
+		nodes: func(nodes []modifyview.ModifyBranchNode) []modifyview.ModifyBranchNode {
+			nodes[0].PendingAction = &modifyview.PendingAction{Type: modifyview.ActionDrop}
+			nodes[0].Removed = true
+			nodes[1].PendingAction = &modifyview.PendingAction{Type: modifyview.ActionRename, NewName: "new-B"}
+			return []modifyview.ModifyBranchNode{nodes[0], nodes[1], insertedModifyNode("inserted"), nodes[2]}
 		},
-	}
-	for _, tt := range tests {
-		for _, unoccupied := range []bool{false, true} {
-			layout := "occupied"
-			if unoccupied {
-				layout = "mixed"
-			}
-			t.Run(tt.name+"/"+layout, func(t *testing.T) {
-				repo := setupDistributedModify(t, false)
-				if unoccupied {
-					runModifyGit(t, repo.owners["B"], "checkout", "-qb", "b-observer", "main")
-					require.NoError(t, os.WriteFile(filepath.Join(repo.owners["B"], "unrelated.txt"), []byte("keep"), 0644))
-				}
-				require.NoError(t, os.WriteFile(filepath.Join(repo.caller, "unrelated.txt"), []byte("keep"), 0644))
-				beforeTrees := runModifyGit(t, repo.root, "worktree", "list", "--porcelain")
-				restore := git.SetOps(requireWorktree(t, git.CurrentOps(), repo.origin))
-				defer restore()
-				cfg, _, _ := config.NewTestConfig()
-				defer cfg.Out.Close()
-				defer cfg.Err.Close()
-				result, conflict, err := ApplyPlan(cfg, repo.common, &repo.sf.Stacks[0], repo.sf,
-					tt.nodes(makeNodes(&repo.sf.Stacks[0])), "C", noopUpdateBaseSHAs)
-				require.NoError(t, err)
-				assert.Nil(t, conflict)
-				require.NotNil(t, result)
-				saved, err := stack.Load(repo.common)
-				require.NoError(t, err)
-				assert.Equal(t, tt.order, saved.Stacks[0].BranchNames())
-				top := tt.order[len(tt.order)-1]
-				assert.Equal(t, tt.files, strings.Fields(runModifyGit(t, repo.root, "ls-tree", "--name-only", top)))
-				for i, branch := range tt.order {
-					parent := "main"
-					if i > 0 {
-						parent = tt.order[i-1]
-					}
-					runModifyGit(t, repo.root, "merge-base", "--is-ancestor", parent, branch)
-				}
-				aName, bName := "A", "B"
-				if tt.renamedA {
-					aName = "new-A"
-				}
-				if tt.renamedB {
-					bName = "new-B"
-				}
-				if unoccupied {
-					bName = "b-observer"
-					assert.Equal(t, "?? unrelated.txt", runModifyGit(t, repo.owners["B"], "status", "--porcelain"))
-				}
-				assert.Equal(t, aName, runModifyGit(t, repo.owners["A"], "branch", "--show-current"))
-				assert.Equal(t, bName, runModifyGit(t, repo.owners["B"], "branch", "--show-current"))
-				assert.Equal(t, "C", runModifyGit(t, repo.origin, "branch", "--show-current"))
-				assert.Equal(t, "observer", runModifyGit(t, repo.caller, "branch", "--show-current"))
-				afterTrees := runModifyGit(t, repo.root, "worktree", "list", "--porcelain")
-				assert.Equal(t, strings.Count(beforeTrees, "worktree "), strings.Count(afterTrees, "worktree "))
-				if tt.name == "drop" {
-					assert.Equal(t, repo.refs["A"], runModifyGit(t, repo.root, "rev-parse", "A"))
-				}
-				if tt.name == "fold down" || tt.name == "fold up" {
-					assert.Equal(t, repo.refs["B"], runModifyGit(t, repo.root, "rev-parse", "B"))
-				}
-				if tt.name == "rename insert and drop" {
-					assert.Equal(t, runModifyGit(t, repo.root, "rev-parse", "new-B"), runModifyGit(t, repo.root, "rev-parse", "inserted"),
-						"an inserted empty layer must not resurrect the dropped parent's commits")
-				}
-				assert.False(t, StateExists(repo.common))
-			})
+		order: []string{"new-B", "inserted", "C"}, files: []string{"b.txt", "base.txt", "c.txt"}, renamedB: true,
+	})
+}
+
+func testDistributedModifyAction(t *testing.T, tt distributedModifyActionCase) {
+	t.Helper()
+	for _, unoccupied := range []bool{false, true} {
+		layout := "occupied"
+		if unoccupied {
+			layout = "mixed"
 		}
+		t.Run(layout, func(t *testing.T) {
+			repo := setupDistributedModify(t, false)
+			if unoccupied {
+				runModifyGit(t, repo.owners["B"], "checkout", "-qb", "b-observer", "main")
+				require.NoError(t, os.WriteFile(filepath.Join(repo.owners["B"], "unrelated.txt"), []byte("keep"), 0644))
+			}
+			require.NoError(t, os.WriteFile(filepath.Join(repo.caller, "unrelated.txt"), []byte("keep"), 0644))
+			beforeTrees := runModifyGit(t, repo.root, "worktree", "list", "--porcelain")
+			restore := git.SetOps(requireWorktree(t, git.CurrentOps(), repo.origin))
+			defer restore()
+			cfg, outR, errR := config.NewTestConfig()
+			defer cfg.Out.Close()
+			defer cfg.Err.Close()
+			defer outR.Close()
+			defer errR.Close()
+			result, conflict, err := ApplyPlan(cfg, repo.common, &repo.sf.Stacks[0], repo.sf,
+				tt.nodes(makeNodes(&repo.sf.Stacks[0])), "C", noopUpdateBaseSHAs)
+			require.NoError(t, err)
+			assert.Nil(t, conflict)
+			require.NotNil(t, result)
+			saved, err := stack.Load(repo.common)
+			require.NoError(t, err)
+			assert.Equal(t, tt.order, saved.Stacks[0].BranchNames())
+			top := tt.order[len(tt.order)-1]
+			assert.Equal(t, tt.files, strings.Fields(runModifyGit(t, repo.root, "ls-tree", "--name-only", top)))
+			for i, branch := range tt.order {
+				parent := "main"
+				if i > 0 {
+					parent = tt.order[i-1]
+				}
+				runModifyGit(t, repo.root, "merge-base", "--is-ancestor", parent, branch)
+			}
+			aName, bName := "A", "B"
+			if tt.renamedA {
+				aName = "new-A"
+			}
+			if tt.renamedB {
+				bName = "new-B"
+			}
+			if unoccupied {
+				bName = "b-observer"
+				assert.Equal(t, "?? unrelated.txt", runModifyGit(t, repo.owners["B"], "status", "--porcelain"))
+			}
+			assert.Equal(t, aName, runModifyGit(t, repo.owners["A"], "branch", "--show-current"))
+			assert.Equal(t, bName, runModifyGit(t, repo.owners["B"], "branch", "--show-current"))
+			assert.Equal(t, "C", runModifyGit(t, repo.origin, "branch", "--show-current"))
+			assert.Equal(t, "observer", runModifyGit(t, repo.caller, "branch", "--show-current"))
+			afterTrees := runModifyGit(t, repo.root, "worktree", "list", "--porcelain")
+			assert.Equal(t, strings.Count(beforeTrees, "worktree "), strings.Count(afterTrees, "worktree "))
+			if tt.name == "drop" {
+				assert.Equal(t, repo.refs["A"], runModifyGit(t, repo.root, "rev-parse", "A"))
+			}
+			if tt.name == "fold down" || tt.name == "fold up" {
+				assert.Equal(t, repo.refs["B"], runModifyGit(t, repo.root, "rev-parse", "B"))
+			}
+			if tt.name == "rename insert and drop" {
+				assert.Equal(t, runModifyGit(t, repo.root, "rev-parse", "new-B"), runModifyGit(t, repo.root, "rev-parse", "inserted"),
+					"an inserted empty layer must not resurrect the dropped parent's commits")
+			}
+			assert.False(t, StateExists(repo.common))
+		})
 	}
 }
 

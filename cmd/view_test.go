@@ -41,11 +41,14 @@ func TestTimeAgo(t *testing.T) {
 }
 
 func TestViewJSON(t *testing.T) {
-	git.SetOps(&git.MockOps{
+	original := git.CurrentOps()
+	t.Cleanup(func() { assert.Same(t, original, git.CurrentOps()) })
+	restore := git.SetOps(&git.MockOps{
 		IsAncestorFn: func(ancestor, descendant string) (bool, error) {
 			return true, nil // all branches are linear
 		},
 	})
+	defer restore()
 
 	tests := []struct {
 		name          string
@@ -139,7 +142,9 @@ func TestViewJSON(t *testing.T) {
 }
 
 func TestViewJSON_BranchFields(t *testing.T) {
-	git.SetOps(&git.MockOps{
+	original := git.CurrentOps()
+	t.Cleanup(func() { assert.Same(t, original, git.CurrentOps()) })
+	restore := git.SetOps(&git.MockOps{
 		IsAncestorFn: func(ancestor, descendant string) (bool, error) {
 			// feat/02 needs rebase
 			if descendant == "feat/02" {
@@ -148,6 +153,7 @@ func TestViewJSON_BranchFields(t *testing.T) {
 			return true, nil
 		},
 	})
+	defer restore()
 
 	s := &stack.Stack{
 		Trunk: stack.BranchRef{Branch: "main", Head: "aaa111"},

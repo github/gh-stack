@@ -124,7 +124,7 @@ func CurrentOps() Ops {
 // --- defaultOps method implementations ---
 
 func (d *defaultOps) GitDir() (string, error) {
-	return d.path("rev-parse", "--absolute-git-dir")
+	return d.directory("--absolute-git-dir")
 }
 
 func (d *defaultOps) RootDir() (string, error) {

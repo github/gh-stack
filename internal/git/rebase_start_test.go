@@ -11,7 +11,7 @@ import (
 
 func rebaseTestRepo(t *testing.T) string {
 	t.Helper()
-	_, clone := setupBareAndClone(t)
+	clone := setupLocalRepo(t)
 
 	gitExec(t, clone, "checkout", "-b", "feature")
 	writeFile(t, clone, "feature.txt", "feature")

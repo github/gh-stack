@@ -10,8 +10,11 @@ Repository operations require Git 2.36+.
 go mod download                  # install deps
 go build -o gh-stack .           # build
 go vet ./...                     # static analysis. Always run before tests.
-go test -race -count=1 ./...     # tests with race detection
+go test -race -count=1 -timeout=30m ./... # canonical tests with race detection
+go run ./scripts/testsuite -workers 4   # same suite in isolated processes
 ```
+
+Run vet before either test command. CI uses the same race-enabled suite on all three OSes, with process-isolated shards and a `Tests complete` manifest/result gate. The runner's JSON artifacts include test inventories and timings; scheduling hints never exclude tests. Do not add `t.Parallel` to tests that change Git mocks, cwd, or environment variables.
 
 No Makefile, no code generation, no external linter config. Standard Go toolchain only.
 

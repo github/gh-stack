@@ -81,6 +81,16 @@ func writeFile(t *testing.T, dir, name, content string) {
 	require.NoError(t, os.WriteFile(filepath.Join(dir, name), []byte(content), 0644))
 }
 
+func setupLocalRepo(t *testing.T) string {
+	t.Helper()
+	dir := t.TempDir()
+	gitExec(t, dir, "init", "-q", "-b", "main")
+	writeFile(t, dir, "init.txt", "hello")
+	gitExec(t, dir, "add", ".")
+	gitExec(t, dir, "commit", "-qm", "initial commit")
+	return dir
+}
+
 // withGitDir temporarily sets the git client to operate in dir by changing
 // the working directory. Returns a restore function.
 func withGitDir(t *testing.T, dir string) func() {
@@ -694,14 +704,13 @@ func TestIntegration_CherryPickQuitLeavesIndexUnmerged(t *testing.T) {
 
 func setupWorktreeRepo(t *testing.T) (*defaultOps, string) {
 	t.Helper()
-	_, dir := setupBareAndClone(t)
+	dir := setupLocalRepo(t)
 	gitExec(t, dir, "config", "user.name", "Test")
 	gitExec(t, dir, "config", "user.email", "test@test.com")
 	gitExec(t, dir, "config", "commit.gpgsign", "false")
 	gitExec(t, dir, "config", "rerere.enabled", "false")
 	gitExec(t, dir, "config", "merge.conflictStyle", "merge")
 	gitExec(t, dir, "config", "rebase.backend", "merge")
-	t.Cleanup(withGitDir(t, dir))
 	return &defaultOps{client: &cligit.Client{RepoDir: dir}}, dir
 }
 
@@ -790,6 +799,7 @@ func TestIntegration_WorktreeDirectoriesAndDiscovery(t *testing.T) {
 }
 
 func TestIntegration_WorktreePathsPreserveWhitespace(t *testing.T) {
+	t.Parallel()
 	for _, name := range []string{"space and \u03bb", " leading and trailing ", "embedded\nand trailing\n", `quotes " and backslash \`} {
 		t.Run(name, func(t *testing.T) {
 			if runtime.GOOS == "windows" && (strings.ContainsAny(name, "\n\"\\") || strings.HasSuffix(name, " ")) {
@@ -797,8 +807,6 @@ func TestIntegration_WorktreePathsPreserveWhitespace(t *testing.T) {
 			}
 			root, dir := setupWorktreeRepo(t)
 			mainPath := filepath.Join(filepath.Dir(dir), "main "+name)
-			// Windows cannot rename the process's current directory.
-			require.NoError(t, os.Chdir(filepath.Dir(dir)))
 			require.NoError(t, os.Rename(dir, mainPath))
 			root.client.RepoDir = mainPath
 			linkedPath := filepath.Join(t.TempDir(), name)
@@ -850,12 +858,12 @@ func setupSeparateGitRepo(t *testing.T) (*defaultOps, string, string) {
 	writeFile(t, dir, "init.txt", "initial")
 	gitExec(t, dir, "add", ".")
 	gitExec(t, dir, "commit", "-m", "initial")
-	t.Cleanup(withGitDir(t, dir))
 	root := &defaultOps{client: &cligit.Client{RepoDir: dir}}
 	return root, dir, gitDir
 }
 
 func TestIntegration_SeparateGitDirectory(t *testing.T) {
+	t.Parallel()
 	root, dir, gitDir := setupSeparateGitRepo(t)
 	linked, linkedPath := addTestWorktree(t, root, dir, "feature")
 	for _, scope := range []Ops{root, linked} {
@@ -890,6 +898,7 @@ func TestIntegration_SeparateGitDirectory(t *testing.T) {
 }
 
 func TestIntegration_SeparateGitDirectoryBacklink(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
 		name           string
 		relative       bool
@@ -948,6 +957,7 @@ func TestIntegration_SeparateGitDirectoryBacklink(t *testing.T) {
 }
 
 func TestIntegration_SeparateGitDirectoryMissingBacklink(t *testing.T) {
+	t.Parallel()
 	root, dir, gitDir := setupSeparateGitRepo(t)
 	linked, linkedPath := addTestWorktree(t, root, dir, "feature")
 	worktrees, err := linked.Worktrees()
@@ -1022,6 +1032,7 @@ func TestIntegration_ForWorktreeRejectsInvalidContext(t *testing.T) {
 }
 
 func TestIntegration_ForWorktreeIndependentExecutors(t *testing.T) {
+	t.Parallel()
 	root, dir := setupWorktreeRepo(t)
 	first, _ := addTestWorktree(t, root, dir, "first")
 	second, _ := addTestWorktree(t, root, dir, "second")
@@ -1047,7 +1058,41 @@ func TestIntegration_ForWorktreeIndependentExecutors(t *testing.T) {
 	assert.Equal(t, "main", gitExec(t, dir, "branch", "--show-current"))
 }
 
+func TestIntegration_WorktreeDirectoriesReuseOnlyCurrentValidation(t *testing.T) {
+	root, dir := setupWorktreeRepo(t)
+	linked, path := addTestWorktree(t, root, dir, "feature")
+	tracePath := filepath.Join(t.TempDir(), "trace.jsonl")
+	t.Setenv("GIT_TRACE2_EVENT", tracePath)
+	common, err := linked.CommonDir()
+	require.NoError(t, err)
+	assert.Equal(t, canonicalGitTestPath(t, filepath.Join(dir, ".git")), common)
+	gitDir, err := linked.GitDir()
+	require.NoError(t, err)
+	assert.NotEqual(t, common, gitDir)
+	requireWorktree(t, linked, path)
+	trace, err := os.ReadFile(tracePath)
+	require.NoError(t, err)
+	probes := 0
+	for _, line := range strings.Split(strings.TrimSpace(string(trace)), "\n") {
+		var event struct {
+			Event string
+			Argv  []string
+		}
+		require.NoError(t, json.Unmarshal([]byte(line), &event))
+		if event.Event == "start" && slices.Contains(event.Argv, "rev-parse") {
+			probes++
+		}
+	}
+	assert.Equal(t, 8, probes, "directory queries reuse current validation; selecting a scope still validates both directories")
+	require.NoError(t, os.Rename(path, path+"-moved"))
+	_, err = linked.CommonDir()
+	require.Error(t, err, "the previous validation must not be cached across calls")
+	_, err = linked.GitDir()
+	require.Error(t, err)
+}
+
 func TestIntegration_WorktreeMissingCheckoutDoesNotReportStagedChanges(t *testing.T) {
+	t.Parallel()
 	root, dir := setupWorktreeRepo(t)
 	linked, path := addTestWorktree(t, root, dir, "feature")
 	require.NoError(t, os.Rename(path, path+"-moved"))
@@ -1058,6 +1103,7 @@ func TestIntegration_WorktreeMissingCheckoutDoesNotReportStagedChanges(t *testin
 }
 
 func TestIntegration_WorktreeStateQueriesRejectChangedScope(t *testing.T) {
+	t.Parallel()
 	for _, change := range []string{"missing checkout", "removed gitfile", "replaced gitfile"} {
 		t.Run(change, func(t *testing.T) {
 			root, dir := setupWorktreeRepo(t)
@@ -1096,6 +1142,10 @@ func TestIntegration_WorktreeStateQueriesRejectChangedScope(t *testing.T) {
 			child, err := selected.ForWorktree(otherPath)
 			require.Error(t, err)
 			assert.Nil(t, child)
+			_, err = selected.GitDir()
+			require.Error(t, err)
+			_, err = selected.CommonDir()
+			require.Error(t, err)
 			require.Error(t, selected.StageAll())
 			require.Error(t, selected.ResetHard("HEAD"))
 			require.True(t, IsRebaseStartError(selected.Rebase("main", RebaseOpts{})))
@@ -1210,6 +1260,7 @@ func TestIntegration_GitStateQueriesSurfaceFilesystemErrors(t *testing.T) {
 }
 
 func TestIntegration_WorktreeRebasePreservesOtherRefsAndConfig(t *testing.T) {
+	t.Parallel()
 	for _, onto := range []bool{false, true} {
 		for _, dates := range []bool{false, true} {
 			t.Run(fmt.Sprintf("onto=%t/dates=%t", onto, dates), func(t *testing.T) {
@@ -1612,6 +1663,11 @@ func TestIntegration_WorktreeLocalMutations(t *testing.T) {
 	defaultBranch, err := linked.DefaultBranch()
 	require.NoError(t, err)
 	assert.Equal(t, "main", defaultBranch)
+	gitExec(t, dir, "update-ref", "refs/remotes/origin/remote-trunk", "main")
+	gitExec(t, dir, "symbolic-ref", "refs/remotes/origin/HEAD", "refs/remotes/origin/remote-trunk")
+	defaultBranch, err = linked.DefaultBranch()
+	require.NoError(t, err)
+	assert.Equal(t, "remote-trunk", defaultBranch, "a remote HEAD takes precedence over local branch-name fallbacks")
 	initial := gitExec(t, dir, "rev-parse", "HEAD")
 	writeFile(t, dir, "new.txt", "new main commit\n")
 	gitExec(t, dir, "add", ".")

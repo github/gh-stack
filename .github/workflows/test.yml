@@ -14,7 +14,17 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, windows-latest, macos-latest]
+        include:
+          - {os: ubuntu-latest, shard: 0, shards: 1, workers: 2}
+          - {os: windows-latest, shard: 0, shards: 4, workers: 1}
+          - {os: windows-latest, shard: 1, shards: 4, workers: 1}
+          - {os: windows-latest, shard: 2, shards: 4, workers: 1}
+          - {os: windows-latest, shard: 3, shards: 4, workers: 1}
+          - {os: macos-latest, shard: 0, shards: 4, workers: 1}
+          - {os: macos-latest, shard: 1, shards: 4, workers: 1}
+          - {os: macos-latest, shard: 2, shards: 4, workers: 1}
+          - {os: macos-latest, shard: 3, shards: 4, workers: 1}
+    name: test (${{ matrix.os }}, shard ${{ matrix.shard }})
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -26,5 +36,39 @@ jobs:
       - name: Vet
         run: go vet ./...
       - name: Test
-        # The real-Git worktree cases can exceed Go's 10-minute package limit on Windows.
-        run: go test -race -count=1 -timeout=30m ./...
+        run: >-
+          go run ./scripts/testsuite
+          -workers ${{ matrix.workers }}
+          -shard ${{ matrix.shard }}
+          -shards ${{ matrix.shards }}
+          -output "${{ runner.temp }}/test-results"
+      - name: Upload test results
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: tests-${{ matrix.os }}-${{ matrix.shard }}
+          path: ${{ runner.temp }}/test-results
+          if-no-files-found: error
+          retention-days: 14
+
+  test-complete:
+    name: Tests complete
+    if: always()
+    needs: test
+    runs-on: ubuntu-latest
+    steps:
+      - name: Require successful shards
+        if: needs.test.result != 'success'
+        run: |
+          echo "A required test shard failed, was cancelled, or did not run."
+          exit 1
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          pattern: tests-*
+          path: ${{ runner.temp }}/test-results
+      - name: Verify full platform inventories
+        run: go run ./scripts/testsuite -verify "${{ runner.temp }}/test-results"

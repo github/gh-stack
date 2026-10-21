@@ -36,9 +36,46 @@ This produces a `gh-stack` binary in the current directory.
 ## Test
 
 ```sh
-# Run all tests with race detection
-go test -race -count=1 ./...
+# Run static analysis before tests
+go vet ./...
+
+# Run all tests with race detection in isolated parallel processes
+go run ./scripts/testsuite -workers 4
+
+# The canonical unsharded suite remains supported
+go test -race -count=1 -timeout=30m ./...
 ```
+
+The parallel runner uses the same tests on every platform, including native Windows
+regressions. It compiles race-enabled test binaries once and isolates process-wide
+Git mocks, environment changes, and working directories. `-workers` bounds process
+concurrency; each child uses `-test.parallel=1` to avoid multiplying that limit.
+Choose a smaller worker count on constrained machines.
+
+Results are saved in a printed temporary directory, or under the directory supplied
+with `-output`. Each run contains JSON event logs and a `report.json` with the test
+inventory, assignments, results, runner/toolchain metadata, and build/test timings.
+Top-level timings include their subtests; do not add both together.
+
+To run a package or a specific regression:
+
+```sh
+go vet ./internal/modify
+go run ./scripts/testsuite -workers 4 ./internal/modify
+
+go vet ./cmd
+go test -race -count=1 -timeout=30m -run '^TestRebase_Worktrees' ./cmd
+```
+
+CI partitions the full suite across Windows and macOS jobs. The `Tests complete`
+check verifies that every platform has a complete, consistent set of successful
+shards. Missing results, failures, or cancelled shards fail the check. Test
+membership comes from Go's test binaries, not the advisory scheduling weights in
+`scripts/testsuite/timings.go`; newly added tests are included automatically.
+
+The former `TestDistributedModify_AllActions/<action>/<layout>` cases now run as
+`TestDistributedModify_{Rename,Insert,Drop,FoldDown,FoldUp,Reorder,RenameInsertAndDrop}/<layout>`.
+Both occupied and mixed layouts and their assertions are retained.
 
 ## Vet
 
@@ -79,8 +116,8 @@ npm run build     # Production build to docs/dist/
 1. [Fork][fork] and clone the repository
 1. Create a new branch: `git checkout -b my-branch-name`
 1. Make your change and add tests
-1. Make sure tests pass: `go test -race -count=1 ./...`
 1. Make sure vet passes: `go vet ./...`
+1. Make sure tests pass: `go run ./scripts/testsuite -workers 4` (or the canonical command above)
 1. Push to your fork and [submit a pull request][pr]
 
 Here are a few things you can do that will increase the likelihood of your pull request being accepted:
