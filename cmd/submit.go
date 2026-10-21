@@ -3,6 +3,7 @@ package cmd
 import (
 	"errors"
 	"fmt"
+	"slices"
 	"strconv"
 	"strings"
 
@@ -147,17 +148,6 @@ func runSubmit(cfg *config.Config, opts *submitOptions) error {
 	// Sync PR state to detect merged/queued PRs before pushing.
 	prDetails := syncStackPRs(cfg, s)
 
-	// If the active branches now sit on top of a fully-merged base, they can no
-	// longer extend the existing remote stack. Fork them into a fresh stack
-	// rooted at the trunk and continue the submit with that new stack.
-	if stacksAvailable {
-		s, err = maybeForkFromMergedBase(cfg, client, sf, s, gitDir)
-		if err != nil {
-			cfg.Errorf("%s", err)
-			return ErrSilent
-		}
-	}
-
 	// Resolve remote for pushing
 	remote, err := pickRemote(cfg, currentBranch, opts.remote)
 	if err != nil {
@@ -197,6 +187,18 @@ func runSubmit(cfg *config.Config, opts *submitOptions) error {
 			return ErrSilent
 		}
 	}
+
+	// A pending modify owns its replacement identity, including on retries
+	// after unstacking left only merged PRs in the old remote stack.
+	if stacksAvailable && !pendingModify {
+		s, err = maybeForkFromMergedBase(cfg, client, sf, s, gitDir)
+		if err != nil {
+			cfg.Errorf("%s", err)
+			return ErrSilent
+		}
+	}
+	activeBranches = activeBranchNames(s)
+	queued = s.QueuedBranches()
 
 	// Best-effort fetch to update tracking refs (helps --force-with-lease
 	// in shallow clones). Silently ignored if branches don't exist on the
@@ -283,7 +285,7 @@ func runSubmit(cfg *config.Config, opts *submitOptions) error {
 		return stackSaveError(cfg, err)
 	}
 	if pendingModify {
-		if !allPRsSubmitted || (!stackSynced && len(s.Branches) != 1) {
+		if !allPRsSubmitted || (!stackSynced && len(activeBranches) > 1) {
 			cfg.Errorf("modify is not fully submitted; recovery state was retained")
 			cfg.Printf("Finish submitting all remaining PRs, then retry `%s`", cfg.ColorCyan("gh stack submit"))
 			return ErrSilent
@@ -565,7 +567,11 @@ func maybeForkFromMergedBase(cfg *config.Config, client github.ClientOps, sf *st
 		return s, nil
 	}
 
-	remotePRs := remoteStackPRs(client, s.ID)
+	remote, err := remoteStackByID(client, s.ID)
+	if err != nil || remote == nil {
+		return s, nil
+	}
+	remotePRs := remote.PRNumbers()
 	if len(remotePRs) == 0 {
 		return s, nil
 	}
@@ -651,19 +657,17 @@ func maybeForkFromMergedBase(cfg *config.Config, client github.ClientOps, sf *st
 	return &sf.Stacks[len(sf.Stacks)-1], nil
 }
 
-// remoteStackPRs returns the PR numbers that are officially part of the remote
-// stack identified by stackID, or nil if it can't be determined.
-func remoteStackPRs(client github.ClientOps, stackID string) []int {
+func remoteStackByID(client github.ClientOps, stackID string) (*github.RemoteStack, error) {
 	stacks, err := client.ListStacks()
 	if err != nil {
-		return nil
+		return nil, err
 	}
-	for _, rs := range stacks {
-		if strconv.Itoa(rs.ID) == stackID {
-			return rs.PRNumbers()
+	for i := range stacks {
+		if strconv.Itoa(stacks[i].ID) == stackID {
+			return &stacks[i], nil
 		}
 	}
-	return nil
+	return nil, nil
 }
 
 // mergedPRNumbers returns the set of PR numbers whose local branch is marked
@@ -679,9 +683,36 @@ func mergedPRNumbers(s *stack.Stack) map[int]bool {
 	return merged
 }
 
+// prepareStackRecreation recognizes a merged-only remote remnant and records
+// fresh merge state without removing any local branches.
+func prepareStackRecreation(s *stack.Stack, remaining *github.RemoteStack) bool {
+	if remaining == nil || len(remaining.PRNumbers()) == 0 {
+		return false
+	}
+	merged := mergedPRNumbers(s)
+	for _, pr := range remaining.PRDetails {
+		if pr.IsMerged() {
+			merged[pr.Number] = true
+		}
+	}
+	for _, number := range remaining.PRNumbers() {
+		if !merged[number] {
+			return false
+		}
+	}
+	for i := range s.Branches {
+		b := &s.Branches[i]
+		if b.PullRequest != nil && merged[b.PullRequest.Number] {
+			b.PullRequest.Merged = true
+			b.Queued = false
+		}
+	}
+	return true
+}
+
 // handlePendingModify handles the stack recreation after a modify operation.
-// It deletes the old remote stack and clears s.ID so syncStack creates a new
-// one. The bool identifies a matching pending modification. Its journal is
+// It unstacks the old PRs and clears s.ID so syncStack creates a replacement.
+// The bool identifies a matching pending modification. Its journal is
 // cleared only after the caller verifies all required submission outcomes.
 func handlePendingModify(cfg *config.Config, client github.ClientOps, s *stack.Stack, gitDir string) (bool, error) {
 	state, err := modify.LoadState(gitDir)
@@ -719,17 +750,19 @@ func handlePendingModify(cfg *config.Config, client github.ClientOps, s *stack.S
 		}
 	}
 
-	// Delete the old remote stack
+	// Release the old stack's unmerged PRs before submitting the replacement.
 	if state.PriorRemoteStackID != "" {
-		number, found, lookupErr := stackNumberByID(client, state.PriorRemoteStackID)
+		remote, lookupErr := remoteStackByID(client, state.PriorRemoteStackID)
 		if lookupErr != nil {
 			cfg.Warningf("Failed to look up existing stack: %v", lookupErr)
 			cfg.Printf("Run `%s` again to retry", cfg.ColorCyan("gh stack submit"))
 			return true, lookupErr
 		}
-		if !found {
+		if remote == nil {
 			cfg.Printf("Previous stack already deleted on GitHub")
-		} else if _, dissolved, err := client.Unstack(number); err != nil {
+		} else if prepareStackRecreation(s, remote) {
+			cfg.Infof("Only merged pull requests remain in the previous stack on GitHub")
+		} else if remaining, dissolved, err := client.Unstack(remote.Number); err != nil {
 			var httpErr *api.HTTPError
 			if errors.As(err, &httpErr) && httpErr.StatusCode == 404 {
 				cfg.Printf("Previous stack already deleted on GitHub")
@@ -738,11 +771,14 @@ func handlePendingModify(cfg *config.Config, client github.ClientOps, s *stack.S
 				cfg.Printf("Run `%s` again to retry", cfg.ColorCyan("gh stack submit"))
 				return true, err
 			}
-		} else if !dissolved {
-			cfg.Errorf("the previous stack still has pull requests queued for merge or with auto-merge enabled; it cannot be recreated yet")
+		} else if !dissolved && !prepareStackRecreation(s, remaining) {
+			cfg.Errorf("Some pull requests still belong to the previous stack on GitHub; it cannot be recreated yet")
 			return true, ErrConflict
-		} else {
+		} else if dissolved {
 			cfg.Successf("Cleared existing stack on GitHub")
+		} else {
+			cfg.Successf("Unstacked pull requests from the previous stack on GitHub")
+			cfg.Infof("Merged pull requests remain in the previous stack on GitHub")
 		}
 	}
 	// Record branch identity before the replacement receives a different ID.
@@ -778,10 +814,8 @@ func clearPendingModifyState(cfg *config.Config, s *stack.Stack, gitDir string) 
 	return nil
 }
 
-// syncStack creates or updates a stack on GitHub from the active PRs.
-// If the stack already exists (s.ID is set), it calls the PUT endpoint with
-// the full list of PRs to keep the remote stack in sync. If no stack exists
-// yet, it calls POST to create one.
+// syncStack creates or updates a stack on GitHub. Existing stacks keep their
+// merged members; new stacks exclude merged history from previous stacks.
 // This is a best-effort operation: failures are reported as warnings but do
 // not cause the submit command to fail (the PRs are already created).
 //
@@ -789,30 +823,43 @@ func clearPendingModifyState(cfg *config.Config, s *stack.Stack, gitDir string) 
 // (created, updated, or already in sync) and false otherwise (fewer than two
 // PRs, an unresolved divergence, stacked PRs unavailable, or an API failure).
 func syncStack(cfg *config.Config, client github.ClientOps, s *stack.Stack) bool {
-	// Collect PR numbers in stack order (bottom to top), including merged PRs.
-	// The API expects the full list — omitting merged PRs causes a
-	// "Stack contents have changed" rejection.
-	var prNumbers []int
+	prCount := 0
 	for _, b := range s.Branches {
 		if b.PullRequest != nil {
-			prNumbers = append(prNumbers, b.PullRequest.Number)
+			prCount++
 		}
 	}
 
 	// The API requires at least 2 PRs to form a stack.
-	if len(prNumbers) < 2 {
+	if prCount < 2 {
 		return false
 	}
 
 	if s.ID != "" {
-		return updateStack(cfg, client, s, prNumbers)
+		return updateStack(cfg, client, s)
 	}
 
 	// No locally tracked stack ID. The stack may already exist on GitHub
 	// (created from the web UI or another clone) without being recorded
 	// locally. Adopt it instead of blindly creating a new one, which the API
 	// rejects because the PRs are already part of a stack.
-	return reconcileUntrackedStack(cfg, client, s, prNumbers)
+	return reconcileUntrackedStack(cfg, client, s, stackPRNumbers(s, nil))
+}
+
+// stackPRNumbers includes merged PRs only when they belong to the remote stack
+// being updated, rather than to a previous stack retained after unstacking.
+func stackPRNumbers(s *stack.Stack, remote *github.RemoteStack) []int {
+	var members []int
+	if remote != nil {
+		members = remote.PRNumbers()
+	}
+	var numbers []int
+	for _, b := range s.Branches {
+		if b.PullRequest != nil && (!b.IsMerged() || slices.Contains(members, b.PullRequest.Number)) {
+			numbers = append(numbers, b.PullRequest.Number)
+		}
+	}
+	return numbers
 }
 
 // reconcileUntrackedStack reconciles a locally untracked stack (s.ID == "")
@@ -828,7 +875,7 @@ func reconcileUntrackedStack(cfg *config.Config, client github.ClientOps, s *sta
 	if err != nil {
 		// Couldn't inspect remote state — fall back to the create path, which
 		// reports its own errors (handleCreate422 covers "already stacked").
-		return createNewStack(cfg, client, s, prNumbers)
+		return createNewStack(cfg, client, s)
 	}
 
 	matched, err := findMatchingStack(stacks, prNumbers)
@@ -844,9 +891,10 @@ func reconcileUntrackedStack(cfg *config.Config, client github.ClientOps, s *sta
 
 	if matched == nil {
 		// No existing stack contains any of our PRs — create a new one.
-		return createNewStack(cfg, client, s, prNumbers)
+		return createNewStack(cfg, client, s)
 	}
 
+	prNumbers = stackPRNumbers(s, matched)
 	// A remote stack already contains some of our PRs. Refuse to silently drop
 	// any PRs it holds that we aren't tracking locally; let the user reconcile.
 	if dropped := prsMissingFrom(matched.PRNumbers(), prNumbers); len(dropped) > 0 {
@@ -869,7 +917,7 @@ func reconcileUntrackedStack(cfg *config.Config, client github.ClientOps, s *sta
 	}
 
 	cfg.Infof("Found the stack on GitHub — updating it to match your local stack")
-	return updateStack(cfg, client, s, prNumbers)
+	return updateStack(cfg, client, s)
 }
 
 // prsMissingFrom returns the numbers in remote that do not appear in local,
@@ -895,13 +943,13 @@ func prsMissingFrom(remote, local []int) []int {
 // leaves the remote stack untouched. If the remote stack is gone (404) it
 // clears the local ID and re-creates it. Returns true when the remote stack
 // reflects the local stack (updated, already in sync, or recreated).
-func updateStack(cfg *config.Config, client github.ClientOps, s *stack.Stack, prNumbers []int) bool {
+func updateStack(cfg *config.Config, client github.ClientOps, s *stack.Stack) bool {
 	number, err := ensureStackNumber(client, s)
 	if err != nil || number == 0 {
 		// Can't resolve the remote stack — treat as missing and (re)create.
 		s.ID = ""
 		s.Number = 0
-		return createNewStack(cfg, client, s, prNumbers)
+		return createNewStack(cfg, client, s)
 	}
 
 	remote, err := client.GetStack(number)
@@ -910,13 +958,20 @@ func updateStack(cfg *config.Config, client github.ClientOps, s *stack.Stack, pr
 		if errors.As(err, &httpErr) && httpErr.StatusCode == 404 {
 			s.ID = ""
 			s.Number = 0
-			return createNewStack(cfg, client, s, prNumbers)
+			return createNewStack(cfg, client, s)
 		}
 		cfg.Warningf("Failed to read stack on GitHub: %v", err)
 		return false
 	}
 
+	if prepareStackRecreation(s, remote) && len(s.ActiveBranches()) > 0 {
+		s.ID = ""
+		s.Number = 0
+		return createNewStack(cfg, client, s)
+	}
+
 	current := remote.PRNumbers()
+	prNumbers := stackPRNumbers(s, remote)
 	if slicesEqual(current, prNumbers) {
 		s.ID = strconv.Itoa(remote.ID)
 		s.Number = remote.Number
@@ -947,7 +1002,7 @@ func updateStack(cfg *config.Config, client github.ClientOps, s *stack.Stack, pr
 				// immediately try to re-create it.
 				s.ID = ""
 				s.Number = 0
-				return createNewStack(cfg, client, s, prNumbers)
+				return createNewStack(cfg, client, s)
 			case 422:
 				// A merged branch whose ref has been deleted upstream breaks the
 				// stack's base→head chain, so the update is rejected. This is
@@ -977,7 +1032,11 @@ func updateStack(cfg *config.Config, client github.ClientOps, s *stack.Stack, pr
 // createNewStack calls the POST endpoint to create a new stack, handling the
 // three types of 422 errors the API may return.
 // Returns true when the stack was created or is confirmed already in sync.
-func createNewStack(cfg *config.Config, client github.ClientOps, s *stack.Stack, prNumbers []int) bool {
+func createNewStack(cfg *config.Config, client github.ClientOps, s *stack.Stack) bool {
+	prNumbers := stackPRNumbers(s, nil)
+	if len(prNumbers) < 2 {
+		return false
+	}
 	rs, err := client.CreateStack(prNumbers)
 	if err == nil {
 		s.ID = strconv.Itoa(rs.ID)

@@ -653,7 +653,7 @@ func TestUpdateStack_BrokenChainAfterMerge(t *testing.T) {
 			AddToStackFn: func(int, []int) (*github.RemoteStack, error) { return nil, mustFormErr() },
 		}
 		cfg, _, errR := config.NewTestConfig()
-		updateStack(cfg, mock, s, []int{1, 2, 3})
+		updateStack(cfg, mock, s)
 		cfg.Err.Close()
 		out, _ := io.ReadAll(errR)
 		output := string(out)
@@ -678,7 +678,7 @@ func TestUpdateStack_BrokenChainAfterMerge(t *testing.T) {
 			AddToStackFn: func(int, []int) (*github.RemoteStack, error) { return nil, mustFormErr() },
 		}
 		cfg, _, errR := config.NewTestConfig()
-		updateStack(cfg, mock, s, []int{1, 2})
+		updateStack(cfg, mock, s)
 		cfg.Err.Close()
 		out, _ := io.ReadAll(errR)
 		output := string(out)
@@ -1274,29 +1274,62 @@ func TestSyncStack_SkippedForSinglePR(t *testing.T) {
 	assert.False(t, updateCalled, "UpdateStack should not be called with fewer than 2 PRs")
 }
 
-func TestSyncStack_IncludesMergedBranches(t *testing.T) {
-	s := &stack.Stack{
-		Trunk: stack.BranchRef{Branch: "main"},
-		Branches: []stack.BranchRef{
-			{Branch: "b1", PullRequest: &stack.PullRequestRef{Number: 10, Merged: true}},
-			{Branch: "b2", PullRequest: &stack.PullRequestRef{Number: 11}},
-			{Branch: "b3", PullRequest: &stack.PullRequestRef{Number: 12}},
-		},
+func TestSyncStack_MergedMembership(t *testing.T) {
+	for _, tc := range []struct {
+		name       string
+		tracked    bool
+		remotePRs  []int
+		wantCreate []int
+		wantAdd    []int
+	}{
+		{name: "create without historical stack", remotePRs: []int{10}, wantCreate: []int{11, 12}},
+		{name: "recreate a tracked remnant", tracked: true, remotePRs: []int{10}, wantCreate: []int{11, 12}},
+		{name: "update keeps merged member", tracked: true, remotePRs: []int{10, 11}, wantAdd: []int{12}},
+		{name: "update excludes historical nonmember", tracked: true, remotePRs: []int{11, 12}},
+		{name: "adopt keeps merged member", remotePRs: []int{10, 11, 12}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			s := &stack.Stack{
+				Trunk: stack.BranchRef{Branch: "main"},
+				Branches: []stack.BranchRef{
+					{Branch: "b1", PullRequest: &stack.PullRequestRef{Number: 10, Merged: true}},
+					{Branch: "b2", PullRequest: &stack.PullRequestRef{Number: 11}},
+					{Branch: "b3", PullRequest: &stack.PullRequestRef{Number: 12}},
+				},
+			}
+			if tc.tracked {
+				s.ID, s.Number = "77", 7
+			}
+			remote := &github.RemoteStack{ID: 77, Number: 7, PullRequests: tc.remotePRs}
+			var created, added []int
+			mock := &github.MockClient{
+				ListStacksFn: func() ([]github.RemoteStack, error) {
+					return []github.RemoteStack{*remote}, nil
+				},
+				GetStackFn: func(int) (*github.RemoteStack, error) { return remote, nil },
+				CreateStackFn: func(numbers []int) (*github.RemoteStack, error) {
+					created = numbers
+					return &github.RemoteStack{ID: 88, Number: 8, PullRequests: numbers}, nil
+				},
+				AddToStackFn: func(number int, numbers []int) (*github.RemoteStack, error) {
+					assert.Equal(t, 7, number)
+					added = numbers
+					return &github.RemoteStack{ID: 77, Number: 7, PullRequests: append(tc.remotePRs, numbers...)}, nil
+				},
+			}
+			cfg, outR, errR := config.NewTestConfig()
+			assert.True(t, syncStack(cfg, mock, s))
+			commandOutput(t, cfg, outR, errR)
+			assert.Equal(t, tc.wantCreate, created)
+			assert.Equal(t, tc.wantAdd, added)
+			if tc.wantCreate != nil {
+				assert.Equal(t, "88", s.ID)
+			} else {
+				assert.Equal(t, "77", s.ID)
+			}
+			assert.Equal(t, []string{"b1", "b2", "b3"}, s.BranchNames())
+		})
 	}
-
-	var gotNumbers []int
-	mock := &github.MockClient{
-		CreateStackFn: func(prNumbers []int) (*github.RemoteStack, error) {
-			gotNumbers = prNumbers
-			return &github.RemoteStack{ID: 42, Number: 42}, nil
-		},
-	}
-
-	cfg, _, _ := config.NewTestConfig()
-	syncStack(cfg, mock, s)
-	cfg.Err.Close()
-
-	assert.Equal(t, []int{10, 11, 12}, gotNumbers, "should include merged PRs to keep API in sync")
 }
 
 func TestSyncStack_SkipsBranchesWithoutPR(t *testing.T) {
@@ -1831,6 +1864,8 @@ func TestSubmit_PendingModifyCompletion(t *testing.T) {
 		newPR        bool
 		failure      string
 		priorDeleted bool
+		mergedBase   bool
+		retry        bool
 	}{
 		{name: "one existing PR", branches: 1},
 		{name: "one new PR", branches: 1, newPR: true},
@@ -1844,7 +1879,11 @@ func TestSubmit_PendingModifyCompletion(t *testing.T) {
 		{name: "one PR failed ready update", branches: 1, failure: "ready"},
 		{name: "one PR failed catalog save", branches: 1, failure: "save"},
 		{name: "one PR lost during final refresh", branches: 1, failure: "refresh"},
+		{name: "one PR after partial unstack", branches: 1, mergedBase: true},
 		{name: "multiple PRs complete", branches: 3},
+		{name: "multiple PRs after partial unstack", branches: 3, mergedBase: true},
+		{name: "retry push after partial unstack", branches: 3, mergedBase: true, failure: "push", retry: true},
+		{name: "retry creation after partial unstack", branches: 3, mergedBase: true, failure: "stack", retry: true},
 		{name: "multiple PRs failed lookup", branches: 3, failure: "lookup"},
 		{name: "multiple PRs failed creation", branches: 3, newPR: true, failure: "create"},
 		{name: "multiple PRs failed base update", branches: 3, failure: "base"},
@@ -1856,6 +1895,15 @@ func TestSubmit_PendingModifyCompletion(t *testing.T) {
 			prs := make(map[string]*github.PullRequest)
 			oldNumbers := []int{99, 100}
 			target := fmt.Sprintf("b%d", tc.branches)
+			if tc.mergedBase {
+				s.Branches = append(s.Branches, stack.BranchRef{
+					Branch: "merged", PullRequest: &stack.PullRequestRef{Number: 9, Merged: true},
+				})
+				prs["merged"] = &github.PullRequest{
+					Number: 9, HeadRefName: "merged", BaseRefName: "main", State: "MERGED", Merged: true,
+				}
+				oldNumbers = append(oldNumbers, 9)
+			}
 			for i := 0; i < tc.branches; i++ {
 				name := fmt.Sprintf("b%d", i+1)
 				br := stack.BranchRef{Branch: name}
@@ -1915,10 +1963,14 @@ func TestSubmit_PendingModifyCompletion(t *testing.T) {
 					if !oldDeleted {
 						return []github.RemoteStack{{ID: 42, Number: 7, PullRequests: oldNumbers}}, nil
 					}
-					if replacement != nil {
-						return []github.RemoteStack{*replacement}, nil
+					var stacks []github.RemoteStack
+					if tc.mergedBase {
+						stacks = append(stacks, github.RemoteStack{ID: 42, Number: 7, PullRequests: []int{9}})
 					}
-					return nil, nil
+					if replacement != nil {
+						stacks = append(stacks, *replacement)
+					}
+					return stacks, nil
 				},
 				GetStackFn: func(number int) (*github.RemoteStack, error) {
 					if number == 7 && !oldDeleted {
@@ -1950,6 +2002,9 @@ func TestSubmit_PendingModifyCompletion(t *testing.T) {
 					require.Equal(t, 7, number)
 					unstackCalls++
 					oldDeleted = true
+					if tc.mergedBase {
+						return &github.RemoteStack{ID: 42, Number: 7, PullRequests: []int{9}}, false, nil
+					}
 					return nil, true, nil
 				},
 				CreatePRFn: func(base, head, _, _ string, _ bool) (*github.PullRequest, error) {
@@ -1982,6 +2037,7 @@ func TestSubmit_PendingModifyCompletion(t *testing.T) {
 				MarkPRReadyForReviewFn: func(string) error { return assert.AnError },
 				CreateStackFn: func(numbers []int) (*github.RemoteStack, error) {
 					require.GreaterOrEqual(t, len(numbers), 2)
+					assert.NotContains(t, numbers, 9, "merged history must not join the replacement stack")
 					if tc.failure == "stack" {
 						return nil, assert.AnError
 					}
@@ -2011,8 +2067,10 @@ func TestSubmit_PendingModifyCompletion(t *testing.T) {
 				assert.Len(t, pushes, tc.branches)
 				saved, loadErr := stack.Load(dir)
 				require.NoError(t, loadErr)
-				require.NotNil(t, saved.Stacks[0].Branches[tc.branches-1].PullRequest)
-				assert.Equal(t, prs[target].Number, saved.Stacks[0].Branches[tc.branches-1].PullRequest.Number)
+				assert.Equal(t, s.BranchNames(), saved.Stacks[0].BranchNames())
+				targetIndex := saved.Stacks[0].IndexOf(target)
+				require.NotNil(t, saved.Stacks[0].Branches[targetIndex].PullRequest)
+				assert.Equal(t, prs[target].Number, saved.Stacks[0].Branches[targetIndex].PullRequest.Number)
 				if tc.branches == 1 {
 					assert.Empty(t, saved.Stacks[0].ID)
 					assert.Nil(t, replacement)
@@ -2024,6 +2082,20 @@ func TestSubmit_PendingModifyCompletion(t *testing.T) {
 				} else {
 					assert.Equal(t, 1, baseUpdates)
 				}
+			}
+			if tc.retry {
+				tc.failure = ""
+				retryCfg, retryOut, retryErr := config.NewTestConfig()
+				retryCfg.GitHubClientOverride = client
+				err := runSubmit(retryCfg, &submitOptions{auto: true})
+				_, diagnostics := commandOutput(t, retryCfg, retryOut, retryErr)
+				require.NoError(t, err, diagnostics)
+				assert.NoFileExists(t, modify.StatePath(dir))
+				saved, loadErr := stack.Load(dir)
+				require.NoError(t, loadErr)
+				require.Len(t, saved.Stacks, 1)
+				assert.Equal(t, s.BranchNames(), saved.Stacks[0].BranchNames())
+				assert.Equal(t, "77", saved.Stacks[0].ID)
 			}
 			if tc.priorDeleted {
 				assert.Zero(t, unstackCalls)
@@ -2128,27 +2200,72 @@ func TestPendingModify_RetryAfterOldStackDeletion(t *testing.T) {
 	commandOutput(t, cfg, outR, errR)
 }
 
-func TestPendingModify_PartialUnstackPreservesState(t *testing.T) {
-	dir := t.TempDir()
-	saveModifyState(t, dir, newPendingSubmitState("123"))
-	s := &stack.Stack{ID: "123", Number: 7}
-	cfg, outR, errR := config.NewTestConfig()
-	client := &github.MockClient{
-		ListStacksFn: func() ([]github.RemoteStack, error) {
-			return []github.RemoteStack{{ID: 123, Number: 7}}, nil
-		},
-		UnstackFn: func(int) (*github.RemoteStack, bool, error) { return nil, false, nil },
+func TestPendingModify_PartialUnstack(t *testing.T) {
+	for _, tc := range []struct {
+		name             string
+		remaining        []int
+		alreadyUnstacked bool
+		freshlyMerged    bool
+		wantConflict     bool
+	}{
+		{name: "merged", remaining: []int{10}},
+		{name: "merged during unstack", remaining: []int{10}, freshlyMerged: true},
+		{name: "already unstacked", remaining: []int{10}, alreadyUnstacked: true},
+		{name: "queued", remaining: []int{11}, wantConflict: true},
+		{name: "merged and queued", remaining: []int{10, 11}, wantConflict: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			dir := t.TempDir()
+			s := &stack.Stack{
+				ID: "123", Number: 7, Trunk: stack.BranchRef{Branch: "main"},
+				Branches: []stack.BranchRef{
+					{Branch: "b1", PullRequest: &stack.PullRequestRef{Number: 10, Merged: !tc.freshlyMerged}},
+					{Branch: "b2", PullRequest: &stack.PullRequestRef{Number: 11}},
+				},
+			}
+			state := newPendingSubmitState("123")
+			state.RecordStack(s)
+			saveModifyState(t, dir, state)
+			remaining := &github.RemoteStack{ID: 123, Number: 7, PullRequests: tc.remaining}
+			if tc.freshlyMerged {
+				mergedAt := "2026-01-01T00:00:00Z"
+				remaining.PRDetails = []github.RemoteStackPR{{Number: 10, MergedAt: &mergedAt}}
+			}
+			unstackCalled := false
+			client := &github.MockClient{
+				ListStacksFn: func() ([]github.RemoteStack, error) {
+					if tc.alreadyUnstacked {
+						return []github.RemoteStack{*remaining}, nil
+					}
+					return []github.RemoteStack{{ID: 123, Number: 7, PullRequests: []int{10, 11, 12}}}, nil
+				},
+				UnstackFn: func(int) (*github.RemoteStack, bool, error) {
+					unstackCalled = true
+					return remaining, false, nil
+				},
+			}
+			cfg, outR, errR := config.NewTestConfig()
+			handled, err := handlePendingModify(cfg, client, s, dir)
+			commandOutput(t, cfg, outR, errR)
+			assert.True(t, handled)
+			assert.Equal(t, !tc.alreadyUnstacked, unstackCalled)
+			state, loadErr := modify.LoadState(dir)
+			require.NoError(t, loadErr)
+			require.NotNil(t, state, "keep recovery until submission completes")
+			if tc.wantConflict {
+				assert.ErrorIs(t, err, ErrConflict)
+				assert.Equal(t, "123", s.ID)
+				assert.Equal(t, 7, s.Number)
+				assert.Equal(t, "123", state.PriorRemoteStackID)
+			} else {
+				require.NoError(t, err)
+				assert.Empty(t, s.ID)
+				assert.Zero(t, s.Number)
+				assert.Empty(t, state.PriorRemoteStackID)
+				assert.True(t, s.Branches[0].IsMerged())
+			}
+		})
 	}
-	handled, err := handlePendingModify(cfg, client, s, dir)
-	assert.ErrorIs(t, err, ErrConflict)
-	assert.True(t, handled)
-	assert.Equal(t, "123", s.ID)
-	assert.Equal(t, 7, s.Number)
-	state, err := modify.LoadState(dir)
-	require.NoError(t, err)
-	require.NotNil(t, state)
-	assert.Equal(t, "123", state.PriorRemoteStackID)
-	commandOutput(t, cfg, outR, errR)
 }
 
 func TestSubmit_UnrelatedPendingModifyIsPreserved(t *testing.T) {
