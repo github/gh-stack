@@ -2473,52 +2473,87 @@ func TestSync_Divergent_UseRemote_DirtyBlocked(t *testing.T) {
 	assert.Equal(t, "9", sf.Stacks[0].ID)
 }
 
-// TestSync_Divergent_DeleteRemote deletes the diverged remote stack, clears the
-// local association, and stops the sync (pointing the user at submit) without
-// recreating the stack or pushing.
+// The keep-local resolution stops before pushing or recreating the stack.
 func TestSync_Divergent_DeleteRemote(t *testing.T) {
-	tmpDir := t.TempDir()
-	divergentStack(t, tmpDir)
+	mergedAt := "2026-01-01T00:00:00Z"
+	for _, tc := range []struct {
+		name        string
+		remaining   *github.RemoteStack
+		apiErr      error
+		lookupFails bool
+		wantErr     error
+	}{
+		{name: "dissolved"},
+		{name: "merged", remaining: &github.RemoteStack{
+			ID: 9, Number: 9, PullRequests: []int{101},
+			PRDetails: []github.RemoteStackPR{{Number: 101, MergedAt: &mergedAt}},
+		}},
+		{name: "queued", remaining: &github.RemoteStack{ID: 9, Number: 9, PullRequests: []int{102}}, wantErr: ErrConflict},
+		{name: "server rejection", apiErr: &api.HTTPError{StatusCode: 422, Message: "Pull requests cannot be removed"}, wantErr: ErrAPIFailure},
+		{name: "lookup failure", lookupFails: true, wantErr: ErrAPIFailure},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			tmpDir := t.TempDir()
+			divergentStack(t, tmpDir)
+			unstacked, pushed := false, false
+			ghMock := divergentRemoteMock()
+			listStacks := ghMock.ListStacksFn
+			lookups := 0
+			ghMock.ListStacksFn = func() ([]github.RemoteStack, error) {
+				lookups++
+				if tc.lookupFails && lookups > 1 {
+					return nil, assert.AnError
+				}
+				return listStacks()
+			}
+			ghMock.UnstackFn = func(number int) (*github.RemoteStack, bool, error) {
+				assert.Equal(t, 9, number)
+				unstacked = true
+				return tc.remaining, tc.remaining == nil, tc.apiErr
+			}
+			ghMock.CreateStackFn = func([]int) (*github.RemoteStack, error) {
+				t.Fatal("CreateStack must not be called")
+				return nil, nil
+			}
+			ghMock.AddToStackFn = func(int, []int) (*github.RemoteStack, error) {
+				t.Fatal("AddToStack must not be called")
+				return nil, nil
+			}
+			mock := newSyncMockNoRebase(tmpDir, "b1")
+			mock.PushFn = func(string, []string, bool, bool) error { pushed = true; return nil }
+			output, err := runSyncCfg(t, mock, func(cfg *config.Config) {
+				cfg.GitHubClientOverride = ghMock
+				cfg.ForceInteractive = true
+				cfg.SelectFn = func(_, _ string, _ []string) (int, error) { return 1, nil }
+			})
 
-	deleted := false
-	var deletedNumber int
-	var pushed bool
-	ghMock := divergentRemoteMock()
-	ghMock.UnstackFn = func(number int) (*github.RemoteStack, bool, error) {
-		deleted = true
-		deletedNumber = number
-		return nil, true, nil
+			assert.Equal(t, !tc.lookupFails, unstacked)
+			assert.False(t, pushed)
+			assert.NotContains(t, output, "Stack synced")
+			assert.NotContains(t, output, "Branches synced")
+			sf, loadErr := stack.Load(tmpDir)
+			require.NoError(t, loadErr)
+			assert.Equal(t, []string{"b1", "b2", "b3"}, sf.Stacks[0].BranchNames())
+			if tc.wantErr != nil {
+				assert.ErrorIs(t, err, tc.wantErr)
+				assert.Equal(t, "9", sf.Stacks[0].ID)
+				assert.NotContains(t, output, "gh stack submit")
+			} else {
+				require.NoError(t, err)
+				assert.Empty(t, sf.Stacks[0].ID)
+				assert.Zero(t, sf.Stacks[0].Number)
+				assert.Contains(t, output, "gh stack submit")
+				if tc.remaining != nil {
+					assert.Contains(t, output, "remain stacked on GitHub")
+					assert.NotContains(t, output, "Remote stack removed")
+					assert.NotContains(t, output, "only the stack on GitHub was removed")
+					assert.True(t, sf.Stacks[0].Branches[0].IsMerged())
+				} else {
+					assert.Contains(t, output, "Remote stack removed")
+				}
+			}
+		})
 	}
-	ghMock.CreateStackFn = func([]int) (*github.RemoteStack, error) {
-		t.Fatal("CreateStack must not be called")
-		return nil, nil
-	}
-	ghMock.AddToStackFn = func(int, []int) (*github.RemoteStack, error) {
-		t.Fatal("AddToStack must not be called")
-		return nil, nil
-	}
-	mock := newSyncMockNoRebase(tmpDir, "b1")
-	mock.PushFn = func(string, []string, bool, bool) error { pushed = true; return nil }
-
-	output, err := runSyncCfg(t, mock, func(cfg *config.Config) {
-		cfg.GitHubClientOverride = ghMock
-		cfg.ForceInteractive = true
-		cfg.SelectFn = func(_, _ string, _ []string) (int, error) { return 1, nil }
-	})
-	require.NoError(t, err)
-
-	assert.True(t, deleted, "remote stack should be deleted")
-	assert.Equal(t, 9, deletedNumber)
-	assert.False(t, pushed, "sync should stop after deleting the remote stack")
-	assert.Contains(t, output, "Deleted the stack on GitHub")
-	assert.Contains(t, output, "gh stack submit")
-	assert.NotContains(t, output, "Stack synced")
-	assert.NotContains(t, output, "Branches synced")
-
-	sf, err := stack.Load(tmpDir)
-	require.NoError(t, err)
-	assert.Equal(t, "", sf.Stacks[0].ID, "local association is cleared")
-	assert.Equal(t, []string{"b1", "b2", "b3"}, sf.Stacks[0].BranchNames(), "local branches untouched")
 }
 
 // TestSync_Divergent_Cancel makes no changes and preserves the association.

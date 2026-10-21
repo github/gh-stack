@@ -2000,7 +2000,7 @@ func resolveStackDivergence(cfg *config.Config, client github.ClientOps, sf *sta
 
 	options := []string{
 		"Update local to match remote — replace your local stack with the remote version",
-		"Delete the remote stack on GitHub — keep your local stack and recreate on remote later",
+		"Unstack pull requests on GitHub — keep your local stack and recreate on remote later",
 		"Cancel — make no changes",
 	}
 	p := prompter.New(cfg.In, cfg.Out, cfg.Err)
@@ -2136,40 +2136,54 @@ func nearestBranchAfterReplace(oldBranches []string, currentBranch string, newSt
 	return newStack.Trunk.Branch
 }
 
-// resolveDivergenceDeleteRemote deletes the diverged stack object on GitHub and
-// removes the local association (clearing the stack ID). The PRs and local
-// branches are left untouched — only the stack grouping on GitHub is removed. It
-// stops the sync and points the user at `gh stack submit` to recreate the stack
-// (which, unlike sync, also creates PRs for any un-submitted branches).
+// resolveDivergenceDeleteRemote unstacks the remote PRs while keeping the local
+// branch layout. It stops sync so submit can recreate the active stack.
 func resolveDivergenceDeleteRemote(cfg *config.Config, client github.ClientOps, sf *stack.StackFile, s *stack.Stack, gitDir string) (remoteReconcileResult, error) {
 	res := remoteReconcileResult{stop: true}
 
-	number, err := ensureStackNumber(client, s)
-	if err != nil || number == 0 {
-		cfg.Warningf("Remote stack already deleted")
-	} else if _, dissolved, unstackErr := client.Unstack(number); unstackErr != nil {
+	remote, err := remoteStackByID(client, s.ID)
+	if err != nil {
+		cfg.Errorf("failed to look up remote stack: %v", err)
+		return res, ErrAPIFailure
+	}
+	if err := unstackAndKeepLocal(cfg, client, sf, s, remote, gitDir); err != nil {
+		return res, err
+	}
+
+	cfg.Printf("")
+	cfg.Printf("Your local branches and stack order are unchanged.")
+	cfg.Printf("  Run `%s` to recreate the stack on GitHub.", cfg.ColorCyan("gh stack submit"))
+	cfg.Printf("  Run `%s` first if you want to change the stack's structure.", cfg.ColorCyan("gh stack modify"))
+	return res, nil
+}
+
+func unstackAndKeepLocal(cfg *config.Config, client github.ClientOps, sf *stack.StackFile, s *stack.Stack, remote *github.RemoteStack, gitDir string) error {
+	if remote == nil {
+		cfg.Warningf("Remote stack already removed")
+	} else if prepareStackRecreation(s, remote) {
+		cfg.Infof("Merged pull requests remain stacked on GitHub%s", stackLabel(remote.Number))
+	} else if remaining, dissolved, unstackErr := client.Unstack(remote.Number); unstackErr != nil {
 		var httpErr *api.HTTPError
 		if errors.As(unstackErr, &httpErr) && httpErr.StatusCode == 404 {
-			cfg.Warningf("Remote stack already deleted")
+			cfg.Warningf("Remote stack already removed")
 		} else {
-			cfg.Errorf("failed to delete remote stack: %v", unstackErr)
-			return res, ErrAPIFailure
+			cfg.Errorf("failed to unstack remote stack: %v", unstackErr)
+			return ErrAPIFailure
 		}
+	} else if !dissolved && !prepareStackRecreation(s, remaining) {
+		cfg.Errorf("Some pull requests still belong to the remote stack; it cannot be recreated yet")
+		return ErrConflict
 	} else if dissolved {
-		cfg.Successf("Deleted the stack on GitHub")
+		cfg.Successf("Remote stack removed%s", stackLabel(remote.Number))
 	} else {
-		cfg.Warningf("Some pull requests could not be unstacked and remain on GitHub")
+		cfg.Successf("Pull requests unstacked on GitHub%s", stackLabel(remote.Number))
+		cfg.Infof("Merged pull requests remain stacked on GitHub%s", stackLabel(remote.Number))
 	}
 
 	s.ID = ""
 	s.Number = 0
 	if err := stack.Save(gitDir, sf); err != nil {
-		return res, handleSaveError(cfg, err)
+		return stackSaveError(cfg, err)
 	}
-
-	cfg.Printf("")
-	cfg.Printf("Your PRs and local branches are unchanged — only the stack on GitHub was removed.")
-	cfg.Printf("  Run `%s` to recreate the stack on GitHub.", cfg.ColorCyan("gh stack submit"))
-	cfg.Printf("  Run `%s` first if you want to change the stack's structure.", cfg.ColorCyan("gh stack modify"))
-	return res, nil
+	return nil
 }

@@ -580,13 +580,19 @@ func handleCompositionConflict(
 	p := prompter.New(cfg.In, cfg.Out, cfg.Err)
 	options := []string{
 		"Replace local stack with remote version",
-		"Delete remote stack and keep local version",
+		"Unstack on GitHub and keep local version",
 		"Cancel",
 	}
-	selected, err := p.Select("How would you like to resolve this?", "", options)
+	selectFn := p.Select
+	if cfg.SelectFn != nil {
+		selectFn = cfg.SelectFn
+	}
+	selected, err := selectFn("How would you like to resolve this?", "", options)
 	if err != nil {
 		if isInterruptError(err) {
-			clearSelectPrompt(cfg, len(options))
+			if cfg.SelectFn == nil {
+				clearSelectPrompt(cfg, len(options))
+			}
 			printInterrupt(cfg)
 			return nil, errInterrupt
 		}
@@ -619,28 +625,8 @@ func handleCompositionConflict(
 		return s, nil
 
 	case 1:
-		// Unstack the remote stack, keep local
-		_, dissolved, err := client.Unstack(remoteStack.Number)
-		if err != nil {
-			var httpErr *api.HTTPError
-			if errors.As(err, &httpErr) && httpErr.StatusCode == 404 {
-				cfg.Warningf("Remote stack already removed")
-			} else if errors.As(err, &httpErr) && httpErr.StatusCode == 422 {
-				cfg.Errorf("Cannot unstack remote stack: %s", httpErr.Message)
-				return nil, ErrAPIFailure
-			} else {
-				cfg.Errorf("failed to unstack remote stack: %v", err)
-				return nil, ErrAPIFailure
-			}
-		} else if dissolved {
-			cfg.Successf("Remote stack removed")
-		} else {
-			cfg.Warningf("Some pull requests could not be unstacked and remain on GitHub")
-		}
-		localStack.ID = ""
-		localStack.Number = 0
-		if err := stack.Save(gitDir, sf); err != nil {
-			return nil, stackSaveError(cfg, err)
+		if err := unstackAndKeepLocal(cfg, client, sf, localStack, remoteStack, gitDir); err != nil {
+			return nil, err
 		}
 		return localStack, nil
 

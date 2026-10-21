@@ -1323,6 +1323,82 @@ func TestCheckout_NumericTarget_AlreadyOnTarget(t *testing.T) {
 
 // --- Helper tests ---
 
+func TestCheckout_CompositionConflict_KeepLocal(t *testing.T) {
+	for _, tc := range []struct {
+		name             string
+		remaining        *github.RemoteStack
+		apiErr           error
+		alreadyUnstacked bool
+		wantErr          error
+	}{
+		{name: "dissolved"},
+		{name: "merged", remaining: &github.RemoteStack{ID: 9, Number: 9, PullRequests: []int{101}}},
+		{name: "already unstacked", remaining: &github.RemoteStack{ID: 9, Number: 9, PullRequests: []int{101}}, alreadyUnstacked: true},
+		{name: "queued", remaining: &github.RemoteStack{ID: 9, Number: 9, PullRequests: []int{102}}, wantErr: ErrConflict},
+		{name: "server rejection", apiErr: &api.HTTPError{StatusCode: 422, Message: "Pull requests cannot be removed"}, wantErr: ErrAPIFailure},
+		{name: "already gone", apiErr: &api.HTTPError{StatusCode: 404}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			dir := t.TempDir()
+			writeStackFileMulti(t, dir, stack.Stack{
+				ID: "9", Number: 9, Trunk: stack.BranchRef{Branch: "main"},
+				Branches: []stack.BranchRef{
+					{Branch: "b1", PullRequest: &stack.PullRequestRef{Number: 101, Merged: true}},
+					{Branch: "b2", PullRequest: &stack.PullRequestRef{Number: 102}},
+					{Branch: "b3", PullRequest: &stack.PullRequestRef{Number: 103}},
+				},
+			}, stack.Stack{
+				ID: "20", Number: 20, Trunk: stack.BranchRef{Branch: "main"},
+				Branches: []stack.BranchRef{{Branch: "other"}},
+			})
+			sf, err := stack.Load(dir)
+			require.NoError(t, err)
+			local := &sf.Stacks[0]
+			remote := &github.RemoteStack{ID: 9, Number: 9, PullRequests: []int{101, 102, 104}}
+			if tc.alreadyUnstacked {
+				remote = tc.remaining
+			}
+			unstacked := false
+			client := &github.MockClient{
+				UnstackFn: func(number int) (*github.RemoteStack, bool, error) {
+					assert.Equal(t, 9, number)
+					unstacked = true
+					return tc.remaining, tc.remaining == nil, tc.apiErr
+				},
+			}
+			cfg, outR, errR := config.NewTestConfig()
+			cfg.ForceInteractive = true
+			cfg.SelectFn = func(_, _ string, _ []string) (int, error) { return 1, nil }
+			prs := []*github.PullRequest{{HeadRefName: "b1"}, {HeadRefName: "b2"}, {HeadRefName: "b4"}}
+			result, err := handleCompositionConflict(cfg, client, sf, local, remote, prs, dir, "main")
+			_, output := commandOutput(t, cfg, outR, errR)
+			assert.Equal(t, !tc.alreadyUnstacked, unstacked)
+			saved, loadErr := stack.Load(dir)
+			require.NoError(t, loadErr)
+			require.Len(t, saved.Stacks, 2)
+			assert.Equal(t, []string{"b1", "b2", "b3"}, saved.Stacks[0].BranchNames())
+			assert.Equal(t, "20", saved.Stacks[1].ID)
+			assert.Equal(t, []string{"other"}, saved.Stacks[1].BranchNames())
+			if tc.wantErr != nil {
+				assert.ErrorIs(t, err, tc.wantErr)
+				assert.Nil(t, result)
+				assert.Equal(t, "9", saved.Stacks[0].ID)
+				assert.Equal(t, 9, saved.Stacks[0].Number)
+			} else {
+				require.NoError(t, err)
+				assert.Same(t, local, result)
+				assert.Empty(t, saved.Stacks[0].ID)
+				assert.Zero(t, saved.Stacks[0].Number)
+				if tc.remaining != nil {
+					assert.Contains(t, output, "remain stacked on GitHub")
+					assert.NotContains(t, output, "Remote stack removed")
+					assert.NotContains(t, output, "could not be unstacked")
+				}
+			}
+		})
+	}
+}
+
 func TestStackCompositionMatches(t *testing.T) {
 	tests := []struct {
 		name    string

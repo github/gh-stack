@@ -381,7 +381,7 @@ A clean remote-ahead update (PRs added on top of your local stack) is pulled dow
 When neither stack is a clean prefix of the other — for example, you added a branch locally while separate PRs were added to the same stack on GitHub — sync cannot merge the two automatically. In an interactive terminal it offers three choices:
 
 - **Use the remote stack as the source of truth** — replaces your local stack composition with the remote's, pulling any missing branches. If you were on a branch that the remote stack no longer contains, you're moved to the nearest surviving branch. Requires a clean working state with no uncommitted changes.
-- **Delete the stack on GitHub** — deletes the stack object on GitHub and stops the sync. Your PRs and local branches are untouched (only the stack on GitHub is removed); recreate the stack with `gh stack submit` (run `gh stack modify` first if you want to change its structure). This is the way to make GitHub match your local stack, because `submit` — unlike `sync` — also creates PRs for any branches you haven't submitted yet.
+- **Unstack on GitHub and keep local** — unstacks eligible PRs and stops sync without changing local branches or their order. Merged PRs may remain in the old stack; recreate the active stack with `gh stack submit` (or run `gh stack modify` first to change its structure). If unmerged PRs remain stacked, the local association is kept and the command reports a conflict. Unlike `sync`, `submit` also creates PRs for branches you haven't submitted yet.
 - **Cancel** — aborts the sync without pushing branches or updating any PRs.
 
 In a non-interactive terminal, a divergence aborts the sync (exit success) without pushing branches or updating PRs; resolve it by unstacking and recreating the stack.
