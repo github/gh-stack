@@ -297,9 +297,7 @@ func TestUnstack_RemovesCorrectStackByPointer(t *testing.T) {
 }
 
 func TestUnstack_AllLocked_ServerRejects(t *testing.T) {
-	// Every PR is queued for merge or has auto-merge enabled. The server
-	// (not the client) rejects the unstack with a 422; the command surfaces the
-	// error and leaves local tracking in place.
+	// The server rejects the unstack when no PRs can be removed.
 	gitDir := t.TempDir()
 	restore := git.SetOps(&git.MockOps{
 		GitDirFn:        func() (string, error) { return gitDir, nil },
@@ -322,7 +320,7 @@ func TestUnstack_AllLocked_ServerRejects(t *testing.T) {
 	cfg.GitHubClientOverride = &github.MockClient{
 		UnstackFn: func(int) (*github.RemoteStack, bool, error) {
 			unstackCalled = true
-			return nil, false, &api.HTTPError{StatusCode: 422, Message: "all pull requests are queued for merge or have auto-merge enabled"}
+			return nil, false, &api.HTTPError{StatusCode: 422, Message: "Pull requests #101, #102 cannot be removed from this stack"}
 		},
 	}
 
@@ -339,45 +337,67 @@ func TestUnstack_AllLocked_ServerRejects(t *testing.T) {
 	require.Len(t, sf.Stacks, 1)
 }
 
-func TestUnstack_PartialUnstack_KeepsLocalTracking(t *testing.T) {
-	// Some PRs (queued for merge / auto-merge) remain stacked, so the server
-	// returns the surviving stack (dissolved=false). Local tracking is kept.
-	gitDir := t.TempDir()
-	restore := git.SetOps(&git.MockOps{
-		GitDirFn:        func() (string, error) { return gitDir, nil },
-		CurrentBranchFn: func() (string, error) { return "b1", nil },
-	})
-	defer restore()
-
-	writeStackFile(t, gitDir, stack.Stack{
-		ID:     "99",
-		Number: 99,
-		Trunk:  stack.BranchRef{Branch: "main"},
-		Branches: []stack.BranchRef{
-			{Branch: "b1", PullRequest: &stack.PullRequestRef{Number: 101}},
-			{Branch: "b2", PullRequest: &stack.PullRequestRef{Number: 102}},
-		},
-	})
-
-	cfg, outR, errR := config.NewTestConfig()
-	cfg.GitHubClientOverride = &github.MockClient{
-		UnstackFn: func(int) (*github.RemoteStack, bool, error) {
-			return &github.RemoteStack{ID: 99, Number: 99, PullRequests: []int{102}}, false, nil
-		},
+func TestUnstack_PartialUnstack_RemovesLocalTracking(t *testing.T) {
+	tests := []struct {
+		name         string
+		stackNumber  int
+		remainingPRs []int
+	}{
+		{name: "merged", remainingPRs: []int{101}},
+		{name: "merged and queued", remainingPRs: []int{101, 102}},
+		{name: "by stack number", stackNumber: 99, remainingPRs: []int{101}},
 	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			gitDir := t.TempDir()
+			restore := git.SetOps(&git.MockOps{
+				GitDirFn:        func() (string, error) { return gitDir, nil },
+				CurrentBranchFn: func() (string, error) { return "b2", nil },
+			})
+			defer restore()
 
-	err := runUnstack(cfg, &unstackOptions{})
-	output := collectOutput(cfg, outR, errR)
+			writeTwoStacks(t, gitDir, stack.Stack{
+				ID:     "99",
+				Number: 99,
+				Trunk:  stack.BranchRef{Branch: "main"},
+				Branches: []stack.BranchRef{
+					{Branch: "b1", PullRequest: &stack.PullRequestRef{Number: 101, Merged: true}},
+					{Branch: "b2", PullRequest: &stack.PullRequestRef{Number: 102}},
+					{Branch: "b3", PullRequest: &stack.PullRequestRef{Number: 103}},
+				},
+			}, stack.Stack{
+				ID:       "42",
+				Number:   42,
+				Trunk:    stack.BranchRef{Branch: "main"},
+				Branches: []stack.BranchRef{{Branch: "other"}},
+			})
 
-	require.NoError(t, err)
-	assert.Contains(t, output, "remain stacked on GitHub")
-	assert.Contains(t, output, "local tracking is unchanged")
-	assert.NotContains(t, output, "Stack removed from local tracking")
+			cfg, outR, errR := config.NewTestConfig()
+			cfg.GitHubClientOverride = &github.MockClient{
+				UnstackFn: func(number int) (*github.RemoteStack, bool, error) {
+					assert.Equal(t, 99, number)
+					return &github.RemoteStack{ID: 99, Number: 99, PullRequests: tt.remainingPRs}, false, nil
+				},
+			}
 
-	// The stack still exists remotely, so local tracking is preserved.
-	sf, loadErr := stack.Load(gitDir)
-	require.NoError(t, loadErr)
-	require.Len(t, sf.Stacks, 1)
+			err := runUnstack(cfg, &unstackOptions{stackNumber: tt.stackNumber})
+			output := collectOutput(cfg, outR, errR)
+
+			require.NoError(t, err)
+			assert.Contains(t, output, "Pull requests unstacked on GitHub")
+			assert.Contains(t, output, "Some pull requests remain stacked on GitHub")
+			assert.Contains(t, output, "Stack removed from local tracking")
+			assert.NotContains(t, output, "auto-merge")
+			assert.NotContains(t, output, "local tracking is unchanged")
+			assert.NotContains(t, output, "⚠")
+
+			sf, loadErr := stack.Load(gitDir)
+			require.NoError(t, loadErr)
+			require.Len(t, sf.Stacks, 1)
+			assert.Equal(t, 42, sf.Stacks[0].Number)
+			assert.Equal(t, []string{"other"}, sf.Stacks[0].BranchNames())
+		})
+	}
 }
 
 func TestUnstack_NumberLookupFailure_StopsDeletion(t *testing.T) {
@@ -542,8 +562,7 @@ func TestUnstack_ByStackNumber_RemoteOnly_NotFound(t *testing.T) {
 }
 
 func TestUnstack_ByStackNumber_RemoteOnly_Partial(t *testing.T) {
-	// Some PRs (queued for merge / auto-merge) remain stacked. There is no local
-	// tracking to keep, so the command reports the outcome and succeeds.
+	// A partial remote-only unstack succeeds without changing unrelated local tracking.
 	gitDir := t.TempDir()
 	restore := git.SetOps(&git.MockOps{
 		GitDirFn:        func() (string, error) { return gitDir, nil },
@@ -568,7 +587,10 @@ func TestUnstack_ByStackNumber_RemoteOnly_Partial(t *testing.T) {
 	output := collectOutput(cfg, outR, errR)
 
 	require.NoError(t, err)
-	assert.Contains(t, output, "remain stacked on GitHub")
+	assert.Contains(t, output, "Pull requests unstacked on GitHub")
+	assert.Contains(t, output, "Some pull requests remain stacked on GitHub")
+	assert.NotContains(t, output, "auto-merge")
+	assert.NotContains(t, output, "⚠")
 	// No local tracking is involved, so no local-tracking messaging is shown.
 	assert.NotContains(t, output, "local tracking is unchanged")
 	assert.NotContains(t, output, "Stack removed from local tracking")
@@ -579,8 +601,7 @@ func TestUnstack_ByStackNumber_RemoteOnly_Partial(t *testing.T) {
 }
 
 func TestUnstack_ByStackNumber_RemoteOnly_AllLocked(t *testing.T) {
-	// Every PR is queued for merge or has auto-merge enabled; the server rejects
-	// the unstack with a 422 and the command surfaces the error.
+	// The server rejects the unstack when no PRs can be removed.
 	gitDir := t.TempDir()
 	restore := git.SetOps(&git.MockOps{
 		GitDirFn:        func() (string, error) { return gitDir, nil },
@@ -598,7 +619,7 @@ func TestUnstack_ByStackNumber_RemoteOnly_AllLocked(t *testing.T) {
 	cfg, outR, errR := config.NewTestConfig()
 	cfg.GitHubClientOverride = &github.MockClient{
 		UnstackFn: func(int) (*github.RemoteStack, bool, error) {
-			return nil, false, &api.HTTPError{StatusCode: 422, Message: "all pull requests are queued for merge or have auto-merge enabled"}
+			return nil, false, &api.HTTPError{StatusCode: 422, Message: "Pull requests #101, #102 cannot be removed from this stack"}
 		},
 	}
 	err := runUnstack(cfg, &unstackOptions{stackNumber: 999})
@@ -700,8 +721,7 @@ func TestUnstack_ByStackNumber_LocalFlag_LegacyStack_NoRemoteCall(t *testing.T) 
 
 func TestUnstack_ByStackNumber_LegacyStackResolvedByID(t *testing.T) {
 	// A stack tracked before the number was recorded (Number == 0) is resolved
-	// by mapping its internal ID to the remote stack number, and the backfilled
-	// number is persisted.
+	// by mapping its internal ID to the remote stack number.
 	gitDir := t.TempDir()
 	restore := git.SetOps(&git.MockOps{
 		GitDirFn:        func() (string, error) { return gitDir, nil },
@@ -726,7 +746,6 @@ func TestUnstack_ByStackNumber_LegacyStackResolvedByID(t *testing.T) {
 		},
 		UnstackFn: func(n int) (*github.RemoteStack, bool, error) {
 			unstackedNumber = n
-			// Some PRs remain stacked, so local tracking is kept.
 			return &github.RemoteStack{ID: 99, Number: 7, PullRequests: []int{102}}, false, nil
 		},
 	}
@@ -737,10 +756,9 @@ func TestUnstack_ByStackNumber_LegacyStackResolvedByID(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, 7, unstackedNumber, "should resolve the legacy stack and unstack by its remote number")
 	assert.Contains(t, output, "remain stacked on GitHub")
+	assert.Contains(t, output, "Stack removed from local tracking")
 
-	// The backfilled number is persisted to the stack file.
 	sf, loadErr := stack.Load(gitDir)
 	require.NoError(t, loadErr)
-	require.Len(t, sf.Stacks, 1)
-	assert.Equal(t, 7, sf.Stacks[0].Number, "the resolved stack number should be persisted")
+	assert.Empty(t, sf.Stacks)
 }

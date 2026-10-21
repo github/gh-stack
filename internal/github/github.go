@@ -576,10 +576,10 @@ func (c *Client) AddToStack(stackNumber int, prNumbers []int) (*RemoteStack, err
 	return &rs, nil
 }
 
-// Unstack removes unlocked pull requests from a stack. The server leaves PRs
-// that cannot be unstacked (queued for merge or with auto-merge enabled) in
-// place. When PRs remain, the updated stack is returned with dissolved=false;
-// when none remain the stack is destroyed and dissolved=true (HTTP 204).
+// Unstack removes eligible pull requests from a stack. When PRs remain (e.g.
+// merged or queued PRs), the updated stack is returned with dissolved=false.
+// When none remain, the stack is destroyed and dissolved=true (HTTP 204).
+// Both outcomes indicate a successful unstack.
 func (c *Client) Unstack(stackNumber int) (rs *RemoteStack, dissolved bool, err error) {
 	path := fmt.Sprintf("repos/%s/%s/stacks/%d/unstack", c.owner, c.repo, stackNumber)
 	resp, err := c.rest.Request(http.MethodPost, path, nil)

@@ -163,7 +163,7 @@ echo '{"pull_requests": [104]}' | \
 POST /repos/{owner}/{repo}/stacks/{stack_number}/unstack
 ```
 
-Removes the unmerged pull requests from a stack. This endpoint takes no request body. Pull requests that cannot be unstacked (those merged, merging, or queued for merge) are left in place.
+Removes eligible pull requests from a stack. This endpoint takes no request body. Merged or queued pull requests are left in place.
 
 - When pull requests remain in the stack, the updated stack is returned with `200 OK`.
 - When no pull requests remain, the stack is dissolved and `204 No Content` is returned.
@@ -174,7 +174,7 @@ gh api --method POST repos/OWNER/REPO/stacks/42/unstack
 
 ### The stack resource
 
-Each stack is represented by the following resource. The get, create, and add endpoints return a single stack; the list endpoint returns an array of them; and unstack returns the remaining merged stack, or `204 No Content` when the stack is dissolved.
+Each stack is represented by the following resource. The get, create, and add endpoints return a single stack; the list endpoint returns an array of them; and unstack returns the remaining stack, or `204 No Content` when the stack is dissolved.
 
 | Field | Type | Description |
 |-------|------|-------------|

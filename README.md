@@ -575,7 +575,7 @@ Provide a stack number (the identifier shown in the github.com stack UI) to unst
 
 Use `--local` to only remove local tracking without contacting GitHub.
 
-GitHub decides which pull requests can be unstacked: PRs that are queued for merge or have auto-merge enabled are left stacked. When some pull requests remain stacked, the stack is kept (and local tracking, if any, is unchanged).
+PRs that are merged, merging, or queued for merge cannot be removed from a stack on GitHub. After a successful unstack, local tracking is removed even when some PRs remain on GitHub.
 
 | Flag | Description |
 |------|-------------|

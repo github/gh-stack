@@ -36,9 +36,9 @@ local tracking is removed as well.
 
 Use --local to only remove local tracking without touching remote (GitHub).
 
-GitHub decides which pull requests can be unstacked: PRs that are queued for
-merge or have auto-merge enabled are left stacked. When some pull requests
-remain stacked, the stack is kept (and local tracking, if any, is unchanged).`,
+GitHub decides which pull requests can be unstacked. Merged or queued PRs remain
+stacked on GitHub. After a successful unstack, local tracking is removed even
+when some PRs remain on GitHub.`,
 		Example: `  # Unstack the current stack locally and on GitHub
   $ gh stack unstack
 
@@ -110,8 +110,8 @@ func runUnstack(cfg *config.Config, opts *unstackOptions) error {
 	return unstackTrackedStack(cfg, opts, result)
 }
 
-// unstackTrackedStack unstacks a locally tracked stack: it removes the stack on
-// GitHub (unless --local) and then removes it from local tracking.
+// unstackTrackedStack unstacks eligible PRs on GitHub (unless --local) and then
+// removes the stack from local tracking.
 func unstackTrackedStack(cfg *config.Config, opts *unstackOptions, result *loadStackResult) error {
 	gitDir := result.GitDir
 
@@ -119,9 +119,7 @@ func unstackTrackedStack(cfg *config.Config, opts *unstackOptions, result *loadS
 	s := result.Stack
 
 	// Unstack on GitHub first (unless --local). The server decides which PRs
-	// can be unstacked; PRs that are queued for merge or have auto-merge enabled
-	// are left in place and the stack is kept. Local tracking is only removed
-	// when the remote stack is fully dissolved.
+	// can be removed; successful partial unstacking still removes local tracking.
 	if !opts.local {
 		if s.ID == "" && s.Number == 0 {
 			cfg.Warningf("Stack has no remote ID — skipping server-side unstack")
@@ -140,16 +138,8 @@ func unstackTrackedStack(cfg *config.Config, opts *unstackOptions, result *loadS
 
 			if number == 0 {
 				cfg.Warningf("Stack not found on GitHub — continuing with local unstack")
-			} else {
-				keepLocal, err := unstackNumberOnGitHub(cfg, client, number, true)
-				if err != nil {
-					return err
-				}
-				if keepLocal {
-					// Some PRs remain stacked, so the stack still exists on
-					// GitHub. Keep local tracking so it continues to reflect it.
-					return nil
-				}
+			} else if err := unstackNumberOnGitHub(cfg, client, number, true); err != nil {
+				return err
 			}
 		}
 	}
@@ -181,24 +171,13 @@ func runRemoteUnstack(cfg *config.Config, number int) error {
 		cfg.Errorf("failed to create GitHub client: %s", err)
 		return ErrAPIFailure
 	}
-	if _, err := unstackNumberOnGitHub(cfg, client, number, false); err != nil {
-		return err
-	}
-	return nil
+	return unstackNumberOnGitHub(cfg, client, number, false)
 }
 
 // unstackNumberOnGitHub calls the Unstack API for the given stack number and
-// reports the outcome. hasLocalTracking indicates whether the caller has a
-// locally tracked stack to reconcile, which changes how a 404 and a partial
-// unstack are handled: with local tracking a 404 is an idempotent success (the
-// caller finishes removing local state) and a partial unstack keeps local
-// tracking; without it a 404 is a hard error because the user targeted a stack
-// that does not exist on GitHub.
-//
-// It returns keepLocal=true when local tracking should be preserved because a
-// partial unstack left some PRs stacked. keepLocal is only meaningful when
-// hasLocalTracking is true.
-func unstackNumberOnGitHub(cfg *config.Config, client github.ClientOps, number int, hasLocalTracking bool) (keepLocal bool, err error) {
+// reports the outcome. With local tracking, a 404 is an idempotent success so
+// the caller can finish local cleanup; otherwise it is a not-found error.
+func unstackNumberOnGitHub(cfg *config.Config, client github.ClientOps, number int, hasLocalTracking bool) error {
 	_, dissolved, err := client.Unstack(number)
 	if err != nil {
 		var httpErr *api.HTTPError
@@ -209,36 +188,28 @@ func unstackNumberOnGitHub(cfg *config.Config, client github.ClientOps, number i
 					// Stack already gone on GitHub — treat as success and let
 					// the caller finish removing local tracking.
 					cfg.Warningf("Stack not found on GitHub — continuing with local unstack")
-					return false, nil
+					return nil
 				}
 				// Remote-first: the targeted stack does not exist on GitHub.
 				cfg.Errorf("stack #%d not found on GitHub", number)
-				return false, ErrNotInStack
+				return ErrNotInStack
 			case 422:
-				// The server refused: every PR is queued for merge or has
-				// auto-merge enabled, so nothing can be unstacked.
 				cfg.Errorf("Unstacking not allowed: %s", httpErr.Message)
-				return false, ErrInvalidArgs
+				return ErrInvalidArgs
 			default:
 				cfg.Errorf("Failed to unstack on GitHub (HTTP %d): %s", httpErr.StatusCode, httpErr.Message)
-				return false, ErrAPIFailure
+				return ErrAPIFailure
 			}
 		}
 		cfg.Errorf("Failed to unstack on GitHub: %v", err)
-		return false, ErrAPIFailure
+		return ErrAPIFailure
 	}
 
-	if !dissolved {
-		// Some PRs (queued for merge or with auto-merge enabled) remain stacked
-		// on GitHub, so the stack still exists.
-		cfg.Warningf("Some pull requests are queued for merge or have auto-merge enabled and remain stacked on GitHub")
-		if hasLocalTracking {
-			cfg.Printf("The stack was left in place — local tracking is unchanged")
-			return true, nil
-		}
-		return false, nil
+	if dissolved {
+		cfg.Successf("Stack removed on GitHub%s", stackLabel(number))
+	} else {
+		cfg.Successf("Pull requests unstacked on GitHub%s", stackLabel(number))
+		cfg.Infof("Some pull requests remain stacked on GitHub")
 	}
-
-	cfg.Successf("Stack removed on GitHub%s", stackLabel(number))
-	return false, nil
+	return nil
 }
