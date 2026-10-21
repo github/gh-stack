@@ -188,9 +188,11 @@ func runSubmit(cfg *config.Config, opts *submitOptions) error {
 		}
 	}
 
-	// A pending modify owns its replacement identity, including on retries
-	// after unstacking left only merged PRs in the old remote stack.
-	if stacksAvailable && !pendingModify {
+	// A modify retry may still have the old catalog ID. Refresh detached PRs
+	// after clearing it so merged or queued PRs are not pushed again.
+	if pendingModify {
+		prDetails = syncStackPRs(cfg, s)
+	} else if stacksAvailable {
 		s, err = maybeForkFromMergedBase(cfg, client, sf, s, gitDir)
 		if err != nil {
 			cfg.Errorf("%s", err)

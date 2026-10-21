@@ -1866,6 +1866,7 @@ func TestSubmit_PendingModifyCompletion(t *testing.T) {
 		priorDeleted bool
 		mergedBase   bool
 		retry        bool
+		mergeOnRetry bool
 	}{
 		{name: "one existing PR", branches: 1},
 		{name: "one new PR", branches: 1, newPR: true},
@@ -1883,6 +1884,7 @@ func TestSubmit_PendingModifyCompletion(t *testing.T) {
 		{name: "multiple PRs complete", branches: 3},
 		{name: "multiple PRs after partial unstack", branches: 3, mergedBase: true},
 		{name: "retry push after partial unstack", branches: 3, mergedBase: true, failure: "push", retry: true},
+		{name: "released PR merged before retry", branches: 3, mergedBase: true, failure: "push", retry: true, mergeOnRetry: true},
 		{name: "retry creation after partial unstack", branches: 3, mergedBase: true, failure: "stack", retry: true},
 		{name: "multiple PRs failed lookup", branches: 3, failure: "lookup"},
 		{name: "multiple PRs failed creation", branches: 3, newPR: true, failure: "create"},
@@ -1996,6 +1998,9 @@ func TestSubmit_PendingModifyCompletion(t *testing.T) {
 					if branch == target && (tc.failure == "lookup" || (tc.failure == "refresh" && baseUpdates > 0)) {
 						return nil, assert.AnError
 					}
+					if pr := prs[branch]; pr != nil && pr.Merged {
+						return nil, nil
+					}
 					return prs[branch], nil
 				},
 				UnstackFn: func(number int) (*github.RemoteStack, bool, error) {
@@ -2084,7 +2089,15 @@ func TestSubmit_PendingModifyCompletion(t *testing.T) {
 				}
 			}
 			if tc.retry {
+				if tc.mergeOnRetry {
+					before, loadErr := stack.Load(dir)
+					require.NoError(t, loadErr)
+					assert.Equal(t, "42", before.Stacks[0].ID)
+					prs["b2"].Merged = true
+					prs["b2"].State = "MERGED"
+				}
 				tc.failure = ""
+				pushStart := len(pushes)
 				retryCfg, retryOut, retryErr := config.NewTestConfig()
 				retryCfg.GitHubClientOverride = client
 				err := runSubmit(retryCfg, &submitOptions{auto: true})
@@ -2096,6 +2109,15 @@ func TestSubmit_PendingModifyCompletion(t *testing.T) {
 				require.Len(t, saved.Stacks, 1)
 				assert.Equal(t, s.BranchNames(), saved.Stacks[0].BranchNames())
 				assert.Equal(t, "77", saved.Stacks[0].ID)
+				if tc.mergeOnRetry {
+					assert.Equal(t, []string{"b1", "b3"}, pushes[pushStart:])
+					assert.Zero(t, createdPRs)
+					require.NotNil(t, replacement)
+					assert.Equal(t, []int{10, 12}, replacement.PullRequests)
+					mergedIndex := saved.Stacks[0].IndexOf("b2")
+					require.NotEqual(t, -1, mergedIndex)
+					assert.True(t, saved.Stacks[0].Branches[mergedIndex].IsMerged())
+				}
 			}
 			if tc.priorDeleted {
 				assert.Zero(t, unstackCalls)
