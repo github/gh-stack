@@ -244,6 +244,10 @@ func TestWorkflowMatrix(t *testing.T) {
 	data, err := os.ReadFile(filepath.Join("..", "..", ".github", "workflows", "test.yml"))
 	require.NoError(t, err)
 	var workflow struct {
+		On map[string]struct {
+			Branches       []string `yaml:"branches"`
+			BranchesIgnore []string `yaml:"branches-ignore"`
+		} `yaml:"on"`
 		Jobs map[string]struct {
 			Strategy struct {
 				Matrix struct {
@@ -258,10 +262,14 @@ func TestWorkflowMatrix(t *testing.T) {
 		} `yaml:"jobs"`
 	}
 	require.NoError(t, yaml.Unmarshal(data, &workflow))
+	pullRequest, exists := workflow.On["pull_request"]
+	require.True(t, exists)
+	assert.Empty(t, pullRequest.Branches, "stacked PRs target another layer, not necessarily main")
+	assert.Empty(t, pullRequest.BranchesIgnore)
 	seen := make(map[string]map[int]bool)
 	counts := make(map[string]int)
 	for _, entry := range workflow.Jobs["test"].Strategy.Matrix.Include {
-		require.NoError(t, (options{workers: entry.Workers, shards: entry.Shards, shard: entry.Shard, timeout: time.Minute}).validate())
+		require.NoError(t, validatePartitions(entry.Workers, entry.Shards, entry.Shard))
 		if seen[entry.OS] == nil {
 			seen[entry.OS] = make(map[int]bool)
 			counts[entry.OS] = entry.Shards
@@ -284,29 +292,67 @@ func TestWorkflowMatrix(t *testing.T) {
 
 func TestRunnerEndToEnd(t *testing.T) {
 	ctx := context.Background()
-	pkg := "github.com/github/gh-stack/internal/branch"
-	_, err := output(ctx, "", "go", "vet", pkg)
+	repo := t.TempDir()
+	t.Chdir(repo)
+	t.Setenv("GIT_CONFIG_GLOBAL", os.DevNull)
+	t.Setenv("GIT_CONFIG_NOSYSTEM", "1")
+	require.NoError(t, os.WriteFile("go.mod", []byte("module fixture\n\ngo 1.26.0\n"), 0644))
+	require.NoError(t, os.WriteFile("fixture.go", []byte("package fixture\n"), 0644))
+	require.NoError(t, os.WriteFile("race_test.go", []byte("//go:build race\n\npackage fixture\nimport \"testing\"\nfunc TestRaceOnly(t *testing.T) {}\n"), 0644))
+	_, err := output(ctx, repo, "git", "init", "-q", "-b", "main")
+	require.NoError(t, err)
+	_, err = output(ctx, repo, "git", "-c", "user.name=Test", "-c", "user.email=test@example.com",
+		"-c", "commit.gpgsign=false", "commit", "--allow-empty", "-qm", "fixture")
+	require.NoError(t, err)
+	_, err = output(ctx, repo, "go", "vet", "-race", "./...")
 	require.NoError(t, err)
 	dir := t.TempDir()
 	var stdout, stderr bytes.Buffer
 	for shard := range 2 {
 		err := run(ctx, options{workers: 1, shards: 2, shard: shard, timeout: time.Minute, output: dir},
-			[]string{pkg}, &stdout, &stderr)
+			[]string{"./..."}, &stdout, &stderr)
 		require.NoError(t, err, stderr.String())
 	}
 	require.NoError(t, verifyReports(dir, []string{runtime.GOOS}, &stdout))
-	assert.Contains(t, stdout.String(), "2 top-level tests")
+	assert.Contains(t, stdout.String(), "1 top-level tests")
 	assert.Empty(t, stderr.String())
+	reports, err := filepath.Glob(filepath.Join(dir, "gh-stack-tests-*", "report.json"))
+	require.NoError(t, err)
+	require.Len(t, reports, 2)
+	executed := 0
+	for _, path := range reports {
+		data, err := os.ReadFile(path)
+		require.NoError(t, err)
+		var rep report
+		require.NoError(t, json.Unmarshal(data, &rep))
+		require.Equal(t, []testID{{"fixture", "TestRaceOnly"}}, rep.Inventory)
+		for _, result := range rep.Results {
+			require.Equal(t, "TestRaceOnly", result.Test)
+			require.Equal(t, "pass", result.Action)
+			executed++
+		}
+	}
+	assert.Equal(t, 1, executed)
 }
 
 func TestRunBatch(t *testing.T) {
 	dir := t.TempDir()
 	require.NoError(t, os.WriteFile(filepath.Join(dir, "go.mod"), []byte("module fixture\n\ngo 1.26.0\n"), 0644))
 	source := `package fixture
-import ("fmt"; "os"; "testing")
+import ("fmt"; "os"; "testing"; "time")
+func block(phase string) {
+	if os.Getenv("GH_STACK_TESTSUITE_BLOCK_PHASE") == phase {
+		fmt.Println("blocking", phase)
+		for { time.Sleep(time.Hour) }
+	}
+}
+func init() { block("init") }
 func TestMain(m *testing.M) {
 	if os.Getenv("GH_STACK_TESTSUITE_EARLY_EXIT") == "1" { os.Exit(0) }
-	os.Exit(m.Run())
+	block("before")
+	code := m.Run()
+	block("after")
+	os.Exit(code)
 }
 func TestPass(t *testing.T) { t.Run("child", func(t *testing.T) {}) }
 func TestFailure(t *testing.T) { t.Fatal("intentional child failure") }
@@ -387,5 +433,21 @@ func FuzzSeed(f *testing.F) {
 		_, err := runBatch(ctx, pkg, batch{pkg.ImportPath, []string{"TestSlow"}}, time.Minute, filepath.Join(t.TempDir(), "events.jsonl"))
 		require.Error(t, err)
 		require.ErrorIs(t, ctx.Err(), context.DeadlineExceeded)
+	})
+	for _, phase := range []string{"init", "before", "after"} {
+		t.Run("external deadline/"+phase, func(t *testing.T) {
+			t.Setenv("GH_STACK_TESTSUITE_BLOCK_PHASE", phase)
+			path := filepath.Join(t.TempDir(), "events.jsonl")
+			_, err := runBatch(ctx, pkg, batch{pkg.ImportPath, []string{"TestPass"}}, 100*time.Millisecond, path)
+			require.ErrorIs(t, err, context.DeadlineExceeded)
+			assert.Contains(t, err.Error(), "blocking "+phase, "the fixture must reach the blocked lifecycle phase")
+		})
+	}
+	t.Run("discovery deadline", func(t *testing.T) {
+		t.Setenv("GH_STACK_TESTSUITE_BLOCK_PHASE", "after")
+		names, err := discoverTests(ctx, pkg, 100*time.Millisecond)
+		require.ErrorIs(t, err, context.DeadlineExceeded)
+		assert.Nil(t, names)
+		assert.Contains(t, err.Error(), "blocking after", "list mode must not bypass the external deadline")
 	})
 }

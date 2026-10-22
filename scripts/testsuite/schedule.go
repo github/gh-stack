@@ -1,11 +1,14 @@
 package main
 
 import (
+	"errors"
 	"fmt"
 	"regexp"
 	"slices"
 	"strings"
 )
+
+const maxSelectorBytes = 8000
 
 type testID struct {
 	Package string
@@ -15,6 +18,16 @@ type testID struct {
 type batch struct {
 	Package string
 	Tests   []string
+}
+
+func validatePartitions(workers, shards, shard int) error {
+	if workers < 1 || shards < 1 || shards > 256 || workers > 256/shards {
+		return errors.New("workers and shards must be positive, with at most 256 total worker partitions")
+	}
+	if shard < 0 || shard >= shards {
+		return errors.New("shard must be between zero and shards-1")
+	}
+	return nil
 }
 
 func selector(names []string) string {
@@ -85,8 +98,7 @@ func schedule(packages []testPackage, partitions int) [][]batch {
 		merged := false
 		for i := range result[target] {
 			group := &result[target][i]
-			// Leave ample space below Windows' command-line limit, including UTF-16 paths.
-			if group.Package == item.Package && len(selector(group.Tests))+len(selector(item.Tests)) < 8000 {
+			if group.Package == item.Package {
 				group.Tests = append(group.Tests, item.Tests...)
 				merged = true
 				break
@@ -102,7 +114,8 @@ func schedule(packages []testPackage, partitions int) [][]batch {
 			slices.Sort(group.Tests)
 			current := batch{Package: group.Package}
 			for _, name := range group.Tests {
-				if len(current.Tests) > 0 && len(selector(current.Tests))+len(regexp.QuoteMeta(name))+1 > 8000 {
+				// Leave ample space below Windows' command-line limit, including UTF-16 paths.
+				if len(current.Tests) > 0 && len(selector(current.Tests))+len(regexp.QuoteMeta(name))+1 > maxSelectorBytes {
 					bounded = append(bounded, current)
 					current = batch{Package: group.Package}
 				}
@@ -126,7 +139,7 @@ func validateAssignments(inventory []testID, assignments [][]batch) error {
 	seen := make(map[testID]bool, len(inventory))
 	for _, groups := range assignments {
 		for _, group := range groups {
-			if len(selector(group.Tests)) > 8000 {
+			if len(selector(group.Tests)) > maxSelectorBytes {
 				return fmt.Errorf("test selector exceeds the argument limit for %s", group.Package)
 			}
 			for _, name := range group.Tests {

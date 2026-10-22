@@ -10,13 +10,10 @@ Repository operations require Git 2.36 or later.
 go mod download                  # install dependencies
 go build -o gh-stack .           # build (produces ./gh-stack binary)
 go vet ./...                     # static analysis. Run before tests.
-go test -race -count=1 -timeout=30m ./... # canonical tests with race detection
-go run ./scripts/testsuite -workers 4   # same suite, isolated parallel processes
+go run ./scripts/testsuite -workers 4 # full race-enabled suite in isolated processes
 ```
 
-Always run `go vet` before `go test` or the parallel test runner. CI runs vet and the complete race-enabled suite on every push/PR across ubuntu, windows, and macOS (`test.yml`). Windows and macOS use process-isolated shards; `Tests complete` checks the combined manifests and results. No tests are excluded to shard the suite.
-
-The parallel runner discovers tests from compiled binaries, retains ordinary `go test` support, and writes JSON timing/result artifacts to the printed temporary directory (`-output` selects a parent). Its `-workers` limit bounds test processes; children use `-test.parallel=1`. Scheduling weights in `scripts/testsuite/timings.go` affect balance only, never test membership.
+Always run `go vet` before tests. See [CONTRIBUTING.md](CONTRIBUTING.md#test) for the alternative canonical `go test` command, targeted tests, and timing artifacts. CI runs the full platform-applicable suite with race detection on Linux, macOS, and Windows, with a cross-shard completion gate.
 
 There is no Makefile, linter config, or code generation step. The standard Go toolchain is all that's needed.
 

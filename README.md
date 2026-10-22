@@ -770,6 +770,10 @@ export GH_STACK_THEME=light && gh stack view
 | 7 | Rebase already in progress |
 | 8 | Stack is locked by another process |
 
+## Contributing
+
+See [CONTRIBUTING.md](CONTRIBUTING.md) for development setup and testing instructions.
+
 ## License 
 
 This project is licensed under the terms of the MIT open source license. Please refer to the [LICENSE](LICENSE) file for the full terms.

@@ -200,46 +200,41 @@ func CheckClean(ops git.Ops, path string) error {
 }
 
 func (c *Context) Preflight(branches []string) error {
-	_, err := c.preflight(branches)
-	return err
-}
-
-func (c *Context) preflight(branches []string) (map[string]git.Ops, error) {
 	checked := make(map[string]bool)
-	executors := make(map[string]git.Ops, len(branches))
 	for _, branch := range branches {
 		ops, err := c.Ops(branch)
 		if err != nil {
-			return nil, err
+			return err
 		}
 		location := c.Location(branch)
 		if !checked[location.Path] {
 			if err := CheckClean(ops, location.Path); err != nil {
-				return nil, err
+				return err
 			}
 			checked[location.Path] = true
 		}
 		if !SamePath(location.Path, c.Origin.Path) {
 			current, err := ops.CurrentBranch()
 			if err != nil {
-				return nil, fmt.Errorf("checking current branch in worktree %s: %w", location.Path, err)
+				return fmt.Errorf("checking current branch in worktree %s: %w", location.Path, err)
 			}
 			if current != branch {
-				return nil, fmt.Errorf("worktree %s no longer has branch %s checked out", location.Path, branch)
+				return fmt.Errorf("worktree %s no longer has branch %s checked out", location.Path, branch)
 			}
 		}
-		executors[branch] = ops
 	}
-	return executors, nil
+	return nil
 }
 
 // Prepare may switch the initiating worktree, but never a different worktree.
 func (c *Context) Prepare(branch string) (git.Ops, error) {
-	executors, err := c.preflight([]string{branch})
+	if err := c.Preflight([]string{branch}); err != nil {
+		return nil, err
+	}
+	ops, err := c.Ops(branch)
 	if err != nil {
 		return nil, err
 	}
-	ops := executors[branch]
 	current, err := ops.CurrentBranch()
 	if err != nil {
 		return nil, err

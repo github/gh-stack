@@ -13,7 +13,7 @@ import (
 )
 
 func validateResults(rep report) error {
-	if err := (options{workers: rep.Workers, shard: rep.Shard, shards: rep.Shards, timeout: 1}).validate(); err != nil {
+	if err := validatePartitions(rep.Workers, rep.Shards, rep.Shard); err != nil {
 		return err
 	}
 	if len(rep.Assignments) != rep.Shards*rep.Workers {

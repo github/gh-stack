@@ -32,81 +32,42 @@ func (d *defaultOps) path(args ...string) (string, error) {
 }
 
 func (d *defaultOps) CommonDir() (string, error) {
-	return d.directory("--git-common-dir")
+	return d.path("rev-parse", "--path-format=absolute", "--git-common-dir")
 }
 
-type validatedGitClient struct {
-	client    *cligit.Client
-	gitDir    string
-	commonDir string
-}
-
-func (d *defaultOps) inspectGitClient() (validatedGitClient, error) {
+func (d *defaultOps) gitClient() (*cligit.Client, error) {
 	c := d.client
 	if c == nil {
 		c = client
 	}
-	validated := validatedGitClient{client: c}
 	for _, directory := range []struct {
 		option string
 		info   os.FileInfo
-		path   *string
 	}{
-		{"--absolute-git-dir", d.gitDir, &validated.gitDir},
-		{"--git-common-dir", d.commonDir, &validated.commonDir},
+		{"--absolute-git-dir", d.gitDir},
+		{"--git-common-dir", d.commonDir},
 	} {
 		if directory.info == nil {
 			continue
 		}
 		cmd, err := c.Command(context.Background(), "rev-parse", "--path-format=absolute", directory.option)
 		if err != nil {
-			return validatedGitClient{}, err
+			return nil, err
 		}
 		d.configureCommand(cmd)
 		out, err := cmd.Output()
 		if err != nil {
-			return validatedGitClient{}, fmt.Errorf("inspecting worktree %q: %w", c.RepoDir, err)
+			return nil, fmt.Errorf("inspecting worktree %q: %w", c.RepoDir, err)
 		}
-		path := strings.TrimSuffix(string(out), "\n")
-		info, err := os.Stat(path)
+		info, err := os.Stat(strings.TrimSuffix(string(out), "\n"))
 		if err != nil {
-			return validatedGitClient{}, fmt.Errorf("inspecting worktree %q: %w", c.RepoDir, err)
+			return nil, fmt.Errorf("inspecting worktree %q: %w", c.RepoDir, err)
 		}
 		if !os.SameFile(directory.info, info) {
-			return validatedGitClient{}, fmt.Errorf("worktree %q no longer refers to the selected Git directory; rediscover worktrees before continuing", c.RepoDir)
+			return nil, fmt.Errorf("worktree %q no longer refers to the selected Git directory; rediscover worktrees before continuing", c.RepoDir)
 		}
-		*directory.path = path
 	}
-	return validated, nil
-}
-
-func (d *defaultOps) gitClient() (*cligit.Client, error) {
-	validated, err := d.inspectGitClient()
-	return validated.client, err
-}
-
-func (d *defaultOps) directory(option string) (string, error) {
-	validated, err := d.inspectGitClient()
-	if err != nil {
-		return "", err
-	}
-	// Reuse only paths validated by this call, never across commands.
-	if option == "--absolute-git-dir" && validated.gitDir != "" {
-		return validated.gitDir, nil
-	}
-	if option == "--git-common-dir" && validated.commonDir != "" {
-		return validated.commonDir, nil
-	}
-	cmd, err := validated.client.Command(context.Background(), "rev-parse", "--path-format=absolute", option)
-	if err != nil {
-		return "", err
-	}
-	d.configureCommand(cmd)
-	out, err := cmd.Output()
-	if err != nil {
-		return "", err
-	}
-	return strings.TrimSuffix(string(out), "\n"), nil
+	return c, nil
 }
 
 // ForWorktree resolves relative paths against this receiver's execution
@@ -115,17 +76,13 @@ func (d *defaultOps) ForWorktree(path string) (Ops, error) {
 	if path == "" {
 		return nil, errors.New("worktree path must not be empty")
 	}
-	validated, err := d.inspectGitClient()
+	c, err := d.gitClient()
 	if err != nil {
 		return nil, err
 	}
-	c := validated.client
-	common := validated.commonDir
-	if common == "" {
-		common, err = d.CommonDir()
-		if err != nil {
-			return nil, fmt.Errorf("locating the source repository: %w", err)
-		}
+	common, err := d.CommonDir()
+	if err != nil {
+		return nil, fmt.Errorf("locating the source repository: %w", err)
 	}
 	expectedCommon, err := os.Stat(common)
 	if err != nil {

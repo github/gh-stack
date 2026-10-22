@@ -20,6 +20,9 @@ import (
 	"time"
 )
 
+// Allow native timeout diagnostics and race-runtime shutdown bounded grace.
+const testExitGrace = 5 * time.Second
+
 type options struct {
 	workers, shard, shards int
 	output, verify         string
@@ -97,11 +100,8 @@ func main() {
 }
 
 func (o options) validate() error {
-	if o.workers < 1 || o.shards < 1 || o.shards > 256 || o.workers > 256/o.shards {
-		return errors.New("workers and shards must be positive, with at most 256 total worker partitions")
-	}
-	if o.shard < 0 || o.shard >= o.shards {
-		return errors.New("shard must be between zero and shards-1")
+	if err := validatePartitions(o.workers, o.shards, o.shard); err != nil {
+		return err
 	}
 	if o.timeout <= 0 {
 		return errors.New("timeout must be positive")
@@ -168,7 +168,7 @@ func run(ctx context.Context, opts options, patterns []string, stdout, stderr io
 		return err
 	}
 	rep.Git = strings.TrimSpace(string(version))
-	data, err := output(ctx, "", append([]string{"go", "list", "-json"}, patterns...)...)
+	data, err := output(ctx, "", append([]string{"go", "list", "-race", "-json"}, patterns...)...)
 	if err != nil {
 		return err
 	}
@@ -211,18 +211,9 @@ func run(ctx context.Context, opts options, patterns []string, stdout, stderr io
 			pkg.binary = ""
 			return nil
 		}
-		data, err := output(ctx, pkg.Dir, pkg.binary, "-test.list=.")
-		if err != nil {
-			return err
-		}
-		for _, line := range strings.Split(string(data), "\n") {
-			name := strings.TrimSpace(line)
-			if token.IsIdentifier(name) && (strings.HasPrefix(name, "Test") || strings.HasPrefix(name, "Example") || strings.HasPrefix(name, "Fuzz")) {
-				pkg.tests = append(pkg.tests, name)
-			}
-		}
-		slices.Sort(pkg.tests)
-		return nil
+		var err error
+		pkg.tests, err = discoverTests(ctx, *pkg, opts.timeout)
+		return err
 	})
 	rep.BuildTime = time.Since(start).Seconds()
 	if err != nil {
@@ -300,7 +291,27 @@ func parallel(count, workers int, fn func(int) error) error {
 	return errors.Join(errs...)
 }
 
+func discoverTests(ctx context.Context, pkg testPackage, timeout time.Duration) ([]string, error) {
+	ctx, cancel := context.WithDeadline(ctx, time.Now().Add(timeout).Add(testExitGrace))
+	defer cancel()
+	data, err := output(ctx, pkg.Dir, pkg.binary, "-test.list=.")
+	if err != nil {
+		return nil, errors.Join(err, ctx.Err())
+	}
+	var names []string
+	for _, line := range strings.Split(string(data), "\n") {
+		name := strings.TrimSpace(line)
+		if token.IsIdentifier(name) && (strings.HasPrefix(name, "Test") || strings.HasPrefix(name, "Example") || strings.HasPrefix(name, "Fuzz")) {
+			names = append(names, name)
+		}
+	}
+	slices.Sort(names)
+	return names, nil
+}
+
 func runBatch(ctx context.Context, pkg testPackage, group batch, timeout time.Duration, path string) ([]testResult, error) {
+	ctx, cancel := context.WithDeadline(ctx, time.Now().Add(timeout).Add(testExitGrace))
+	defer cancel()
 	log, err := os.Create(path)
 	if err != nil {
 		return nil, err
@@ -340,7 +351,7 @@ func runBatch(ctx context.Context, pkg testPackage, group batch, timeout time.Du
 			results = append(results, testResult{e.Package, e.Test, e.Action, e.Elapsed})
 		}
 	}
-	err = errors.Join(cmd.Wait(), decodeErr, log.Close())
+	err = errors.Join(cmd.Wait(), ctx.Err(), decodeErr, log.Close())
 	if !packagePassed {
 		err = errors.Join(err, errors.New("test process did not report package success"))
 	}
