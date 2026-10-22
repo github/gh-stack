@@ -174,9 +174,17 @@ gh stack view --short
 gh stack view --json
 ```
 
-`gh stack view --short` uses OSC 8 hyperlinks for PR numbers when the terminal
-supports them. Otherwise, the full URL is shown for copy/paste. Set
-`GH_STACK_HYPERLINKS=1` or `GH_STACK_HYPERLINKS=0` to override terminal detection.
+Stack references follow the existing PR-link behavior in text output: OSC 8
+hyperlinks when supported, or the full URL for copy/paste otherwise. Links open
+the repository's `/stack/<number>` page; confirmed missing or removed stacks
+are left unlinked. Set `GH_STACK_HYPERLINKS=1` or `GH_STACK_HYPERLINKS=0` to
+override terminal detection.
+
+TUIs keep labels compact: click the stack identifier in `view` or `submit` to
+open its page, or use your terminal's hyperlink gesture in the `checkout`
+picker and `merge` wizard. Those inline views keep plain numbers when terminal
+hyperlinks are unavailable. The environment override controls OSC 8 links, not
+the application-handled clicks in `view` and `submit`. JSON output is unchanged.
 
 ### `gh stack checkout`
 
@@ -733,7 +741,7 @@ gh stack feedback "Support for reordering branches"
 | Variable | Values | Description |
 |----------|--------|-------------|
 | `GH_STACK_THEME` | `auto` (default), `light`, `dark` | Controls the color palette of the interactive screens (`submit`, `modify`, `view`) and all colored command output. Colors adapt to your terminal background automatically; set this to force the light or dark palette when a terminal doesn't report its background (some SSH or `tmux` setups). |
-| `GH_STACK_HYPERLINKS` | `0`, `1` | Disables or enables OSC 8 hyperlinks when terminal detection is incorrect. Unsupported terminals show the full URL by default. |
+| `GH_STACK_HYPERLINKS` | `0`, `1` | Disables or enables OSC 8 hyperlinks for PR and stack references when terminal detection is incorrect. Text output falls back to full URLs; compact TUIs keep plain labels. Does not control application-handled clicks in `view` and `submit`. |
 | `GH_STACK_NO_UPDATE_NOTIFIER` | Any non-empty value | Disables gh-stack's background release checks and upgrade notices. For example, set to `1` in automation that requires quiet stderr. |
 
 ```sh
