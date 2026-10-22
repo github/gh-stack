@@ -167,7 +167,7 @@ func (m Model) leftStackLinkHit(x, y int) bool {
 		return false
 	}
 	labelWidth := lipgloss.Width(truncateVisible(m.stackHeading(), leftW-3))
-	return x >= 2 && x < 2+labelWidth && x < leftW-1
+	return x >= 2+lipgloss.Width(stackHeadingPrefix) && x < 2+labelWidth && x < leftW-1
 }
 
 // handleClick routes a left click to a branch row (left map) or an editor

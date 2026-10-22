@@ -9,6 +9,7 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 	"github.com/charmbracelet/x/ansi"
+	"github.com/muesli/termenv"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
@@ -49,13 +50,17 @@ func testNumberLinks(rows []StackRow) map[int]string {
 	links := make(map[int]string)
 	for _, row := range rows {
 		if row.Number > 0 {
-			links[row.Number] = fmt.Sprintf("\x1b]8;;https://github.com/o/r/stack/%d\x1b\\%d\x1b]8;;\x1b\\", row.Number, row.Number)
+			links[row.Number] = fmt.Sprintf("\x1b[4m\x1b]8;;https://github.com/o/r/stack/%d\x1b\\%d\x1b]8;;\x1b\\\x1b[24m", row.Number, row.Number)
 		}
 	}
 	return links
 }
 
 func TestNumberLinksPreserveRows(t *testing.T) {
+	profile := lipgloss.DefaultRenderer().ColorProfile()
+	lipgloss.SetColorProfile(termenv.ANSI256)
+	defer lipgloss.SetColorProfile(profile)
+
 	rows := sampleRows()
 	m := sized(New(rows).WithNumberLinks(testNumberLinks(rows)))
 	plain := sized(New(rows))
@@ -77,6 +82,10 @@ func TestNumberLinksPreserveRows(t *testing.T) {
 }
 
 func TestNumberLinksScrollingAndClipping(t *testing.T) {
+	profile := lipgloss.DefaultRenderer().ColorProfile()
+	lipgloss.SetColorProfile(termenv.ANSI256)
+	defer lipgloss.SetColorProfile(profile)
+
 	rows := manyRows(20)
 	rows[0].BottomBranch = "界面"
 	links := testNumberLinks(rows)

@@ -41,7 +41,7 @@ func TestGatherCheckoutRows_FallbackToLocalOnListError(t *testing.T) {
 		},
 	}}}
 
-	rows, remote := gatherCheckoutRows(cfg, sf)
+	rows, remote, _ := gatherCheckoutRows(cfg, sf)
 	require.Len(t, rows, 1, "falls back to a local-only list when ListStacks fails")
 	assert.Empty(t, remote)
 	assert.Equal(t, checkoutview.TypeLocal, rows[0].Type)
@@ -70,7 +70,7 @@ func TestGatherCheckoutRows_IncludesRemoteOnlyStacks(t *testing.T) {
 		Branches: []stack.BranchRef{{Branch: "local-a"}},
 	}}}
 
-	rows, remote := gatherCheckoutRows(cfg, sf)
+	rows, remote, _ := gatherCheckoutRows(cfg, sf)
 	require.Len(t, rows, 2, "local and remote-only stacks are both listed")
 	require.Len(t, remote, 1)
 
@@ -173,25 +173,29 @@ func TestMatchingRemoteStacksForBranch(t *testing.T) {
 }
 
 func TestOfferRemoteStackForBranch_Confirmed(t *testing.T) {
-	t.Setenv("GH_STACK_HYPERLINKS", "0")
-	cfg, _, _ := config.NewTestConfig()
-	setTestRepo(cfg)
-	cfg.ConfirmFn = func(prompt string, defaultValue bool) (bool, error) {
-		assert.Equal(t, `Found stack #7 (https://github.com/o/r/stack/7) that includes branch "feature". Check out stack #7 (https://github.com/o/r/stack/7)?`, prompt)
-		assert.True(t, defaultValue)
-		return true, nil
+	for _, force := range []string{"0", "1"} {
+		t.Run(force, func(t *testing.T) {
+			t.Setenv("GH_STACK_HYPERLINKS", force)
+			cfg, outR, errR := config.NewTestConfig()
+			setTestRepo(cfg)
+			cfg.ConfirmFn = func(prompt string, defaultValue bool) (bool, error) {
+				assert.Equal(t, "Check out stack #7?", prompt)
+				assert.True(t, defaultValue)
+				return true, nil
+			}
+			number, confirmed, err := offerRemoteStackForBranch(cfg, &stack.StackFile{}, []github.RemoteStack{{
+				Number: 7,
+				PRDetails: []github.RemoteStackPR{
+					{Number: 10, State: "open", Head: github.RemoteStackPRHead{Ref: "feature"}},
+				},
+			}}, "feature")
+			output := collectOutput(cfg, outR, errR)
+			require.NoError(t, err)
+			assert.True(t, confirmed)
+			assert.Equal(t, 7, number)
+			assert.Contains(t, output, "Found stack "+cfg.StackLink(7)+` that includes branch "feature".`)
+		})
 	}
-
-	number, confirmed, err := offerRemoteStackForBranch(cfg, &stack.StackFile{}, []github.RemoteStack{{
-		Number: 7,
-		PRDetails: []github.RemoteStackPR{
-			{Number: 10, State: "open", Head: github.RemoteStackPRHead{Ref: "feature"}},
-		},
-	}}, "feature")
-
-	require.NoError(t, err)
-	assert.True(t, confirmed)
-	assert.Equal(t, 7, number)
 }
 
 func TestOfferRemoteStackForBranch_FallsBack(t *testing.T) {
@@ -448,22 +452,32 @@ func TestResolveCheckoutSelection_RemoteRoutesToClone(t *testing.T) {
 
 func TestResolveCheckoutSelection_RemoteLoadFailure(t *testing.T) {
 	t.Setenv("GH_STACK_HYPERLINKS", "1")
-	cfg, outR, errR := config.NewTestConfig()
-	setTestRepo(cfg)
-	cfg.GitHubClientOverride = &github.MockClient{
-		GetStackFn: func(n int) (*github.RemoteStack, error) {
-			return nil, errors.New("boom")
-		},
+	for _, tt := range []struct {
+		name string
+		err  error
+		link bool
+	}{
+		{"transient failure", errors.New("boom"), true},
+		{"deleted stack", &api.HTTPError{StatusCode: 404}, false},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			cfg, outR, errR := config.NewTestConfig()
+			setTestRepo(cfg)
+			cfg.GitHubClientOverride = &github.MockClient{
+				GetStackFn: func(int) (*github.RemoteStack, error) { return nil, tt.err },
+			}
+			sel := checkoutview.StackRow{Type: checkoutview.TypeRemote, Number: 7}
+			_, _, err := resolveCheckoutSelection(cfg, &stack.StackFile{}, t.TempDir(), sel)
+			output := collectOutput(cfg, outR, errR)
+			assert.ErrorIs(t, err, ErrAPIFailure)
+			if tt.link {
+				assert.Contains(t, output, "\x1b]8;;https://github.com/o/r/stack/7\x1b\\#7\x1b]8;;\x1b\\")
+			} else {
+				assert.Contains(t, output, "stack #7 could not be loaded")
+				assert.NotContains(t, output, "/stack/")
+			}
+		})
 	}
-
-	sel := checkoutview.StackRow{Type: checkoutview.TypeRemote, Number: 7}
-	_, _, err := resolveCheckoutSelection(cfg, &stack.StackFile{}, t.TempDir(), sel)
-
-	var exitErr *ExitError
-	require.ErrorAs(t, err, &exitErr)
-	assert.Equal(t, ErrAPIFailure, err)
-	output := collectOutput(cfg, outR, errR)
-	assert.Contains(t, output, "\x1b]8;;https://github.com/o/r/stack/7\x1b\\#7\x1b]8;;\x1b\\")
 }
 
 func TestTopUnmergedBranch(t *testing.T) {

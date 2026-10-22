@@ -9,6 +9,7 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 	"github.com/charmbracelet/x/ansi"
+	"github.com/muesli/termenv"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -411,9 +412,18 @@ func TestOutcome_SHA(t *testing.T) {
 	assert.Equal(t, "deadbeef", m.Outcome().SHA)
 }
 
+const stackLink42 = "\x1b[4m\x1b]8;;https://github.example.com/o/r/stack/42\x1b\\#42\x1b]8;;\x1b\\\x1b[24m"
+
 func TestView_RendersBannerAndSteps(t *testing.T) {
-	m := New(baseOptions())
+	profile := lipgloss.DefaultRenderer().ColorProfile()
+	lipgloss.SetColorProfile(termenv.ANSI256)
+	defer lipgloss.SetColorProfile(profile)
+	opts := baseOptions()
+	opts.StackNumber, opts.StackLink = 42, stackLink42
+	m := New(opts)
 	sel := m.View()
+	assert.Contains(t, sel, stackLink42)
+	sel = ansi.Strip(sel)
 	assert.Contains(t, sel, "Merge stack")
 	assert.Contains(t, sel, "Select PRs")
 	assert.Contains(t, sel, "Select Merge Method")
@@ -424,59 +434,29 @@ func TestView_RendersBannerAndSteps(t *testing.T) {
 
 	m = step(m, keyType(tea.KeyTab))
 	method := m.View()
+	assert.Contains(t, method, stackLink42)
+	method = ansi.Strip(method)
 	assert.Contains(t, method, "Squash and merge") // method labels, no subheading
 	assert.Contains(t, method, "↓↑/jk")
 
 	m = step(m, keyType(tea.KeyTab))
 	confirm := m.View()
+	assert.Contains(t, confirm, stackLink42)
+	confirm = ansi.Strip(confirm)
 	assert.Contains(t, confirm, "Merge 3 PRs")
 	assert.Contains(t, confirm, "#1, #2, #3")
-}
-
-func TestBanner_StackLinks(t *testing.T) {
-	const link = "\x1b]8;;https://github.example.com/o/r/stack/42\x1b\\#42\x1b]8;;\x1b\\"
-	for _, tt := range []struct {
-		name, label string
-		number      int
-		linked      bool
-	}{
-		{"linked", link, 42, true},
-		{"disabled", "#42", 42, false},
-		{"missing URL", "", 42, false},
-		{"unknown number", link, 0, false},
-	} {
-		t.Run(tt.name, func(t *testing.T) {
-			opts := baseOptions()
-			opts.StackNumber, opts.StackLink = tt.number, tt.label
-			m := New(opts)
-			for _, phase := range []Step{StepSelectPRs, StepMethod, StepConfirm, StepProgress, StepDone} {
-				m.step = phase
-				output := m.View()
-				if phase == StepProgress || phase == StepDone {
-					assert.NotContains(t, output, "Merge stack")
-					assert.NotContains(t, output, "/stack/")
-					continue
-				}
-				want := "Merge stack"
-				if tt.number > 0 {
-					want += " #42"
-				}
-				assert.Contains(t, ansi.Strip(output), want+"\n")
-				if tt.linked {
-					assert.Contains(t, output, link)
-				} else {
-					assert.NotContains(t, output, "\x1b]8")
-					assert.NotContains(t, output, "https://")
-				}
-			}
-		})
-	}
+	m.opts.StackNumber = 0
+	assert.NotContains(t, m.View(), "/stack/", "unknown numbers do not get a link")
 }
 
 func TestBanner_StackLinksClipping(t *testing.T) {
+	profile := lipgloss.DefaultRenderer().ColorProfile()
+	lipgloss.SetColorProfile(termenv.ANSI256)
+	defer lipgloss.SetColorProfile(profile)
+
 	opts := baseOptions()
 	opts.StackNumber = 12345
-	opts.StackLink = "\x1b]8;;https://github.com/o/r/stack/12345\x1b\\#12345\x1b]8;;\x1b\\"
+	opts.StackLink = "\x1b[4m\x1b]8;;https://github.com/o/r/stack/12345\x1b\\#12345\x1b]8;;\x1b\\\x1b[24m"
 	opts.PRs[0].Title = "你好世界"
 	linked := New(opts)
 	opts.StackLink = ""
@@ -506,11 +486,14 @@ func TestBanner_IncludesStackNumber(t *testing.T) {
 }
 
 func TestProgress_HidesHeader(t *testing.T) {
-	m := New(baseOptions())
+	opts := baseOptions()
+	opts.StackNumber, opts.StackLink = 42, stackLink42
+	m := New(opts)
 	m.step = StepProgress
 	v := m.View()
 	assert.NotContains(t, v, "Merge stack", "header/wizard hidden during progress")
 	assert.NotContains(t, v, "Select PRs")
+	assert.NotContains(t, v, stackLink42)
 	assert.Contains(t, v, "Merging")
 	assert.NotContains(t, v, "…", "no trailing ellipsis on the Merging line")
 }

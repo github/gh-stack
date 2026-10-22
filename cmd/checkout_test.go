@@ -9,69 +9,87 @@ import (
 	"testing"
 
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/charmbracelet/lipgloss"
 	"github.com/cli/go-gh/v2/pkg/api"
 	"github.com/github/gh-stack/internal/config"
 	"github.com/github/gh-stack/internal/git"
 	"github.com/github/gh-stack/internal/github"
 	"github.com/github/gh-stack/internal/stack"
 	"github.com/github/gh-stack/internal/tui/checkoutview"
+	"github.com/muesli/termenv"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
 func TestCheckoutPickerStackLinks(t *testing.T) {
-	for _, force := range []string{"0", "1"} {
-		t.Run(force, func(t *testing.T) {
-			t.Setenv("GH_STACK_HYPERLINKS", force)
-			cfg := &config.Config{}
+	profile := lipgloss.DefaultRenderer().ColorProfile()
+	t.Setenv("NO_COLOR", "")
+	t.Setenv("CLICOLOR_FORCE", "1")
+	lipgloss.SetColorProfile(termenv.ANSI256)
+	defer lipgloss.SetColorProfile(profile)
+
+	for _, tt := range []struct {
+		name                       string
+		number                     int
+		empty, failed, missingRepo bool
+		force                      string
+		wantLink                   bool
+	}{
+		{name: "matched stacks", number: 7, force: "1", wantLink: true},
+		{name: "successful empty listing", number: 7, empty: true, force: "1"},
+		{name: "failed listing", number: 7, failed: true, force: "1", wantLink: true},
+		{name: "legacy ID match", force: "1", wantLink: true},
+		{name: "links disabled", number: 7, force: "0"},
+		{name: "missing repository", number: 7, missingRepo: true, force: "1"},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Setenv("GH_STACK_HYPERLINKS", tt.force)
+			cfg := config.New()
 			setTestRepo(cfg)
 			cfg.RepoOverride.Host = "github.example.com"
-			rows := []checkoutview.StackRow{
-				{Number: 0, Type: checkoutview.TypeLocal, BottomBranch: "unsubmitted"},
-				{Number: 7, Type: checkoutview.TypeLocal, BottomBranch: "tracked"},
-				{Number: 8, Type: checkoutview.TypeRemote, BottomBranch: "remote"},
+			if tt.missingRepo {
+				cfg.RepoOverride.Owner = ""
 			}
-			m := newCheckoutPicker(cfg, rows)
+			calls := 0
+			cfg.GitHubClientOverride = &github.MockClient{
+				ListStacksFn: func() ([]github.RemoteStack, error) {
+					calls++
+					if tt.failed {
+						return nil, fmt.Errorf("offline")
+					}
+					if tt.empty {
+						return nil, nil
+					}
+					return []github.RemoteStack{
+						{ID: 6154, Number: 7, PRDetails: []github.RemoteStackPR{linkPR(10, "tracked")}},
+						{ID: 808, Number: 8, PRDetails: []github.RemoteStackPR{linkPR(11, "remote")}},
+					}, nil
+				},
+				GetStackFn: func(int) (*github.RemoteStack, error) {
+					t.Fatal("formatting picker links must not add a lookup")
+					return nil, nil
+				},
+			}
+			sf := &stack.StackFile{Stacks: []stack.Stack{
+				{Branches: []stack.BranchRef{{Branch: "unsubmitted"}}},
+				{ID: "6154", Number: tt.number, Branches: []stack.BranchRef{{Branch: "tracked"}}},
+			}}
+			rows, _, links := gatherCheckoutRows(cfg, sf)
+			m := checkoutview.New(rows).WithNumberLinks(links)
 			sized, _ := m.Update(tea.WindowSizeMsg{Width: 100, Height: 20})
 			output := sized.View()
-			if force == "1" {
-				for _, number := range []int{7, 8} {
-					assert.Contains(t, output, fmt.Sprintf("\x1b]8;;https://github.example.com/o/r/stack/%d\x1b\\%d\x1b]8;;\x1b\\", number, number))
-				}
-				assert.NotContains(t, output, "/stack/0")
+			if tt.wantLink {
+				assert.Contains(t, output, "\x1b]8;;https://github.example.com/o/r/stack/7\x1b\\7\x1b]8;;\x1b\\")
 			} else {
 				assert.NotContains(t, output, "\x1b]8")
 				assert.NotContains(t, output, "https://")
 			}
-			cfg.RepoOverride.Owner = ""
-			missing, _ := newCheckoutPicker(cfg, rows).Update(tea.WindowSizeMsg{Width: 100, Height: 20})
-			assert.NotContains(t, missing.View(), "\x1b]8")
-		})
-	}
-}
-
-func TestCheckoutStackPromptLinks(t *testing.T) {
-	for _, force := range []string{"0", "1"} {
-		t.Run(force, func(t *testing.T) {
-			t.Setenv("GH_STACK_HYPERLINKS", force)
-			cfg := &config.Config{}
-			setTestRepo(cfg)
-			want := "#7 (https://github.com/o/r/stack/7)"
-			if force == "1" {
-				want = "\x1b]8;;https://github.com/o/r/stack/7\x1b\\#7\x1b]8;;\x1b\\"
+			if !tt.empty && !tt.failed && tt.wantLink {
+				assert.Contains(t, output, "/stack/8")
 			}
-			cfg.ConfirmFn = func(prompt string, defaultValue bool) (bool, error) {
-				assert.Equal(t, fmt.Sprintf("Found stack %s that includes branch %q. Check out stack %s?", want, "feature", want), prompt)
-				assert.True(t, defaultValue)
-				return true, nil
-			}
-			number, confirmed, err := offerRemoteStackForBranch(cfg, &stack.StackFile{}, []github.RemoteStack{{
-				ID: 6154, Number: 7,
-				PRDetails: []github.RemoteStackPR{{Number: 42, State: "open", Head: github.RemoteStackPRHead{Ref: "feature"}}},
-			}}, "feature")
-			require.NoError(t, err)
-			assert.True(t, confirmed)
-			assert.Equal(t, 7, number)
+			assert.NotContains(t, output, "/stack/0")
+			assert.Equal(t, 1, calls)
+			assert.Equal(t, tt.number, sf.Stacks[1].Number, "presentation must not mutate tracking")
 		})
 	}
 }

@@ -522,9 +522,6 @@ func (m Model) renderRow(r StackRow, selected bool, lay layout) string {
 	if r.Number == 0 {
 		numStyle = dimStyle
 	} else if link := m.numberLinks[r.Number]; r.Number > 0 && link != "" {
-		if link != number {
-			numStyle = numStyle.Underline(true)
-		}
 		number = link
 	}
 	b.WriteString(renderCell(number, numStyle, lay.num, selected))

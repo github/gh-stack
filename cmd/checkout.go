@@ -384,9 +384,10 @@ func checkoutStackByNumber(cfg *config.Config, sf *stack.StackFile, gitDir strin
 	}
 
 	remoteStack, err := client.GetStack(stackNumber)
-	if err != nil || remoteStack == nil || len(remoteStack.PullRequests) == 0 {
-		// No such stack, stacks unavailable, or a transient failure — let the
-		// caller try the number as a PR number or branch name.
+	if err != nil {
+		return nil, "", errors.Join(errStackNumberNotFound, err)
+	}
+	if remoteStack == nil || len(remoteStack.PullRequests) == 0 {
 		return nil, "", errStackNumberNotFound
 	}
 
@@ -748,7 +749,7 @@ func interactiveCheckout(cfg *config.Config, sf *stack.StackFile, gitDir string)
 		return nil, "", fmt.Errorf("no target specified; provide a branch name or PR number, or run interactively to select a stack")
 	}
 
-	rows, remoteStacks := gatherCheckoutRows(cfg, sf)
+	rows, remoteStacks, links := gatherCheckoutRows(cfg, sf)
 	if currentBranch, branchErr := git.CurrentBranch(); branchErr == nil {
 		stackNumber, confirmed, confirmErr := offerRemoteStackForBranch(cfg, sf, remoteStacks, currentBranch)
 		if confirmErr != nil {
@@ -772,7 +773,7 @@ func interactiveCheckout(cfg *config.Config, sf *stack.StackFile, gitDir string)
 		return nil, "", nil
 	}
 
-	selected, ok, err := launchCheckoutPicker(cfg, rows)
+	selected, ok, err := launchCheckoutPicker(rows, links)
 	if err != nil {
 		return nil, "", err
 	}
@@ -789,14 +790,29 @@ func interactiveCheckout(cfg *config.Config, sf *stack.StackFile, gitDir string)
 // with the local stacks into the picker's rows. Any GitHub failure (stacks not
 // enabled for the repo, no auth, network error) gracefully degrades to a
 // local-only list.
-func gatherCheckoutRows(cfg *config.Config, sf *stack.StackFile) ([]checkoutview.StackRow, []github.RemoteStack) {
+func gatherCheckoutRows(cfg *config.Config, sf *stack.StackFile) ([]checkoutview.StackRow, []github.RemoteStack, map[int]string) {
 	var remote []github.RemoteStack
+	var remoteNumbers map[int]bool // nil means the remote listing was unavailable
 	if client, err := cfg.GitHubClient(); err == nil {
 		if stacks, err := client.ListStacks(); err == nil {
 			remote = stacks
+			remoteNumbers = make(map[int]bool, len(stacks))
+			for _, s := range stacks {
+				remoteNumbers[s.Number] = true
+			}
 		}
 	}
-	return checkoutview.BuildRows(sf.Stacks, remote), remote
+	rows := checkoutview.BuildRows(sf.Stacks, remote)
+	links := make(map[int]string)
+	if repo, err := cfg.Repo(); err == nil && repo.Owner != "" && repo.Name != "" {
+		for _, row := range rows {
+			if row.Number > 0 && (remoteNumbers == nil || remoteNumbers[row.Number]) {
+				url := github.StackURL(repo.Host, repo.Owner, repo.Name, row.Number)
+				links[row.Number] = cfg.TerminalLink(row.NumberDisplay(), url)
+			}
+		}
+	}
+	return rows, remote, links
 }
 
 // offerRemoteStackForBranch asks to check out the unique active remote stack
@@ -814,8 +830,8 @@ func offerRemoteStackForBranch(cfg *config.Config, sf *stack.StackFile, remote [
 	}
 
 	stackNumber := matches[0].Number
-	link := cfg.StackLink(stackNumber)
-	prompt := fmt.Sprintf("Found stack %s that includes branch %q. Check out stack %s?", link, branch, link)
+	cfg.Infof("Found stack %s that includes branch %q.", cfg.StackLink(stackNumber), branch)
+	prompt := fmt.Sprintf("Check out stack #%d?", stackNumber)
 	confirmed, err := confirmRemoteStackCheckout(cfg, prompt)
 	if err != nil {
 		if errors.Is(err, errInterrupt) {
@@ -887,7 +903,11 @@ func resolveCheckoutSelection(cfg *config.Config, sf *stack.StackFile, gitDir st
 	s, targetBranch, err := checkoutStackByNumber(cfg, sf, gitDir, selected.Number)
 	if err != nil {
 		if errors.Is(err, errStackNumberNotFound) {
-			cfg.Errorf("stack %s could not be loaded from GitHub", cfg.StackLink(selected.Number))
+			label := fmt.Sprintf("#%d", selected.Number)
+			if !isNotFound(err) {
+				label = cfg.StackLink(selected.Number)
+			}
+			cfg.Errorf("stack %s could not be loaded from GitHub", label)
 			return nil, "", ErrAPIFailure
 		}
 		return nil, "", err
@@ -895,29 +915,13 @@ func resolveCheckoutSelection(cfg *config.Config, sf *stack.StackFile, gitDir st
 	return s, targetBranch, nil
 }
 
-func newCheckoutPicker(cfg *config.Config, rows []checkoutview.StackRow) checkoutview.Model {
-	model := checkoutview.New(rows)
-	repo, err := cfg.Repo()
-	if err != nil || repo.Owner == "" || repo.Name == "" {
-		return model
-	}
-	links := make(map[int]string, len(rows))
-	for _, row := range rows {
-		if row.Number > 0 {
-			url := github.StackURL(repo.Host, repo.Owner, repo.Name, row.Number)
-			links[row.Number] = cfg.TerminalLink(row.NumberDisplay(), url)
-		}
-	}
-	return model.WithNumberLinks(links)
-}
-
 // launchCheckoutPicker runs the Bubble Tea stack picker and returns the selected
 // row (and whether one was chosen). It renders inline (no alt-screen) so the
 // picker occupies only a few lines and leaves the surrounding terminal output
 // intact. Mouse motion is intentionally not enabled so the search field never
 // receives stray mouse bytes.
-func launchCheckoutPicker(cfg *config.Config, rows []checkoutview.StackRow) (checkoutview.StackRow, bool, error) {
-	p := tea.NewProgram(newCheckoutPicker(cfg, rows))
+func launchCheckoutPicker(rows []checkoutview.StackRow, links map[int]string) (checkoutview.StackRow, bool, error) {
+	p := tea.NewProgram(checkoutview.New(rows).WithNumberLinks(links))
 	finalModel, err := p.Run()
 	if err != nil {
 		return checkoutview.StackRow{}, false, fmt.Errorf("running stack picker: %w", err)

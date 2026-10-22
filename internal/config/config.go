@@ -187,7 +187,7 @@ func (c *Config) Link(label, url string) string {
 		if !hyperlinksEnabled {
 			return fmt.Sprintf("%s (%s)", label, url)
 		}
-		label = hyperlink(label, url)
+		label = fmt.Sprintf("\033]8;;%s\033\\%s\033]8;;\033\\", url, label)
 	}
 	if c.Terminal.IsColorEnabled() {
 		label = fmt.Sprintf("\033[4m%s\033[24m", label)
@@ -196,16 +196,12 @@ func (c *Config) Link(label, url string) string {
 }
 
 // TerminalLink keeps a compact label when terminal hyperlinks are unavailable.
-// TUI callers supply their own styling.
+// Use Link's raw underline codes; per-rune TUI underlining can corrupt OSC 8.
 func (c *Config) TerminalLink(label, url string) string {
 	if url == "" || !supportsHyperlinks(c.Terminal.IsTerminalOutput()) {
 		return label
 	}
-	return hyperlink(label, url)
-}
-
-func hyperlink(label, url string) string {
-	return fmt.Sprintf("\033]8;;%s\033\\%s\033]8;;\033\\", url, label)
+	return c.Link(label, url)
 }
 
 // StackURL returns no destination when optional display identity is unavailable.

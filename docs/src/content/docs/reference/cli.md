@@ -175,12 +175,12 @@ gh stack view --json
 ```
 
 Stack references follow the existing PR-link behavior in text output: OSC 8
-hyperlinks when supported, or the full URL for copy/paste otherwise. Links open
+hyperlinks when supported, or the full URL for copy/paste otherwise. Stack links open
 the repository's `/stack/<number>` page; confirmed missing or removed stacks
 are left unlinked. Set `GH_STACK_HYPERLINKS=1` or `GH_STACK_HYPERLINKS=0` to
 override terminal detection.
 
-TUIs keep labels compact: click the stack identifier in `view` or `submit` to
+TUIs keep labels compact: click `#N` in `view` or `submit` to
 open its page, or use your terminal's hyperlink gesture in the `checkout`
 picker and `merge` wizard. Those inline views keep plain numbers when terminal
 hyperlinks are unavailable. The environment override controls OSC 8 links, not

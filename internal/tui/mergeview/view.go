@@ -75,8 +75,8 @@ func (m Model) banner() string {
 	title := "Merge stack"
 	if m.opts.StackNumber > 0 {
 		label := fmt.Sprintf("#%d", m.opts.StackNumber)
-		if m.opts.StackLink != "" && m.opts.StackLink != label {
-			label = titleStyle.Underline(true).Render(m.opts.StackLink)
+		if m.opts.StackLink != "" {
+			label = m.opts.StackLink
 		}
 		title = "Merge stack " + label
 	}

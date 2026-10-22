@@ -763,9 +763,11 @@ func leftPanelBox(content string, width, height int) string {
 		Render(content)
 }
 
+const stackHeadingPrefix = "STACK "
+
 func (m Model) stackHeading() string {
 	if m.stackNumber > 0 {
-		return fmt.Sprintf("STACK #%d", m.stackNumber)
+		return stackHeadingPrefix + fmt.Sprintf("#%d", m.stackNumber)
 	}
 	return "STACK"
 }
@@ -776,12 +778,13 @@ func (m Model) stackHeading() string {
 // nodes/cursor/width, so the mouse layer can recompute it to resolve clicks.
 func (m Model) buildLeftRows(fullW int) []leftRow {
 	cur := m.cursor
-	headingStyle := sectionLabelStyle
-	if m.stackNumber > 0 && m.stackURL != "" {
-		headingStyle = headingStyle.Underline(true)
+	heading := truncateVisible(m.stackHeading(), fullW-1)
+	renderedHeading := sectionLabelStyle.Render(heading)
+	if number, ok := strings.CutPrefix(heading, stackHeadingPrefix); ok && m.stackURL != "" {
+		renderedHeading = sectionLabelStyle.Render(stackHeadingPrefix) + sectionLabelStyle.Underline(true).Render(number)
 	}
 	rows := []leftRow{
-		{text: pad(1, false) + headingStyle.Render(truncateVisible(m.stackHeading(), fullW-1)), branch: -1},
+		{text: pad(1, false) + renderedHeading, branch: -1},
 		{text: m.gapRow(fullW, false, cur == 0), branch: -1}, // blank under STACK; top pad for branch 0
 	}
 	for i := range m.nodes {
@@ -939,6 +942,9 @@ func pad(n int, focused bool) string {
 // leftVisibleHeight is the number of timeline rows the left panel can show.
 func (m Model) leftVisibleHeight() int {
 	h := m.contentHeight() - 2 - m.leftButtonRows() // panel border + reserved button rows
+	if m.renderClosedBanner() != "" {
+		h--
+	}
 	if h < 1 {
 		h = 1
 	}

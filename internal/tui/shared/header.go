@@ -36,8 +36,8 @@ type ShortcutEntry struct {
 type HeaderInfoLine struct {
 	Icon      string
 	Label     string
-	Suffix    string          // optional text after the label, outside its link
-	URL       string          // optional native-click target for the label
+	LinkLabel string          // optional clickable text within Label
+	URL       string          // native-click target for LinkLabel
 	IconStyle *lipgloss.Style // optional override; nil uses default HeaderInfoStyle (cyan)
 }
 
@@ -243,8 +243,12 @@ func HeaderLinkAt(cfg HeaderConfig, width, height, x, y int) string {
 		return ""
 	}
 	info := cfg.InfoLines[i]
-	start := 1 + headerLeftMargin + lipgloss.Width(info.Icon) + 1
-	end := start + lipgloss.Width(info.Label)
+	prefix, _, found := strings.Cut(info.Label, info.LinkLabel)
+	if info.URL == "" || info.LinkLabel == "" || !found {
+		return ""
+	}
+	start := 1 + headerLeftMargin + lipgloss.Width(info.Icon) + 1 + lipgloss.Width(prefix)
+	end := start + lipgloss.Width(info.LinkLabel)
 	if x >= start && x < end && x < width-1 {
 		return info.URL
 	}
@@ -252,12 +256,13 @@ func HeaderLinkAt(cfg HeaderConfig, width, height, x, y int) string {
 }
 
 func renderHeaderInfoLabel(info HeaderInfoLine) string {
-	if info.URL == "" {
-		return HeaderInfoLabelStyle.Render(" " + info.Label + info.Suffix)
+	prefix, suffix, found := strings.Cut(info.Label, info.LinkLabel)
+	if info.URL == "" || info.LinkLabel == "" || !found {
+		return HeaderInfoLabelStyle.Render(" " + info.Label)
 	}
-	return HeaderInfoLabelStyle.Render(" ") +
-		HeaderInfoLabelStyle.Underline(true).Render(info.Label) +
-		HeaderInfoLabelStyle.Render(info.Suffix)
+	return HeaderInfoLabelStyle.Render(" "+prefix) +
+		HeaderInfoLabelStyle.Underline(true).Render(info.LinkLabel) +
+		HeaderInfoLabelStyle.Render(suffix)
 }
 
 // RenderHeader renders the full-width header box.

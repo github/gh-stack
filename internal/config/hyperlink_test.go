@@ -171,6 +171,15 @@ func TestStackURL_RepositoryUnavailable(t *testing.T) {
 	assert.Equal(t, "#7", cfg.StackLink(7))
 }
 
+func TestTerminalLinkColor(t *testing.T) {
+	t.Setenv("NO_COLOR", "")
+	t.Setenv("CLICOLOR_FORCE", "1")
+	t.Setenv("GH_STACK_HYPERLINKS", "1")
+	assert.Equal(t,
+		"\x1b[4m\x1b]8;;https://github.com/o/r/stack/7\x1b\\#7\x1b]8;;\x1b\\\x1b[24m",
+		New().TerminalLink("#7", "https://github.com/o/r/stack/7"))
+}
+
 func TestTerminalLink(t *testing.T) {
 	const url = "https://github.com/o/r/stack/7"
 	tests := []struct {

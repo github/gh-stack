@@ -317,7 +317,12 @@ func runLinkAdd(cfg *config.Config, client github.ClientOps, opts *linkOptions, 
 	// full stack if the top branch can't be resolved from the listed stack.
 	topBranch, err := stackTopBranch(target)
 	if err != nil {
-		if full, gerr := client.GetStack(target.Number); gerr == nil && full != nil {
+		full, gerr := client.GetStack(target.Number)
+		if isNotFound(gerr) {
+			cfg.Errorf("Stack #%d no longer exists", target.Number)
+			return ErrNotInStack
+		}
+		if gerr == nil && full != nil {
 			topBranch, err = stackTopBranch(full)
 		}
 		if err != nil {

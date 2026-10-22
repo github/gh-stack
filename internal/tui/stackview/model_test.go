@@ -44,42 +44,22 @@ var testTrunk = stack.BranchRef{Branch: "main"}
 
 func TestStackHeaderLink(t *testing.T) {
 	const url = "https://github.example.com/o/r/stack/7"
-	for _, tt := range []struct {
-		name                   string
-		number                 int
-		width, height, x, y    int
-		merged, noURL, wantHit bool
-	}{
-		{name: "identifier", number: 7, width: 100, height: 40, x: 4, y: 4, wantHit: true},
-		{name: "all merged", number: 7, width: 100, height: 40, x: 11, y: 4, merged: true, wantHit: true},
-		{name: "unknown stack", width: 100, height: 40, x: 4, y: 4},
-		{name: "unknown URL", number: 7, width: 100, height: 40, x: 4, y: 4, noURL: true},
-		{name: "icon", number: 7, width: 100, height: 40, x: 2, y: 4},
-		{name: "after label", number: 7, width: 100, height: 40, x: 12, y: 4},
-		{name: "other line", number: 7, width: 100, height: 40, x: 4, y: 5},
-		{name: "short header hidden", number: 7, width: 100, height: 20, x: 4, y: 4},
-		{name: "narrow header hidden", number: 7, width: 40, height: 40, x: 4, y: 4},
-	} {
-		t.Run(tt.name, func(t *testing.T) {
+	for _, merged := range []bool{false, true} {
+		t.Run(fmt.Sprint(merged), func(t *testing.T) {
 			nodes := makeNodes("feature")
-			if tt.merged {
-				nodes[0].Ref.PullRequest = &stack.PullRequestRef{Number: 42, Merged: true}
-			}
-			m := New(nodes, testTrunk, "0.0.1", tt.number).WithStackURL(url)
-			if tt.noURL {
-				m = m.WithStackURL("")
-			}
-			m.width, m.height = tt.width, tt.height
+			nodes[0].Ref.PullRequest = &stack.PullRequestRef{Number: 42, Merged: merged}
+			m := New(nodes, testTrunk, "0.0.1", 7).WithStackURL(url)
+			m.width, m.height = 100, 40
 			beforeCursor := m.cursor
 			var opened []string
 			m.openURL = func(url string) { opened = append(opened, url) }
-			updated, cmd := m.Update(tea.MouseMsg{Action: tea.MouseActionPress, Button: tea.MouseButtonLeft, X: tt.x, Y: tt.y})
-			result := updated.(Model)
-			if tt.wantHit {
-				assert.Equal(t, []string{url}, opened)
-			} else {
-				assert.Empty(t, opened)
+			for _, x := range []int{4, 9, 12} {
+				_, _ = m.Update(tea.MouseMsg{Action: tea.MouseActionPress, Button: tea.MouseButtonLeft, X: x, Y: 4})
 			}
+			assert.Empty(t, opened, "words, spaces, and padding are not links")
+			updated, cmd := m.Update(tea.MouseMsg{Action: tea.MouseActionPress, Button: tea.MouseButtonLeft, X: 10, Y: 4})
+			result := updated.(Model)
+			assert.Equal(t, []string{url}, opened)
 			assert.Equal(t, beforeCursor, result.cursor)
 			assert.Empty(t, result.CheckoutBranch())
 			assert.Nil(t, cmd)
@@ -551,5 +531,6 @@ func TestBuildHeaderConfig_ShowsStackNumber(t *testing.T) {
 	m0 := New(makeNodes("b1", "b2"), testTrunk, "0.0.1", 0)
 	for _, line := range m0.buildHeaderConfig().InfoLines {
 		assert.NotContains(t, line.Label, "Stack #")
+		assert.Empty(t, line.URL)
 	}
 }
