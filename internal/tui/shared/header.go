@@ -36,8 +36,12 @@ type ShortcutEntry struct {
 type HeaderInfoLine struct {
 	Icon      string
 	Label     string
+	Suffix    string          // optional text after the label, outside its link
+	URL       string          // optional native-click target for the label
 	IconStyle *lipgloss.Style // optional override; nil uses default HeaderInfoStyle (cyan)
 }
+
+const headerInfoStartRow = 3
 
 // headerLeftMargin is the left padding, in columns, before the logo and the
 // info lines (which share this left edge). It is kept small so it visually
@@ -113,7 +117,7 @@ func shortcutRowCount(cfg HeaderConfig) int {
 // keeps the box exactly as tall as its content, with no trailing empty row.
 func headerContentRows(cfg HeaderConfig) int {
 	// title (row 0), subtitle (row 1), a gap (row 2), then the info lines.
-	info := 3 + len(cfg.InfoLines)
+	info := headerInfoStartRow + len(cfg.InfoLines)
 	sc := shortcutRowCount(cfg)
 	if sc > info {
 		return sc
@@ -127,20 +131,12 @@ func HeaderHeightFor(cfg HeaderConfig) int {
 	return headerContentRows(cfg) + 2
 }
 
-// RenderHeader renders the full-width header box.
-// Progressive disclosure as width narrows: first hides the art, then the
-// info text, keeping keyboard shortcuts always visible.
-func RenderHeader(b *strings.Builder, cfg HeaderConfig, width, height int) {
-	if width < 2 {
-		return
-	}
-	innerWidth := width - 2
+type shortcutLine struct {
+	text     string
+	visWidth int
+}
 
-	// Always build shortcut lines
-	type shortcutLine struct {
-		text     string
-		visWidth int
-	}
+func headerShortcuts(cfg HeaderConfig) ([]shortcutLine, int) {
 	var shortcuts []shortcutLine
 	maxShortcutWidth := 0
 	rightColWidth := 0
@@ -225,11 +221,60 @@ func RenderHeader(b *strings.Builder, cfg HeaderConfig, width, height int) {
 		rightColWidth = maxShortcutWidth + 2
 	}
 
+	return shortcuts, rightColWidth
+}
+
+func headerInfoFits(width, rightColWidth int) bool {
+	const infoMinWidth = 20
+	return width-2 >= rightColWidth+infoMinWidth+4
+}
+
+// HeaderLinkAt returns the URL of a visible info label at the screen coordinates.
+func HeaderLinkAt(cfg HeaderConfig, width, height, x, y int) string {
+	if !ShouldShowHeader(width, height) {
+		return ""
+	}
+	_, rightColWidth := headerShortcuts(cfg)
+	if !headerInfoFits(width, rightColWidth) {
+		return ""
+	}
+	i := y - 1 - headerInfoStartRow
+	if i < 0 || i >= len(cfg.InfoLines) {
+		return ""
+	}
+	info := cfg.InfoLines[i]
+	start := 1 + headerLeftMargin + lipgloss.Width(info.Icon) + 1
+	end := start + lipgloss.Width(info.Label)
+	if x >= start && x < end && x < width-1 {
+		return info.URL
+	}
+	return ""
+}
+
+func renderHeaderInfoLabel(info HeaderInfoLine) string {
+	if info.URL == "" {
+		return HeaderInfoLabelStyle.Render(" " + info.Label + info.Suffix)
+	}
+	return HeaderInfoLabelStyle.Render(" ") +
+		HeaderInfoLabelStyle.Underline(true).Render(info.Label) +
+		HeaderInfoLabelStyle.Render(info.Suffix)
+}
+
+// RenderHeader renders the full-width header box.
+// Progressive disclosure as width narrows: first hides the art, then the
+// info text, keeping keyboard shortcuts always visible.
+func RenderHeader(b *strings.Builder, cfg HeaderConfig, width, height int) {
+	if width < 2 {
+		return
+	}
+	innerWidth := width - 2
+	shortcuts, rightColWidth := headerShortcuts(cfg)
+
 	// Determine what fits: shortcuts always shown, the logo and info are
 	// progressive. The logo is image-or-nothing: it shows only when an
 	// inline-image protocol is available and the viewport is wide enough.
 	showArt := cfg.ShowArt && LogoAvailable()
-	showInfo := true
+	showInfo := headerInfoFits(width, rightColWidth)
 
 	// Hide the logo when the viewport is too narrow or too short. The height
 	// guard drops the logo a little before the rest of the header because a
@@ -251,12 +296,6 @@ func RenderHeader(b *strings.Builder, cfg HeaderConfig, width, height int) {
 
 	cr := headerContentRows(cfg)
 
-	// If info + shortcuts don't fit, hide info
-	infoMinWidth := 20 // rough minimum for title/info text
-	if innerWidth < rightColWidth+infoMinWidth+4 {
-		showInfo = false
-	}
-
 	// Map info lines to row indices
 	infoByRow := make(map[int]string)
 	if showInfo {
@@ -265,7 +304,7 @@ func RenderHeader(b *strings.Builder, cfg HeaderConfig, width, height int) {
 			infoByRow[1] = HeaderInfoLabelStyle.Render(cfg.Subtitle)
 		}
 		for i, info := range cfg.InfoLines {
-			row := 3 + i
+			row := headerInfoStartRow + i
 			if row > cr-1 {
 				break
 			}
@@ -273,7 +312,7 @@ func RenderHeader(b *strings.Builder, cfg HeaderConfig, width, height int) {
 			if info.IconStyle != nil {
 				iconStyle = *info.IconStyle
 			}
-			infoByRow[row] = iconStyle.Render(info.Icon) + HeaderInfoLabelStyle.Render(" "+info.Label)
+			infoByRow[row] = iconStyle.Render(info.Icon) + renderHeaderInfoLabel(info)
 		}
 	}
 

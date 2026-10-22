@@ -1706,6 +1706,20 @@ func setTestRepo(cfg *config.Config) {
 	cfg.RepoOverride = &repository.Repository{Host: "github.com", Owner: "o", Name: "r"}
 }
 
+func TestLinkedStackLabel(t *testing.T) {
+	cfg := &config.Config{}
+	setTestRepo(cfg)
+	for _, force := range []string{"0", "1"} {
+		t.Run(force, func(t *testing.T) {
+			t.Setenv("GH_STACK_HYPERLINKS", force)
+			assert.Empty(t, linkedStackLabel(cfg, 0))
+			assert.Empty(t, linkedStackLabel(cfg, -1))
+			assert.Equal(t, " (stack "+cfg.StackLink(7)+")", linkedStackLabel(cfg, 7))
+			assert.Equal(t, " (stack #7)", stackLabel(7))
+		})
+	}
+}
+
 func TestWarnStacksUnavailable_ShowsNotEnabled(t *testing.T) {
 	cfg, _, errR := config.NewTestConfig()
 

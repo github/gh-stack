@@ -177,16 +177,55 @@ func (c *Config) Outf(format string, args ...any) {
 // PRLink formats a PR number as a clickable terminal hyperlink when supported,
 // or includes the full URL as a copyable fallback.
 func (c *Config) PRLink(number int, url string) string {
+	return c.Link(fmt.Sprintf("#%d", number), url)
+}
+
+// Link formats a reference with a terminal hyperlink or a copyable URL fallback.
+func (c *Config) Link(label, url string) string {
 	hyperlinksEnabled := supportsHyperlinks(c.Terminal.IsTerminalOutput())
-	label := fmt.Sprintf("#%d", number)
 	if url != "" {
 		if !hyperlinksEnabled {
 			return fmt.Sprintf("%s (%s)", label, url)
 		}
-		label = fmt.Sprintf("\033]8;;%s\033\\%s\033]8;;\033\\", url, label)
+		label = hyperlink(label, url)
 	}
 	if c.Terminal.IsColorEnabled() {
 		label = fmt.Sprintf("\033[4m%s\033[24m", label)
+	}
+	return label
+}
+
+// TerminalLink keeps a compact label when terminal hyperlinks are unavailable.
+// TUI callers supply their own styling.
+func (c *Config) TerminalLink(label, url string) string {
+	if url == "" || !supportsHyperlinks(c.Terminal.IsTerminalOutput()) {
+		return label
+	}
+	return hyperlink(label, url)
+}
+
+func hyperlink(label, url string) string {
+	return fmt.Sprintf("\033]8;;%s\033\\%s\033]8;;\033\\", url, label)
+}
+
+// StackURL returns no destination when optional display identity is unavailable.
+// Formatting a reference must not turn an otherwise successful command into an error.
+func (c *Config) StackURL(number int) string {
+	if number <= 0 {
+		return ""
+	}
+	repo, err := c.Repo()
+	if err != nil || repo.Owner == "" || repo.Name == "" {
+		return ""
+	}
+	return ghapi.StackURL(repo.Host, repo.Owner, repo.Name, number)
+}
+
+// StackLink formats a stack number using the same conventions as PRLink.
+func (c *Config) StackLink(number int) string {
+	label := fmt.Sprintf("#%d", number)
+	if url := c.StackURL(number); url != "" {
+		return c.Link(label, url)
 	}
 	return label
 }

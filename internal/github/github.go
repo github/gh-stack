@@ -95,6 +95,14 @@ func PRURL(host, owner, repo string, number int) string {
 	return fmt.Sprintf("https://%s/%s/%s/pull/%d", host, owner, repo, number)
 }
 
+// StackURL constructs the web URL for a repository-scoped stack number.
+func StackURL(host, owner, repo string, number int) string {
+	if host == "" {
+		host = "github.com"
+	}
+	return fmt.Sprintf("https://%s/%s/%s/stack/%d", host, owner, repo, number)
+}
+
 // FindPRForBranch finds an open PR by head branch name.
 func (c *Client) FindPRForBranch(branch string) (*PullRequest, error) {
 	var query struct {

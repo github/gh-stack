@@ -35,6 +35,23 @@ func TestPRURL(t *testing.T) {
 	}
 }
 
+func TestStackURL(t *testing.T) {
+	tests := []struct {
+		name, host, owner, repo string
+		number                  int
+		want                    string
+	}{
+		{"github.com", "github.com", "o", "r", 360, "https://github.com/o/r/stack/360"},
+		{"custom host", "github.example.com", "org", "repo", 7, "https://github.example.com/org/repo/stack/7"},
+		{"default host", "", "o", "r", 7, "https://github.com/o/r/stack/7"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			assert.Equal(t, tt.want, StackURL(tt.host, tt.owner, tt.repo, tt.number))
+		})
+	}
+}
+
 func TestPullRequest_IsQueued(t *testing.T) {
 	t.Run("not queued when MergeQueueEntry is nil", func(t *testing.T) {
 		pr := &PullRequest{Number: 1}
