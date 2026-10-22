@@ -339,6 +339,7 @@ func collectPRDrafts(cfg *config.Config, client github.ClientOps, s *stack.Stack
 		Version:        Version,
 		CanCreateStack: canCreateStack,
 		StackNumber:    s.Number,
+		StackURL:       cfg.StackURL(s.Number),
 	})
 
 	// Use cell-motion mouse mode (clicks, drag, and wheel) rather than all-motion.

@@ -3,6 +3,7 @@ package submitview
 import (
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
+	"github.com/github/gh-stack/internal/tui/shared"
 )
 
 func (m Model) handleMouse(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
@@ -156,11 +157,33 @@ func (m Model) leftStackButtonHit(x, y int) bool {
 	return x >= 1 && x < 1+lipgloss.Width(m.renderStackButton(leftW-2))
 }
 
+func (m Model) leftStackLinkHit(x, y int) bool {
+	if m.stackNumber <= 0 || m.stackURL == "" || y != m.panelTopRow() {
+		return false
+	}
+	leftW, _ := m.panelWidths()
+	rows := m.buildLeftRows(leftW - 2)
+	if clampScroll(m.leftScroll, len(rows), m.leftVisibleHeight()) != 0 {
+		return false
+	}
+	labelWidth := lipgloss.Width(truncateVisible(m.stackHeading(), leftW-3))
+	return x >= 2 && x < 2+labelWidth && x < leftW-1
+}
+
 // handleClick routes a left click to a branch row (left map) or an editor
 // element (right panel).
 func (m Model) handleClick(x, y int) (tea.Model, tea.Cmd) {
 	m.statusMessage = ""
 	m.statusIsError = false
+
+	if url := shared.HeaderLinkAt(m.buildHeaderConfig(), m.width, m.height, x, y); url != "" {
+		m.openBrowser(url)
+		return m, nil
+	}
+	if m.leftStackLinkHit(x, y) {
+		m.openBrowser(m.stackURL)
+		return m, nil
+	}
 
 	leftW, rightW := m.panelWidths()
 

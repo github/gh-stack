@@ -340,6 +340,10 @@ func (m *Model) openFocusedPR() {
 	if url == "" {
 		return
 	}
+	m.openBrowser(url)
+}
+
+func (m Model) openBrowser(url string) {
 	if m.openURL != nil {
 		m.openURL(url)
 		return
@@ -759,18 +763,25 @@ func leftPanelBox(content string, width, height int) string {
 		Render(content)
 }
 
+func (m Model) stackHeading() string {
+	if m.stackNumber > 0 {
+		return fmt.Sprintf("STACK #%d", m.stackNumber)
+	}
+	return "STACK"
+}
+
 // buildLeftRows lays out the whole left panel: the STACK header, each branch's
 // node/name/meta lines, a spine gap between branches (shaded as padding around
 // the focused branch), and the trunk. It is deterministic given the
 // nodes/cursor/width, so the mouse layer can recompute it to resolve clicks.
 func (m Model) buildLeftRows(fullW int) []leftRow {
 	cur := m.cursor
-	stackLabel := "STACK"
-	if m.stackNumber > 0 {
-		stackLabel = fmt.Sprintf("STACK #%d", m.stackNumber)
+	headingStyle := sectionLabelStyle
+	if m.stackNumber > 0 && m.stackURL != "" {
+		headingStyle = headingStyle.Underline(true)
 	}
 	rows := []leftRow{
-		{text: pad(1, false) + sectionLabelStyle.Render(stackLabel), branch: -1},
+		{text: pad(1, false) + headingStyle.Render(truncateVisible(m.stackHeading(), fullW-1)), branch: -1},
 		{text: m.gapRow(fullW, false, cur == 0), branch: -1}, // blank under STACK; top pad for branch 0
 	}
 	for i := range m.nodes {

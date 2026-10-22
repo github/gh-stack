@@ -4,6 +4,7 @@ import (
 	"testing"
 
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/charmbracelet/lipgloss"
 	ghapi "github.com/github/gh-stack/internal/github"
 	"github.com/github/gh-stack/internal/stack"
 	"github.com/github/gh-stack/internal/tui/stackview"
@@ -329,8 +330,12 @@ func TestHeaderConfig_StackNumberInRepoLine(t *testing.T) {
 		RepoLabel:   "myorg/myrepo",
 		Version:     "1.0.0",
 		StackNumber: 7,
+		StackURL:    "https://github.com/myorg/myrepo/stack/7",
 	})
-	assert.Equal(t, "Stack #7 • myorg/myrepo", m.buildHeaderConfig().InfoLines[0].Label)
+	info := m.buildHeaderConfig().InfoLines[0]
+	assert.Equal(t, "Stack #7", info.Label)
+	assert.Equal(t, " • myorg/myrepo", info.Suffix)
+	assert.Equal(t, "https://github.com/myorg/myrepo/stack/7", info.URL)
 
 	// Without a stack number, the first line is just the repo.
 	assert.Equal(t, "Repo: myorg/myrepo", testModel(t, newNodes()).buildHeaderConfig().InfoLines[0].Label)
@@ -374,6 +379,102 @@ func TestView_EmptyWhenNoSize(t *testing.T) {
 }
 
 // --- mouse ---
+
+func TestLeftPanel_StackLinkClipping(t *testing.T) {
+	m := testModel(t, newNodes())
+	m.width = 70
+	m.stackNumber = int(^uint(0) >> 1)
+	m.stackURL = "https://github.com/o/r/stack/7"
+	leftW, _ := m.panelWidths()
+	header := m.buildLeftRows(leftW - 2)[0].text
+	assert.LessOrEqual(t, lipgloss.Width(header), leftW-2)
+	assert.NotContains(t, header, m.stackURL)
+	last := 1 + lipgloss.Width(truncateVisible(m.stackHeading(), leftW-3))
+	assert.True(t, m.leftStackLinkHit(last, m.panelTopRow()))
+	assert.False(t, m.leftStackLinkHit(last+1, m.panelTopRow()))
+	assert.False(t, m.leftStackLinkHit(leftW-1, m.panelTopRow()))
+}
+
+func TestMouse_StackLinks(t *testing.T) {
+	t.Setenv("GH_STACK_HYPERLINKS", "0")
+	const url = "https://github.example.com/o/r/stack/7"
+	tests := []struct {
+		name                       string
+		sidebar, unknown, noURL    bool
+		help, confirming, scrolled bool
+		closed, short              bool
+		x                          int
+		wantHit                    bool
+	}{
+		{name: "header", x: 4, wantHit: true},
+		{name: "header last cell", x: 11, wantHit: true},
+		{name: "header icon", x: 2},
+		{name: "header repo suffix", x: 12},
+		{name: "header unknown number", x: 4, unknown: true},
+		{name: "header unknown URL", x: 4, noURL: true},
+		{name: "header hidden", x: 4, short: true},
+		{name: "header help overlay", x: 4, help: true},
+		{name: "header quit overlay", x: 4, confirming: true},
+		{name: "sidebar", sidebar: true, x: 2, wantHit: true},
+		{name: "sidebar last cell", sidebar: true, x: 9, wantHit: true},
+		{name: "sidebar gutter", sidebar: true, x: 1},
+		{name: "sidebar after label", sidebar: true, x: 10},
+		{name: "sidebar unknown number", sidebar: true, x: 2, unknown: true},
+		{name: "sidebar unknown URL", sidebar: true, x: 2, noURL: true},
+		{name: "sidebar help overlay", sidebar: true, x: 2, help: true},
+		{name: "sidebar quit overlay", sidebar: true, x: 2, confirming: true},
+		{name: "sidebar scrolled away", sidebar: true, x: 2, scrolled: true},
+		{name: "sidebar below closed banner", sidebar: true, x: 2, closed: true, wantHit: true},
+		{name: "sidebar without header", sidebar: true, x: 2, short: true, wantHit: true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			nodes := newNodes()
+			if tt.closed {
+				nodes = append(nodes, newNode("closed", StateClosed))
+			}
+			m := testModel(t, nodes)
+			m.stackNumber, m.stackURL = 7, url
+			if tt.unknown {
+				m.stackNumber = 0
+			}
+			if tt.noURL {
+				m.stackURL = ""
+			}
+			if tt.scrolled {
+				m.height = 26
+				m.leftScroll = 1
+			}
+			if tt.short {
+				m.height = 20
+			}
+			m.showHelp, m.confirmingQuit = tt.help, tt.confirming
+			m.titleArea.SetValue("unsaved title")
+			m.descArea.SetValue("unsaved description")
+			beforeCursor, beforeField := m.cursor, m.focusedField
+			var opened []string
+			m.openURL = func(url string) { opened = append(opened, url) }
+			y := 4
+			if tt.sidebar {
+				y = m.panelTopRow()
+			}
+			updated, cmd := m.Update(tea.MouseMsg{Action: tea.MouseActionPress, Button: tea.MouseButtonLeft, X: tt.x, Y: y})
+			result := updated.(Model)
+			if tt.wantHit {
+				assert.Equal(t, []string{url}, opened)
+				assert.Equal(t, beforeCursor, result.cursor)
+				assert.Equal(t, beforeField, result.focusedField)
+				assert.Equal(t, "unsaved title", result.titleArea.Value())
+				assert.Equal(t, "unsaved description", result.descArea.Value())
+				assert.Nil(t, cmd)
+			} else {
+				assert.Empty(t, opened)
+			}
+			assert.False(t, result.SubmitRequested())
+			assert.False(t, result.Cancelled())
+		})
+	}
+}
 
 func TestMouse_ClickBranchFocuses(t *testing.T) {
 	m := testModel(t, newNodes())

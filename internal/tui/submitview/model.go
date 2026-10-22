@@ -53,6 +53,7 @@ type Options struct {
 	// StackNumber is the human-facing stack number shown in the header. Zero
 	// when the local stack has not yet been created on GitHub.
 	StackNumber int
+	StackURL    string
 }
 
 // Model is the Bubble Tea model backing the interactive `gh stack submit` TUI.
@@ -69,6 +70,7 @@ type Model struct {
 	// stackNumber is the human-facing stack number shown in the header (0 when
 	// the stack has not been created on GitHub yet).
 	stackNumber int
+	stackURL    string
 
 	cursor int // index into nodes (the focused branch)
 
@@ -105,7 +107,7 @@ type Model struct {
 	cancelled       bool
 
 	// openURL, when non-nil, is called instead of launching the system browser
-	// to open an existing PR. Tests inject a no-op so the suite never spawns a
+	// to open a PR or stack. Tests inject a no-op so the suite never spawns a
 	// real browser.
 	openURL func(string)
 
@@ -157,6 +159,7 @@ func New(opts Options) Model {
 
 		canCreateStack: opts.CanCreateStack,
 		stackNumber:    opts.StackNumber,
+		stackURL:       opts.StackURL,
 
 		titleArea:    tia,
 		descArea:     ta,
