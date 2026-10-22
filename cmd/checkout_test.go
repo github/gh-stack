@@ -8,14 +8,73 @@ import (
 	"strings"
 	"testing"
 
+	tea "github.com/charmbracelet/bubbletea"
 	"github.com/cli/go-gh/v2/pkg/api"
 	"github.com/github/gh-stack/internal/config"
 	"github.com/github/gh-stack/internal/git"
 	"github.com/github/gh-stack/internal/github"
 	"github.com/github/gh-stack/internal/stack"
+	"github.com/github/gh-stack/internal/tui/checkoutview"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
+
+func TestCheckoutPickerStackLinks(t *testing.T) {
+	for _, force := range []string{"0", "1"} {
+		t.Run(force, func(t *testing.T) {
+			t.Setenv("GH_STACK_HYPERLINKS", force)
+			cfg := &config.Config{}
+			setTestRepo(cfg)
+			cfg.RepoOverride.Host = "github.example.com"
+			rows := []checkoutview.StackRow{
+				{Number: 0, Type: checkoutview.TypeLocal, BottomBranch: "unsubmitted"},
+				{Number: 7, Type: checkoutview.TypeLocal, BottomBranch: "tracked"},
+				{Number: 8, Type: checkoutview.TypeRemote, BottomBranch: "remote"},
+			}
+			m := newCheckoutPicker(cfg, rows)
+			sized, _ := m.Update(tea.WindowSizeMsg{Width: 100, Height: 20})
+			output := sized.View()
+			if force == "1" {
+				for _, number := range []int{7, 8} {
+					assert.Contains(t, output, fmt.Sprintf("\x1b]8;;https://github.example.com/o/r/stack/%d\x1b\\%d\x1b]8;;\x1b\\", number, number))
+				}
+				assert.NotContains(t, output, "/stack/0")
+			} else {
+				assert.NotContains(t, output, "\x1b]8")
+				assert.NotContains(t, output, "https://")
+			}
+			cfg.RepoOverride.Owner = ""
+			missing, _ := newCheckoutPicker(cfg, rows).Update(tea.WindowSizeMsg{Width: 100, Height: 20})
+			assert.NotContains(t, missing.View(), "\x1b]8")
+		})
+	}
+}
+
+func TestCheckoutStackPromptLinks(t *testing.T) {
+	for _, force := range []string{"0", "1"} {
+		t.Run(force, func(t *testing.T) {
+			t.Setenv("GH_STACK_HYPERLINKS", force)
+			cfg := &config.Config{}
+			setTestRepo(cfg)
+			want := "#7 (https://github.com/o/r/stack/7)"
+			if force == "1" {
+				want = "\x1b]8;;https://github.com/o/r/stack/7\x1b\\#7\x1b]8;;\x1b\\"
+			}
+			cfg.ConfirmFn = func(prompt string, defaultValue bool) (bool, error) {
+				assert.Equal(t, fmt.Sprintf("Found stack %s that includes branch %q. Check out stack %s?", want, "feature", want), prompt)
+				assert.True(t, defaultValue)
+				return true, nil
+			}
+			number, confirmed, err := offerRemoteStackForBranch(cfg, &stack.StackFile{}, []github.RemoteStack{{
+				ID: 6154, Number: 7,
+				PRDetails: []github.RemoteStackPR{{Number: 42, State: "open", Head: github.RemoteStackPRHead{Ref: "feature"}}},
+			}}, "feature")
+			require.NoError(t, err)
+			assert.True(t, confirmed)
+			assert.Equal(t, 7, number)
+		})
+	}
+}
 
 func TestCheckout_PrintPathRequiresTarget(t *testing.T) {
 	cfg, outR, errR := config.NewTestConfig()
@@ -47,6 +106,7 @@ func TestCheckout_PrintPathAmbiguousBranch(t *testing.T) {
 }
 
 func TestCheckout_RemotePrintPathDoesNotImportDuringRecovery(t *testing.T) {
+	t.Setenv("GH_STACK_HYPERLINKS", "1")
 	common, root, owner := t.TempDir(), t.TempDir(), t.TempDir()
 	require.NoError(t, os.WriteFile(filepath.Join(common, rebaseStateFile), []byte(`{"worktrees":{}}`), 0600))
 	restore := git.SetOps(&git.MockOps{
@@ -428,6 +488,7 @@ func TestCheckout_BranchNotFound(t *testing.T) {
 }
 
 func TestCheckout_RemoteBranchName_MultipleStacks(t *testing.T) {
+	t.Setenv("GH_STACK_HYPERLINKS", "0")
 	gitDir := t.TempDir()
 	checkoutCalled := false
 	restore := git.SetOps(&git.MockOps{
@@ -443,6 +504,7 @@ func TestCheckout_RemoteBranchName_MultipleStacks(t *testing.T) {
 	require.NoError(t, stack.Save(gitDir, &stack.StackFile{SchemaVersion: 1, Stacks: []stack.Stack{}}))
 
 	cfg, outR, errR := config.NewTestConfig()
+	setTestRepo(cfg)
 	cfg.GitHubClientOverride = &github.MockClient{
 		ListStacksFn: func() ([]github.RemoteStack, error) {
 			return []github.RemoteStack{
@@ -471,7 +533,7 @@ func TestCheckout_RemoteBranchName_MultipleStacks(t *testing.T) {
 
 	assert.ErrorIs(t, err, ErrDisambiguate)
 	assert.False(t, checkoutCalled)
-	assert.Contains(t, output, `branch "feature" belongs to multiple stacks on GitHub (7, 8)`)
+	assert.Contains(t, output, `branch "feature" belongs to multiple stacks on GitHub (7 (https://github.com/o/r/stack/7), 8 (https://github.com/o/r/stack/8))`)
 	assert.Contains(t, output, "stack or PR number")
 }
 
@@ -663,6 +725,7 @@ func TestCheckout_NumericTarget_NewStack(t *testing.T) {
 }
 
 func TestCheckout_ByStackNumber(t *testing.T) {
+	t.Setenv("GH_STACK_HYPERLINKS", "1")
 	gitDir := t.TempDir()
 	var checkedOut string
 	var createdBranches []string
@@ -697,6 +760,7 @@ func TestCheckout_ByStackNumber(t *testing.T) {
 
 	var gotStackNumber int
 	cfg, outR, errR := config.NewTestConfig()
+	setTestRepo(cfg)
 	cfg.GitHubClientOverride = &github.MockClient{
 		GetStackFn: func(n int) (*github.RemoteStack, error) {
 			gotStackNumber = n
@@ -716,6 +780,8 @@ func TestCheckout_ByStackNumber(t *testing.T) {
 	}
 
 	err := runCheckout(cfg, &checkoutOptions{target: "7"})
+	require.NoError(t, err)
+	require.NoError(t, runCheckout(cfg, &checkoutOptions{target: "7"}))
 	output := collectOutput(cfg, outR, errR)
 
 	require.NoError(t, err)
@@ -723,6 +789,10 @@ func TestCheckout_ByStackNumber(t *testing.T) {
 	// The top-most (last) branch of the stack is checked out.
 	assert.Equal(t, "feat-3", checkedOut)
 	assert.Contains(t, output, "Imported stack with 3 branches")
+	link := "\x1b]8;;https://github.com/o/r/stack/7\x1b\\#7\x1b]8;;\x1b\\"
+	assert.Contains(t, output, "from GitHub (stack "+link+")")
+	assert.Contains(t, output, "Local stack matches remote (stack "+link+")")
+	assert.NotContains(t, output, "/stack/42")
 
 	// Verify the stack was imported with both its internal id and stack number.
 	sf, loadErr := stack.Load(gitDir)

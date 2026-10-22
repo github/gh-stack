@@ -2,22 +2,20 @@ package checkoutview
 
 import (
 	"fmt"
-	"regexp"
 	"strings"
 	"testing"
 	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
+	"github.com/charmbracelet/x/ansi"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
 	"github.com/github/gh-stack/internal/stack"
 )
 
-var ansiRe = regexp.MustCompile("\x1b\\[[0-9;]*m")
-
-func stripANSI(s string) string { return ansiRe.ReplaceAllString(s, "") }
+func stripANSI(s string) string { return ansi.Strip(s) }
 
 func runeKey(s string) tea.KeyMsg { return tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune(s)} }
 
@@ -45,6 +43,62 @@ func sampleRows() []StackRow {
 
 func sized(m Model) Model {
 	return drive(m, tea.WindowSizeMsg{Width: 100, Height: 20})
+}
+
+func testNumberLinks(rows []StackRow) map[int]string {
+	links := make(map[int]string)
+	for _, row := range rows {
+		if row.Number > 0 {
+			links[row.Number] = fmt.Sprintf("\x1b]8;;https://github.com/o/r/stack/%d\x1b\\%d\x1b]8;;\x1b\\", row.Number, row.Number)
+		}
+	}
+	return links
+}
+
+func TestNumberLinksPreserveRows(t *testing.T) {
+	rows := sampleRows()
+	m := sized(New(rows).WithNumberLinks(testNumberLinks(rows)))
+	plain := sized(New(rows))
+	assert.Equal(t, stripANSI(plain.View()), stripANSI(m.View()))
+	assert.Contains(t, m.View(), testNumberLinks(rows)[55])
+	assert.NotContains(t, m.View(), "/stack/0")
+
+	// URL text is presentation only, not a search term.
+	searchURL := drive(m, runeKey("/"), runeKey("https"))
+	assert.Empty(t, searchURL.filtered)
+	m = drive(m, runeKey("/"), runeKey("42"))
+	require.Len(t, m.filtered, 1)
+	assert.Contains(t, m.View(), testNumberLinks(rows)[42])
+	assert.NotContains(t, m.View(), "/stack/55")
+	m = drive(m, tea.KeyMsg{Type: tea.KeyEnter})
+	row, selected := m.Result()
+	require.True(t, selected)
+	assert.Equal(t, rows[2], row)
+}
+
+func TestNumberLinksScrollingAndClipping(t *testing.T) {
+	rows := manyRows(20)
+	rows[0].BottomBranch = "界面"
+	links := testNumberLinks(rows)
+	m := New(rows).WithNumberLinks(links)
+	for _, width := range []int{1, 2, 3, 6, 12, 24, 40, 60, 100} {
+		t.Run(fmt.Sprint(width), func(t *testing.T) {
+			mm := drive(m, tea.WindowSizeMsg{Width: width, Height: 11})
+			for range 15 {
+				mm = drive(mm, tea.KeyMsg{Type: tea.KeyDown})
+			}
+			output := mm.View()
+			for _, line := range strings.Split(output, "\n") {
+				assert.LessOrEqual(t, lipgloss.Width(line), width)
+				assert.Equal(t, strings.Count(line, "\x1b]8;;https://"), strings.Count(line, "\x1b]8;;\x1b\\"), "each line closes its hyperlinks")
+			}
+			assert.NotContains(t, output, "/stack/1000", "scrolled-out rows have no links")
+			if width == 100 {
+				assert.Contains(t, output, links[1015])
+			}
+			assert.NotContains(t, stripANSI(output), "https://")
+		})
+	}
 }
 
 func TestNew_InitialState(t *testing.T) {

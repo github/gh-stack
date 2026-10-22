@@ -173,9 +173,11 @@ func TestMatchingRemoteStacksForBranch(t *testing.T) {
 }
 
 func TestOfferRemoteStackForBranch_Confirmed(t *testing.T) {
+	t.Setenv("GH_STACK_HYPERLINKS", "0")
 	cfg, _, _ := config.NewTestConfig()
+	setTestRepo(cfg)
 	cfg.ConfirmFn = func(prompt string, defaultValue bool) (bool, error) {
-		assert.Equal(t, `Found stack #7 that includes branch "feature". Check out stack #7?`, prompt)
+		assert.Equal(t, `Found stack #7 (https://github.com/o/r/stack/7) that includes branch "feature". Check out stack #7 (https://github.com/o/r/stack/7)?`, prompt)
 		assert.True(t, defaultValue)
 		return true, nil
 	}
@@ -445,7 +447,9 @@ func TestResolveCheckoutSelection_RemoteRoutesToClone(t *testing.T) {
 }
 
 func TestResolveCheckoutSelection_RemoteLoadFailure(t *testing.T) {
-	cfg, _, _ := config.NewTestConfig()
+	t.Setenv("GH_STACK_HYPERLINKS", "1")
+	cfg, outR, errR := config.NewTestConfig()
+	setTestRepo(cfg)
 	cfg.GitHubClientOverride = &github.MockClient{
 		GetStackFn: func(n int) (*github.RemoteStack, error) {
 			return nil, errors.New("boom")
@@ -458,6 +462,8 @@ func TestResolveCheckoutSelection_RemoteLoadFailure(t *testing.T) {
 	var exitErr *ExitError
 	require.ErrorAs(t, err, &exitErr)
 	assert.Equal(t, ErrAPIFailure, err)
+	output := collectOutput(cfg, outR, errR)
+	assert.Contains(t, output, "\x1b]8;;https://github.com/o/r/stack/7\x1b\\#7\x1b]8;;\x1b\\")
 }
 
 func TestTopUnmergedBranch(t *testing.T) {

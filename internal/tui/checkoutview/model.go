@@ -58,8 +58,9 @@ var keys = keyMap{
 
 // Model is the Bubble Tea model for the interactive checkout stack picker.
 type Model struct {
-	rows     []StackRow // all reconciled rows (stable order)
-	filtered []StackRow // rows matching the active tab + search query
+	rows        []StackRow // all reconciled rows (stable order)
+	filtered    []StackRow // rows matching the active tab + search query
+	numberLinks map[int]string
 
 	tab       tab
 	query     string
@@ -79,6 +80,12 @@ type Model struct {
 func New(rows []StackRow) Model {
 	m := Model{rows: rows}
 	m.applyFilter()
+	return m
+}
+
+// WithNumberLinks adds compact presentation labels without changing row data.
+func (m Model) WithNumberLinks(links map[int]string) Model {
+	m.numberLinks = links
 	return m
 }
 
@@ -511,10 +518,16 @@ func (m Model) renderRow(r StackRow, selected bool, lay layout) string {
 	// #, Branches, Base, Status, Type, Created. A missing stack number is
 	// rendered faint so it stays unobtrusive.
 	numStyle := numberStyle
+	number := r.NumberDisplay()
 	if r.Number == 0 {
 		numStyle = dimStyle
+	} else if link := m.numberLinks[r.Number]; r.Number > 0 && link != "" {
+		if link != number {
+			numStyle = numStyle.Underline(true)
+		}
+		number = link
 	}
-	b.WriteString(renderCell(r.NumberDisplay(), numStyle, lay.num, selected))
+	b.WriteString(renderCell(number, numStyle, lay.num, selected))
 	b.WriteString(sepCell(selected))
 	b.WriteString(renderSummaryCell(r, lay.summary, selected))
 	b.WriteString(sepCell(selected))

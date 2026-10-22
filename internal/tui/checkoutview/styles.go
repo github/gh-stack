@@ -4,6 +4,7 @@ import (
 	"strings"
 
 	"github.com/charmbracelet/lipgloss"
+	"github.com/charmbracelet/x/ansi"
 
 	"github.com/github/gh-stack/internal/tui/shared"
 )
@@ -161,27 +162,5 @@ func truncate(s string, width int) string {
 	if lipgloss.Width(s) <= width {
 		return s
 	}
-	var b strings.Builder
-	w := 0
-	inEscape := false
-	for _, r := range s {
-		if r == '\x1b' {
-			inEscape = true
-		}
-		if inEscape {
-			b.WriteRune(r)
-			if r == 'm' {
-				inEscape = false
-			}
-			continue
-		}
-		if w >= width-1 {
-			b.WriteString("…")
-			b.WriteString("\x1b[0m")
-			break
-		}
-		b.WriteRune(r)
-		w++
-	}
-	return b.String()
+	return ansi.Truncate(s, width, "…") + "\x1b[0m"
 }

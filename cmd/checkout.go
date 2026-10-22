@@ -292,7 +292,7 @@ func checkoutRemoteStackByBranch(cfg *config.Config, sf *stack.StackFile, gitDir
 	if len(matches) > 1 {
 		stackNumbers := make([]string, len(matches))
 		for i, match := range matches {
-			stackNumbers[i] = strconv.Itoa(match.Number)
+			stackNumbers[i] = cfg.Link(strconv.Itoa(match.Number), cfg.StackURL(match.Number))
 		}
 		cfg.Errorf("branch %q belongs to multiple stacks on GitHub (%s)",
 			branch, strings.Join(stackNumbers, ", "))
@@ -474,7 +474,7 @@ func reconcileAndImportRemoteStack(cfg *config.Config, client github.ClientOps, 
 			if err := stack.Save(gitDir, sf); err != nil {
 				return nil, "", stackSaveError(cfg, err)
 			}
-			cfg.Successf("Local stack matches remote%s", stackLabel(remoteStack.Number))
+			cfg.Successf("Local stack matches remote%s", linkedStackLabel(cfg, remoteStack.Number))
 			return localStack, targetBranch, nil
 		}
 
@@ -712,7 +712,7 @@ func importRemoteStack(
 	// Update base SHAs from actual local refs
 	updateBaseSHAs(s)
 
-	cfg.Successf("Imported stack with %d branches from GitHub%s", len(prs), stackLabel(remoteStackNumber))
+	cfg.Successf("Imported stack with %d branches from GitHub%s", len(prs), linkedStackLabel(cfg, remoteStackNumber))
 	return s, nil
 }
 
@@ -772,7 +772,7 @@ func interactiveCheckout(cfg *config.Config, sf *stack.StackFile, gitDir string)
 		return nil, "", nil
 	}
 
-	selected, ok, err := launchCheckoutPicker(rows)
+	selected, ok, err := launchCheckoutPicker(cfg, rows)
 	if err != nil {
 		return nil, "", err
 	}
@@ -814,7 +814,8 @@ func offerRemoteStackForBranch(cfg *config.Config, sf *stack.StackFile, remote [
 	}
 
 	stackNumber := matches[0].Number
-	prompt := fmt.Sprintf("Found stack #%d that includes branch %q. Check out stack #%d?", stackNumber, branch, stackNumber)
+	link := cfg.StackLink(stackNumber)
+	prompt := fmt.Sprintf("Found stack %s that includes branch %q. Check out stack %s?", link, branch, link)
 	confirmed, err := confirmRemoteStackCheckout(cfg, prompt)
 	if err != nil {
 		if errors.Is(err, errInterrupt) {
@@ -886,7 +887,7 @@ func resolveCheckoutSelection(cfg *config.Config, sf *stack.StackFile, gitDir st
 	s, targetBranch, err := checkoutStackByNumber(cfg, sf, gitDir, selected.Number)
 	if err != nil {
 		if errors.Is(err, errStackNumberNotFound) {
-			cfg.Errorf("stack #%d could not be loaded from GitHub", selected.Number)
+			cfg.Errorf("stack %s could not be loaded from GitHub", cfg.StackLink(selected.Number))
 			return nil, "", ErrAPIFailure
 		}
 		return nil, "", err
@@ -894,13 +895,29 @@ func resolveCheckoutSelection(cfg *config.Config, sf *stack.StackFile, gitDir st
 	return s, targetBranch, nil
 }
 
+func newCheckoutPicker(cfg *config.Config, rows []checkoutview.StackRow) checkoutview.Model {
+	model := checkoutview.New(rows)
+	repo, err := cfg.Repo()
+	if err != nil || repo.Owner == "" || repo.Name == "" {
+		return model
+	}
+	links := make(map[int]string, len(rows))
+	for _, row := range rows {
+		if row.Number > 0 {
+			url := github.StackURL(repo.Host, repo.Owner, repo.Name, row.Number)
+			links[row.Number] = cfg.TerminalLink(row.NumberDisplay(), url)
+		}
+	}
+	return model.WithNumberLinks(links)
+}
+
 // launchCheckoutPicker runs the Bubble Tea stack picker and returns the selected
 // row (and whether one was chosen). It renders inline (no alt-screen) so the
 // picker occupies only a few lines and leaves the surrounding terminal output
 // intact. Mouse motion is intentionally not enabled so the search field never
 // receives stray mouse bytes.
-func launchCheckoutPicker(rows []checkoutview.StackRow) (checkoutview.StackRow, bool, error) {
-	p := tea.NewProgram(checkoutview.New(rows))
+func launchCheckoutPicker(cfg *config.Config, rows []checkoutview.StackRow) (checkoutview.StackRow, bool, error) {
+	p := tea.NewProgram(newCheckoutPicker(cfg, rows))
 	finalModel, err := p.Run()
 	if err != nil {
 		return checkoutview.StackRow{}, false, fmt.Errorf("running stack picker: %w", err)
