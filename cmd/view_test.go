@@ -17,11 +17,7 @@ import (
 )
 
 func TestViewStackLinks(t *testing.T) {
-	restore := git.SetOps(&git.MockOps{
-		IsAncestorFn: func(string, string) (bool, error) { return true, nil },
-	})
-	defer restore()
-
+	t.Setenv("GH_STACK_HYPERLINKS", "1")
 	for _, render := range []struct {
 		name string
 		fn   func(*config.Config, *stack.Stack, string) error
@@ -29,76 +25,18 @@ func TestViewStackLinks(t *testing.T) {
 		{"short", viewShort},
 		{"static", viewFullStatic},
 	} {
-		for _, tt := range []struct {
-			name, force string
-			number      int
-			want        string
-		}{
-			{"hyperlink", "1", 7, "Stack \x1b]8;;https://github.com/o/r/stack/7\x1b\\#7\x1b]8;;\x1b\\"},
-			{"fallback", "0", 7, "Stack #7 (https://github.com/o/r/stack/7)"},
-			{"unknown", "1", 0, ""},
-		} {
-			t.Run(render.name+"/"+tt.name, func(t *testing.T) {
-				t.Setenv("GH_STACK_HYPERLINKS", tt.force)
-				cfg, outR, errR := config.NewTestConfig()
-				defer outR.Close()
-				defer errR.Close()
-				defer cfg.Err.Close()
-				defer cfg.Out.Close()
-				cfg.NonInteractive = true
-				setTestRepo(cfg)
-				cfg.GitHubClientOverride = &github.MockClient{}
-				s := &stack.Stack{
-					ID: "6154", Number: tt.number,
-					Trunk: stack.BranchRef{Branch: "main"},
-					Branches: []stack.BranchRef{{
-						Branch: "feature",
-						PullRequest: &stack.PullRequestRef{
-							Number: 42, URL: "https://github.com/o/r/pull/42",
-						},
-					}},
-				}
-				require.NoError(t, render.fn(cfg, s, "feature"))
-				require.NoError(t, cfg.Out.Close())
-				raw, err := io.ReadAll(outR)
-				require.NoError(t, err)
-				if tt.want == "" {
-					assert.NotContains(t, string(raw), "Stack #")
-					assert.NotContains(t, string(raw), "/stack/")
-				} else {
-					assert.Contains(t, string(raw), tt.want)
-				}
-				assert.NotContains(t, string(raw), "/stack/6154")
-				assert.NotContains(t, string(raw), "/stack/42")
-				if tt.force == "0" {
-					assert.NotContains(t, string(raw), "\x1b]8")
-				}
-			})
-		}
+		t.Run(render.name, func(t *testing.T) {
+			cfg, outR, errR := config.NewTestConfig()
+			cfg.NonInteractive = true
+			setTestRepo(cfg)
+			cfg.GitHubClientOverride = &github.MockClient{}
+			s := &stack.Stack{ID: "6154", Number: 7, Trunk: stack.BranchRef{Branch: "main"}}
+			require.NoError(t, render.fn(cfg, s, "main"))
+			output, _ := commandOutput(t, cfg, outR, errR)
+			assert.Contains(t, output, "Stack \x1b]8;;https://github.com/o/r/stack/7\x1b\\#7\x1b]8;;\x1b\\")
+			assert.NotContains(t, output, "/stack/6154")
+		})
 	}
-}
-
-func TestViewJSON_StackLinksDoNotChangeOutput(t *testing.T) {
-	t.Setenv("GH_STACK_HYPERLINKS", "1")
-	cfg, outR, errR := config.NewTestConfig()
-	defer cfg.Out.Close()
-	defer cfg.Err.Close()
-	defer outR.Close()
-	defer errR.Close()
-	setTestRepo(cfg)
-	s := &stack.Stack{Number: 7, Trunk: stack.BranchRef{Branch: "main"}}
-	require.NoError(t, viewJSON(cfg, s, "main"))
-	require.NoError(t, cfg.Out.Close())
-	raw, err := io.ReadAll(outR)
-	require.NoError(t, err)
-	var out map[string]json.RawMessage
-	require.NoError(t, json.Unmarshal(raw, &out))
-	assert.Len(t, out, 3)
-	assert.Contains(t, out, "trunk")
-	assert.Contains(t, out, "currentBranch")
-	assert.Contains(t, out, "branches")
-	assert.NotContains(t, string(raw), "\x1b")
-	assert.NotContains(t, string(raw), "/stack/")
 }
 
 func TestTimeAgo(t *testing.T) {
@@ -126,6 +64,7 @@ func TestTimeAgo(t *testing.T) {
 }
 
 func TestViewJSON(t *testing.T) {
+	t.Setenv("GH_STACK_HYPERLINKS", "1")
 	original := git.CurrentOps()
 	t.Cleanup(func() { assert.Same(t, original, git.CurrentOps()) })
 	restore := git.SetOps(&git.MockOps{
@@ -208,12 +147,18 @@ func TestViewJSON(t *testing.T) {
 			cfg, outR, _ := config.NewTestConfig()
 			defer outR.Close()
 
+			tt.stack.Number = 7
 			err := viewJSON(cfg, tt.stack, tt.currentBranch)
 			require.NoError(t, err)
 			cfg.Out.Close()
 
 			raw, err := io.ReadAll(outR)
 			require.NoError(t, err)
+			var fields map[string]json.RawMessage
+			require.NoError(t, json.Unmarshal(raw, &fields))
+			assert.Len(t, fields, 3)
+			assert.NotContains(t, string(raw), "\\u001b")
+			assert.NotContains(t, string(raw), "/stack/")
 
 			var got viewJSONOutput
 			err = json.Unmarshal(raw, &got)

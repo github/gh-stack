@@ -2482,19 +2482,23 @@ func TestSync_Divergent_UseRemote_DirtyBlocked(t *testing.T) {
 
 // The keep-local resolution stops before pushing or recreating the stack.
 func TestSync_Divergent_DeleteRemote(t *testing.T) {
+	t.Setenv("GH_STACK_HYPERLINKS", "1")
 	mergedAt := "2026-01-01T00:00:00Z"
+	mergedRemnant := &github.RemoteStack{
+		ID: 9, Number: 9, PullRequests: []int{101},
+		PRDetails: []github.RemoteStackPR{{Number: 101, MergedAt: &mergedAt}},
+	}
 	for _, tc := range []struct {
-		name        string
-		remaining   *github.RemoteStack
-		apiErr      error
-		lookupFails bool
-		wantErr     error
+		name          string
+		remaining     *github.RemoteStack
+		apiErr        error
+		lookupFails   bool
+		alreadyMerged bool
+		wantErr       error
 	}{
 		{name: "dissolved"},
-		{name: "merged", remaining: &github.RemoteStack{
-			ID: 9, Number: 9, PullRequests: []int{101},
-			PRDetails: []github.RemoteStackPR{{Number: 101, MergedAt: &mergedAt}},
-		}},
+		{name: "merged", remaining: mergedRemnant},
+		{name: "already merged", remaining: mergedRemnant, alreadyMerged: true},
 		{name: "queued", remaining: &github.RemoteStack{ID: 9, Number: 9, PullRequests: []int{102}}, wantErr: ErrConflict},
 		{name: "server rejection", apiErr: &api.HTTPError{StatusCode: 422, Message: "Pull requests cannot be removed"}, wantErr: ErrAPIFailure},
 		{name: "lookup failure", lookupFails: true, wantErr: ErrAPIFailure},
@@ -2510,6 +2514,9 @@ func TestSync_Divergent_DeleteRemote(t *testing.T) {
 				lookups++
 				if tc.lookupFails && lookups > 1 {
 					return nil, assert.AnError
+				}
+				if tc.alreadyMerged && lookups > 1 {
+					return []github.RemoteStack{*mergedRemnant}, nil
 				}
 				return listStacks()
 			}
@@ -2529,12 +2536,13 @@ func TestSync_Divergent_DeleteRemote(t *testing.T) {
 			mock := newSyncMockNoRebase(tmpDir, "b1")
 			mock.PushFn = func(string, []string, bool, bool) error { pushed = true; return nil }
 			output, err := runSyncCfg(t, mock, func(cfg *config.Config) {
+				setTestRepo(cfg)
 				cfg.GitHubClientOverride = ghMock
 				cfg.ForceInteractive = true
 				cfg.SelectFn = func(_, _ string, _ []string) (int, error) { return 1, nil }
 			})
 
-			assert.Equal(t, !tc.lookupFails, unstacked)
+			assert.Equal(t, !tc.lookupFails && !tc.alreadyMerged, unstacked)
 			assert.False(t, pushed)
 			assert.NotContains(t, output, "Stack synced")
 			assert.NotContains(t, output, "Branches synced")
@@ -2552,11 +2560,16 @@ func TestSync_Divergent_DeleteRemote(t *testing.T) {
 				assert.Contains(t, output, "gh stack submit")
 				if tc.remaining != nil {
 					assert.Contains(t, output, "remain stacked on GitHub")
+					link := "\x1b]8;;https://github.com/o/r/stack/9\x1b\\#9\x1b]8;;\x1b\\"
+					assert.Contains(t, output, "Merged pull requests remain stacked on GitHub (stack "+link+")")
+					if !tc.alreadyMerged {
+						assert.Contains(t, output, "Pull requests unstacked on GitHub (stack "+link+")")
+					}
 					assert.NotContains(t, output, "Remote stack removed")
 					assert.NotContains(t, output, "only the stack on GitHub was removed")
 					assert.True(t, sf.Stacks[0].Branches[0].IsMerged())
 				} else {
-					assert.Contains(t, output, "Remote stack removed")
+					assert.Contains(t, output, "Remote stack removed (stack #9)")
 				}
 			}
 		})
