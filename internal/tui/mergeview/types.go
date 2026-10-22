@@ -80,6 +80,8 @@ type Options struct {
 	PRs []PRItem
 	// StackNumber is the repo-scoped stack number, shown in the header.
 	StackNumber int
+	// StackLink is the compact terminal link for the stack number, when available.
+	StackLink string
 	// BaseRef is the branch the stack merges into (for display).
 	BaseRef string
 	// RepoSlug is owner/repo, for display.

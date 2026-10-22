@@ -77,6 +77,47 @@ func setupLocalStack(t *testing.T, number int, currentBranch string, branches ..
 	})
 }
 
+func TestResolveMergeStack_FetchFailureLinks(t *testing.T) {
+	for _, mode := range []string{"explicit", "active"} {
+		for _, force := range []string{"0", "1"} {
+			t.Run(mode+"/"+force, func(t *testing.T) {
+				t.Setenv("GH_STACK_HYPERLINKS", force)
+				var args []string
+				if mode == "active" {
+					setupLocalStack(t, 7, "feature", "feature")
+				} else {
+					args = []string{"7"}
+				}
+				cfg, outR, errR := config.NewTestConfig()
+				setTestRepo(cfg)
+				var calls int
+				client := &github.MockClient{
+					GetStackFn: func(number int) (*github.RemoteStack, error) {
+						calls++
+						assert.Equal(t, 7, number)
+						return nil, errors.New("offline")
+					},
+					FindStackForPRFn: func(int) (*github.RemoteStack, error) {
+						t.Fatal("a transient stack failure must not fall back to PR lookup")
+						return nil, nil
+					},
+				}
+				_, _, err := resolveMergeStack(cfg, client, args)
+				output := collectOutput(cfg, outR, errR)
+				assert.ErrorIs(t, err, ErrAPIFailure)
+				assert.Equal(t, 1, calls)
+				link := "#7 (https://github.com/o/r/stack/7)"
+				if force == "1" {
+					link = "\x1b]8;;https://github.com/o/r/stack/7\x1b\\#7\x1b]8;;\x1b\\"
+				} else {
+					assert.NotContains(t, output, "\x1b]8")
+				}
+				assert.Contains(t, output, "failed to fetch stack "+link+": offline")
+			})
+		}
+	}
+}
+
 func TestRunMerge_NoArg_MergesWholeStack(t *testing.T) {
 	setupLocalStack(t, 100, "b2", "b1", "b2", "b3")
 

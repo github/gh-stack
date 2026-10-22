@@ -222,7 +222,7 @@ func resolveMergeStack(cfg *config.Config, client github.ClientOps, args []strin
 		return rs, mergeTarget{}, nil
 	}
 	if err != nil && !isNotFound(err) {
-		cfg.Errorf("failed to fetch stack #%d: %s", n, err)
+		cfg.Errorf("failed to fetch stack %s: %s", cfg.StackLink(n), err)
 		return nil, mergeTarget{}, ErrAPIFailure
 	}
 
@@ -298,7 +298,7 @@ func resolveActiveRemoteStack(cfg *config.Config, client github.ClientOps) (*git
 			warnStacksUnavailable(cfg)
 			return nil, ErrStacksUnavailable
 		}
-		cfg.Errorf("failed to fetch stack #%d: %s", number, err)
+		cfg.Errorf("failed to fetch stack %s: %s", cfg.StackLink(number), err)
 		return nil, ErrAPIFailure
 	}
 	return rs, nil
@@ -328,6 +328,7 @@ func runMergeInteractive(cfg *config.Config, client github.ClientOps, stackNumbe
 	model := mergeview.New(mergeview.Options{
 		PRs:               candidates,
 		StackNumber:       stackNumber,
+		StackLink:         cfg.TerminalLink(fmt.Sprintf("#%d", stackNumber), cfg.StackURL(stackNumber)),
 		BaseRef:           base,
 		AllowedMethods:    allowed,
 		DefaultMethod:     defaultMethod,

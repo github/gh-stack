@@ -6,6 +6,7 @@ import (
 	"strings"
 
 	"github.com/charmbracelet/lipgloss"
+	"github.com/charmbracelet/x/ansi"
 	"github.com/github/gh-stack/internal/theme"
 )
 
@@ -73,7 +74,11 @@ func (m Model) View() string {
 func (m Model) banner() string {
 	title := "Merge stack"
 	if m.opts.StackNumber > 0 {
-		title = fmt.Sprintf("Merge stack #%d", m.opts.StackNumber)
+		label := fmt.Sprintf("#%d", m.opts.StackNumber)
+		if m.opts.StackLink != "" && m.opts.StackLink != label {
+			label = titleStyle.Underline(true).Render(m.opts.StackLink)
+		}
+		title = "Merge stack " + label
 	}
 	return titleStyle.Render(title) + "\n" + m.stepper() + "\n\n"
 }
@@ -419,28 +424,5 @@ func truncate(s string, width int) string {
 	if lipgloss.Width(s) <= width {
 		return s
 	}
-	var b strings.Builder
-	w := 0
-	inEscape := false
-	for _, r := range s {
-		if r == '\x1b' {
-			inEscape = true
-		}
-		if inEscape {
-			b.WriteRune(r)
-			if r == 'm' {
-				inEscape = false
-			}
-			continue
-		}
-		rw := lipgloss.Width(string(r))
-		if w+rw > width-1 {
-			b.WriteString("…")
-			b.WriteString("\x1b[0m")
-			break
-		}
-		b.WriteRune(r)
-		w += rw
-	}
-	return b.String()
+	return ansi.Truncate(s, width, "…") + "\x1b[0m"
 }

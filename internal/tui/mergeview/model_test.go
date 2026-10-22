@@ -8,6 +8,7 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
+	"github.com/charmbracelet/x/ansi"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -430,6 +431,71 @@ func TestView_RendersBannerAndSteps(t *testing.T) {
 	confirm := m.View()
 	assert.Contains(t, confirm, "Merge 3 PRs")
 	assert.Contains(t, confirm, "#1, #2, #3")
+}
+
+func TestBanner_StackLinks(t *testing.T) {
+	const link = "\x1b]8;;https://github.example.com/o/r/stack/42\x1b\\#42\x1b]8;;\x1b\\"
+	for _, tt := range []struct {
+		name, label string
+		number      int
+		linked      bool
+	}{
+		{"linked", link, 42, true},
+		{"disabled", "#42", 42, false},
+		{"missing URL", "", 42, false},
+		{"unknown number", link, 0, false},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			opts := baseOptions()
+			opts.StackNumber, opts.StackLink = tt.number, tt.label
+			m := New(opts)
+			for _, phase := range []Step{StepSelectPRs, StepMethod, StepConfirm, StepProgress, StepDone} {
+				m.step = phase
+				output := m.View()
+				if phase == StepProgress || phase == StepDone {
+					assert.NotContains(t, output, "Merge stack")
+					assert.NotContains(t, output, "/stack/")
+					continue
+				}
+				want := "Merge stack"
+				if tt.number > 0 {
+					want += " #42"
+				}
+				assert.Contains(t, ansi.Strip(output), want+"\n")
+				if tt.linked {
+					assert.Contains(t, output, link)
+				} else {
+					assert.NotContains(t, output, "\x1b]8")
+					assert.NotContains(t, output, "https://")
+				}
+			}
+		})
+	}
+}
+
+func TestBanner_StackLinksClipping(t *testing.T) {
+	opts := baseOptions()
+	opts.StackNumber = 12345
+	opts.StackLink = "\x1b]8;;https://github.com/o/r/stack/12345\x1b\\#12345\x1b]8;;\x1b\\"
+	opts.PRs[0].Title = "你好世界"
+	linked := New(opts)
+	opts.StackLink = ""
+	plain := New(opts)
+	for _, width := range []int{1, 2, 6, 12, 13, 14, 15, 24, 40, 60, 100} {
+		for _, phase := range []Step{StepSelectPRs, StepMethod, StepConfirm} {
+			t.Run(fmt.Sprintf("%d/%d", width, phase), func(t *testing.T) {
+				linked.width, plain.width = width, width
+				linked.step, plain.step = phase, phase
+				output := linked.View()
+				assert.Equal(t, ansi.Strip(plain.View()), ansi.Strip(output))
+				for _, line := range strings.Split(output, "\n") {
+					assert.LessOrEqual(t, lipgloss.Width(line), width)
+					assert.Equal(t, strings.Count(line, "\x1b]8;;https://"), strings.Count(line, "\x1b]8;;\x1b\\"))
+				}
+				assert.NotContains(t, ansi.Strip(output), "https://")
+			})
+		}
+	}
 }
 
 func TestBanner_IncludesStackNumber(t *testing.T) {
