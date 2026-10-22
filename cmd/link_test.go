@@ -2309,6 +2309,106 @@ func linkRemoteStack(number int, details ...github.RemoteStackPR) github.RemoteS
 	return rs
 }
 
+func TestLink_StackLinks(t *testing.T) {
+	tests := []struct {
+		name    string
+		want    string
+		number  int
+		wantErr error
+	}{
+		{"create", "Created stack with 2 PRs (stack %s)", 7, nil},
+		{"update", "Updated stack to 2 PRs (stack %s)", 7, nil},
+		{"append", "Added 1 PR to stack %s", 7, nil},
+		{"noop", "Stack %s is already up to date", 7, nil},
+		{"other stack", "already belongs to stack %s", 8, ErrInvalidArgs},
+		{"no PR details", "stack %s has no pull requests to append to", 7, ErrAPIFailure},
+		{"missing top branch", "could not determine the top branch of stack %s", 7, ErrAPIFailure},
+	}
+	for _, tt := range tests {
+		for _, force := range []string{"0", "1"} {
+			t.Run(tt.name+"/"+force, func(t *testing.T) {
+				t.Setenv("GH_STACK_HYPERLINKS", force)
+				cfg, outR, errR := config.NewTestConfig()
+				defer cfg.Out.Close()
+				defer cfg.Err.Close()
+				defer outR.Close()
+				defer errR.Close()
+				setTestRepo(cfg)
+				target := linkRemoteStack(7, linkPR(10, "branch-10"))
+				remote := &github.RemoteStack{
+					ID: 6154, Number: 7, PullRequests: []int{10, 11},
+					URL: "https://api.github.com/repos/o/r/stacks/7",
+				}
+				client := &github.MockClient{
+					CreateStackFn: func(numbers []int) (*github.RemoteStack, error) {
+						assert.Equal(t, []int{10, 11}, numbers)
+						return remote, nil
+					},
+					AddToStackFn: func(number int, delta []int) (*github.RemoteStack, error) {
+						assert.Equal(t, 7, number)
+						assert.Equal(t, []int{11}, delta)
+						return remote, nil
+					},
+					GetStackFn: func(number int) (*github.RemoteStack, error) {
+						assert.Equal(t, 7, number)
+						return &target, nil
+					},
+				}
+				var err error
+				switch tt.name {
+				case "create":
+					err = createLink(cfg, client, []int{10, 11})
+				case "update":
+					err = updateLink(cfg, client, &target, []int{10, 11})
+				case "append":
+					err = addToStack(cfg, client, 7, []int{11})
+				case "noop":
+					err = runLinkAdd(cfg, client, &linkOptions{baseChanged: true}, &target, []github.RemoteStack{target}, []string{"10"}, []*resolvedArg{{
+						prNumber: 10, prURL: "https://github.com/o/r/pull/10",
+					}}, "")
+				case "other stack":
+					err = ensureNotInOtherStack(cfg, []github.RemoteStack{linkRemoteStack(8, linkPR(11, "branch-11"))}, 7, []*resolvedArg{{
+						prNumber: 11, prURL: "https://github.com/o/r/pull/11",
+					}})
+				default:
+					if tt.name == "no PR details" {
+						target.PRDetails = nil
+					} else {
+						target.PRDetails[0].Head.Ref = ""
+					}
+					_, lookupErr := stackTopBranch(&target)
+					require.Error(t, lookupErr)
+					assert.NotContains(t, lookupErr.Error(), "\x1b")
+					err = runLinkAdd(cfg, client, &linkOptions{}, &target, []github.RemoteStack{target}, []string{"11"}, []*resolvedArg{{prNumber: 11}}, "")
+				}
+				if tt.wantErr != nil {
+					assert.ErrorIs(t, err, tt.wantErr)
+				} else {
+					require.NoError(t, err)
+				}
+				require.NoError(t, cfg.Err.Close())
+				raw, readErr := io.ReadAll(errR)
+				require.NoError(t, readErr)
+				output := string(raw)
+				label := fmt.Sprintf("#%d (https://github.com/o/r/stack/%d)", tt.number, tt.number)
+				if force == "1" {
+					label = fmt.Sprintf("\x1b]8;;https://github.com/o/r/stack/%d\x1b\\#%d\x1b]8;;\x1b\\", tt.number, tt.number)
+				} else {
+					assert.NotContains(t, output, "\x1b]8")
+				}
+				assert.Contains(t, output, fmt.Sprintf(tt.want, label))
+				assert.NotContains(t, output, "/stack/6154")
+				assert.NotContains(t, output, "api.github.com")
+				if tt.name == "noop" {
+					assert.Contains(t, output, "--base is ignored when adding to stack "+label)
+					assert.Contains(t, output, "is already in stack "+label)
+					assert.Contains(t, output, "https://github.com/o/r/pull/10")
+				}
+			})
+		}
+	}
+}
+
 func TestLink_AddMode_AppendsPRNumberToStack(t *testing.T) {
 	defer mockRemoteOnlyGit()()
 	var addNumber int
@@ -2401,8 +2501,10 @@ func TestLink_AddMode_CreatesPRForBranchOnTopOfStack(t *testing.T) {
 }
 
 func TestLink_AddMode_IdempotentWhenAllPresent(t *testing.T) {
+	t.Setenv("GH_STACK_HYPERLINKS", "0")
 	defer mockRemoteOnlyGit()()
 	cfg, _, errR := config.NewTestConfig()
+	setTestRepo(cfg)
 	cfg.GitHubClientOverride = &github.MockClient{
 		FindPRByNumberFn: func(n int) (*github.PullRequest, error) {
 			return &github.PullRequest{
@@ -2434,7 +2536,7 @@ func TestLink_AddMode_IdempotentWhenAllPresent(t *testing.T) {
 
 	assert.NoError(t, err)
 	assert.Contains(t, output, "already in stack #7")
-	assert.Contains(t, output, "Stack #7 is already up to date")
+	assert.Contains(t, output, "Stack #7 (https://github.com/o/r/stack/7) is already up to date")
 }
 
 func TestLink_AddMode_SkipsPresentAppendsNew(t *testing.T) {
@@ -2772,8 +2874,10 @@ func TestLink_AddMode_AddToStack422(t *testing.T) {
 }
 
 func TestLink_AddMode_AddToStack404_StackGone(t *testing.T) {
+	t.Setenv("GH_STACK_HYPERLINKS", "1")
 	defer mockRemoteOnlyGit()()
 	cfg, _, errR := config.NewTestConfig()
+	setTestRepo(cfg)
 	cfg.GitHubClientOverride = &github.MockClient{
 		FindPRByNumberFn: func(n int) (*github.PullRequest, error) {
 			return &github.PullRequest{
@@ -2804,6 +2908,8 @@ func TestLink_AddMode_AddToStack404_StackGone(t *testing.T) {
 
 	assert.ErrorIs(t, err, ErrNotInStack)
 	assert.Contains(t, output, "no longer exists")
+	assert.Contains(t, output, "Stack #7 no longer exists")
+	assert.NotContains(t, output, "/stack/7")
 }
 
 func TestLink_AddMode_FetchesFullStackWhenListLacksHeadRefs(t *testing.T) {

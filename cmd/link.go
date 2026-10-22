@@ -271,7 +271,7 @@ func runLinkCreateOrUpdate(cfg *config.Config, client github.ClientOps, opts *li
 // chained on top of the stack's current top branch.
 func runLinkAdd(cfg *config.Config, client github.ClientOps, opts *linkOptions, target *github.RemoteStack, stacks []github.RemoteStack, prArgs []string, found []*resolvedArg, templateContent string) error {
 	if opts.baseChanged {
-		cfg.Warningf("--base is ignored when adding to stack #%d (its base is fixed by the existing stack)", target.Number)
+		cfg.Warningf("--base is ignored when adding to stack %s (its base is fixed by the existing stack)", cfg.StackLink(target.Number))
 	}
 
 	inTarget := make(map[int]bool, len(target.PRNumbers()))
@@ -287,8 +287,8 @@ func runLinkAdd(cfg *config.Config, client github.ClientOps, opts *linkOptions, 
 	for i, arg := range prArgs {
 		r := found[i]
 		if r != nil && inTarget[r.prNumber] {
-			cfg.Infof("PR %s is already in stack #%d — skipping",
-				cfg.PRLink(r.prNumber, r.prURL), target.Number)
+			cfg.Infof("PR %s is already in stack %s — skipping",
+				cfg.PRLink(r.prNumber, r.prURL), cfg.StackLink(target.Number))
 			continue
 		}
 		appendArgs = append(appendArgs, arg)
@@ -302,7 +302,7 @@ func runLinkAdd(cfg *config.Config, client github.ClientOps, opts *linkOptions, 
 	}
 
 	if len(appendArgs) == 0 {
-		cfg.Successf("Stack #%d is already up to date", target.Number)
+		cfg.Successf("Stack %s is already up to date", cfg.StackLink(target.Number))
 		return nil
 	}
 
@@ -321,7 +321,14 @@ func runLinkAdd(cfg *config.Config, client github.ClientOps, opts *linkOptions, 
 			topBranch, err = stackTopBranch(full)
 		}
 		if err != nil {
-			cfg.Errorf("%s", err)
+			switch {
+			case errors.Is(err, errStackHasNoPRs):
+				cfg.Errorf("stack %s has no pull requests to append to", cfg.StackLink(target.Number))
+			case errors.Is(err, errStackTopBranchMissing):
+				cfg.Errorf("could not determine the top branch of stack %s", cfg.StackLink(target.Number))
+			default:
+				cfg.Errorf("%s", err)
+			}
 			return ErrAPIFailure
 		}
 	}
@@ -368,8 +375,8 @@ func ensureNotInOtherStack(cfg *config.Config, stacks []github.RemoteStack, targ
 			continue
 		}
 		if sn, ok := owner[r.prNumber]; ok && sn != targetNumber {
-			cfg.Errorf("PR %s already belongs to stack #%d — unstack it first",
-				cfg.PRLink(r.prNumber, r.prURL), sn)
+			cfg.Errorf("PR %s already belongs to stack %s — unstack it first",
+				cfg.PRLink(r.prNumber, r.prURL), cfg.StackLink(sn))
 			invalid++
 		}
 	}
@@ -379,15 +386,20 @@ func ensureNotInOtherStack(cfg *config.Config, stacks []github.RemoteStack, targ
 	return nil
 }
 
+var (
+	errStackHasNoPRs         = errors.New("stack has no pull requests to append to")
+	errStackTopBranchMissing = errors.New("could not determine the top branch")
+)
+
 // stackTopBranch returns the head branch of the pull request at the top of the
 // stack — the base for the first PR appended on top of it.
 func stackTopBranch(s *github.RemoteStack) (string, error) {
 	if len(s.PRDetails) == 0 {
-		return "", fmt.Errorf("stack #%d has no pull requests to append to", s.Number)
+		return "", errStackHasNoPRs
 	}
 	top := s.PRDetails[len(s.PRDetails)-1]
 	if top.Head.Ref == "" {
-		return "", fmt.Errorf("could not determine the top branch of stack #%d", s.Number)
+		return "", errStackTopBranchMissing
 	}
 	return top.Head.Ref, nil
 }
@@ -414,7 +426,7 @@ func addToStack(cfg *config.Config, client github.ClientOps, stackNumber int, de
 		return ErrAPIFailure
 	}
 
-	cfg.Successf("Added %d %s to stack #%d", len(delta), plural(len(delta), "PR", "PRs"), stackNumber)
+	cfg.Successf("Added %d %s to stack %s", len(delta), plural(len(delta), "PR", "PRs"), cfg.StackLink(stackNumber))
 	return nil
 }
 
@@ -834,7 +846,7 @@ func createLink(cfg *config.Config, client github.ClientOps, prNumbers []int) er
 		return ErrAPIFailure
 	}
 
-	cfg.Successf("Created stack with %d PRs%s", len(prNumbers), stackLabel(rs.Number))
+	cfg.Successf("Created stack with %d PRs%s", len(prNumbers), linkedStackLabel(cfg, rs.Number))
 	return nil
 }
 
@@ -902,7 +914,7 @@ func updateLink(cfg *config.Config, client github.ClientOps, existing *github.Re
 		return ErrAPIFailure
 	}
 
-	cfg.Successf("Updated stack to %d PRs%s", len(prNumbers), stackLabel(rs.Number))
+	cfg.Successf("Updated stack to %d PRs%s", len(prNumbers), linkedStackLabel(cfg, rs.Number))
 	return nil
 }
 
