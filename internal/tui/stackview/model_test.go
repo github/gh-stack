@@ -42,6 +42,62 @@ func keyMsg(k string) tea.KeyMsg {
 
 var testTrunk = stack.BranchRef{Branch: "main"}
 
+func TestStackHeaderLink(t *testing.T) {
+	const url = "https://github.example.com/o/r/stack/7"
+	for _, tt := range []struct {
+		name                   string
+		number                 int
+		width, height, x, y    int
+		merged, noURL, wantHit bool
+	}{
+		{name: "identifier", number: 7, width: 100, height: 40, x: 4, y: 4, wantHit: true},
+		{name: "all merged", number: 7, width: 100, height: 40, x: 11, y: 4, merged: true, wantHit: true},
+		{name: "unknown stack", width: 100, height: 40, x: 4, y: 4},
+		{name: "unknown URL", number: 7, width: 100, height: 40, x: 4, y: 4, noURL: true},
+		{name: "icon", number: 7, width: 100, height: 40, x: 2, y: 4},
+		{name: "after label", number: 7, width: 100, height: 40, x: 12, y: 4},
+		{name: "other line", number: 7, width: 100, height: 40, x: 4, y: 5},
+		{name: "short header hidden", number: 7, width: 100, height: 20, x: 4, y: 4},
+		{name: "narrow header hidden", number: 7, width: 40, height: 40, x: 4, y: 4},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			nodes := makeNodes("feature")
+			if tt.merged {
+				nodes[0].Ref.PullRequest = &stack.PullRequestRef{Number: 42, Merged: true}
+			}
+			m := New(nodes, testTrunk, "0.0.1", tt.number).WithStackURL(url)
+			if tt.noURL {
+				m = m.WithStackURL("")
+			}
+			m.width, m.height = tt.width, tt.height
+			beforeCursor := m.cursor
+			var opened []string
+			m.openURL = func(url string) { opened = append(opened, url) }
+			updated, cmd := m.Update(tea.MouseMsg{Action: tea.MouseActionPress, Button: tea.MouseButtonLeft, X: tt.x, Y: tt.y})
+			result := updated.(Model)
+			if tt.wantHit {
+				assert.Equal(t, []string{url}, opened)
+			} else {
+				assert.Empty(t, opened)
+			}
+			assert.Equal(t, beforeCursor, result.cursor)
+			assert.Empty(t, result.CheckoutBranch())
+			assert.Nil(t, cmd)
+		})
+	}
+}
+
+func TestOpenPRKeyWithStackLink(t *testing.T) {
+	nodes := makeNodes("feature")
+	nodes[0].PR = &ghapi.PRDetails{Number: 42, URL: "https://github.com/o/r/pull/42"}
+	m := New(nodes, testTrunk, "0.0.1", 7).WithStackURL("https://github.com/o/r/stack/7")
+	var opened string
+	m.openURL = func(url string) { opened = url }
+	_, cmd := m.Update(keyMsg("o"))
+	assert.Equal(t, nodes[0].PR.URL, opened)
+	assert.Nil(t, cmd)
+}
+
 func TestNew_CursorAtCurrentBranch(t *testing.T) {
 	nodes := makeNodes("b1", "b2", "b3")
 	nodes[1].IsCurrent = true

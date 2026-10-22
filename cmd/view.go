@@ -145,7 +145,7 @@ func viewShort(cfg *config.Config, s *stack.Stack, currentBranch string) error {
 	}
 
 	if s.Number > 0 {
-		cfg.Outf("%s\n", cfg.ColorBold(fmt.Sprintf("Stack #%d", s.Number)))
+		cfg.Outf("%s\n", cfg.ColorBold("Stack "+cfg.StackLink(s.Number)))
 	}
 
 	for i := len(s.Branches) - 1; i >= 0; i-- {
@@ -313,7 +313,7 @@ func viewFullTUI(cfg *config.Config, s *stack.Stack, currentBranch string, prDet
 		reversed[len(nodes)-1-i] = n
 	}
 
-	model := stackview.New(reversed, s.Trunk, Version, s.Number)
+	model := stackview.New(reversed, s.Trunk, Version, s.Number).WithStackURL(cfg.StackURL(s.Number))
 
 	p := tea.NewProgram(
 		model,
@@ -359,7 +359,7 @@ func viewFullStatic(cfg *config.Config, s *stack.Stack, currentBranch string) er
 	var buf bytes.Buffer
 
 	if s.Number > 0 {
-		fmt.Fprintf(&buf, "%s\n\n", cfg.ColorBold(fmt.Sprintf("Stack #%d", s.Number)))
+		fmt.Fprintf(&buf, "%s\n\n", cfg.ColorBold("Stack "+cfg.StackLink(s.Number)))
 	}
 
 	for i := len(s.Branches) - 1; i >= 0; i-- {

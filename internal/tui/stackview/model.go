@@ -67,6 +67,8 @@ type Model struct {
 	trunk       stack.BranchRef
 	version     string
 	stackNumber int
+	stackURL    string
+	openURL     func(string)
 	cursor      int // index into nodes (displayed top-down, so 0 = top of stack)
 	help        help.Model
 	width       int
@@ -112,6 +114,20 @@ func New(nodes []BranchNode, trunk stack.BranchRef, version string, stackNumber 
 		cursor:      cursor,
 		help:        h,
 	}
+}
+
+// WithStackURL attaches the optional web destination to the stack header.
+func (m Model) WithStackURL(url string) Model {
+	m.stackURL = url
+	return m
+}
+
+func (m Model) openBrowser(url string) {
+	if m.openURL != nil {
+		m.openURL(url)
+		return
+	}
+	shared.OpenBrowserInBackground(url)
 }
 
 // CheckoutBranch returns the branch to checkout after the TUI exits, if any.
@@ -164,7 +180,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			if m.cursor >= 0 && m.cursor < len(m.nodes) {
 				node := m.nodes[m.cursor]
 				if node.PR != nil && node.PR.URL != "" {
-					shared.OpenBrowserInBackground(node.PR.URL)
+					m.openBrowser(node.PR.URL)
 				}
 			}
 			return m, nil
@@ -223,6 +239,11 @@ func toBranchNodeData(node BranchNode) shared.BranchNodeData {
 
 // handleMouseClick processes a mouse click at the given screen position.
 func (m Model) handleMouseClick(screenX, screenY int) (tea.Model, tea.Cmd) {
+	if url := shared.HeaderLinkAt(m.buildHeaderConfig(), m.width, m.height, screenX, screenY); url != "" {
+		m.openBrowser(url)
+		return m, nil
+	}
+
 	nodes := make([]shared.BranchNodeData, len(m.nodes))
 	for i, n := range m.nodes {
 		nodes[i] = toBranchNodeData(n)
@@ -241,7 +262,7 @@ func (m Model) handleMouseClick(screenX, screenY int) (tea.Model, tea.Cmd) {
 	m.cursor = result.NodeIndex
 
 	if result.OpenURL != "" {
-		shared.OpenBrowserInBackground(result.OpenURL)
+		m.openBrowser(result.OpenURL)
 	}
 	if result.ToggleFiles {
 		m.nodes[result.NodeIndex].FilesExpanded = !m.nodes[result.NodeIndex].FilesExpanded
@@ -448,7 +469,7 @@ func (m Model) buildHeaderConfig() shared.HeaderConfig {
 
 	infoLines := make([]shared.HeaderInfoLine, 0, 3)
 	if m.stackNumber > 0 {
-		infoLines = append(infoLines, shared.HeaderInfoLine{Icon: "◆", Label: fmt.Sprintf("Stack #%d", m.stackNumber)})
+		infoLines = append(infoLines, shared.HeaderInfoLine{Icon: "◆", Label: fmt.Sprintf("Stack #%d", m.stackNumber), URL: m.stackURL})
 	} else {
 		infoLines = append(infoLines, shared.HeaderInfoLine{Icon: "✓", Label: "Stack initialized"})
 	}
