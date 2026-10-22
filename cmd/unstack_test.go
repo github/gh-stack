@@ -16,6 +16,92 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+func TestUnstackNumberOnGitHub_StackLinks(t *testing.T) {
+	for _, outcome := range []string{"partial", "dissolved", "not found"} {
+		for _, force := range []string{"0", "1"} {
+			t.Run(outcome+"/"+force, func(t *testing.T) {
+				t.Setenv("GH_STACK_HYPERLINKS", force)
+				cfg, outR, errR := config.NewTestConfig()
+				setTestRepo(cfg)
+				calls := 0
+				client := &github.MockClient{
+					UnstackFn: func(number int) (*github.RemoteStack, bool, error) {
+						calls++
+						assert.Equal(t, 7, number)
+						if outcome == "not found" {
+							return nil, false, &api.HTTPError{StatusCode: 404}
+						}
+						if outcome == "dissolved" {
+							return nil, true, nil
+						}
+						return &github.RemoteStack{ID: 6154, Number: 7, PullRequests: []int{42}}, false, nil
+					},
+				}
+				err := unstackNumberOnGitHub(cfg, client, 7, false)
+				output := collectOutput(cfg, outR, errR)
+				assert.Equal(t, 1, calls)
+				switch outcome {
+				case "not found":
+					assert.ErrorIs(t, err, ErrNotInStack)
+					assert.Contains(t, output, "stack #7 not found on GitHub")
+				case "dissolved":
+					require.NoError(t, err)
+					assert.Contains(t, output, "Stack removed on GitHub (stack #7)")
+				case "partial":
+					require.NoError(t, err)
+					link := "#7 (https://github.com/o/r/stack/7)"
+					if force == "1" {
+						link = "\x1b]8;;https://github.com/o/r/stack/7\x1b\\#7\x1b]8;;\x1b\\"
+					}
+					assert.Contains(t, output, "Pull requests unstacked on GitHub (stack "+link+")")
+				}
+				if outcome != "partial" {
+					assert.NotContains(t, output, "/stack/")
+					assert.NotContains(t, output, "\x1b]8")
+				}
+			})
+		}
+	}
+}
+
+func TestUnstack_LocalMissingStackLinks(t *testing.T) {
+	for _, localRepo := range []bool{false, true} {
+		name := "remote-only context"
+		if localRepo {
+			name = "local repository"
+		}
+		t.Run(name, func(t *testing.T) {
+			t.Setenv("GH_STACK_HYPERLINKS", "1")
+			if localRepo {
+				dir := t.TempDir()
+				writeStackFile(t, dir, stack.Stack{Number: 42, Trunk: stack.BranchRef{Branch: "main"}})
+				restore := git.SetOps(&git.MockOps{
+					GitDirFn: func() (string, error) { return dir, nil },
+				})
+				defer restore()
+			} else {
+				defer mockRemoteOnlyGit()()
+			}
+			cfg, outR, errR := config.NewTestConfig()
+			setTestRepo(cfg)
+			cfg.GitHubClientOverride = &github.MockClient{
+				ListStacksFn: func() ([]github.RemoteStack, error) {
+					t.Fatal("--local must not look up remote stacks to format a link")
+					return nil, nil
+				},
+				UnstackFn: func(int) (*github.RemoteStack, bool, error) {
+					t.Fatal("--local must not unstack on GitHub")
+					return nil, false, nil
+				},
+			}
+			err := runUnstack(cfg, &unstackOptions{stackNumber: 7, local: true})
+			output := collectOutput(cfg, outR, errR)
+			assert.ErrorIs(t, err, ErrNotInStack)
+			assert.Contains(t, output, "stack \x1b]8;;https://github.com/o/r/stack/7\x1b\\#7\x1b]8;;\x1b\\ is not tracked locally")
+		})
+	}
+}
+
 func TestUnstack_NumberWithoutLocalRepository(t *testing.T) {
 	defer mockRemoteOnlyGit()()
 	cfg, outR, errR := config.NewTestConfig()
@@ -634,6 +720,7 @@ func TestUnstack_ByStackNumber_RemoteOnly_AllLocked(t *testing.T) {
 }
 
 func TestUnstack_ByStackNumber_NotTracked_LocalFlag(t *testing.T) {
+	t.Setenv("GH_STACK_HYPERLINKS", "0")
 	// --local never contacts GitHub. Targeting a number that isn't tracked
 	// locally with --local is an error: there is nothing to remove locally.
 	gitDir := t.TempDir()
@@ -652,6 +739,7 @@ func TestUnstack_ByStackNumber_NotTracked_LocalFlag(t *testing.T) {
 
 	unstackCalled := false
 	cfg, outR, errR := config.NewTestConfig()
+	setTestRepo(cfg)
 	cfg.GitHubClientOverride = &github.MockClient{
 		UnstackFn: func(int) (*github.RemoteStack, bool, error) {
 			unstackCalled = true
@@ -663,7 +751,7 @@ func TestUnstack_ByStackNumber_NotTracked_LocalFlag(t *testing.T) {
 
 	assert.ErrorIs(t, err, ErrNotInStack)
 	assert.False(t, unstackCalled, "--local must never contact GitHub")
-	assert.Contains(t, output, "stack #999 is not tracked locally")
+	assert.Contains(t, output, "stack #999 (https://github.com/o/r/stack/999) is not tracked locally")
 
 	sf, err := stack.Load(gitDir)
 	require.NoError(t, err)
@@ -671,6 +759,7 @@ func TestUnstack_ByStackNumber_NotTracked_LocalFlag(t *testing.T) {
 }
 
 func TestUnstack_ByStackNumber_LocalFlag_LegacyStack_NoRemoteCall(t *testing.T) {
+	t.Setenv("GH_STACK_HYPERLINKS", "0")
 	// --local must never contact GitHub. A legacy stack (Number == 0) can only
 	// be matched by number via a remote backfill (ListStacks); under --local
 	// that lookup must be skipped and the number reported as not tracked.
@@ -694,6 +783,7 @@ func TestUnstack_ByStackNumber_LocalFlag_LegacyStack_NoRemoteCall(t *testing.T) 
 	listCalled := false
 	unstackCalled := false
 	cfg, outR, errR := config.NewTestConfig()
+	setTestRepo(cfg)
 	cfg.GitHubClientOverride = &github.MockClient{
 		ListStacksFn: func() ([]github.RemoteStack, error) {
 			listCalled = true
@@ -711,7 +801,7 @@ func TestUnstack_ByStackNumber_LocalFlag_LegacyStack_NoRemoteCall(t *testing.T) 
 	assert.ErrorIs(t, err, ErrNotInStack)
 	assert.False(t, listCalled, "--local must not contact GitHub (no ListStacks backfill)")
 	assert.False(t, unstackCalled, "--local must not contact GitHub")
-	assert.Contains(t, output, "stack #7 is not tracked locally")
+	assert.Contains(t, output, "stack #7 (https://github.com/o/r/stack/7) is not tracked locally")
 
 	// Local tracking is untouched.
 	sf, loadErr := stack.Load(gitDir)

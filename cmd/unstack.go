@@ -80,7 +80,7 @@ func runUnstack(cfg *config.Config, opts *unstackOptions) error {
 			if !opts.local {
 				return runRemoteUnstack(cfg, opts.stackNumber)
 			}
-			cfg.Errorf("stack #%d is not tracked locally", opts.stackNumber)
+			cfg.Errorf("stack %s is not tracked locally", cfg.StackLink(opts.stackNumber))
 			return ErrNotInStack
 		}
 		// --local must never contact GitHub, so it uses a strictly local lookup
@@ -93,7 +93,7 @@ func runUnstack(cfg *config.Config, opts *unstackOptions) error {
 			if opts.local {
 				// --local never contacts GitHub, and there is nothing to remove
 				// locally, so there is nothing to do.
-				cfg.Errorf("stack #%d is not tracked locally", opts.stackNumber)
+				cfg.Errorf("stack %s is not tracked locally", cfg.StackLink(opts.stackNumber))
 				cfg.Printf("Omit %s to unstack it on GitHub", cfg.ColorCyan("--local"))
 				return ErrNotInStack
 			}
@@ -208,7 +208,7 @@ func unstackNumberOnGitHub(cfg *config.Config, client github.ClientOps, number i
 	if dissolved {
 		cfg.Successf("Stack removed on GitHub%s", stackLabel(number))
 	} else {
-		cfg.Successf("Pull requests unstacked on GitHub%s", stackLabel(number))
+		cfg.Successf("Pull requests unstacked on GitHub%s", linkedStackLabel(cfg, number))
 		cfg.Infof("Some pull requests remain stacked on GitHub")
 	}
 	return nil

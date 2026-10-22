@@ -2168,7 +2168,7 @@ func unstackAndKeepLocal(cfg *config.Config, client github.ClientOps, sf *stack.
 	if remote == nil {
 		cfg.Warningf("Remote stack already removed")
 	} else if prepareStackRecreation(s, remote) {
-		cfg.Infof("Merged pull requests remain stacked on GitHub%s", stackLabel(remote.Number))
+		cfg.Infof("Merged pull requests remain stacked on GitHub%s", linkedStackLabel(cfg, remote.Number))
 	} else if remaining, dissolved, unstackErr := client.Unstack(remote.Number); unstackErr != nil {
 		var httpErr *api.HTTPError
 		if errors.As(unstackErr, &httpErr) && httpErr.StatusCode == 404 {
@@ -2183,8 +2183,8 @@ func unstackAndKeepLocal(cfg *config.Config, client github.ClientOps, sf *stack.
 	} else if dissolved {
 		cfg.Successf("Remote stack removed%s", stackLabel(remote.Number))
 	} else {
-		cfg.Successf("Pull requests unstacked on GitHub%s", stackLabel(remote.Number))
-		cfg.Infof("Merged pull requests remain stacked on GitHub%s", stackLabel(remote.Number))
+		cfg.Successf("Pull requests unstacked on GitHub%s", linkedStackLabel(cfg, remote.Number))
+		cfg.Infof("Merged pull requests remain stacked on GitHub%s", linkedStackLabel(cfg, remote.Number))
 	}
 
 	s.ID = ""
