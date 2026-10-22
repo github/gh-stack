@@ -1083,6 +1083,10 @@ func TestIntegration_WorktreeDirectoriesReuseOnlyCurrentValidation(t *testing.T)
 			probes++
 		}
 	}
+	// 8 rev-parse probes:
+	// - CommonDir: 2 to validate the Git and common directories
+	// - GitDir: 2 for the same validations
+	// - ForWorktree: 4 (2 source validations + 2 destination lookups)
 	assert.Equal(t, 8, probes, "directory queries reuse current validation; selecting a scope still validates both directories")
 	require.NoError(t, os.Rename(path, path+"-moved"))
 	_, err = linked.CommonDir()
