@@ -44,7 +44,7 @@ go vet ./...
 For process-isolated parallel execution:
 
 ```sh
-go run ./scripts/testsuite -workers 4
+go run ./scripts/test -workers 4
 ```
 
 Alternatively, use the canonical Go command:
@@ -70,7 +70,7 @@ To run a package or a specific regression:
 
 ```sh
 go vet ./internal/modify
-go run ./scripts/testsuite -workers 4 ./internal/modify
+go run ./scripts/test -workers 4 ./internal/modify
 
 go vet ./cmd
 go test -race -count=1 -timeout=30m -run '^TestRebase_Worktrees' ./cmd
@@ -80,7 +80,7 @@ CI partitions the full suite across Windows and macOS jobs. The `Tests complete`
 check verifies that every platform has a complete, consistent set of successful
 shards. Missing results, failures, or cancelled shards fail the check. Test
 membership comes from Go's test binaries, not the advisory scheduling weights in
-`scripts/testsuite/timings.go`; newly added tests are included automatically.
+`scripts/test/timings.go`; newly added tests are included automatically.
 
 ## Vet
 
@@ -122,7 +122,7 @@ npm run build     # Production build to docs/dist/
 1. Create a new branch: `git checkout -b my-branch-name`
 1. Make your change and add tests
 1. Make sure vet passes: `go vet ./...`
-1. Make sure tests pass: `go run ./scripts/testsuite -workers 4` (or the canonical command above)
+1. Make sure tests pass: `go run ./scripts/test -workers 4` (or the canonical command above)
 1. Push to your fork and [submit a pull request][pr]
 
 Here are a few things you can do that will increase the likelihood of your pull request being accepted:

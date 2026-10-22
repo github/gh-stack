@@ -36,7 +36,7 @@ jobs:
         run: go vet ./...
       - name: Test
         run: >-
-          go run ./scripts/testsuite
+          go run ./scripts/test
           -workers ${{ matrix.workers }}
           -shard ${{ matrix.shard }}
           -shards ${{ matrix.shards }}
@@ -70,4 +70,4 @@ jobs:
           pattern: tests-*
           path: ${{ runner.temp }}/test-results
       - name: Verify full platform inventories
-        run: go run ./scripts/testsuite -verify "${{ runner.temp }}/test-results"
+        run: go run ./scripts/test -verify "${{ runner.temp }}/test-results"

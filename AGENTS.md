@@ -10,7 +10,7 @@ Repository operations require Git 2.36 or later.
 go mod download                  # install dependencies
 go build -o gh-stack .           # build (produces ./gh-stack binary)
 go vet ./...                     # static analysis. Run before tests.
-go run ./scripts/testsuite -workers 4 # full race-enabled suite in isolated processes
+go run ./scripts/test -workers 4 # full race-enabled suite in isolated processes
 ```
 
 Always run `go vet` before tests. See [CONTRIBUTING.md](CONTRIBUTING.md#test) for the alternative canonical `go test` command, targeted tests, and timing artifacts. CI runs the full platform-applicable suite with race detection on Linux, macOS, and Windows, with a cross-shard completion gate.

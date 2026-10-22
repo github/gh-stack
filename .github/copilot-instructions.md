@@ -10,7 +10,7 @@ Repository operations require Git 2.36+.
 go mod download                  # install deps
 go build -o gh-stack .           # build
 go vet ./...                     # static analysis. Always run before tests.
-go run ./scripts/testsuite -workers 4 # full race-enabled suite in isolated processes
+go run ./scripts/test -workers 4 # full race-enabled suite in isolated processes
 ```
 
 Run vet before tests. See [CONTRIBUTING.md](../CONTRIBUTING.md#test) for canonical/targeted commands and runner details. Do not add `t.Parallel` to tests that change Git mocks, cwd, or environment variables.
