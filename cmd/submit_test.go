@@ -736,6 +736,112 @@ func TestSubmit_Humanize(t *testing.T) {
 	}
 }
 
+func TestSyncStack_StackLinks(t *testing.T) {
+	for _, tt := range []struct {
+		name string
+		want string
+	}{
+		{"create", "Stack created on GitHub with 2 PRs"},
+		{"current", "Stack on GitHub is up to date with 2 PRs"},
+		{"adopt", "Linked to the existing stack on GitHub (2 PRs, already up to date)"},
+		{"update", "Stack updated on GitHub with 2 PRs"},
+		{"recreate", "Stack created on GitHub with 2 PRs"},
+		{"unknown number", "Stack created on GitHub with 2 PRs"},
+	} {
+		for _, force := range []string{"0", "1"} {
+			t.Run(tt.name+"/"+force, func(t *testing.T) {
+				t.Setenv("GH_STACK_HYPERLINKS", force)
+				cfg, outR, errR := config.NewTestConfig()
+				defer cfg.Out.Close()
+				defer cfg.Err.Close()
+				defer outR.Close()
+				defer errR.Close()
+				setTestRepo(cfg)
+				s := &stack.Stack{
+					Trunk: stack.BranchRef{Branch: "main"},
+					Branches: []stack.BranchRef{
+						{Branch: "b1", PullRequest: &stack.PullRequestRef{Number: 10}},
+						{Branch: "b2", PullRequest: &stack.PullRequestRef{Number: 11}},
+					},
+				}
+				rs := &github.RemoteStack{ID: 6154, Number: 7, PullRequests: []int{10, 11}}
+				switch tt.name {
+				case "current", "update":
+					s.ID, s.Number = "6154", 7
+				case "recreate":
+					s.ID, s.Number = "99", 99
+				case "unknown number":
+					rs.Number = 0
+				}
+				var lists, gets, creates, adds int
+				client := &github.MockClient{
+					ListStacksFn: func() ([]github.RemoteStack, error) {
+						lists++
+						if tt.name == "adopt" {
+							return []github.RemoteStack{*rs}, nil
+						}
+						return nil, nil
+					},
+					GetStackFn: func(number int) (*github.RemoteStack, error) {
+						gets++
+						if tt.name == "recreate" {
+							assert.Equal(t, 99, number)
+							return nil, &api.HTTPError{StatusCode: 404}
+						}
+						assert.Equal(t, 7, number)
+						if tt.name == "update" {
+							return &github.RemoteStack{ID: 6154, Number: 7, PullRequests: []int{10}}, nil
+						}
+						return rs, nil
+					},
+					CreateStackFn: func(numbers []int) (*github.RemoteStack, error) {
+						creates++
+						assert.Equal(t, []int{10, 11}, numbers)
+						return rs, nil
+					},
+					AddToStackFn: func(number int, delta []int) (*github.RemoteStack, error) {
+						adds++
+						assert.Equal(t, 7, number)
+						assert.Equal(t, []int{11}, delta)
+						return rs, nil
+					},
+				}
+				require.True(t, syncStack(cfg, client, s))
+				require.NoError(t, cfg.Err.Close())
+				raw, err := io.ReadAll(errR)
+				require.NoError(t, err)
+				output := string(raw)
+				assert.Contains(t, output, tt.want)
+				if rs.Number == 0 {
+					assert.NotContains(t, output, "(stack ")
+					assert.NotContains(t, output, "/stack/")
+				} else if force == "1" {
+					assert.Contains(t, output, "\x1b]8;;https://github.com/o/r/stack/7\x1b\\#7\x1b]8;;\x1b\\")
+				} else {
+					assert.Contains(t, output, "#7 (https://github.com/o/r/stack/7)")
+					assert.NotContains(t, output, "\x1b]8")
+				}
+				assert.NotContains(t, output, "/stack/6154")
+				assert.NotContains(t, output, "/stack/99")
+				assert.Equal(t, "6154", s.ID)
+				assert.Equal(t, rs.Number, s.Number)
+				switch tt.name {
+				case "create", "unknown number":
+					assert.Equal(t, []int{1, 0, 1, 0}, []int{lists, gets, creates, adds})
+				case "adopt":
+					assert.Equal(t, []int{1, 0, 0, 0}, []int{lists, gets, creates, adds})
+				case "current":
+					assert.Equal(t, []int{0, 1, 0, 0}, []int{lists, gets, creates, adds})
+				case "update":
+					assert.Equal(t, []int{0, 1, 0, 1}, []int{lists, gets, creates, adds})
+				case "recreate":
+					assert.Equal(t, []int{0, 1, 1, 0}, []int{lists, gets, creates, adds})
+				}
+			})
+		}
+	}
+}
+
 func TestSyncStack_NewStack_CreateSuccess(t *testing.T) {
 	s := &stack.Stack{
 		Trunk: stack.BranchRef{Branch: "main"},

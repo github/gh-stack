@@ -1773,6 +1773,7 @@ func runSyncWithGitHub(t *testing.T, gitMock *git.MockOps, ghMock *github.MockCl
 	defer restore()
 
 	cfg, _, errR := config.NewTestConfig()
+	setTestRepo(cfg)
 	cfg.GitHubClientOverride = ghMock
 	cmd := SyncCmd(cfg)
 	cmd.SetOut(io.Discard)
@@ -1788,6 +1789,7 @@ func runSyncWithGitHub(t *testing.T, gitMock *git.MockOps, ghMock *github.MockCl
 // branches already have open PRs but no stack exists on GitHub, sync creates the
 // stack object and reports "Stack synced".
 func TestSync_CreatesRemoteStackWhenPRsExist(t *testing.T) {
+	t.Setenv("GH_STACK_HYPERLINKS", "1")
 	s := stack.Stack{
 		Trunk:    stack.BranchRef{Branch: "main"},
 		Branches: []stack.BranchRef{{Branch: "b1"}, {Branch: "b2"}},
@@ -1818,6 +1820,7 @@ func TestSync_CreatesRemoteStackWhenPRsExist(t *testing.T) {
 	assert.Equal(t, []int{101, 102}, createdWith, "should create the stack from both PR numbers")
 	assert.Equal(t, 1, listCalls, "should issue exactly one ListStacks on the create path (no redundant round-trip)")
 	assert.Contains(t, output, "Stack created on GitHub with 2 PRs")
+	assert.Contains(t, output, "\x1b]8;;https://github.com/o/r/stack/7\x1b\\#7\x1b]8;;\x1b\\")
 	assert.Contains(t, output, "Stack synced")
 	assert.NotContains(t, output, "Branches synced")
 
@@ -1832,6 +1835,7 @@ func TestSync_CreatesRemoteStackWhenPRsExist(t *testing.T) {
 // already lists exactly the local PRs, sync records its ID without issuing a
 // redundant create/update and still reports "Stack synced".
 func TestSync_AdoptsExistingEqualRemoteStack(t *testing.T) {
+	t.Setenv("GH_STACK_HYPERLINKS", "0")
 	s := stack.Stack{
 		Trunk:    stack.BranchRef{Branch: "main"},
 		Branches: []stack.BranchRef{{Branch: "b1"}, {Branch: "b2"}},
@@ -1857,6 +1861,7 @@ func TestSync_AdoptsExistingEqualRemoteStack(t *testing.T) {
 	output := runSyncWithGitHub(t, newSyncMockNoRebase(tmpDir, "b1"), ghMock)
 
 	assert.Contains(t, output, "already up to date")
+	assert.Contains(t, output, "#9 (https://github.com/o/r/stack/9)")
 	assert.Contains(t, output, "Stack synced")
 	assert.NotContains(t, output, "Branches synced")
 
@@ -1868,6 +1873,7 @@ func TestSync_AdoptsExistingEqualRemoteStack(t *testing.T) {
 // TestSync_UpdatesPartialRemoteStack verifies that when a remote stack contains
 // only some of the local PRs, sync updates it with the full list.
 func TestSync_UpdatesPartialRemoteStack(t *testing.T) {
+	t.Setenv("GH_STACK_HYPERLINKS", "1")
 	s := stack.Stack{
 		Trunk:    stack.BranchRef{Branch: "main"},
 		Branches: []stack.BranchRef{{Branch: "b1"}, {Branch: "b2"}, {Branch: "b3"}},
@@ -1902,6 +1908,7 @@ func TestSync_UpdatesPartialRemoteStack(t *testing.T) {
 	assert.Equal(t, 9, updatedNumber)
 	assert.Equal(t, []int{103}, addedWith)
 	assert.Contains(t, output, "Stack updated on GitHub with 3 PRs")
+	assert.Contains(t, output, "\x1b]8;;https://github.com/o/r/stack/9\x1b\\#9\x1b]8;;\x1b\\")
 	assert.Contains(t, output, "Stack synced")
 	assert.NotContains(t, output, "Branches synced")
 

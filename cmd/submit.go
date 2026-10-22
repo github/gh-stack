@@ -914,7 +914,7 @@ func reconcileUntrackedStack(cfg *config.Config, client github.ClientOps, s *sta
 	s.Number = matched.Number
 
 	if slicesEqual(matched.PRNumbers(), prNumbers) {
-		cfg.Successf("Linked to the existing stack on GitHub (%d PRs, already up to date)%s", len(prNumbers), stackLabel(matched.Number))
+		cfg.Successf("Linked to the existing stack on GitHub (%d PRs, already up to date)%s", len(prNumbers), linkedStackLabel(cfg, matched.Number))
 		return true
 	}
 
@@ -977,7 +977,7 @@ func updateStack(cfg *config.Config, client github.ClientOps, s *stack.Stack) bo
 	if slicesEqual(current, prNumbers) {
 		s.ID = strconv.Itoa(remote.ID)
 		s.Number = remote.Number
-		cfg.Successf("Stack on GitHub is up to date with %d PRs%s", len(prNumbers), stackLabel(remote.Number))
+		cfg.Successf("Stack on GitHub is up to date with %d PRs%s", len(prNumbers), linkedStackLabel(cfg, remote.Number))
 		return true
 	}
 
@@ -1027,7 +1027,7 @@ func updateStack(cfg *config.Config, client github.ClientOps, s *stack.Stack) bo
 
 	s.ID = strconv.Itoa(rs.ID)
 	s.Number = rs.Number
-	cfg.Successf("Stack updated on GitHub with %d PRs%s", len(prNumbers), stackLabel(rs.Number))
+	cfg.Successf("Stack updated on GitHub with %d PRs%s", len(prNumbers), linkedStackLabel(cfg, rs.Number))
 	return true
 }
 
@@ -1043,7 +1043,7 @@ func createNewStack(cfg *config.Config, client github.ClientOps, s *stack.Stack)
 	if err == nil {
 		s.ID = strconv.Itoa(rs.ID)
 		s.Number = rs.Number
-		cfg.Successf("Stack created on GitHub with %d PRs%s", len(prNumbers), stackLabel(rs.Number))
+		cfg.Successf("Stack created on GitHub with %d PRs%s", len(prNumbers), linkedStackLabel(cfg, rs.Number))
 		return true
 	}
 
