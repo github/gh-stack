@@ -1058,6 +1058,39 @@ func TestIntegration_ForWorktreeIndependentExecutors(t *testing.T) {
 	assert.Equal(t, "main", gitExec(t, dir, "branch", "--show-current"))
 }
 
+func TestIntegration_WorktreeDirectoriesReuseOnlyCurrentValidation(t *testing.T) {
+	root, dir := setupWorktreeRepo(t)
+	linked, path := addTestWorktree(t, root, dir, "feature")
+	tracePath := filepath.Join(t.TempDir(), "trace.jsonl")
+	t.Setenv("GIT_TRACE2_EVENT", tracePath)
+	common, err := linked.CommonDir()
+	require.NoError(t, err)
+	assert.Equal(t, canonicalGitTestPath(t, filepath.Join(dir, ".git")), common)
+	gitDir, err := linked.GitDir()
+	require.NoError(t, err)
+	assert.NotEqual(t, common, gitDir)
+	requireWorktree(t, linked, path)
+	trace, err := os.ReadFile(tracePath)
+	require.NoError(t, err)
+	probes := 0
+	for _, line := range strings.Split(strings.TrimSpace(string(trace)), "\n") {
+		var event struct {
+			Event string
+			Argv  []string
+		}
+		require.NoError(t, json.Unmarshal([]byte(line), &event))
+		if event.Event == "start" && slices.Contains(event.Argv, "rev-parse") {
+			probes++
+		}
+	}
+	assert.Equal(t, 8, probes, "directory queries reuse current validation; selecting a scope still validates both directories")
+	require.NoError(t, os.Rename(path, path+"-moved"))
+	_, err = linked.CommonDir()
+	require.Error(t, err, "the previous validation must not be cached across calls")
+	_, err = linked.GitDir()
+	require.Error(t, err)
+}
+
 func TestIntegration_WorktreeMissingCheckoutDoesNotReportStagedChanges(t *testing.T) {
 	t.Parallel()
 	root, dir := setupWorktreeRepo(t)

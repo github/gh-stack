@@ -202,36 +202,40 @@ func CheckClean(ops git.Ops, path string) error {
 func (c *Context) Preflight(branches []string) error {
 	checked := make(map[string]bool)
 	for _, branch := range branches {
-		ops, err := c.Ops(branch)
-		if err != nil {
+		if _, err := c.preflightBranch(branch, checked); err != nil {
 			return err
-		}
-		location := c.Location(branch)
-		if !checked[location.Path] {
-			if err := CheckClean(ops, location.Path); err != nil {
-				return err
-			}
-			checked[location.Path] = true
-		}
-		if !SamePath(location.Path, c.Origin.Path) {
-			current, err := ops.CurrentBranch()
-			if err != nil {
-				return fmt.Errorf("checking current branch in worktree %s: %w", location.Path, err)
-			}
-			if current != branch {
-				return fmt.Errorf("worktree %s no longer has branch %s checked out", location.Path, branch)
-			}
 		}
 	}
 	return nil
 }
 
-// Prepare may switch the initiating worktree, but never a different worktree.
-func (c *Context) Prepare(branch string) (git.Ops, error) {
-	if err := c.Preflight([]string{branch}); err != nil {
+func (c *Context) preflightBranch(branch string, checked map[string]bool) (git.Ops, error) {
+	ops, err := c.Ops(branch)
+	if err != nil {
 		return nil, err
 	}
-	ops, err := c.Ops(branch)
+	location := c.Location(branch)
+	if !checked[location.Path] {
+		if err := CheckClean(ops, location.Path); err != nil {
+			return nil, err
+		}
+		checked[location.Path] = true
+	}
+	if !SamePath(location.Path, c.Origin.Path) {
+		current, err := ops.CurrentBranch()
+		if err != nil {
+			return nil, fmt.Errorf("checking current branch in worktree %s: %w", location.Path, err)
+		}
+		if current != branch {
+			return nil, fmt.Errorf("worktree %s no longer has branch %s checked out", location.Path, branch)
+		}
+	}
+	return ops, nil
+}
+
+// Prepare may switch the initiating worktree, but never a different worktree.
+func (c *Context) Prepare(branch string) (git.Ops, error) {
+	ops, err := c.preflightBranch(branch, make(map[string]bool))
 	if err != nil {
 		return nil, err
 	}

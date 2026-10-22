@@ -248,3 +248,68 @@ func TestStartRejectsCommitsAfterSnapshot(t *testing.T) {
 	assert.Empty(t, ctx.Pending)
 	assert.Empty(t, ctx.Touched)
 }
+
+func TestPrepareReusesOnlyTheCurrentPreflightExecutor(t *testing.T) {
+	common := t.TempDir()
+	current := "main"
+	resolutions := 0
+	scoped := &git.MockOps{
+		CommonDirFn:     func() (string, error) { return common, nil },
+		GitDirFn:        func() (string, error) { return common, nil },
+		CurrentBranchFn: func() (string, error) { return current, nil },
+		CheckoutBranchFn: func(branch string) error {
+			current = branch
+			return nil
+		},
+	}
+	restore := git.SetOps(&git.MockOps{
+		CommonDirFn: func() (string, error) { return common, nil },
+		ForWorktreeFn: func(string) (git.Ops, error) {
+			resolutions++
+			return scoped, nil
+		},
+	})
+	defer restore()
+	ctx := &Context{Origin: Location{Path: common}}
+	for i := 1; i <= 2; i++ {
+		ops, err := ctx.Prepare("feature")
+		require.NoError(t, err)
+		assert.Same(t, scoped, ops)
+		assert.Equal(t, i, resolutions, "resolve once per preparation, not once per context")
+		assert.Equal(t, "feature", current)
+	}
+
+	scoped.HasUncommittedChangesFn = func() (bool, error) { return true, nil }
+	ops, err := ctx.Prepare("other")
+	require.ErrorContains(t, err, "uncommitted changes")
+	assert.Nil(t, ops)
+	assert.Equal(t, 3, resolutions)
+	assert.Equal(t, "feature", current)
+}
+
+func TestPreflightChecksSharedOwnerOncePerCall(t *testing.T) {
+	common := t.TempDir()
+	resolutions, checks := 0, 0
+	scoped := &git.MockOps{
+		CommonDirFn: func() (string, error) { return common, nil },
+		GitDirFn:    func() (string, error) { return common, nil },
+		HasUncommittedChangesFn: func() (bool, error) {
+			checks++
+			return false, nil
+		},
+	}
+	restore := git.SetOps(&git.MockOps{
+		CommonDirFn: func() (string, error) { return common, nil },
+		ForWorktreeFn: func(string) (git.Ops, error) {
+			resolutions++
+			return scoped, nil
+		},
+	})
+	defer restore()
+	ctx := &Context{Origin: Location{Path: common}}
+	for i := 1; i <= 2; i++ {
+		require.NoError(t, ctx.Preflight([]string{"one", "two"}))
+		assert.Equal(t, 2*i, resolutions, "each branch still resolves its current owner")
+		assert.Equal(t, i, checks, "cleanliness is shared only within this preflight")
+	}
+}
