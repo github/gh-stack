@@ -292,7 +292,12 @@ func (d *defaultOps) Push(remote string, branches []string, force, atomic bool) 
 	// Send the "pull.stacked" push option on force pushes, falling back to a
 	// plain push for remotes that don't support push options.
 	withOpt := append([]string{"push", "-o", "pull.stacked"}, args[1:]...)
-	err := d.runSilent(withOpt...)
+	cmd, err := d.command(withOpt...)
+	if err != nil {
+		return err
+	}
+	cmd.Env = append(cmd.Environ(), "LC_ALL=C")
+	err = cmd.Run()
 	if err != nil && strings.Contains(err.Error(), "does not support push options") {
 		return d.runSilent(args...)
 	}
