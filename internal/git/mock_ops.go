@@ -41,6 +41,7 @@ type MockOps struct {
 	ConflictedFilesFn        func() ([]string, error)
 	FindConflictMarkersFn    func(string) (*ConflictMarkerInfo, error)
 	IsAncestorFn             func(string, string) (bool, error)
+	CommitExistsFn           func(string) (bool, error)
 	RevParseFn               func(string) (string, error)
 	RevParseMultiFn          func([]string) ([]string, error)
 	MergeBaseFn              func(string, string) (string, error)
@@ -290,6 +291,13 @@ func (m *MockOps) IsAncestor(ancestor, descendant string) (bool, error) {
 		return m.IsAncestorFn(ancestor, descendant)
 	}
 	return false, nil
+}
+
+func (m *MockOps) CommitExists(ref string) (bool, error) {
+	if m.CommitExistsFn != nil {
+		return m.CommitExistsFn(ref)
+	}
+	return true, nil
 }
 
 func (m *MockOps) RevParse(ref string) (string, error) {

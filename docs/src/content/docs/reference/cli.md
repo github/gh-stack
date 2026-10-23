@@ -437,6 +437,17 @@ Fetches the latest changes from `origin`, then ensures each branch in the stack 
 
 If a branch's PR has been merged, the rebase automatically switches to `--onto` mode to correctly replay commits on top of the merge target.
 
+Merged PR heads are cached separately from local branch tips, so a stale or deleted
+local merged branch does not determine which commits to replay. Both `rebase`
+and `sync` validate the cutoff against the child's history, including recorded
+bases and reflog fork points when the parent was rewritten or the child was
+already restacked. Older stacks acquire missing PR-head metadata when GitHub
+can provide it.
+
+If no safe cutoff can be established, the command stops with guidance to rebase
+the affected branch manually rather than guessing. This does not automatically
+reconcile diverged active branches, and `--no-trunk` still skips fetching.
+
 If a rebase conflict occurs, the operation pauses and prints the conflicted files with line numbers. Resolve the conflicts, stage with `git add`, and continue with `--continue`. To undo the entire rebase, use `--abort` to restore all branches to their pre-rebase state.
 
 **Examples:**

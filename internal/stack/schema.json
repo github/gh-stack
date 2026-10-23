@@ -89,6 +89,10 @@
         "merged": {
           "type": "boolean",
           "description": "Whether the pull request has been merged."
+        },
+        "mergedHead": {
+          "type": "string",
+          "description": "The head commit associated with the merged pull request, distinct from the resulting merge commit and the current local branch tip."
         }
       }
     }

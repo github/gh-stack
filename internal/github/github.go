@@ -33,6 +33,7 @@ type PullRequest struct {
 	Title            string            `graphql:"title"`
 	Body             string            `graphql:"body"`
 	HeadRefName      string            `graphql:"headRefName"`
+	HeadRefOID       string            `graphql:"headRefOid"`
 	BaseRefName      string            `graphql:"baseRefName"`
 	IsDraft          bool              `graphql:"isDraft"`
 	Merged           bool              `graphql:"merged"`
@@ -354,6 +355,7 @@ func (c *Client) FindPRByNumber(number int) (*PullRequest, error) {
 				Title            string            `graphql:"title"`
 				Body             string            `graphql:"body"`
 				HeadRefName      string            `graphql:"headRefName"`
+				HeadRefOID       string            `graphql:"headRefOid"`
 				BaseRefName      string            `graphql:"baseRefName"`
 				IsDraft          bool              `graphql:"isDraft"`
 				Merged           bool              `graphql:"merged"`
@@ -385,6 +387,7 @@ func (c *Client) FindPRByNumber(number int) (*PullRequest, error) {
 		Title:            n.Title,
 		Body:             n.Body,
 		HeadRefName:      n.HeadRefName,
+		HeadRefOID:       n.HeadRefOID,
 		BaseRefName:      n.BaseRefName,
 		IsDraft:          n.IsDraft,
 		Merged:           n.Merged,

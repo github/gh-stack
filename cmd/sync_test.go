@@ -2669,6 +2669,66 @@ func TestSync_WorktreesPublishesFromLinkedWorktree(t *testing.T) {
 	require.NoError(t, issue250GitMayFail(t, repo.dir, "merge-base", "--is-ancestor", "parent", "child"))
 }
 
+func TestSync_Issue512StaleMergedParent(t *testing.T) {
+	testIssue512StaleMergedParent(t, func(cfg *config.Config) error {
+		return runSync(cfg, &syncOptions{remote: "origin"})
+	})
+}
+
+func TestSync_Issue512StaleRecordedBase(t *testing.T) {
+	testIssue512StaleRecordedBase(t, func(cfg *config.Config) error {
+		return runSync(cfg, &syncOptions{remote: "origin"})
+	})
+}
+
+func TestSync_Issue512WorktreePruneRepeatedRebase(t *testing.T) {
+	repo := setupIssue512Repo(t)
+	squash := issue512Squash(t, repo)
+	issue250Git(t, repo.dir, "checkout", "main")
+	issue250WriteFile(t, repo.dir, "base.txt", "dirty trunk worktree\n")
+	childDir := filepath.Join(t.TempDir(), "child-worktree")
+	issue250Git(t, repo.dir, "worktree", "add", childDir, "child")
+	withIssue250Repo(t, childDir)
+	cfg := issue512Config(t, repo.mergedHead)
+
+	require.NoError(t, runSync(cfg, &syncOptions{remote: "origin", prune: true}))
+	sf, err := stack.Load(repo.gitDir)
+	require.NoError(t, err)
+	assert.Equal(t, squash, sf.Stacks[0].Trunk.Head)
+	assert.Equal(t, squash, sf.Stacks[0].Branches[1].Base)
+	assert.Equal(t, repo.main, issue250Git(t, repo.dir, "rev-parse", "main"))
+	require.Error(t, issue250GitMayFail(t, repo.dir, "show-ref", "--verify", "refs/heads/parent"))
+
+	newTrunk := issue512Advance(t, repo)
+	require.NoError(t, runRebase(cfg, &rebaseOptions{remote: "origin"}))
+	sf, err = stack.Load(repo.gitDir)
+	require.NoError(t, err)
+	assert.Equal(t, newTrunk, sf.Stacks[0].Trunk.Head)
+	assert.Equal(t, newTrunk, sf.Stacks[0].Branches[1].Base)
+	assert.Equal(t, repo.main, issue250Git(t, repo.dir, "rev-parse", "main"))
+	assertIssue512History(t, repo)
+	assert.Equal(t, "main", issue250Git(t, repo.dir, "branch", "--show-current"))
+	assert.Equal(t, "child", issue250Git(t, childDir, "branch", "--show-current"))
+	content, err := os.ReadFile(filepath.Join(repo.dir, "base.txt"))
+	require.NoError(t, err)
+	assert.Equal(t, "dirty trunk worktree\n", string(content))
+}
+
+func TestSync_Issue512ConflictRestoresLocalSnapshots(t *testing.T) {
+	repo, parentDir, childDir := setupIssue512Conflict(t)
+	childBefore := issue250Git(t, repo.dir, "rev-parse", "child")
+	remoteBefore := issue250Git(t, repo.dir, "rev-parse", "origin/child")
+	withIssue250Repo(t, childDir)
+	cfg := issue512Config(t, repo.mergedHead)
+	require.ErrorIs(t, runSync(cfg, &syncOptions{remote: "origin"}), ErrConflict)
+	assert.Equal(t, repo.parent, issue250Git(t, repo.dir, "rev-parse", "parent"))
+	assert.Equal(t, childBefore, issue250Git(t, repo.dir, "rev-parse", "child"))
+	assert.Equal(t, remoteBefore, issue250Git(t, repo.dir, "rev-parse", "origin/child"))
+	assert.Equal(t, "parent", issue250Git(t, parentDir, "branch", "--show-current"))
+	assert.Equal(t, "child", issue250Git(t, childDir, "branch", "--show-current"))
+	assert.NoFileExists(t, filepath.Join(repo.gitDir, rebaseStateFile))
+}
+
 func TestSync_SharedTrunkSelectionRestoresOrigin(t *testing.T) {
 	repo := setupSharedTrunkRebaseRepo(t, false)
 	observerHead := issue250Git(t, repo.childDir, "rev-parse", "HEAD")

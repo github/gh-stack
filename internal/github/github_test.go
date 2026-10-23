@@ -88,6 +88,55 @@ func TestToGraphQLInt(t *testing.T) {
 	})
 }
 
+func TestFindPRByNumber_MergedHead(t *testing.T) {
+	for _, tt := range []struct {
+		name string
+		head string
+		omit bool
+	}{
+		{name: "merged PR head", head: "0123456789abcdef0123456789abcdef01234567"},
+		{name: "empty head"},
+		{name: "missing head", omit: true},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			pr := map[string]any{
+				"number": 42, "state": "MERGED", "merged": true, "headRefName": "feature",
+			}
+			if !tt.omit {
+				pr["headRefOid"] = tt.head
+			}
+			body, err := json.Marshal(map[string]any{
+				"data": map[string]any{"repository": map[string]any{"pullRequest": pr}},
+			})
+			require.NoError(t, err)
+			transport := roundTripFunc(func(r *http.Request) (*http.Response, error) {
+				var request struct {
+					Query string `json:"query"`
+				}
+				require.NoError(t, json.NewDecoder(r.Body).Decode(&request))
+				assert.Contains(t, request.Query, "headRefOid")
+				return &http.Response{
+					StatusCode: http.StatusOK,
+					Body:       io.NopCloser(bytes.NewReader(body)),
+					Header:     http.Header{"Content-Type": []string{"application/json"}},
+					Request:    r,
+				}, nil
+			})
+			gql, err := api.NewGraphQLClient(api.ClientOptions{
+				Host: "github.com", AuthToken: "x", Transport: transport,
+			})
+			require.NoError(t, err)
+
+			client := &Client{gql: gql, owner: "o", repo: "r"}
+			got, err := client.FindPRByNumber(42)
+			require.NoError(t, err)
+			require.NotNil(t, got)
+			assert.True(t, got.Merged)
+			assert.Equal(t, tt.head, got.HeadRefOID)
+		})
+	}
+}
+
 // TestRemoteStack_UnmarshalJSON verifies the custom decoder that flattens the
 // Stacks REST API's pull_requests object array into ordered PullRequests
 // numbers while preserving the full entries in PRDetails. This is the only path

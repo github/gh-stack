@@ -454,8 +454,14 @@ func MergeBase(a, b string) (string, error) {
 
 // MergeBaseForkPoint returns where branch forked from ref, using ref's reflog
 // to see through rewrites such as amend, rebase, or force-push.
+// An unavailable fork point is returned as an empty string without an error.
 func MergeBaseForkPoint(ref, branch string) (string, error) {
 	return ops.MergeBaseForkPoint(ref, branch)
+}
+
+// CommitExists reports whether ref resolves to a locally available commit.
+func CommitExists(ref string) (bool, error) {
+	return ops.CommitExists(ref)
 }
 
 // Log returns recent commits for the given branch.

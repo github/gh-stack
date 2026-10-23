@@ -18,10 +18,11 @@ const (
 
 // PullRequestRef holds relatively immutable metadata about an associated PR.
 type PullRequestRef struct {
-	Number int    `json:"number"`
-	ID     string `json:"id,omitempty"`
-	URL    string `json:"url,omitempty"`
-	Merged bool   `json:"merged,omitempty"`
+	Number     int    `json:"number"`
+	ID         string `json:"id,omitempty"`
+	URL        string `json:"url,omitempty"`
+	Merged     bool   `json:"merged,omitempty"`
+	MergedHead string `json:"mergedHead,omitempty"`
 }
 
 // BranchRef represents a branch and its associated commit hash.

@@ -91,6 +91,50 @@ func setupLocalRepo(t *testing.T) string {
 	return dir
 }
 
+func TestIntegration_RebaseBoundaryLookups(t *testing.T) {
+	dir := setupLocalRepo(t)
+	restore := withGitDir(t, dir)
+	defer restore()
+	d := &defaultOps{}
+
+	for _, tt := range []struct {
+		ref    string
+		exists bool
+	}{
+		{"main", true},
+		{gitExec(t, dir, "rev-parse", "HEAD"), true},
+		{"missing", false},
+		{strings.Repeat("f", 40), false},
+		{"HEAD:init.txt", false},
+	} {
+		t.Run(tt.ref, func(t *testing.T) {
+			exists, err := d.CommitExists(tt.ref)
+			require.NoError(t, err)
+			assert.Equal(t, tt.exists, exists)
+		})
+	}
+
+	point, err := d.MergeBaseForkPoint("main", "main")
+	require.NoError(t, err)
+	assert.Equal(t, gitExec(t, dir, "rev-parse", "main"), point)
+	_, err = d.MergeBaseForkPoint("missing", "main")
+	require.Error(t, err)
+
+	gitExec(t, dir, "checkout", "--orphan", "unrelated")
+	gitExec(t, dir, "commit", "--allow-empty", "-m", "unrelated root")
+	point, err = d.MergeBaseForkPoint("main", "unrelated")
+	require.NoError(t, err)
+	assert.Empty(t, point)
+
+	scoped := requireWorktree(t, d, dir)
+	restore()
+	renamed := dir + "-moved"
+	require.NoError(t, os.Rename(dir, renamed))
+	t.Cleanup(func() { require.NoError(t, os.Rename(renamed, dir)) })
+	_, err = scoped.CommitExists("main")
+	require.Error(t, err, "a lost worktree is not a missing commit")
+}
+
 // withGitDir temporarily sets the git client to operate in dir by changing
 // the working directory. Returns a restore function.
 func withGitDir(t *testing.T, dir string) func() {

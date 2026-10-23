@@ -2216,7 +2216,7 @@ func TestResolveRebaseOldBase(t *testing.T) {
 		restore := git.SetOps(&git.MockOps{
 			IsAncestorFn: func(string, string) (bool, error) { return false, nil },
 			MergeBaseForkPointFn: func(string, string) (string, error) {
-				return "", errors.New("no fork point")
+				return "", nil
 			},
 		})
 		defer restore()
@@ -2232,6 +2232,396 @@ type amendedParentRepo struct {
 	gitDir    string
 	oldParent string
 	newParent string
+}
+
+func TestResolveRebaseOldBase_FallbackOrdering(t *testing.T) {
+	for _, tt := range []struct {
+		name      string
+		ancestors map[string]bool
+		want      string
+		wantErr   string
+	}{
+		{"newer fork point", map[string]bool{"recorded:child": true, "fork:child": true, "recorded:fork": true}, "fork", ""},
+		{"older fork point", map[string]bool{"recorded:child": true, "fork:child": true, "fork:recorded": true}, "recorded", ""},
+		{"invalid fork point", map[string]bool{"recorded:child": true}, "recorded", ""},
+		{"invalid recorded base", map[string]bool{"fork:child": true}, "fork", ""},
+		{"incomparable candidates", map[string]bool{"recorded:child": true, "fork:child": true}, "", "conflicting previous bases"},
+		{"no candidates", nil, "", "rebase this branch manually"},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			restore := git.SetOps(&git.MockOps{
+				IsAncestorFn:         func(a, b string) (bool, error) { return tt.ancestors[a+":"+b], nil },
+				MergeBaseForkPointFn: func(string, string) (string, error) { return "fork", nil },
+			})
+			defer restore()
+			got, err := resolveRebaseOldBase("rewritten", "recorded", "parent", "child")
+			if tt.wantErr != "" {
+				require.ErrorContains(t, err, tt.wantErr)
+			} else {
+				require.NoError(t, err)
+				assert.Equal(t, tt.want, got)
+			}
+		})
+	}
+}
+
+func TestResolveRebaseOldBase_LookupErrors(t *testing.T) {
+	lookupErr := errors.New("Git lookup failed")
+	for _, failAt := range []string{"ancestor", "fork", "comparison"} {
+		t.Run(failAt, func(t *testing.T) {
+			restore := git.SetOps(&git.MockOps{
+				IsAncestorFn: func(a, b string) (bool, error) {
+					if failAt == "ancestor" || (failAt == "comparison" && b == "fork") {
+						return false, lookupErr
+					}
+					return a != "rewritten", nil
+				},
+				MergeBaseForkPointFn: func(string, string) (string, error) {
+					if failAt == "fork" {
+						return "", lookupErr
+					}
+					return "fork", nil
+				},
+			})
+			defer restore()
+			_, err := resolveRebaseOldBase("rewritten", "recorded", "parent", "child")
+			require.ErrorIs(t, err, lookupErr)
+		})
+	}
+	t.Run("unavailable optional head permits local fallback", func(t *testing.T) {
+		restore := git.SetOps(&git.MockOps{
+			IsAncestorFn: func(a, b string) (bool, error) {
+				if a == "missing" {
+					return false, lookupErr
+				}
+				return a == "local" && b == "child", nil
+			},
+			CommitExistsFn: func(ref string) (bool, error) { return ref != "missing", nil },
+		})
+		defer restore()
+		got, err := resolveMergedRebaseOldBase("missing", "local", "recorded", "main", "child")
+		require.NoError(t, err)
+		assert.Equal(t, "local", got)
+	})
+}
+
+func TestRebase_MergedHeadSnapshot(t *testing.T) {
+	dir := t.TempDir()
+	s := &stack.Stack{
+		Trunk: stack.BranchRef{Branch: "main"},
+		Branches: []stack.BranchRef{
+			{Branch: "parent", PullRequest: &stack.PullRequestRef{Number: 10, Merged: true, MergedHead: "saved-head"}},
+			{Branch: "child"},
+		},
+	}
+	state := newWorktreeRebaseState(s, nil, "child",
+		map[string]string{"parent": "local-parent", "child": "local-child"}, trunkTarget{}, 0, 2)
+	syncRemotePRState(s, []*github.PullRequest{{
+		Number: 10, HeadRefName: "parent", Merged: true, HeadRefOID: "later-api-head",
+	}})
+	mock := newRebaseMock(dir, "child")
+	var oldBase string
+	mock.RebaseOntoFn = func(_, old, _ string, _ git.RebaseOpts) error {
+		oldBase = old
+		return nil
+	}
+	restore := git.SetOps(mock)
+	defer restore()
+	cfg := issue250TestConfig(t)
+	result := cascadeRebase(savedCascadeOpts(cfg, dir, state, s))
+	require.NoError(t, result.Err)
+	assert.False(t, result.Conflicted)
+	assert.Equal(t, "saved-head", oldBase)
+	assert.Equal(t, "local-parent", state.OriginalRefs["parent"])
+}
+
+type issue512Repo struct {
+	dir        string
+	writer     string
+	gitDir     string
+	main       string
+	parent     string
+	child      string
+	mergedHead string
+	stack      stack.Stack
+}
+
+func setupIssue512Repo(t *testing.T) issue512Repo {
+	t.Helper()
+	root := t.TempDir()
+	remote := filepath.Join(root, "remote.git")
+	dir := filepath.Join(root, "clone")
+	writer := filepath.Join(root, "writer")
+	issue250Git(t, ".", "-c", "safe.bareRepository=all", "init", "--bare", "-b", "main", remote)
+	issue250Git(t, ".", "clone", remote, dir)
+	issue250Git(t, dir, "config", "user.name", "Test")
+	issue250Git(t, dir, "config", "user.email", "test@example.com")
+	issue250Git(t, dir, "config", "commit.gpgSign", "false")
+	issue250Git(t, dir, "config", "core.hooksPath", os.DevNull)
+	issue250Git(t, dir, "config", "rerere.enabled", "true")
+	issue250WriteFile(t, dir, "base.txt", "base\n")
+	issue250Git(t, dir, "add", ".")
+	issue250Git(t, dir, "commit", "-m", "base")
+	issue250Git(t, dir, "push", "-u", "origin", "main")
+	main := issue250Git(t, dir, "rev-parse", "main")
+	issue250Git(t, dir, "checkout", "-b", "parent")
+	for _, content := range []string{"one\n", "two\n"} {
+		issue250WriteFile(t, dir, "shared.txt", content)
+		issue250Git(t, dir, "add", ".")
+		issue250Git(t, dir, "commit", "-m", "parent "+strings.TrimSpace(content))
+	}
+	parent := issue250Git(t, dir, "rev-parse", "parent")
+	issue250Git(t, dir, "push", "-u", "origin", "parent")
+	issue250Git(t, dir, "checkout", "-b", "child")
+	issue250WriteFile(t, dir, "child.txt", "child\n")
+	issue250Git(t, dir, "add", ".")
+	issue250Git(t, dir, "commit", "-m", "child only")
+	child := issue250Git(t, dir, "rev-parse", "child")
+	issue250Git(t, dir, "push", "-u", "origin", "child")
+	issue250Git(t, ".", "clone", remote, writer)
+	issue250Git(t, writer, "config", "user.name", "Test")
+	issue250Git(t, writer, "config", "user.email", "test@example.com")
+	issue250Git(t, writer, "config", "commit.gpgSign", "false")
+	issue250Git(t, writer, "config", "core.hooksPath", os.DevNull)
+	s := stack.Stack{
+		Trunk: stack.BranchRef{Branch: "main", Head: main},
+		Branches: []stack.BranchRef{
+			{Branch: "parent", Head: parent, Base: main, PullRequest: &stack.PullRequestRef{Number: 10, Merged: true}},
+			{Branch: "child", Head: child, Base: parent},
+		},
+	}
+	gitDir := filepath.Join(dir, ".git")
+	writeStackFile(t, gitDir, s)
+	return issue512Repo{dir, writer, gitDir, main, parent, child, parent, s}
+}
+
+func issue512Config(t *testing.T, mergedHead string) *config.Config {
+	t.Helper()
+	cfg := issue250TestConfig(t)
+	cfg.GitHubClientOverride = &github.MockClient{
+		FindPRByNumberFn: func(number int) (*github.PullRequest, error) {
+			if number != 10 {
+				return nil, nil
+			}
+			return &github.PullRequest{
+				Number: 10, HeadRefName: "parent", BaseRefName: "main",
+				State: "MERGED", Merged: true, HeadRefOID: mergedHead,
+			}, nil
+		},
+	}
+	return cfg
+}
+
+func issue512Squash(t *testing.T, repo issue512Repo) string {
+	t.Helper()
+	issue250Git(t, repo.writer, "checkout", "main")
+	issue250Git(t, repo.writer, "merge", "--squash", "origin/parent")
+	issue250Git(t, repo.writer, "commit", "-m", "squash parent")
+	issue250Git(t, repo.writer, "push", "origin", "main")
+	return issue250Git(t, repo.writer, "rev-parse", "main")
+}
+
+func issue512Advance(t *testing.T, repo issue512Repo) string {
+	t.Helper()
+	issue250WriteFile(t, repo.writer, "shared.txt", "three\n")
+	issue250Git(t, repo.writer, "add", ".")
+	issue250Git(t, repo.writer, "commit", "-m", "advance trunk")
+	issue250Git(t, repo.writer, "push", "origin", "main")
+	return issue250Git(t, repo.writer, "rev-parse", "main")
+}
+
+func issue512RewriteParent(t *testing.T, repo *issue512Repo, rewrite, updateChild bool) {
+	t.Helper()
+	issue250Git(t, repo.writer, "checkout", "-b", "parent", "origin/parent")
+	issue250WriteFile(t, repo.writer, "shared.txt", "updated parent\n")
+	issue250Git(t, repo.writer, "add", ".")
+	args := []string{"commit", "-m", "updated parent"}
+	if rewrite {
+		args = append(args, "--amend")
+	}
+	issue250Git(t, repo.writer, args...)
+	repo.mergedHead = issue250Git(t, repo.writer, "rev-parse", "parent")
+	issue250Git(t, repo.writer, "push", "--force-with-lease", "origin", "parent")
+	if updateChild {
+		issue250Git(t, repo.writer, "checkout", "-b", "child", "origin/child")
+		issue250Git(t, repo.writer, "rebase", "--onto", "parent", repo.parent, "child")
+		issue250Git(t, repo.writer, "push", "--force-with-lease", "origin", "child")
+	}
+	issue512Squash(t, *repo)
+	issue250Git(t, repo.dir, "checkout", "main")
+	issue250Git(t, repo.dir, "fetch", "origin")
+	if updateChild {
+		remoteChild := issue250Git(t, repo.writer, "rev-parse", "child")
+		issue250Git(t, repo.dir, "update-ref", "refs/heads/child", remoteChild, repo.child)
+	}
+	issue250Git(t, repo.dir, "checkout", "child")
+}
+
+func assertIssue512History(t *testing.T, repo issue512Repo) {
+	t.Helper()
+	assert.Equal(t, "child only", issue250Git(t, repo.dir, "log", "--format=%s", "origin/main..child"))
+	assert.Equal(t, "child", strings.TrimSpace(issue250Git(t, repo.dir, "show", "child:child.txt")))
+	assert.Equal(t, issue250Git(t, repo.dir, "show", "origin/main:shared.txt"), issue250Git(t, repo.dir, "show", "child:shared.txt"))
+	sf, err := stack.Load(repo.gitDir)
+	require.NoError(t, err)
+	trunk := issue250Git(t, repo.dir, "rev-parse", "origin/main")
+	assert.Equal(t, trunk, sf.Stacks[0].Trunk.Head)
+	assert.Equal(t, trunk, sf.Stacks[0].Branches[1].Base)
+	assert.NoFileExists(t, filepath.Join(repo.gitDir, rebaseStateFile))
+}
+
+func testIssue512StaleMergedParent(t *testing.T, run func(*config.Config) error) {
+	t.Helper()
+	for _, tt := range []struct {
+		name        string
+		rewrite     bool
+		updateChild bool
+		pruned      bool
+		cached      bool
+		advanced    bool
+	}{
+		{name: "rewritten parent", rewrite: true, updateChild: true},
+		{name: "fast-forwarded parent", updateChild: true},
+		{name: "old child history", rewrite: true},
+		{name: "pruned parent", rewrite: true, updateChild: true, pruned: true},
+		{name: "cached merge head", rewrite: true, updateChild: true, cached: true},
+		{name: "post-merge local parent", rewrite: true, updateChild: true, advanced: true},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			repo := setupIssue512Repo(t)
+			issue512RewriteParent(t, &repo, tt.rewrite, tt.updateChild)
+			if tt.cached {
+				repo.stack.Branches[0].PullRequest.MergedHead = repo.mergedHead
+				writeStackFile(t, repo.gitDir, repo.stack)
+			}
+			if tt.pruned {
+				issue250Git(t, repo.dir, "branch", "-D", "parent")
+			}
+			parentBefore := repo.parent
+			if tt.advanced {
+				parentBefore = issue250Git(t, repo.dir, "rev-parse", "child")
+				issue250Git(t, repo.dir, "update-ref", "refs/heads/parent", parentBefore, repo.parent)
+			}
+			withIssue250Repo(t, repo.dir)
+			cfg := issue512Config(t, repo.mergedHead)
+			require.NoError(t, run(cfg))
+			assertIssue512History(t, repo)
+			if tt.pruned {
+				require.Error(t, issue250GitMayFail(t, repo.dir, "show-ref", "--verify", "refs/heads/parent"))
+			} else {
+				assert.Equal(t, parentBefore, issue250Git(t, repo.dir, "rev-parse", "parent"))
+			}
+		})
+	}
+}
+
+func testIssue512StaleRecordedBase(t *testing.T, run func(*config.Config) error) {
+	t.Helper()
+	repo := setupIssue512Repo(t)
+	issue512Squash(t, repo)
+	issue250Git(t, repo.dir, "fetch", "origin")
+	issue250Git(t, repo.dir, "checkout", "main")
+	issue250Git(t, repo.dir, "merge", "--ff-only", "origin/main")
+	issue250Git(t, repo.dir, "checkout", "child")
+	issue250Git(t, repo.dir, "rebase", "--onto", "main", repo.parent, "child")
+	repo.stack.Branches[1].Base = repo.main
+	writeStackFile(t, repo.gitDir, repo.stack)
+	issue512Advance(t, repo)
+	withIssue250Repo(t, repo.dir)
+	require.NoError(t, run(issue512Config(t, repo.mergedHead)))
+	assertIssue512History(t, repo)
+}
+
+func TestRebase_Issue512StaleMergedParent(t *testing.T) {
+	testIssue512StaleMergedParent(t, func(cfg *config.Config) error {
+		return runRebase(cfg, &rebaseOptions{remote: "origin"})
+	})
+}
+
+func TestRebase_Issue512StaleRecordedBase(t *testing.T) {
+	testIssue512StaleRecordedBase(t, func(cfg *config.Config) error {
+		return runRebase(cfg, &rebaseOptions{remote: "origin"})
+	})
+}
+
+func TestRebase_Issue512SelectedRangeWithPrunedParent(t *testing.T) {
+	for _, mode := range []string{"upstack", "downstack", "no-trunk"} {
+		t.Run(mode, func(t *testing.T) {
+			repo := setupIssue512Repo(t)
+			issue512RewriteParent(t, &repo, true, true)
+			issue250Git(t, repo.dir, "checkout", "main")
+			issue250Git(t, repo.dir, "merge", "--ff-only", "origin/main")
+			issue250Git(t, repo.dir, "checkout", "child")
+			issue250Git(t, repo.dir, "branch", "-D", "parent")
+			repo.stack.Trunk.Head = issue250Git(t, repo.dir, "rev-parse", "main")
+			repo.stack.Branches[0].Head = ""
+			repo.stack.Branches[0].PullRequest.MergedHead = repo.mergedHead
+			writeStackFile(t, repo.gitDir, repo.stack)
+			withIssue250Repo(t, repo.dir)
+			require.NoError(t, runRebase(issue512Config(t, repo.mergedHead), &rebaseOptions{
+				remote: "origin", upstack: mode == "upstack", downstack: mode == "downstack", noTrunk: mode == "no-trunk",
+			}))
+			assertIssue512History(t, repo)
+			require.Error(t, issue250GitMayFail(t, repo.dir, "show-ref", "--verify", "refs/heads/parent"))
+		})
+	}
+}
+
+func setupIssue512Conflict(t *testing.T) (issue512Repo, string, string) {
+	t.Helper()
+	repo := setupIssue512Repo(t)
+	issue512RewriteParent(t, &repo, true, true)
+	issue250WriteFile(t, repo.writer, "child.txt", "trunk conflict\n")
+	issue250Git(t, repo.writer, "add", "child.txt")
+	issue250Git(t, repo.writer, "commit", "-m", "trunk conflict")
+	issue250Git(t, repo.writer, "push", "origin", "main")
+	issue250Git(t, repo.dir, "checkout", "main")
+	parentDir := filepath.Join(t.TempDir(), "parent-owner")
+	childDir := filepath.Join(t.TempDir(), "child-owner")
+	issue250Git(t, repo.dir, "worktree", "add", parentDir, "parent")
+	issue250Git(t, repo.dir, "worktree", "add", childDir, "child")
+	return repo, parentDir, childDir
+}
+
+func TestRebase_Issue512WorktreeRecovery(t *testing.T) {
+	for _, action := range []string{"continue", "abort"} {
+		t.Run(action, func(t *testing.T) {
+			repo, parentDir, childDir := setupIssue512Conflict(t)
+			childBefore := issue250Git(t, repo.dir, "rev-parse", "child")
+			withIssue250Repo(t, repo.dir)
+			cfg := issue512Config(t, repo.mergedHead)
+			require.ErrorIs(t, runRebase(cfg, &rebaseOptions{remote: "origin"}), ErrConflict)
+
+			state, err := loadRebaseState(repo.gitDir)
+			require.NoError(t, err)
+			assert.Equal(t, repo.mergedHead, state.RebaseOldBase)
+			assert.Equal(t, repo.mergedHead, state.OriginalStack.Branches[0].PullRequest.MergedHead)
+			assert.Equal(t, repo.parent, state.OriginalRefs["parent"])
+			assert.Equal(t, childBefore, state.OriginalRefs["child"])
+			require.NotEqual(t, repo.mergedHead, state.OriginalRefs["parent"])
+			assert.True(t, worktree.SamePath(childDir, state.Worktrees.Location("child").Path))
+
+			if action == "continue" {
+				issue250WriteFile(t, childDir, "child.txt", "resolved child\n")
+				issue250Git(t, childDir, "add", "child.txt")
+			}
+			withIssue250Repo(t, parentDir)
+			cfg = issue512Config(t, childBefore)
+			require.NoError(t, runRebase(cfg, &rebaseOptions{cont: action == "continue", abort: action == "abort"}))
+
+			assert.Equal(t, repo.parent, issue250Git(t, repo.dir, "rev-parse", "parent"))
+			assert.Equal(t, "main", issue250Git(t, repo.dir, "branch", "--show-current"))
+			assert.Equal(t, "parent", issue250Git(t, parentDir, "branch", "--show-current"))
+			assert.Equal(t, "child", issue250Git(t, childDir, "branch", "--show-current"))
+			assert.NoFileExists(t, filepath.Join(repo.gitDir, rebaseStateFile))
+			if action == "abort" {
+				assert.Equal(t, childBefore, issue250Git(t, repo.dir, "rev-parse", "child"))
+			} else {
+				assert.Equal(t, "child only", issue250Git(t, repo.dir, "log", "--format=%s", "origin/main..child"))
+				assert.Equal(t, "resolved child", issue250Git(t, repo.dir, "show", "child:child.txt"))
+			}
+		})
+	}
 }
 
 func issue250Git(t *testing.T, dir string, args ...string) string {

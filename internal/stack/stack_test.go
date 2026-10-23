@@ -242,7 +242,7 @@ func TestLoad_Save_RoundTrip(t *testing.T) {
 					Trunk:  BranchRef{Branch: "main", Head: "abc123"},
 					Branches: []BranchRef{
 						{Branch: "b1", Head: "def456", Base: "abc123"},
-						{Branch: "b2", PullRequest: &PullRequestRef{Number: 42, ID: "PR_id", URL: "https://example.com", Merged: true}},
+						{Branch: "b2", PullRequest: &PullRequestRef{Number: 42, ID: "PR_id", URL: "https://example.com", Merged: true, MergedHead: "merged-pr-head"}},
 					},
 				},
 			},
@@ -269,6 +269,17 @@ func TestLoad_Save_RoundTrip(t *testing.T) {
 		require.NotNil(t, s.Branches[1].PullRequest)
 		assert.Equal(t, 42, s.Branches[1].PullRequest.Number)
 		assert.True(t, s.Branches[1].PullRequest.Merged)
+		assert.Equal(t, "merged-pr-head", s.Branches[1].PullRequest.MergedHead)
+	})
+
+	t.Run("legacy merged PR metadata remains valid", func(t *testing.T) {
+		var ref PullRequestRef
+		require.NoError(t, json.Unmarshal([]byte(`{"number":42,"merged":true}`), &ref))
+		assert.True(t, ref.Merged)
+		assert.Empty(t, ref.MergedHead)
+		data, err := json.Marshal(ref)
+		require.NoError(t, err)
+		assert.JSONEq(t, `{"number":42,"merged":true}`, string(data))
 	})
 
 	t.Run("missing file returns empty stack file", func(t *testing.T) {

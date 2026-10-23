@@ -497,7 +497,7 @@ func resolveStack(sf *stack.StackFile, branch string, cfg *config.Config) (*stac
 //  1. No tracked PR — look for an OPEN PR by head branch name.
 //  2. Tracked PR (not merged) — refresh status by number; if closed,
 //     clear the association and fall through to path 1.
-//  3. Tracked PR (merged) — skip; the merged state is final.
+//  3. Tracked PR (merged) — only look up a missing merged head; the state is final.
 //
 // The transient Queued flag is also populated from the API response.
 //
@@ -536,7 +536,7 @@ func syncStackPRs(cfg *config.Config, s *stack.Stack) map[string]*github.PRDetai
 	for i := range s.Branches {
 		b := s.Branches[i]
 
-		if b.IsMerged() {
+		if b.IsMerged() && (b.PullRequest.MergedHead != "" || b.PullRequest.Number == 0) {
 			results[i] = branchResult{index: i, skip: true}
 			// Provide PRDetails for merged branches from existing tracked PR
 			if b.PullRequest != nil && b.PullRequest.Number != 0 {
@@ -564,7 +564,7 @@ func syncStackPRs(cfg *config.Config, s *stack.Stack) map[string]*github.PRDetai
 			if branch.PullRequest != nil && branch.PullRequest.Number != 0 {
 				// Tracked PR — refresh its state.
 				pr, err := client.FindPRByNumber(branch.PullRequest.Number)
-				if err != nil {
+				if err != nil || (branch.IsMerged() && (pr == nil || !pr.Merged)) {
 					// API error — keep existing tracked PR
 					res.skip = true
 					res.details = prDetailsFromTracked(branch.PullRequest)
@@ -573,12 +573,7 @@ func syncStackPRs(cfg *config.Config, s *stack.Stack) map[string]*github.PRDetai
 				}
 				if pr != nil && pr.State != "CLOSED" {
 					// PR is open or merged — keep it
-					res.pullRequest = &stack.PullRequestRef{
-						Number: pr.Number,
-						ID:     pr.ID,
-						URL:    pr.URL,
-						Merged: pr.Merged,
-					}
+					res.pullRequest = pullRequestRef(pr, branch.PullRequest)
 					res.queued = pr.IsQueued()
 					res.details = prDetailsFromPR(pr)
 					results[idx] = res
@@ -597,11 +592,7 @@ func syncStackPRs(cfg *config.Config, s *stack.Stack) map[string]*github.PRDetai
 				results[idx] = res
 				return
 			}
-			res.pullRequest = &stack.PullRequestRef{
-				Number: pr.Number,
-				ID:     pr.ID,
-				URL:    pr.URL,
-			}
+			res.pullRequest = pullRequestRef(pr, nil)
 			res.queued = pr.IsQueued()
 			// FindPRForBranch only returns OPEN PRs
 			res.details = &github.PRDetails{
@@ -646,6 +637,32 @@ func syncStackPRs(cfg *config.Config, s *stack.Stack) map[string]*github.PRDetai
 
 // maxAPIConcurrency limits the number of concurrent API calls to avoid hitting secondary rate limits.
 const maxAPIConcurrency = 6
+
+func pullRequestRef(pr *github.PullRequest, previous *stack.PullRequestRef) *stack.PullRequestRef {
+	ref := &stack.PullRequestRef{
+		Number: pr.Number,
+		ID:     pr.ID,
+		URL:    pr.URL,
+		Merged: pr.Merged,
+	}
+	if previous != nil && previous.Number == pr.Number &&
+		(previous.ID == "" || pr.ID == "" || previous.ID == pr.ID) {
+		if ref.ID == "" {
+			ref.ID = previous.ID
+		}
+		if ref.URL == "" {
+			ref.URL = previous.URL
+		}
+		if previous.Merged {
+			ref.Merged = true
+			ref.MergedHead = previous.MergedHead
+		}
+	}
+	if pr.Merged && pr.HeadRefOID != "" {
+		ref.MergedHead = pr.HeadRefOID
+	}
+	return ref
+}
 
 // prDetailsFromPR builds PRDetails from a PullRequest returned by FindPRByNumber.
 func prDetailsFromPR(pr *github.PullRequest) *github.PRDetails {
@@ -738,6 +755,19 @@ func syncStackPRsFromRemote(client github.ClientOps, s *stack.Stack) (map[string
 		return nil, false
 	}
 
+	remotePRCount := len(remotePRNumbers)
+	queried := make(map[int]bool, remotePRCount)
+	for _, number := range remotePRNumbers {
+		queried[number] = true
+	}
+	for _, b := range s.Branches {
+		if b.IsMerged() && b.PullRequest.MergedHead == "" && b.PullRequest.Number != 0 &&
+			!queried[b.PullRequest.Number] {
+			remotePRNumbers = append(remotePRNumbers, b.PullRequest.Number)
+			queried[b.PullRequest.Number] = true
+		}
+	}
+
 	// Fetch each remote PR concurrently. Results are written to an ordered
 	// slice (one slot per PR number) so that when we build the branch map
 	// below, later entries win on duplicate HeadRefNames — matching the
@@ -768,9 +798,13 @@ func syncStackPRsFromRemote(client github.ClientOps, s *stack.Stack) (map[string
 
 	// Build map sequentially to preserve order semantics.
 	prByBranch := make(map[string]*github.PullRequest, len(remotePRNumbers))
-	for _, pr := range prResults {
+	prByNumber := make(map[int]*github.PullRequest, len(remotePRNumbers))
+	for i, pr := range prResults {
 		if pr != nil {
-			prByBranch[pr.HeadRefName] = pr
+			if i < remotePRCount {
+				prByBranch[pr.HeadRefName] = pr
+			}
+			prByNumber[pr.Number] = pr
 		}
 	}
 
@@ -779,15 +813,16 @@ func syncStackPRsFromRemote(client github.ClientOps, s *stack.Stack) (map[string
 	for i := range s.Branches {
 		b := &s.Branches[i]
 		pr, ok := prByBranch[b.Branch]
+		if !ok && b.IsMerged() {
+			pr, ok = prByNumber[b.PullRequest.Number]
+		}
 		if !ok {
 			continue
 		}
-		b.PullRequest = &stack.PullRequestRef{
-			Number: pr.Number,
-			ID:     pr.ID,
-			URL:    pr.URL,
-			Merged: pr.Merged,
+		if b.IsMerged() && b.PullRequest.Number == pr.Number && !pr.Merged {
+			continue
 		}
+		b.PullRequest = pullRequestRef(pr, b.PullRequest)
 		b.Queued = pr.IsQueued()
 		details[b.Branch] = prDetailsFromPR(pr)
 	}
@@ -1235,21 +1270,45 @@ func (o cascadeRebaseOpts) trunkRef() string {
 // amended it falls below the old parent commit and would replay that commit
 // into the child, which is the corruption this helper prevents.
 func resolveRebaseOldBase(currentParentTip, recordedBase, newBase, branch string) (string, error) {
-	isValid := func(candidate string) bool {
-		if candidate == "" {
-			return false
-		}
-		ok, err := git.IsAncestor(candidate, branch)
-		return err == nil && ok
-	}
-
-	if isValid(currentParentTip) {
+	if valid, err := rebaseBoundaryContains(currentParentTip, branch); err != nil {
+		return "", err
+	} else if valid {
 		return currentParentTip, nil
 	}
-	if recordedBase != currentParentTip && isValid(recordedBase) {
+
+	recordedValid, err := rebaseBoundaryContains(recordedBase, branch)
+	if err != nil {
+		return "", err
+	}
+	forkPoint, err := git.MergeBaseForkPoint(newBase, branch)
+	if err != nil {
+		return "", fmt.Errorf("finding the previous base of %s from %s: %w", branch, newBase, err)
+	}
+	forkValid, err := rebaseBoundaryContains(forkPoint, branch)
+	if err != nil {
+		return "", err
+	}
+	if recordedValid && forkValid && recordedBase != forkPoint {
+		// Both can be ancestors of the child; prefer the later cutoff.
+		older, err := git.IsAncestor(recordedBase, forkPoint)
+		if err != nil {
+			return "", fmt.Errorf("comparing previous bases of %s: %w", branch, err)
+		}
+		if older {
+			return forkPoint, nil
+		}
+		older, err = git.IsAncestor(forkPoint, recordedBase)
+		if err != nil {
+			return "", fmt.Errorf("comparing previous bases of %s: %w", branch, err)
+		}
+		if !older {
+			return "", fmt.Errorf("conflicting previous bases for %s after %s changed; rebase this branch manually", branch, newBase)
+		}
+	}
+	if recordedValid {
 		return recordedBase, nil
 	}
-	if forkPoint, err := git.MergeBaseForkPoint(newBase, branch); err == nil && isValid(forkPoint) {
+	if forkValid {
 		return forkPoint, nil
 	}
 
@@ -1257,6 +1316,42 @@ func resolveRebaseOldBase(currentParentTip, recordedBase, newBase, branch string
 		"could not determine the previous base of %s after %s changed; rebase this branch manually",
 		branch, newBase,
 	)
+}
+
+func rebaseBoundaryContains(candidate, branch string) (bool, error) {
+	if candidate == "" {
+		return false, nil
+	}
+	valid, err := git.IsAncestor(candidate, branch)
+	if err == nil {
+		return valid, nil
+	}
+	exists, lookupErr := git.CommitExists(candidate)
+	if lookupErr == nil && !exists {
+		return false, nil
+	}
+	return false, fmt.Errorf("checking previous base %s of %s: %w", candidate, branch, errors.Join(err, lookupErr))
+}
+
+func (o cascadeRebaseOpts) mergedHead(branch string) string {
+	s := o.Stack
+	if o.State != nil && o.State.OriginalStack != nil {
+		// PR refreshes during continuation must not change saved cutoffs.
+		s = o.State.OriginalStack
+	}
+	if i := s.IndexOf(branch); i >= 0 && s.Branches[i].IsMerged() {
+		return s.Branches[i].PullRequest.MergedHead
+	}
+	return ""
+}
+
+func resolveMergedRebaseOldBase(mergedHead, localTip, recordedBase, newBase, branch string) (string, error) {
+	if valid, err := rebaseBoundaryContains(mergedHead, branch); err != nil {
+		return "", err
+	} else if valid {
+		return mergedHead, nil
+	}
+	return resolveRebaseOldBase(localTip, recordedBase, newBase, branch)
 }
 
 // cascadeRebaseResult describes the outcome of a cascade rebase.
@@ -1396,7 +1491,14 @@ func cascadeRebase(opts cascadeRebaseOpts) cascadeRebaseResult {
 				}
 			}
 
-			actualOldBase, err := resolveRebaseOldBase(ontoOldBase, br.Base, newBase, br.Branch)
+			var actualOldBase string
+			var err error
+			if absIdx > 0 && s.Branches[absIdx-1].IsMerged() {
+				parent := s.Branches[absIdx-1].Branch
+				actualOldBase, err = resolveMergedRebaseOldBase(opts.mergedHead(parent), ontoOldBase, br.Base, newBase, br.Branch)
+			} else {
+				actualOldBase, err = resolveRebaseOldBase(ontoOldBase, br.Base, newBase, br.Branch)
+			}
 			if err != nil {
 				return cascadeRebaseResult{
 					Rebased: result.Rebased,
@@ -1956,13 +2058,8 @@ func pullRemoteAdditions(cfg *config.Config, sf *stack.StackFile, s *stack.Stack
 			continue
 		}
 		s.Branches = append(s.Branches, stack.BranchRef{
-			Branch: pr.HeadRefName,
-			PullRequest: &stack.PullRequestRef{
-				Number: pr.Number,
-				ID:     pr.ID,
-				URL:    pr.URL,
-				Merged: pr.Merged,
-			},
+			Branch:      pr.HeadRefName,
+			PullRequest: pullRequestRef(pr, nil),
 		})
 		added++
 	}

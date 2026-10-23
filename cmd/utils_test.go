@@ -1282,6 +1282,7 @@ func TestSyncStackPRs_TrackedPR_DetectsMerge(t *testing.T) {
 		Branches: []stack.BranchRef{
 			{
 				Branch: "feature",
+				Head:   "local-head",
 				PullRequest: &stack.PullRequestRef{
 					Number: 42,
 					ID:     "PR_42",
@@ -1295,11 +1296,12 @@ func TestSyncStackPRs_TrackedPR_DetectsMerge(t *testing.T) {
 	cfg.GitHubClientOverride = &github.MockClient{
 		FindPRByNumberFn: func(number int) (*github.PullRequest, error) {
 			return &github.PullRequest{
-				Number: 42,
-				ID:     "PR_42",
-				URL:    "https://github.com/o/r/pull/42",
-				State:  "MERGED",
-				Merged: true,
+				Number:     42,
+				ID:         "PR_42",
+				URL:        "https://github.com/o/r/pull/42",
+				State:      "MERGED",
+				Merged:     true,
+				HeadRefOID: "merged-head",
 			}, nil
 		},
 	}
@@ -1310,20 +1312,23 @@ func TestSyncStackPRs_TrackedPR_DetectsMerge(t *testing.T) {
 	require.NotNil(t, s.Branches[0].PullRequest)
 	assert.Equal(t, 42, s.Branches[0].PullRequest.Number)
 	assert.True(t, s.Branches[0].PullRequest.Merged)
+	assert.Equal(t, "merged-head", s.Branches[0].PullRequest.MergedHead)
+	assert.Equal(t, "local-head", s.Branches[0].Head)
 }
 
 func TestSyncStackPRs_MergedBranch_StaysMerged(t *testing.T) {
-	// A merged branch should stay merged — no API calls, no changes.
+	// A merged branch with a known head needs no further lookup.
 	s := &stack.Stack{
 		Trunk: stack.BranchRef{Branch: "main"},
 		Branches: []stack.BranchRef{
 			{
 				Branch: "merged-branch",
 				PullRequest: &stack.PullRequestRef{
-					Number: 20,
-					ID:     "PR_20",
-					URL:    "https://github.com/o/r/pull/20",
-					Merged: true,
+					Number:     20,
+					ID:         "PR_20",
+					URL:        "https://github.com/o/r/pull/20",
+					Merged:     true,
+					MergedHead: "merged-head",
 				},
 			},
 		},
@@ -1349,6 +1354,151 @@ func TestSyncStackPRs_MergedBranch_StaysMerged(t *testing.T) {
 	assert.Equal(t, 20, s.Branches[0].PullRequest.Number)
 	assert.True(t, s.Branches[0].PullRequest.Merged)
 	assert.False(t, apiCalled, "no API calls should be made for merged branches")
+}
+
+func TestPullRequestRef_MergedHead(t *testing.T) {
+	for _, tt := range []struct {
+		name       string
+		previous   *stack.PullRequestRef
+		pr         github.PullRequest
+		wantHead   string
+		wantMerged bool
+	}{
+		{
+			name:     "captures confirmed merge head",
+			pr:       github.PullRequest{Number: 10, Merged: true, HeadRefOID: "remote"},
+			wantHead: "remote", wantMerged: true,
+		},
+		{
+			name:     "preserves head on sparse response",
+			previous: &stack.PullRequestRef{Number: 10, ID: "PR_10", Merged: true, MergedHead: "cached"},
+			pr:       github.PullRequest{Number: 10, Merged: true},
+			wantHead: "cached", wantMerged: true,
+		},
+		{
+			name:     "merged state is final",
+			previous: &stack.PullRequestRef{Number: 10, Merged: true, MergedHead: "cached"},
+			pr:       github.PullRequest{Number: 10, HeadRefOID: "open-head"},
+			wantHead: "cached", wantMerged: true,
+		},
+		{
+			name:     "does not copy cache to replacement PR",
+			previous: &stack.PullRequestRef{Number: 10, Merged: true, MergedHead: "cached"},
+			pr:       github.PullRequest{Number: 11},
+		},
+		{
+			name:     "does not copy cache across conflicting identities",
+			previous: &stack.PullRequestRef{Number: 10, ID: "old", Merged: true, MergedHead: "cached"},
+			pr:       github.PullRequest{Number: 10, ID: "new"},
+		},
+		{
+			name: "open heads are not merge heads",
+			pr:   github.PullRequest{Number: 10, HeadRefOID: "open-head"},
+		},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			var before stack.PullRequestRef
+			if tt.previous != nil {
+				before = *tt.previous
+			}
+			ref := pullRequestRef(&tt.pr, tt.previous)
+			assert.Equal(t, tt.wantHead, ref.MergedHead)
+			assert.Equal(t, tt.wantMerged, ref.Merged)
+			if tt.previous != nil {
+				assert.Equal(t, before, *tt.previous, "operation snapshots must not be mutated")
+			}
+		})
+	}
+}
+
+func TestSyncStackPRs_MergedHeadBackfill(t *testing.T) {
+	for _, tt := range []struct {
+		name string
+		pr   *github.PullRequest
+		err  error
+		want string
+	}{
+		{"found", &github.PullRequest{Number: 10, Merged: true, HeadRefOID: "remote"}, nil, "remote"},
+		{"empty", &github.PullRequest{Number: 10, Merged: true}, nil, ""},
+		{"missing", nil, nil, ""},
+		{"unavailable", nil, fmt.Errorf("API unavailable"), ""},
+		{"non-merged response", &github.PullRequest{Number: 10, State: "OPEN", HeadRefOID: "open"}, nil, ""},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			s := &stack.Stack{
+				Trunk: stack.BranchRef{Branch: "main"},
+				Branches: []stack.BranchRef{{
+					Branch: "parent", Head: "local",
+					PullRequest: &stack.PullRequestRef{Number: 10, ID: "PR_10", Merged: true},
+				}},
+			}
+			calls := 0
+			cfg, outR, errR := config.NewTestConfig()
+			cfg.GitHubClientOverride = &github.MockClient{
+				FindPRByNumberFn: func(number int) (*github.PullRequest, error) {
+					assert.Equal(t, 10, number)
+					calls++
+					return tt.pr, tt.err
+				},
+				FindPRForBranchFn: func(string) (*github.PullRequest, error) {
+					t.Error("must not rediscover a replacement for a merged PR")
+					return nil, nil
+				},
+			}
+			syncStackPRs(cfg, s)
+			if tt.want != "" {
+				syncStackPRs(cfg, s)
+			}
+			collectOutput(cfg, outR, errR)
+			assert.Equal(t, 1, calls)
+			assert.True(t, s.Branches[0].IsMerged())
+			assert.Equal(t, tt.want, s.Branches[0].PullRequest.MergedHead)
+			assert.Equal(t, "PR_10", s.Branches[0].PullRequest.ID)
+			assert.Equal(t, "local", s.Branches[0].Head)
+		})
+	}
+}
+
+func TestSyncStackPRs_RemoteStack_MergedHeadBackfill(t *testing.T) {
+	for _, included := range []bool{false, true} {
+		t.Run(fmt.Sprintf("merged PR listed=%t", included), func(t *testing.T) {
+			s := &stack.Stack{
+				ID: "100", Trunk: stack.BranchRef{Branch: "main"},
+				Branches: []stack.BranchRef{
+					{Branch: "parent", PullRequest: &stack.PullRequestRef{Number: 10, Merged: true}},
+					{Branch: "child", PullRequest: &stack.PullRequestRef{Number: 11}},
+				},
+			}
+			calls := 0
+			cfg, outR, errR := config.NewTestConfig()
+			cfg.GitHubClientOverride = &github.MockClient{
+				ListStacksFn: func() ([]github.RemoteStack, error) {
+					numbers := []int{11}
+					if included {
+						numbers = []int{10, 11}
+					}
+					return []github.RemoteStack{{ID: 100, PullRequests: numbers}}, nil
+				},
+				FindPRByNumberFn: func(number int) (*github.PullRequest, error) {
+					if number == 10 {
+						calls++
+						return &github.PullRequest{Number: 10, HeadRefName: "parent", Merged: true, HeadRefOID: "remote"}, nil
+					}
+					return &github.PullRequest{Number: 11, HeadRefName: "child", State: "OPEN"}, nil
+				},
+			}
+			syncStackPRs(cfg, s)
+			syncStackPRs(cfg, s)
+			collectOutput(cfg, outR, errR)
+			wantCalls := 1
+			if included {
+				wantCalls = 2
+			}
+			assert.Equal(t, wantCalls, calls)
+			assert.Equal(t, "remote", s.Branches[0].PullRequest.MergedHead)
+			assert.True(t, s.Branches[0].IsMerged())
+		})
+	}
 }
 
 func TestSyncStackPRs_ClosedPR_ReplacedByOpenPR(t *testing.T) {

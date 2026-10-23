@@ -1151,7 +1151,7 @@ func TestCheckout_NumericTarget_MergedBranchDeletedFromRemote(t *testing.T) {
 		},
 		FindPRByNumberFn: func(number int) (*github.PullRequest, error) {
 			prs := map[int]*github.PullRequest{
-				10: {ID: "PR_10", Number: 10, HeadRefName: "feat-1", BaseRefName: "main", Merged: true, State: "MERGED", URL: "https://github.com/o/r/pull/10"},
+				10: {ID: "PR_10", Number: 10, HeadRefName: "feat-1", HeadRefOID: "merged-head", BaseRefName: "main", Merged: true, State: "MERGED", URL: "https://github.com/o/r/pull/10"},
 				11: {ID: "PR_11", Number: 11, HeadRefName: "feat-2", BaseRefName: "feat-1", State: "OPEN", URL: "https://github.com/o/r/pull/11"},
 			}
 			return prs[number], nil
@@ -1165,6 +1165,24 @@ func TestCheckout_NumericTarget_MergedBranchDeletedFromRemote(t *testing.T) {
 	assert.Equal(t, "feat-2", checkedOut)
 	assert.Contains(t, output, "Skipping merged branch feat-1")
 	assert.Contains(t, output, "Imported stack with 2 branches")
+	sf, err := stack.Load(gitDir)
+	require.NoError(t, err)
+	assert.Equal(t, "merged-head", sf.Stacks[0].Branches[0].PullRequest.MergedHead)
+	assert.Empty(t, sf.Stacks[0].Branches[0].Head)
+}
+
+func TestSyncRemotePRState_MergedHead(t *testing.T) {
+	s := &stack.Stack{Branches: []stack.BranchRef{{
+		Branch: "parent", Head: "local",
+		PullRequest: &stack.PullRequestRef{Number: 10, Merged: true, MergedHead: "cached"},
+	}}}
+	syncRemotePRState(s, []*github.PullRequest{{Number: 10, HeadRefName: "parent", Merged: true}})
+	assert.Equal(t, "cached", s.Branches[0].PullRequest.MergedHead)
+	assert.Equal(t, "local", s.Branches[0].Head)
+
+	syncRemotePRState(s, []*github.PullRequest{{Number: 11, HeadRefName: "parent", State: "OPEN"}})
+	assert.Empty(t, s.Branches[0].PullRequest.MergedHead)
+	assert.False(t, s.Branches[0].IsMerged())
 }
 
 func TestCheckout_NumericTarget_AllPRsMerged(t *testing.T) {

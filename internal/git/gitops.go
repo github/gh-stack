@@ -64,6 +64,7 @@ type Ops interface {
 	ConflictedFiles() ([]string, error)
 	FindConflictMarkers(filePath string) (*ConflictMarkerInfo, error)
 	IsAncestor(ancestor, descendant string) (bool, error)
+	CommitExists(ref string) (bool, error)
 	RevParse(ref string) (string, error)
 	RevParseMulti(refs []string) ([]string, error)
 	MergeBase(a, b string) (string, error)
@@ -518,6 +519,18 @@ func (d *defaultOps) IsAncestor(ancestor, descendant string) (bool, error) {
 	return false, err
 }
 
+func (d *defaultOps) CommitExists(ref string) (bool, error) {
+	_, err := d.run("rev-parse", "--verify", "--quiet", "--end-of-options", ref+"^{commit}")
+	if err == nil {
+		return true, nil
+	}
+	var exitErr *exec.ExitError
+	if errors.As(err, &exitErr) && exitErr.ExitCode() == 1 {
+		return false, nil
+	}
+	return false, err
+}
+
 func (d *defaultOps) RevParse(ref string) (string, error) {
 	return d.run("rev-parse", ref)
 }
@@ -543,7 +556,12 @@ func (d *defaultOps) MergeBase(a, b string) (string, error) {
 }
 
 func (d *defaultOps) MergeBaseForkPoint(ref, branch string) (string, error) {
-	return d.run("merge-base", "--fork-point", ref, branch)
+	point, err := d.run("merge-base", "--fork-point", ref, branch)
+	var exitErr *exec.ExitError
+	if errors.As(err, &exitErr) && exitErr.ExitCode() == 1 {
+		return "", nil
+	}
+	return point, err
 }
 
 func (d *defaultOps) Log(ref string, maxCount int) ([]CommitInfo, error) {
