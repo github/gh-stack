@@ -291,7 +291,7 @@ func (d *defaultOps) Push(remote string, branches []string, force, atomic bool) 
 	}
 	// Send the "pull.stacked" push option on force pushes, falling back to a
 	// plain push for remotes that don't support push options.
-	withOpt := append([]string{"push", "-o", "pull.stacked"}, args[1:]...)
+	withOpt := append([]string{"-c", "push.pushOption=pull.stacked", "push"}, args[1:]...)
 	cmd, err := d.command(withOpt...)
 	if err != nil {
 		return err
