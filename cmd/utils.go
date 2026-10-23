@@ -1349,6 +1349,22 @@ func resolveMergedRebaseOldBase(mergedHead, localTip, recordedBase, newBase, bra
 	if valid, err := rebaseBoundaryContains(mergedHead, branch); err != nil {
 		return "", err
 	} else if valid {
+		if recordedBase != "" && recordedBase != mergedHead {
+			// A regular merge keeps the PR head reachable through a newer base.
+			// Only skip that extra history if the destination contains it too.
+			for _, pair := range [][2]string{
+				{recordedBase, branch}, {mergedHead, recordedBase}, {recordedBase, newBase},
+			} {
+				contains, err := rebaseBoundaryContains(pair[0], pair[1])
+				if err != nil {
+					return "", err
+				}
+				if !contains {
+					return mergedHead, nil
+				}
+			}
+			return recordedBase, nil
+		}
 		return mergedHead, nil
 	}
 	return resolveRebaseOldBase(localTip, recordedBase, newBase, branch)

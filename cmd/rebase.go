@@ -454,7 +454,8 @@ func continueRebase(cfg *config.Config, gitDir string) error {
 			NeedsOnto:                 state.UseOnto,
 			OntoOldBase:               state.OntoOldBase,
 			CommitterDateIsAuthorDate: state.CommitterDateIsAuthorDate,
-			TrunkRef:                  trunkBase,
+			TrunkRef:                  trunkRef,
+			TrunkSHA:                  state.TrunkSHA,
 		})
 
 		if result.Err != nil {

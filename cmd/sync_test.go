@@ -2681,6 +2681,12 @@ func TestSync_Issue512StaleRecordedBase(t *testing.T) {
 	})
 }
 
+func TestSync_Issue512RepeatedRegularMerge(t *testing.T) {
+	testIssue512RepeatedRegularMerge(t, func(cfg *config.Config) error {
+		return runSync(cfg, &syncOptions{remote: "origin"})
+	})
+}
+
 func TestSync_Issue512WorktreePruneRepeatedRebase(t *testing.T) {
 	repo := setupIssue512Repo(t)
 	squash := issue512Squash(t, repo)

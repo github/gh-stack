@@ -2544,6 +2544,52 @@ func TestRebase_Issue512StaleRecordedBase(t *testing.T) {
 	})
 }
 
+func testIssue512RepeatedRegularMerge(t *testing.T, run func(*config.Config) error) {
+	t.Helper()
+	repo := setupIssue512Repo(t)
+	issue250WriteFile(t, repo.writer, "trunk-only.txt", "before merge\n")
+	issue250Git(t, repo.writer, "add", ".")
+	issue250Git(t, repo.writer, "commit", "-m", "trunk before merge")
+	issue250Git(t, repo.writer, "merge", "--no-ff", "origin/parent", "-m", "merge parent")
+	issue250Git(t, repo.writer, "push", "origin", "main")
+	withIssue250Repo(t, repo.dir)
+	cfg := issue512Config(t, repo.mergedHead)
+	require.NoError(t, run(cfg))
+	assertIssue512History(t, repo)
+
+	issue250Git(t, repo.dir, "branch", "-D", "parent")
+	sf, err := stack.Load(repo.gitDir)
+	require.NoError(t, err)
+	sf.Stacks[0].Branches[0].Head = ""
+	require.NoError(t, stack.Save(repo.gitDir, sf))
+	issue250WriteFile(t, repo.writer, "trunk-only.txt", "after merge\n")
+	issue250Git(t, repo.writer, "add", ".")
+	issue250Git(t, repo.writer, "commit", "-m", "trunk after merge")
+	issue250Git(t, repo.writer, "push", "origin", "main")
+
+	require.NoError(t, run(cfg))
+	assertIssue512History(t, repo)
+	assert.Equal(t, "after merge", issue250Git(t, repo.dir, "show", "child:trunk-only.txt"))
+}
+
+func TestRebase_Issue512RepeatedRegularMerge(t *testing.T) {
+	testIssue512RepeatedRegularMerge(t, func(cfg *config.Config) error {
+		return runRebase(cfg, &rebaseOptions{remote: "origin"})
+	})
+}
+
+func TestRebase_MergedHeadPreservesUnmergedRecordedBase(t *testing.T) {
+	restore := git.SetOps(&git.MockOps{
+		IsAncestorFn: func(a, b string) (bool, error) {
+			return !(a == "unmerged-local" && b == "main"), nil
+		},
+	})
+	defer restore()
+	base, err := resolveMergedRebaseOldBase("merged", "unmerged-local", "unmerged-local", "main", "child")
+	require.NoError(t, err)
+	assert.Equal(t, "merged", base, "a recorded base not in the destination must not discard unmerged work")
+}
+
 func TestRebase_Issue512SelectedRangeWithPrunedParent(t *testing.T) {
 	for _, mode := range []string{"upstack", "downstack", "no-trunk"} {
 		t.Run(mode, func(t *testing.T) {
@@ -3456,6 +3502,44 @@ func TestRebase_LegacyContinuePersistsCatalogUnderOperationLock(t *testing.T) {
 	assert.Equal(t, "sha-main", sf.Stacks[0].Branches[0].Base)
 	_, err = os.Stat(filepath.Join(dir, rebaseStateFile))
 	assert.ErrorIs(t, err, os.ErrNotExist)
+}
+
+func TestRebase_LegacyContinueKeepsNamedTrunkForForkPoint(t *testing.T) {
+	dir := t.TempDir()
+	writeStackFile(t, dir, stack.Stack{
+		Trunk: stack.BranchRef{Branch: "main"},
+		Branches: []stack.BranchRef{
+			{Branch: "parent", PullRequest: &stack.PullRequestRef{Number: 10, Merged: true}},
+			{Branch: "child", Base: "recorded"},
+		},
+	})
+	require.NoError(t, saveRebaseState(dir, &rebaseState{
+		OriginalBranch: "child", ConflictBranch: "parent", RemainingBranches: []string{"child"},
+		OriginalRefs: map[string]string{"parent": "stale", "child": "before"},
+		UseOnto:      true, OntoOldBase: "stale", TrunkRef: "main", TrunkSHA: "pinned",
+	}))
+	mock := newRebaseMock(dir, "child")
+	mock.IsAncestorFn = func(a, b string) (bool, error) { return a != "stale", nil }
+	mock.MergeBaseForkPointFn = func(ref, branch string) (string, error) {
+		assert.Equal(t, "main", ref)
+		if ref != "main" {
+			return "", fmt.Errorf("No such ref: %s", ref)
+		}
+		return "", nil
+	}
+	rebased := false
+	mock.RebaseOntoFn = func(target, oldBase, branch string, _ git.RebaseOpts) error {
+		rebased = true
+		assert.Equal(t, "pinned", target)
+		assert.Equal(t, "recorded", oldBase)
+		assert.Equal(t, "child", branch)
+		return nil
+	}
+	restore := git.SetOps(mock)
+	defer restore()
+	require.NoError(t, runRebase(issue250TestConfig(t), &rebaseOptions{cont: true}))
+	assert.True(t, rebased)
+	assert.NoFileExists(t, filepath.Join(dir, rebaseStateFile))
 }
 
 func TestRebase_LegacyPhaseGuards(t *testing.T) {
