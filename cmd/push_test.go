@@ -67,6 +67,42 @@ func TestPush_PushesAllBranches(t *testing.T) {
 	assert.Contains(t, output, "gh stack submit", "should hint about submit when branches have no PRs")
 }
 
+func TestPush_Atomic(t *testing.T) {
+	s := stack.Stack{
+		Trunk: stack.BranchRef{Branch: "main"},
+		Branches: []stack.BranchRef{
+			{Branch: "b1"},
+			{Branch: "b2"},
+		},
+	}
+
+	tmpDir := t.TempDir()
+	writeStackFile(t, tmpDir, s)
+
+	var pushCalls []pushCall
+	mock := newPushMock(tmpDir, "b1")
+	mock.PushFn = func(remote string, branches []string, force, atomic bool) error {
+		pushCalls = append(pushCalls, pushCall{remote, branches, force, atomic})
+		return nil
+	}
+
+	restore := git.SetOps(mock)
+	defer restore()
+
+	cfg, _, _ := config.NewTestConfig()
+	cfg.GitHubClientOverride = &github.MockClient{}
+	cmd := PushCmd(cfg)
+	cmd.SetArgs([]string{"--atomic"})
+	cmd.SetOut(io.Discard)
+	cmd.SetErr(io.Discard)
+
+	require.NoError(t, cmd.Execute())
+	require.Len(t, pushCalls, 1)
+	assert.Equal(t, []string{"b1", "b2"}, pushCalls[0].branches)
+	assert.True(t, pushCalls[0].force)
+	assert.True(t, pushCalls[0].atomic)
+}
+
 func TestPush_NoSubmitHintWhenPRsExist(t *testing.T) {
 	s := stack.Stack{
 		Trunk: stack.BranchRef{Branch: "main"},
