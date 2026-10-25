@@ -1667,3 +1667,44 @@ func TestCheckout_ByPRURL_Remote(t *testing.T) {
 	assert.Equal(t, "feat-2", checkedOut)
 	assert.Contains(t, output, "Imported stack with 2 branches")
 }
+
+func TestCheckout_BaseRetarget(t *testing.T) {
+	t.Run("reports a tracked stack", func(t *testing.T) {
+		repo := setupBaseRetargetRepo(t, "main", false)
+		withIssue250Repo(t, repo.dir)
+		cfg, outR, errR := config.NewTestConfig()
+		cfg.GitHubClientOverride = repo.client
+
+		require.NoError(t, runCheckout(cfg, &checkoutOptions{target: "9"}))
+		_, diagnostics := commandOutput(t, cfg, outR, errR)
+		assert.Contains(t, diagnostics, "from parent to main")
+		assert.NotContains(t, diagnostics, "matches remote")
+		sf, err := stack.Load(repo.gitDir)
+		require.NoError(t, err)
+		assert.Equal(t, "parent", sf.Stacks[0].Trunk.Branch)
+	})
+
+	t.Run("imports onto the stack base", func(t *testing.T) {
+		repo := setupBaseRetargetRepo(t, "main", true)
+		withIssue250Repo(t, repo.dir)
+		sf, err := stack.Load(repo.gitDir)
+		require.NoError(t, err)
+		sf.Stacks = nil
+		require.NoError(t, stack.Save(repo.gitDir, sf))
+		repo.remote.PullRequests = []int{10, 11, 12}
+		repo.client.FindPRByNumberFn = func(n int) (*github.PullRequest, error) {
+			if n == 10 {
+				return &github.PullRequest{Number: 10, HeadRefName: "parent-old", BaseRefName: "deleted", State: "MERGED", Merged: true}, nil
+			}
+			heads := map[int]string{11: "child", 12: "top"}
+			return &github.PullRequest{Number: n, HeadRefName: heads[n], BaseRefName: "parent", State: "OPEN"}, nil
+		}
+		cfg := issue250TestConfig(t)
+		cfg.GitHubClientOverride = repo.client
+
+		require.NoError(t, runCheckout(cfg, &checkoutOptions{target: "9"}))
+		sf, err = stack.Load(repo.gitDir)
+		require.NoError(t, err)
+		assert.Equal(t, "main", sf.Stacks[0].Trunk.Branch)
+	})
+}

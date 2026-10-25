@@ -404,3 +404,23 @@ func TestPickRemote_OverrideTakesPrecedence(t *testing.T) {
 	assert.Equal(t, "custom", remote)
 	assert.False(t, resolveCalled, "ResolveRemote should not be called when override is provided")
 }
+
+func TestPush_BaseRetarget(t *testing.T) {
+	dir := t.TempDir()
+	writeStackFile(t, dir, stack.Stack{ID: "9", Number: 9, Trunk: stack.BranchRef{Branch: "parent"}, Branches: []stack.BranchRef{{Branch: "child"}}})
+	mock := newPushMock(dir, "child")
+	mock.PushFn = func(string, []string, bool, bool) error {
+		t.Fatal("must not push before rebasing onto the new base")
+		return nil
+	}
+	restore := git.SetOps(mock)
+	defer restore()
+	cfg, _, _ := config.NewTestConfig()
+	cfg.GitHubClientOverride = &github.MockClient{
+		GetStackFn: func(int) (*github.RemoteStack, error) {
+			return &github.RemoteStack{ID: 9, Base: github.RemoteStackBase{Ref: "main"}}, nil
+		},
+	}
+
+	assert.ErrorIs(t, runPush(cfg, &pushOptions{remote: "origin"}), ErrSilent)
+}

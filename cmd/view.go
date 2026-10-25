@@ -75,6 +75,7 @@ func runView(cfg *config.Config, opts *viewOptions) error {
 	sf := result.StackFile
 	s := result.Stack
 	currentBranch := result.CurrentBranch
+	warnRetargeted(cfg, s)
 
 	// Show loading indicator for interactive TUI mode.
 	showingLoader := false
@@ -130,10 +131,20 @@ func runViewJSON(cfg *config.Config) error {
 	}
 	s := stacks[0]
 
+	retargeted := warnRetargeted(cfg, s)
 	syncStackPRs(cfg, s)
 	stack.SaveNonBlocking(gitDir, sf)
 
-	return viewJSON(cfg, s, currentBranch)
+	return viewJSON(cfg, s, currentBranch, retargeted)
+}
+
+// warnRetargeted reports a GitHub retarget that has not been rebased onto yet.
+func warnRetargeted(cfg *config.Config, s *stack.Stack) bool {
+	newBase, _ := retargetedBase(cfg, s, "")
+	if newBase != "" {
+		cfg.Printf("  Run `%s` to rebase the stack onto %s", cfg.ColorCyan("gh stack sync"), newBase)
+	}
+	return newBase != ""
 }
 
 func viewShort(cfg *config.Config, s *stack.Stack, currentBranch string) error {
@@ -229,14 +240,18 @@ type viewJSONPR struct {
 	State  string `json:"state"`
 }
 
-func viewJSON(cfg *config.Config, s *stack.Stack, currentBranch string) error {
+func viewJSON(cfg *config.Config, s *stack.Stack, currentBranch string, retargeted bool) error {
 	out := viewJSONOutput{
 		Trunk:         s.Trunk.Branch,
 		CurrentBranch: currentBranch,
 		Branches:      make([]viewJSONBranch, 0, len(s.Branches)),
 	}
+	bottom := -1
+	if retargeted {
+		bottom = s.FirstActiveBranchIndex()
+	}
 
-	for _, b := range s.Branches {
+	for i, b := range s.Branches {
 		jb := viewJSONBranch{
 			Name:      b.Branch,
 			Head:      b.Head,
@@ -249,7 +264,7 @@ func viewJSON(cfg *config.Config, s *stack.Stack, currentBranch string) error {
 		// Check if the branch needs rebasing (base not ancestor of branch).
 		if !jb.IsMerged {
 			baseBranch := s.ActiveBaseBranch(b.Branch)
-			if isAnc, err := git.IsAncestor(baseBranch, b.Branch); err == nil && !isAnc {
+			if isAnc, err := git.IsAncestor(baseBranch, b.Branch); i == bottom || (err == nil && !isAnc) {
 				jb.NeedsRebase = true
 			}
 		}

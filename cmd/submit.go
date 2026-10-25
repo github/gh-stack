@@ -156,6 +156,9 @@ func runSubmit(cfg *config.Config, opts *submitOptions) error {
 		}
 		return ErrSilent
 	}
+	if err := requireCurrentBase(cfg, s, remote); err != nil {
+		return err
+	}
 	merged := s.MergedBranches()
 	if len(merged) > 0 {
 		cfg.Printf("Skipping %d merged %s", len(merged), plural(len(merged), "branch", "branches"))

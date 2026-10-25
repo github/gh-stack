@@ -3145,3 +3145,33 @@ func TestEnsurePR_DeselectedMissingPRIsIncompleteWithCachedAssociation(t *testin
 	assert.False(t, submitted, "a cached PR count must not turn a deselected missing PR into success")
 	commandOutput(t, cfg, outR, errR)
 }
+
+func TestSubmit_BaseRetarget(t *testing.T) {
+	for name, tt := range map[string]struct {
+		err  error
+		want error
+	}{
+		"retargeted":     {want: ErrSilent},
+		"lookup failure": {err: fmt.Errorf("unavailable"), want: ErrAPIFailure},
+	} {
+		t.Run(name, func(t *testing.T) {
+			dir := t.TempDir()
+			writeStackFile(t, dir, stack.Stack{ID: "9", Number: 9, Trunk: stack.BranchRef{Branch: "parent"}, Branches: []stack.BranchRef{{Branch: "child"}}})
+			mock := newSubmitMock(dir, "child")
+			mock.PushFn = func(string, []string, bool, bool) error {
+				t.Fatal("must not push before rebasing onto the new base")
+				return nil
+			}
+			restore := git.SetOps(mock)
+			defer restore()
+			cfg, _, _ := config.NewTestConfig()
+			cfg.GitHubClientOverride = &github.MockClient{
+				GetStackFn: func(int) (*github.RemoteStack, error) {
+					return &github.RemoteStack{ID: 9, Base: github.RemoteStackBase{Ref: "main"}}, tt.err
+				},
+			}
+
+			assert.ErrorIs(t, runSubmit(cfg, &submitOptions{auto: true, remote: "origin"}), tt.want)
+		})
+	}
+}
