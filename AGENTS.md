@@ -47,6 +47,7 @@ internal/
   modify/                    # interactive stack modification state machine
   worktree/                  # operation-owned worktree identities and ref recovery
   pr/                        # PR template discovery
+  theme/                     # GitHub-branded color palette, colorizers, full-screen canvas painting
   tui/                       # bubbletea/bubbles/lipgloss terminal UI
     stackview/               # interactive stack visualization
     modifyview/              # interactive modify session UI
@@ -147,3 +148,5 @@ if errors.As(err, &exitErr) { ... }
 - Rebase commands disable automatic maintenance through command-local configuration so detached `rerere gc` cannot race conflict handling. Repository settings and unrelated Git commands are unchanged.
 - Date-preserving rebase starts use the merge backend so Git persists the date setting across conflicts. Continuations use native saved settings, not start-only date flags.
 - The `.gitignore` ignores `/gh-stack` and `/gh-stack.exe` (the built binary).
+- Colors: every hex value lives in `internal/theme` (Primer Brand hues on GitHub neutrals, as `lipgloss.AdaptiveColor` light/dark pairs; TUIs use the `internal/tui/shared` aliases). Don't hard-code colors in views. `TestPaletteContrast` enforces WCAG contrast on the GitHub canvases.
+- Full-screen TUIs (`view`, `modify`, `submit`) run through `runFullScreenTUI` (`cmd/utils.go`), which paints GitHub's canvas via `theme.CanvasOutput` when the terminal is a truecolor TTY and `GH_STACK_BACKGROUND` isn't `terminal`. The wrapper paints right after the alternate screen is entered and resets (OSC 111/110) right before it's left, which covers exits, panics, signals, and `tea.ExecProcess`. It also saves the terminal's colors (OSC 11/10 queries) before the program starts. The deferred `Restore` re-queries after the program returns and explicitly sets only colors the reset didn't bring back, such as runtime-set colors or terminals without reset support. Never query the terminal while Bubble Tea owns its input. Commands run with `tea.ExecProcess` must set their own `Stdout`, or the child gets the non-terminal wrapper (see `editorCommand`). Inline TUIs (`checkout`, `merge`) and plain output never paint.

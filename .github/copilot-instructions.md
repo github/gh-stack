@@ -25,6 +25,7 @@ No Makefile, no code generation, no external linter config. Standard Go toolchai
 - `internal/config/`: `Config` struct passed to all commands. Holds I/O, colors, and test hooks (`SelectFn`, `ConfirmFn`, `InputFn`, `GitHubClientOverride`).
 - `internal/stack/`: Shared catalog (`<common-dir>/gh-stack`, JSON), conservative legacy migration, atomic saves, and short catalog locks.
 - `internal/worktree/`: Origin/owner identities, cleanliness preflight, scoped operations, and touched-ref recovery.
+- `internal/theme/`: GitHub-branded palette (single source of all hex colors), plain-output colorizers, and `CanvasOutput`, which paints GitHub's canvas behind full-screen TUIs.
 - `internal/tui/`: bubbletea views (`stackview`, `modifyview`).
 
 ## Coding conventions
@@ -42,5 +43,6 @@ No Makefile, no code generation, no external linter config. Standard Go toolchai
 - Finish paused operations before switching preview stages or versions. Reject origin-only and unknown rebase execution modes before routing recovery; use the matching layer3 build in the recorded origin for origin-only journals.
 - Mutation locks coordinate gh-stack only, not Git commands/editors. Keep affected worktrees quiescent during rewrites. Pass the snapshot SHA (or prior `Context.Touched` SHA) to `Context.Start` before ref mutations; never claim an external commit as this operation's work during continuation.
 - Distributed modify preflights action/cascade targets and executes in recorded owners; only the origin may switch for unoccupied branches. Preserve dropped/folded source worktrees and refs. Before native continuation, preflight other worktrees, not remaining branches in the intentionally busy pending worktree.
+- Colors come only from `internal/theme`. Run full-screen TUIs through `runFullScreenTUI` (canvas painting). Commands launched with `tea.ExecProcess` must set their own `Stdout`.
 
 For full architecture details, see [AGENTS.md](../AGENTS.md) in the repository root.

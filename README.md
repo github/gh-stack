@@ -749,20 +749,36 @@ Compared to the typical workflow, there's no need to name branches, run `git add
 
 ## Terminal theme
 
-The interactive screens (`submit`, `modify`, and `view`) and all colored command output (status messages, prompts) automatically adapt their colors to your terminal's background, so they're readable on both dark and light themes. The background is detected from the terminal; if a terminal doesn't report it (some SSH or `tmux` setups), the dark palette is used.
+gh-stack uses GitHub's colors: the Primer Brand blues, greens, and status colors, on GitHub's own dark or light canvas.
+
+The full-screen screens (`submit`, `modify`, and `view`) paint GitHub's canvas behind themselves, like the GitHub Copilot CLI: a `#0d1117` background on dark terminals and a `#ffffff` background on light ones. When the screen closes, gh-stack restores your terminal's colors. Terminals that report their colors also get back colors set at runtime (for example by pywal or base16-shell); others return to their configured colors. While `$EDITOR` is open, the terminal shows its configured colors. Painting needs a truecolor terminal (most modern terminals, including iTerm2, Ghostty, kitty, WezTerm, Windows Terminal, and VS Code); other terminals keep their own background. In `tmux`, only the current pane is painted.
+
+All other output (status messages, prompts, and the inline `checkout` and `merge` screens) keeps your terminal's background. Colors everywhere adapt to whether that background is dark or light. The background is detected from the terminal; if a terminal doesn't report it (some SSH or `tmux` setups), the dark palette is used.
 
 Set `GH_STACK_THEME` to force a palette if detection is wrong:
 
 | Value | Behavior |
 |-------|----------|
 | `auto` (default) | Detect from the terminal background |
-| `light` | Force the light palette |
-| `dark` | Force the dark palette |
+| `light` | Force the light palette (and the light canvas) |
+| `dark` | Force the dark palette (and the dark canvas) |
+
+Set `GH_STACK_BACKGROUND` to control the canvas:
+
+| Value | Behavior |
+|-------|----------|
+| `github` (default) | Paint GitHub's canvas behind the full-screen screens |
+| `terminal` | Keep your terminal's background and text colors everywhere |
 
 ```bash
 # Force the light palette
 export GH_STACK_THEME=light && gh stack view
+
+# Keep your terminal's own background in the full-screen screens
+export GH_STACK_BACKGROUND=terminal
 ```
+
+If gh-stack is force-killed (for example with `kill -9`) while a full-screen screen is open, the terminal can't be restored automatically. Run `printf '\033]111\007\033]110\007'` or open a new tab to reset its colors.
 
 ## Exit codes
 
