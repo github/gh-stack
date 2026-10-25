@@ -7,8 +7,12 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/glamour"
+	gansi "github.com/charmbracelet/glamour/ansi"
 	"github.com/charmbracelet/glamour/styles"
 	"github.com/charmbracelet/lipgloss"
+	"github.com/muesli/termenv"
+
+	"github.com/github/gh-stack/internal/tui/shared"
 )
 
 // editorFinishedMsg is delivered after the external $EDITOR process exits.
@@ -130,13 +134,13 @@ func writeTempDescription(content string) (string, error) {
 	return f.Name(), nil
 }
 
-// renderMarkdown renders markdown to styled terminal output using Glamour. It
-// selects the light or dark Glamour style from the already-detected terminal
-// background (lipgloss.HasDarkBackground, cached at startup) rather than
-// glamour.WithAutoStyle(): auto-style probes the terminal with an OSC query whose
-// response is consumed by Bubble Tea's own input reader, so the query blocks
-// forever and freezes the UI. On any error it falls back to the raw markdown so
-// the user still sees their content.
+// renderMarkdown renders markdown to styled terminal output using Glamour, with
+// the gh-stack palette (see markdownStyle). It selects the light or dark style
+// from the already-detected terminal background (lipgloss.HasDarkBackground,
+// cached at startup) rather than glamour.WithAutoStyle(): auto-style probes the
+// terminal with an OSC query whose response is consumed by Bubble Tea's own
+// input reader, so the query blocks forever and freezes the UI. On any error it
+// falls back to the raw markdown so the user still sees their content.
 func renderMarkdown(md string, width int) string {
 	if strings.TrimSpace(md) == "" {
 		return hintStyle.Render("(no description)")
@@ -144,19 +148,11 @@ func renderMarkdown(md string, width int) string {
 	if width < 10 {
 		width = 10
 	}
-	// Match the preview to the terminal background, then drop the document
-	// block's default 2-column margin so the preview text aligns flush-left with
-	// the edit-mode textarea instead of being indented. Copying the struct and
-	// replacing the Margin pointer leaves the shared package-level style
-	// untouched.
-	style := styles.DarkStyleConfig
-	if !lipgloss.HasDarkBackground() {
-		style = styles.LightStyleConfig
-	}
-	var noMargin uint
-	style.Document.Margin = &noMargin
+	profile := lipgloss.ColorProfile()
 	r, err := glamour.NewTermRenderer(
-		glamour.WithStyles(style),
+		glamour.WithStyles(markdownStyle(lipgloss.HasDarkBackground())),
+		glamour.WithColorProfile(profile),
+		glamour.WithChromaFormatter(chromaFormatter(profile)),
 		glamour.WithWordWrap(width),
 	)
 	if err != nil {
@@ -167,4 +163,69 @@ func renderMarkdown(md string, width int) string {
 		return md
 	}
 	return strings.Trim(out, "\n")
+}
+
+// markdownStyle returns Glamour's light or dark base style recolored to the
+// gh-stack palette, so the preview reads like a description rendered on GitHub:
+// primary ink for body text and headings, accent links, inline code on a
+// neutral chip, muted quotes and rules, and GitHub's own syntax highlighting
+// for code blocks. The base style is copied, so the shared package-level
+// Glamour styles stay untouched.
+func markdownStyle(dark bool) gansi.StyleConfig {
+	style := styles.DarkStyleConfig
+	codeTheme := "github-dark"
+	if !dark {
+		style = styles.LightStyleConfig
+		codeTheme = "github"
+	}
+	pick := func(c lipgloss.AdaptiveColor) *string {
+		v := c.Light
+		if dark {
+			v = c.Dark
+		}
+		return &v
+	}
+	text, muted, accent := pick(shared.ColorText), pick(shared.ColorTextMuted), pick(shared.ColorAccent)
+
+	// Drop the document block's default 2-column margin so the preview text
+	// aligns flush-left with the edit-mode textarea instead of being indented.
+	var noMargin uint
+	style.Document.Margin = &noMargin
+	style.Document.Color = text
+
+	// Headings in bold primary ink, with H1 marked like the other levels rather
+	// than Glamour's colored pill. GitHub renders H6 in muted ink.
+	style.Heading.Color = text
+	style.H1.Prefix, style.H1.Suffix = "# ", ""
+	style.H1.Color, style.H1.BackgroundColor = nil, nil
+	style.H6.Color = muted
+
+	style.Link.Color = accent
+	style.LinkText.Color = accent
+	style.Image.Color = accent
+	style.ImageText.Color = muted
+	style.BlockQuote.Color = muted
+	style.HorizontalRule.Color = pick(shared.ColorBorder)
+
+	style.Code.Color = text
+	style.Code.BackgroundColor = pick(shared.ColorCodeBg)
+	style.CodeBlock.Chroma = nil
+	style.CodeBlock.Theme = codeTheme
+	return style
+}
+
+// chromaFormatter returns the Chroma formatter that matches the terminal's
+// color profile, so highlighted code blocks use exact GitHub syntax colors on
+// truecolor terminals and no color at all when color is disabled.
+func chromaFormatter(profile termenv.Profile) string {
+	switch profile {
+	case termenv.TrueColor:
+		return "terminal16m"
+	case termenv.ANSI256:
+		return "terminal256"
+	case termenv.ANSI:
+		return "terminal16"
+	default:
+		return "noop"
+	}
 }

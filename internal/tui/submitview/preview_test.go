@@ -8,8 +8,13 @@ import (
 	"testing"
 
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/charmbracelet/glamour/styles"
+	"github.com/charmbracelet/lipgloss"
+	"github.com/muesli/termenv"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"github.com/github/gh-stack/internal/tui/shared"
 )
 
 func TestTogglePreview(t *testing.T) {
@@ -155,6 +160,64 @@ func TestPreview_RendersWithoutHanging(t *testing.T) {
 	// query the terminal (which would block) and must show the content.
 	out := m.View()
 	assert.Contains(t, out, "Heading")
+}
+
+func TestMarkdownStyle(t *testing.T) {
+	for _, dark := range []bool{true, false} {
+		pick := func(c lipgloss.AdaptiveColor) string {
+			if dark {
+				return c.Dark
+			}
+			return c.Light
+		}
+		style := markdownStyle(dark)
+
+		require.NotNil(t, style.Document.Margin)
+		assert.Zero(t, *style.Document.Margin, "flush with the edit-mode textarea")
+		assert.Equal(t, pick(shared.ColorText), *style.Document.Color)
+		assert.Equal(t, pick(shared.ColorText), *style.Heading.Color)
+		assert.Equal(t, "# ", style.H1.Prefix, "H1 is marked like the other heading levels")
+		assert.Nil(t, style.H1.BackgroundColor, "no colored H1 pill")
+		assert.Equal(t, pick(shared.ColorAccent), *style.Link.Color)
+		assert.Equal(t, pick(shared.ColorAccent), *style.LinkText.Color)
+		assert.Equal(t, pick(shared.ColorCodeBg), *style.Code.BackgroundColor)
+		assert.Nil(t, style.CodeBlock.Chroma, "code blocks use a named Chroma theme")
+	}
+	assert.Equal(t, "github-dark", markdownStyle(true).CodeBlock.Theme)
+	assert.Equal(t, "github", markdownStyle(false).CodeBlock.Theme)
+
+	// The base styles are copied, never modified.
+	assert.Equal(t, " ", styles.DarkStyleConfig.H1.Prefix)
+	assert.NotNil(t, styles.DarkStyleConfig.H1.BackgroundColor)
+	assert.NotNil(t, styles.LightStyleConfig.CodeBlock.Chroma)
+}
+
+func TestChromaFormatter(t *testing.T) {
+	assert.Equal(t, "terminal16m", chromaFormatter(termenv.TrueColor))
+	assert.Equal(t, "terminal256", chromaFormatter(termenv.ANSI256))
+	assert.Equal(t, "terminal16", chromaFormatter(termenv.ANSI))
+	assert.Equal(t, "noop", chromaFormatter(termenv.Ascii))
+}
+
+// TestRenderMarkdownUsesPalette renders on a truecolor terminal and checks the
+// links use the accent color and code blocks use GitHub's syntax theme.
+func TestRenderMarkdownUsesPalette(t *testing.T) {
+	forceTrueColor(t, true)
+	out := renderMarkdown("See [docs](https://example.com).\n\n```go\nfunc main() {}\n```", 60)
+	assert.Contains(t, out, sgr(shared.ColorAccent.Dark, false), "accent link")
+	assert.Contains(t, out, "\x1b[38;2;255;123;114mfunc", "github-dark keyword color")
+}
+
+func TestRenderMarkdownWithoutColor(t *testing.T) {
+	profile := lipgloss.ColorProfile()
+	t.Cleanup(func() { lipgloss.SetColorProfile(profile) })
+	lipgloss.SetColorProfile(termenv.Ascii)
+
+	out := renderMarkdown("# Title\n\n```go\nfunc main() {}\n```", 60)
+	assert.NotContains(t, out, "38;", "no foreground colors when color is disabled")
+	assert.NotContains(t, out, "48;", "no background colors when color is disabled")
+	assert.Contains(t, out, "Title")
+	assert.Contains(t, out, "func main() {}", "code blocks are not highlighted")
 }
 
 func TestEditorCommand(t *testing.T) {
