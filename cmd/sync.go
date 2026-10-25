@@ -193,7 +193,7 @@ func runSync(cfg *config.Config, opts *syncOptions) error {
 	}
 	var cutoff string
 	if newBase != "" {
-		if cutoff, err = retargetCutoff(cfg, s, trunk, opts.acceptBaseChange); err != nil {
+		if cutoff, err = retargetCutoff(cfg, s, trunk, planned, opts.acceptBaseChange); err != nil {
 			return err
 		}
 	}
@@ -221,6 +221,7 @@ func runSync(cfg *config.Config, opts *syncOptions) error {
 		} else {
 			state = newWorktreeRebaseState(s, ctx, currentBranch, originalRefs, trunk, 0, len(s.Branches))
 			state.TargetTrunk = newBase
+			state.UseOnto, state.OntoOldBase = cutoff != "", cutoff
 			if s.Trunk.Branch != originalTrunk {
 				if err := stack.Save(gitDir, sf); err != nil {
 					return handleSaveError(cfg, err)

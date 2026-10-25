@@ -2898,3 +2898,47 @@ func TestSync_BaseRetargetConflictKeepsOldBase(t *testing.T) {
 	assert.Equal(t, top, issue250Git(t, repo.dir, "rev-parse", "origin/top"))
 	assert.NoFileExists(t, filepath.Join(repo.gitDir, rebaseStateFile))
 }
+
+type interruptAfterSyncJournal struct {
+	git.Ops
+	path string
+}
+
+func (o interruptAfterSyncJournal) IsAncestor(ancestor, descendant string) (bool, error) {
+	if _, err := os.Stat(o.path); err == nil {
+		panic("interrupted after initial journal")
+	} else if !errors.Is(err, os.ErrNotExist) {
+		return false, err
+	}
+	return o.Ops.IsAncestor(ancestor, descendant)
+}
+
+func TestSync_BaseRetargetInitialJournal(t *testing.T) {
+	repo := setupBaseRetargetRepo(t, "main", false)
+	withIssue250Repo(t, repo.dir)
+	cfg := issue250TestConfig(t)
+	cfg.GitHubClientOverride = repo.client
+	restore := git.SetOps(interruptAfterSyncJournal{
+		Ops: git.CurrentOps(), path: filepath.Join(repo.gitDir, rebaseStateFile),
+	})
+	defer restore()
+
+	require.PanicsWithValue(t, "interrupted after initial journal", func() {
+		_ = runSync(cfg, &syncOptions{remote: "origin", acceptBaseChange: true})
+	})
+	restore()
+	state, err := loadRebaseState(repo.gitDir)
+	require.NoError(t, err)
+	assert.True(t, state.UseOnto)
+	assert.Equal(t, repo.oldParent, state.OntoOldBase)
+
+	require.NoError(t, runRebase(cfg, &rebaseOptions{cont: true}))
+	assertBaseRetargetHistory(t, repo)
+	assert.NoFileExists(t, filepath.Join(repo.gitDir, rebaseStateFile))
+}
+
+func TestSync_BaseRetargetReviewCases(t *testing.T) {
+	testBaseRetargetReviewCases(t, func(cfg *config.Config, accept bool) error {
+		return runSync(cfg, &syncOptions{remote: "origin", acceptBaseChange: accept})
+	})
+}

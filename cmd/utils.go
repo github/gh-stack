@@ -1136,30 +1136,52 @@ func requireCurrentBase(cfg *config.Config, s *stack.Stack, remote string) error
 // onto a retargeted base, or "" when merged branches below it already set the
 // cutoff. Dropping commits that are not known to have landed in the new base
 // requires consent.
-func retargetCutoff(cfg *config.Config, s *stack.Stack, target trunkTarget, accept bool) (string, error) {
+func retargetCutoff(cfg *config.Config, s *stack.Stack, target trunkTarget, planned []branchFastForward, accept bool) (string, error) {
 	i := s.FirstActiveBranchIndex()
 	if i < 0 {
 		return "", nil
 	}
-	var cutoff string
-	landed := false
-	if i == 0 {
-		b := s.Branches[0]
-		oldTip, _ := git.RevParse(s.Trunk.Branch)
-		var err error
-		if cutoff, err = resolveRebaseOldBase(oldTip, b.Base, target.Ref, b.Branch); err == nil {
-			landed, err = git.IsAncestor(cutoff, target.SHA)
-		}
-		if err != nil {
-			cfg.Errorf("%s", err)
-			return "", ErrSilent
+	b := s.Branches[i]
+	head := b.Branch
+	for _, forward := range planned {
+		if forward.Branch == b.Branch {
+			head = forward.NewSHA
+			break
 		}
 	}
-	if !landed && !accept {
-		if client, err := cfg.GitHubClient(); err == nil {
-			pr, err := client.FindPRDetailsForBranch(s.Trunk.Branch)
-			landed = err == nil && pr != nil && pr.Merged
+	var cutoff string
+	var err error
+	if i == 0 {
+		cutoff, err = resolveRetargetOldBase(s.Trunk, b.Base, head)
+	} else {
+		parent := s.Branches[i-1]
+		if !parent.IsMerged() {
+			cfg.Errorf("the retargeted bottom PR is queued; wait for it to leave the merge queue before rebasing")
+			return "", ErrSilent
 		}
+		refs, lookupErr := resolveOriginalRefs(s)
+		if lookupErr != nil {
+			return "", lookupErr
+		}
+		cutoff, err = resolveMergedRebaseOldBase(parent.PullRequest.MergedHead, refs[parent.Branch], b.Base, target.SHA, head)
+	}
+	if err != nil {
+		cfg.Errorf("%s", err)
+		return "", ErrSilent
+	}
+	landed, err := git.IsAncestor(cutoff, target.SHA)
+	if err != nil {
+		return "", err
+	}
+	if !landed && !accept {
+		landed, err = retargetBaseMerged(cfg, s.Trunk.Branch, cutoff, target.SHA)
+		if err != nil {
+			cfg.Warningf("could not verify whether the old base landed in %s: %v", target.Branch, err)
+		}
+	}
+	if i > 0 {
+		// The existing merged-predecessor cascade selects this same boundary.
+		cutoff = ""
 	}
 	if landed || accept {
 		return cutoff, nil
@@ -1172,13 +1194,90 @@ func retargetCutoff(cfg *config.Config, s *stack.Stack, target trunkTarget, acce
 			printInterrupt(cfg)
 			return "", ErrSilent
 		}
-		if err == nil && ok {
+		if err != nil {
+			return "", err
+		}
+		if ok {
 			return cutoff, nil
 		}
 		cfg.Canceled = true
 	}
 	cfg.Errorf("stack not rebased; rerun with --accept-base-change to rebase onto %s", target.Branch)
 	return "", ErrSilent
+}
+
+// Only old-parent evidence can identify the cutoff; the new base's fork point
+// may sit below commits that must be excluded from the retargeted stack.
+func resolveRetargetOldBase(trunk stack.BranchRef, recordedBase, head string) (string, error) {
+	candidates := []string{recordedBase, trunk.Head}
+	exists, err := git.BranchExists(trunk.Branch)
+	if err != nil {
+		return "", err
+	}
+	if exists {
+		tip, err := git.RevParse(trunk.Branch)
+		if err != nil {
+			return "", err
+		}
+		forkPoint, err := git.MergeBaseForkPoint(trunk.Branch, head)
+		if err != nil {
+			return "", err
+		}
+		candidates = append(candidates, tip, forkPoint)
+	}
+	var cutoff string
+	for _, candidate := range candidates {
+		valid, err := rebaseBoundaryContains(candidate, head)
+		if err != nil {
+			return "", err
+		}
+		if !valid || candidate == cutoff {
+			continue
+		}
+		if cutoff == "" {
+			cutoff = candidate
+			continue
+		}
+		newer, err := git.IsAncestor(cutoff, candidate)
+		if err != nil {
+			return "", err
+		}
+		if newer {
+			cutoff = candidate
+			continue
+		}
+		older, err := git.IsAncestor(candidate, cutoff)
+		if err != nil {
+			return "", err
+		}
+		if !older {
+			return "", fmt.Errorf("conflicting previous bases of %s; rebase this branch manually", trunk.Branch)
+		}
+	}
+	if cutoff == "" {
+		return "", fmt.Errorf("could not determine the previous base from %s; rebase this branch manually", trunk.Branch)
+	}
+	return cutoff, nil
+}
+
+func retargetBaseMerged(cfg *config.Config, oldBranch, cutoff, target string) (bool, error) {
+	client, err := cfg.GitHubClient()
+	if err != nil {
+		return false, err
+	}
+	pr, err := client.FindPRDetailsForBranch(oldBranch)
+	if err != nil || pr == nil || !pr.Merged || pr.HeadRefOID == "" || pr.MergeCommitOID == "" {
+		return false, err
+	}
+	exists, err := git.CommitExists(pr.HeadRefOID)
+	if err != nil || !exists {
+		return false, err
+	}
+	covered, err := git.IsAncestor(cutoff, pr.HeadRefOID)
+	if err != nil || !covered {
+		return false, err
+	}
+	return rebaseBoundaryContains(pr.MergeCommitOID, target)
 }
 
 type trunkTarget struct {

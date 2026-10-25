@@ -236,7 +236,7 @@ func runRebase(cfg *config.Config, opts *rebaseOptions) error {
 			return err
 		}
 		if newBase != "" {
-			if cutoff, err = retargetCutoff(cfg, s, trunk, opts.acceptBaseChange); err != nil {
+			if cutoff, err = retargetCutoff(cfg, s, trunk, planned, opts.acceptBaseChange); err != nil {
 				return err
 			}
 		}

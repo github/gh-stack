@@ -290,30 +290,36 @@ func (c *Client) repositoryID() (string, error) {
 	return query.Repository.ID, nil
 }
 
-// PRDetails holds enriched pull request data for display in the TUI.
+// PRDetails holds pull request status and commit metadata.
 type PRDetails struct {
-	Number   int
-	State    string // OPEN, CLOSED, MERGED
-	URL      string
-	Title    string
-	Body     string
-	IsDraft  bool
-	Merged   bool
-	IsQueued bool
+	Number         int
+	State          string // OPEN, CLOSED, MERGED
+	URL            string
+	Title          string
+	Body           string
+	IsDraft        bool
+	Merged         bool
+	IsQueued       bool
+	HeadRefOID     string
+	MergeCommitOID string
 }
 
-// FindPRDetailsForBranch fetches enriched PR data for display purposes.
+// FindPRDetailsForBranch fetches status and commit metadata for the latest PR.
 // Returns nil without error if no PR exists for the branch.
 func (c *Client) FindPRDetailsForBranch(branch string) (*PRDetails, error) {
 	var query struct {
 		Repository struct {
 			PullRequests struct {
 				Nodes []struct {
-					Number          int              `graphql:"number"`
-					State           string           `graphql:"state"`
-					URL             string           `graphql:"url"`
-					IsDraft         bool             `graphql:"isDraft"`
-					Merged          bool             `graphql:"merged"`
+					Number      int    `graphql:"number"`
+					State       string `graphql:"state"`
+					URL         string `graphql:"url"`
+					IsDraft     bool   `graphql:"isDraft"`
+					Merged      bool   `graphql:"merged"`
+					HeadRefOID  string `graphql:"headRefOid"`
+					MergeCommit struct {
+						OID string `graphql:"oid"`
+					} `graphql:"mergeCommit"`
 					MergeQueueEntry *MergeQueueEntry `graphql:"mergeQueueEntry"`
 				}
 			} `graphql:"pullRequests(headRefName: $head, last: 1)"`
@@ -337,12 +343,14 @@ func (c *Client) FindPRDetailsForBranch(branch string) (*PRDetails, error) {
 
 	n := nodes[0]
 	return &PRDetails{
-		Number:   n.Number,
-		State:    n.State,
-		URL:      n.URL,
-		IsDraft:  n.IsDraft,
-		Merged:   n.Merged,
-		IsQueued: n.MergeQueueEntry != nil && n.MergeQueueEntry.ID != "",
+		Number:         n.Number,
+		State:          n.State,
+		URL:            n.URL,
+		IsDraft:        n.IsDraft,
+		Merged:         n.Merged,
+		IsQueued:       n.MergeQueueEntry != nil && n.MergeQueueEntry.ID != "",
+		HeadRefOID:     n.HeadRefOID,
+		MergeCommitOID: n.MergeCommit.OID,
 	}, nil
 }
 
