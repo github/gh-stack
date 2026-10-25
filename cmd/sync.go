@@ -15,8 +15,9 @@ import (
 )
 
 type syncOptions struct {
-	remote string
-	prune  bool
+	remote           string
+	prune            bool
+	acceptBaseChange bool
 }
 
 func SyncCmd(cfg *config.Config) *cobra.Command {
@@ -60,6 +61,10 @@ stack, while "Branches synced" means the branches were rebased and pushed
 but no remote stack object was created or updated (for example, when fewer
 than two PRs exist yet).
 
+If GitHub retargeted the stack because its base branch was deleted, sync
+rebases the stack onto the new base. Removing commits from an old base that
+did not merge requires confirmation, or --accept-base-change.
+
 Use --prune to delete local branches for merged PRs. Stack metadata is
 preserved so that rebase and display logic continue to work correctly.
 If you are on a branch that would be pruned, your checkout is moved to
@@ -71,6 +76,7 @@ the first active branch in the stack, or the trunk if all are merged.`,
 
 	cmd.Flags().StringVar(&opts.remote, "remote", "", "Remote to fetch from and push to (defaults to auto-detected remote)")
 	cmd.Flags().BoolVar(&opts.prune, "prune", false, "Delete local branches for merged PRs")
+	cmd.Flags().BoolVar(&opts.acceptBaseChange, "accept-base-change", false, "Rebase onto a retargeted base even if the old base did not merge")
 
 	return cmd
 }
@@ -151,6 +157,11 @@ func runSync(cfg *config.Config, opts *syncOptions) error {
 		currentBranch = cb
 	}
 	_ = syncStackPRs(cfg, s)
+	newBase, err := retargetedBase(cfg, s, remote)
+	if err != nil {
+		cfg.Errorf("failed to read the stack's base on GitHub: %v", err)
+		return ErrAPIFailure
+	}
 	ctx, err := worktree.New()
 	if err != nil {
 		cfg.Errorf("%s", err)
@@ -161,12 +172,13 @@ func runSync(cfg *config.Config, opts *syncOptions) error {
 	// --- Step 2: Resolve trunk ---
 	trunk, err := resolveTrunkTarget(cfg, s, remote, currentBranch, trunkResolveOptions{
 		Worktrees: ctx,
+		Branch:    newBase,
 		Preflight: func(sha string, moved bool) error {
 			var required []string
 			for _, forward := range planned {
 				required = append(required, forward.Branch)
 			}
-			if moved || len(planned) > 0 || stackNeedsRebase(s, sha) {
+			if newBase != "" || moved || len(planned) > 0 || stackNeedsRebase(s, sha) {
 				required = append(required, activeBranchNames(s)...)
 			}
 			if err := ctx.Preflight(required); err != nil {
@@ -179,6 +191,12 @@ func runSync(cfg *config.Config, opts *syncOptions) error {
 	if err != nil {
 		return err
 	}
+	var cutoff string
+	if newBase != "" {
+		if cutoff, err = retargetCutoff(cfg, s, trunk, opts.acceptBaseChange); err != nil {
+			return err
+		}
+	}
 
 	// --- Step 2b: Fast-forward stack branches behind their remote tracking branch ---
 	updatedBranches, err := fastForwardBranches(cfg, planned, ctx)
@@ -188,7 +206,7 @@ func runSync(cfg *config.Config, opts *syncOptions) error {
 	}
 
 	// --- Step 3: Cascade rebase ---
-	needsRebase := trunk.Moved || len(updatedBranches) > 0 || stackNeedsRebase(s, trunk.Ref)
+	needsRebase := newBase != "" || trunk.Moved || len(updatedBranches) > 0 || stackNeedsRebase(s, trunk.Ref)
 	rebased := false
 	var originalRefs map[string]string
 	var state *rebaseState
@@ -202,6 +220,7 @@ func runSync(cfg *config.Config, opts *syncOptions) error {
 			return ErrSilent
 		} else {
 			state = newWorktreeRebaseState(s, ctx, currentBranch, originalRefs, trunk, 0, len(s.Branches))
+			state.TargetTrunk = newBase
 			if s.Trunk.Branch != originalTrunk {
 				if err := stack.Save(gitDir, sf); err != nil {
 					return handleSaveError(cfg, err)
@@ -217,6 +236,8 @@ func runSync(cfg *config.Config, opts *syncOptions) error {
 				Branches:     s.Branches,
 				StartAbsIdx:  0,
 				OriginalRefs: originalRefs,
+				NeedsOnto:    cutoff != "",
+				OntoOldBase:  cutoff,
 				TrunkRef:     trunk.Ref,
 				TrunkSHA:     trunk.SHA,
 				Worktrees:    ctx,

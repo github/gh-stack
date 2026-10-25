@@ -125,7 +125,7 @@ func restoreWorktreeRebaseMetadata(dir string, state *rebaseState) error {
 	if !slices.Equal(state.OriginalStack.BranchNames(), target.BranchNames()) {
 		return fmt.Errorf("original stack snapshot does not match the recovery target")
 	}
-	target.Trunk.Head = state.OriginalStack.Trunk.Head
+	target.Trunk = state.OriginalStack.Trunk
 	for i, before := range state.OriginalStack.Branches {
 		target.Branches[i].Base = before.Base
 		target.Branches[i].Head = before.Head
@@ -147,7 +147,8 @@ func rebaseStackFromState(sf *stack.StackFile, state *rebaseState) (*stack.Stack
 	var target *stack.Stack
 	for i := range sf.Stacks {
 		s := &sf.Stacks[i]
-		if s.Trunk.Branch != state.StackTrunk || !slices.Equal(s.BranchNames(), state.StackBranches) {
+		trunk := s.Trunk.Branch
+		if (trunk != state.StackTrunk && trunk != state.TargetTrunk) || !slices.Equal(s.BranchNames(), state.StackBranches) {
 			continue
 		}
 		if (state.Phase == "applying" || state.Phase == "conflict") && state.StackID != "" && s.ID != "" && state.StackID != s.ID {
@@ -328,6 +329,9 @@ func finishWorktreeRebase(cfg *config.Config, dir string, state *rebaseState, sf
 }
 
 func publishCompletedRebase(cfg *config.Config, dir string, state *rebaseState, sf *stack.StackFile, s *stack.Stack) error {
+	if state.TargetTrunk != "" {
+		s.Trunk.Branch = state.TargetTrunk
+	}
 	updateBaseSHAsWithTrunk(s, state.TrunkSHA)
 	state.Phase = "complete"
 	state.CurrentBranchIndex = state.EndIndex

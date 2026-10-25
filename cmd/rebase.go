@@ -26,6 +26,7 @@ type rebaseOptions struct {
 	noTrunk                   bool
 	remote                    string
 	committerDateIsAuthorDate bool
+	acceptBaseChange          bool
 }
 
 type rebaseState struct {
@@ -34,6 +35,7 @@ type rebaseState struct {
 	Worktrees                 *worktree.Context `json:"worktrees,omitempty"`
 	StackID                   string            `json:"stackId,omitempty"`
 	StackTrunk                string            `json:"stackTrunk,omitempty"`
+	TargetTrunk               string            `json:"targetTrunk,omitempty"`
 	StackBranches             []string          `json:"stackBranches,omitempty"`
 	OriginalStack             *stack.Stack      `json:"originalStack,omitempty"`
 	RebaseBase                string            `json:"rebaseBase,omitempty"`
@@ -72,7 +74,11 @@ layer in its commit history, rebasing if necessary.
 
 Use --no-trunk to skip fetching and rebasing with the trunk branch.
 Only the inter-branch rebases are performed (branch 2 onto branch 1,
-branch 3 onto branch 2, etc.).`,
+branch 3 onto branch 2, etc.).
+
+If GitHub retargeted the stack because its base branch was deleted, the
+stack is rebased onto the new base. Removing commits from an old base that
+did not merge requires confirmation, or --accept-base-change.`,
 		Example: `  # Rebase the entire stack
   $ gh stack rebase
 
@@ -102,6 +108,7 @@ branch 3 onto branch 2, etc.).`,
 	cmd.Flags().BoolVar(&opts.downstack, "downstack", false, "Only rebase branches from trunk to current branch")
 	cmd.Flags().BoolVar(&opts.upstack, "upstack", false, "Only rebase branches from current branch to top")
 	cmd.Flags().BoolVar(&opts.noTrunk, "no-trunk", false, "Skip trunk — only rebase stack branches onto each other")
+	cmd.Flags().BoolVar(&opts.acceptBaseChange, "accept-base-change", false, "Rebase onto a retargeted base even if the old base did not merge")
 	cmd.Flags().BoolVar(&opts.cont, "continue", false, "Continue rebase after resolving conflicts")
 	cmd.Flags().BoolVar(&opts.abort, "abort", false, "Abort rebase and restore all branches")
 	cmd.Flags().StringVar(&opts.remote, "remote", "", "Remote to fetch from (defaults to auto-detected remote)")
@@ -192,6 +199,7 @@ func runRebase(cfg *config.Config, opts *rebaseOptions) error {
 	}
 
 	var trunk trunkTarget
+	var newBase, cutoff string
 	if !opts.noTrunk {
 		// Resolve remote for fetch and trunk comparison
 		remote, err := pickRemote(cfg, anchor, opts.remote)
@@ -200,6 +208,14 @@ func runRebase(cfg *config.Config, opts *rebaseOptions) error {
 				cfg.Errorf("%s", err)
 			}
 			return ErrSilent
+		}
+		if newBase, err = retargetedBase(cfg, s, remote); err != nil {
+			cfg.Errorf("failed to read the stack's base on GitHub: %v", err)
+			return ErrAPIFailure
+		}
+		if i := s.FirstActiveBranchIndex(); newBase != "" && i >= 0 && (i < startIdx || i >= endIdx) {
+			cfg.Errorf("rebase the whole stack to move it onto %s", newBase)
+			return ErrInvalidArgs
 		}
 
 		// Fast-forward stack branches that are behind their remote tracking branch.
@@ -215,9 +231,14 @@ func runRebase(cfg *config.Config, opts *rebaseOptions) error {
 			cfg.Errorf("%s", err)
 			return ErrSilent
 		}
-		trunk, err = resolveTrunkTarget(cfg, s, remote, currentBranch, trunkResolveOptions{Worktrees: ctx})
+		trunk, err = resolveTrunkTarget(cfg, s, remote, currentBranch, trunkResolveOptions{Worktrees: ctx, Branch: newBase})
 		if err != nil {
 			return err
+		}
+		if newBase != "" {
+			if cutoff, err = retargetCutoff(cfg, s, trunk, opts.acceptBaseChange); err != nil {
+				return err
+			}
 		}
 		if _, err := fastForwardBranches(cfg, planned, ctx); err != nil {
 			cfg.Errorf("%s", err)
@@ -254,11 +275,15 @@ func runRebase(cfg *config.Config, opts *rebaseOptions) error {
 			ontoOldBase = originalRefs[prev.Branch]
 		}
 	}
+	if cutoff != "" {
+		needsOnto, ontoOldBase = true, cutoff
+	}
 
 	state := newWorktreeRebaseState(s, ctx, currentBranch, originalRefs, trunk, startIdx, endIdx)
 	state.CommitterDateIsAuthorDate = opts.committerDateIsAuthorDate
 	state.NoTrunk = opts.noTrunk
 	state.UseOnto, state.OntoOldBase = needsOnto, ontoOldBase
+	state.TargetTrunk = newBase
 	if s.Trunk.Branch != originalTrunk {
 		if err := stack.Save(gitDir, sf); err != nil {
 			return handleSaveError(cfg, err)

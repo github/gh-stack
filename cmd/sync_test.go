@@ -2857,3 +2857,44 @@ func TestSync_RollbackFailureRetainsRecovery(t *testing.T) {
 	assert.Equal(t, "b2", current)
 	assert.NoFileExists(t, filepath.Join(dir, rebaseStateFile))
 }
+
+func TestSync_BaseRetarget(t *testing.T) {
+	for _, merged := range []bool{true, false} {
+		t.Run(fmt.Sprintf("merged=%t", merged), func(t *testing.T) {
+			repo := setupBaseRetargetRepo(t, "main", merged)
+			withIssue250Repo(t, repo.dir)
+			cfg := issue250TestConfig(t)
+			cfg.GitHubClientOverride = repo.client
+
+			require.NoError(t, runSync(cfg, &syncOptions{remote: "origin", acceptBaseChange: !merged}))
+			assertBaseRetargetHistory(t, repo)
+			assert.Equal(t, issue250Git(t, repo.dir, "rev-parse", "top"), issue250Git(t, repo.dir, "rev-parse", "origin/top"))
+			top := issue250Git(t, repo.dir, "rev-parse", "top")
+			require.NoError(t, runSync(cfg, &syncOptions{remote: "origin"}))
+			assert.Equal(t, top, issue250Git(t, repo.dir, "rev-parse", "top"))
+		})
+	}
+}
+
+func TestSync_BaseRetargetConflictKeepsOldBase(t *testing.T) {
+	repo := setupBaseRetargetRepo(t, "main", true)
+	issue250Git(t, repo.dir, "checkout", "main")
+	issue250WriteFile(t, repo.dir, "child.txt", "conflict\n")
+	issue250Git(t, repo.dir, "add", ".")
+	issue250Git(t, repo.dir, "commit", "-m", "conflict")
+	issue250Git(t, repo.dir, "push", "origin", "main")
+	issue250Git(t, repo.dir, "checkout", "top")
+	withIssue250Repo(t, repo.dir)
+	cfg := issue250TestConfig(t)
+	cfg.GitHubClientOverride = repo.client
+	top := issue250Git(t, repo.dir, "rev-parse", "top")
+
+	require.ErrorIs(t, runSync(cfg, &syncOptions{remote: "origin"}), ErrConflict)
+	sf, err := stack.Load(repo.gitDir)
+	require.NoError(t, err)
+	assert.Equal(t, "parent", sf.Stacks[0].Trunk.Branch)
+	assert.Equal(t, repo.oldParent, sf.Stacks[0].Branches[0].Base)
+	assert.Equal(t, top, issue250Git(t, repo.dir, "rev-parse", "top"))
+	assert.Equal(t, top, issue250Git(t, repo.dir, "rev-parse", "origin/top"))
+	assert.NoFileExists(t, filepath.Join(repo.gitDir, rebaseStateFile))
+}
