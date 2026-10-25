@@ -2,8 +2,10 @@ package theme
 
 import (
 	"bytes"
+	"fmt"
 	"io"
 	"os"
+	"strconv"
 	"strings"
 	"sync"
 
@@ -58,7 +60,7 @@ func canvasPaint(dark bool) string {
 // CanvasOutput is the output for a full-screen Bubble Tea program
 // (tea.WithOutput) that paints the GitHub canvas while the program is on the
 // alternate screen, the way the Copilot CLI does. The canvas is painted right
-// after the program enters the alternate screen and reset right before it
+// after the program enters the alternate screen and taken down right before it
 // leaves, so the primary screen never shows it. Bubble Tea leaves the
 // alternate screen when the program exits (including on panics and signals)
 // and around tea.ExecProcess, which keeps the canvas out of the user's shell,
@@ -66,9 +68,9 @@ func canvasPaint(dark bool) string {
 //
 // Resetting (OSC 111/110) returns a terminal to its configured colors, which
 // drops colors set at runtime (e.g. by pywal or base16-shell) and does nothing
-// on terminals without reset support. So the output also records the
-// terminal's colors before painting, and Restore puts back any the reset
-// didn't. While $EDITOR runs, the terminal shows its configured colors.
+// on terminals without reset support. So before painting, the output plans how
+// to put each color back (see planRestore) and applies that plan every time it
+// leaves the alternate screen.
 //
 // It wraps rather than embeds the *os.File on purpose: Bubble Tea writes escape
 // sequences with io.WriteString, which would call the file's WriteString and
@@ -79,17 +81,11 @@ func canvasPaint(dark bool) string {
 type CanvasOutput struct {
 	f     *os.File
 	paint string
-
-	// savedBg and savedFg are the terminal's colors before painting, when it
-	// reported both; query reads the terminal's current colors.
-	savedBg, savedFg string
-	query            colorQuery
+	// restore puts the terminal's colors back when the canvas comes down.
+	restore string
 
 	mu      sync.Mutex
 	painted bool
-	// touched records that the canvas was painted at least once, so Restore
-	// checks that the terminal's colors came back.
-	touched bool
 }
 
 // colorQuery reports the terminal's current default background and foreground
@@ -97,19 +93,76 @@ type CanvasOutput struct {
 type colorQuery func() (bg, fg string)
 
 // NewCanvasOutput wraps f, painting the canvas variant that matches the
-// detected (or GH_STACK_THEME-forced) terminal background. It asks the
-// terminal for its current colors first, so call it before the program starts
-// reading input.
+// detected (or GH_STACK_THEME-forced) terminal background. It queries the
+// terminal to plan the restore, so call it before the program starts reading
+// input.
 func NewCanvasOutput(f *os.File) *CanvasOutput {
 	return newCanvasOutput(f, lipgloss.HasDarkBackground(), terminalColors(f))
 }
 
 func newCanvasOutput(f *os.File, dark bool, query colorQuery) *CanvasOutput {
-	o := &CanvasOutput{f: f, paint: canvasPaint(dark), query: query}
-	if bg, fg := query(); bg != "" && fg != "" && !isCanvas(bg, fg) {
-		o.savedBg, o.savedFg = bg, fg
+	return &CanvasOutput{f: f, paint: canvasPaint(dark), restore: planRestore(f, query)}
+}
+
+// planRestore decides how to put each of the terminal's default colors back
+// when the canvas comes down, while the terminal can still be queried. A reset
+// is used when it brings the color back, so configuration changes made while
+// the screen is open (e.g. an automatic light/dark switch) still apply. A color
+// set at runtime, or any color on a terminal that ignores resets, is set back
+// explicitly instead. To tell these apart, planRestore nudges each color
+// imperceptibly, resets it, and reads back what the terminal shows, then puts
+// back right away any color the reset didn't restore. Without answers from the
+// terminal, it falls back to the reset.
+func planRestore(w io.Writer, query colorQuery) string {
+	bg, fg := query()
+	if bg == "" || fg == "" || isCanvas(bg, fg) {
+		return canvasReset
 	}
-	return o
+	_, _ = io.WriteString(w, ansi.SetBackgroundColor(nudge(bg))+ansi.SetForegroundColor(nudge(fg))+canvasReset)
+	resetBg, resetFg := query()
+	bgPlan := restoreColor(bg, resetBg, ansi.ResetBackgroundColor, ansi.SetBackgroundColor)
+	fgPlan := restoreColor(fg, resetFg, ansi.ResetForegroundColor, ansi.SetForegroundColor)
+	if fix := explicit(bgPlan) + explicit(fgPlan); fix != "" {
+		_, _ = io.WriteString(w, fix)
+	}
+	return bgPlan + fgPlan
+}
+
+// restoreColor returns how to restore a color that was before painting and
+// reads afterReset once reset: the reset itself when that brought the color
+// back (or the terminal stopped answering), otherwise the color, set
+// explicitly.
+func restoreColor(before, afterReset, reset string, set func(string) string) string {
+	if afterReset == "" || afterReset == before {
+		return reset
+	}
+	return set(before)
+}
+
+// explicit returns plan when it sets a color explicitly, or "" for a reset.
+func explicit(plan string) string {
+	if plan == ansi.ResetBackgroundColor || plan == ansi.ResetForegroundColor {
+		return ""
+	}
+	return plan
+}
+
+// nudge returns hex with its blue channel shifted by a few units: a color the
+// eye can't tell apart from hex, used to see whether a reset takes effect.
+func nudge(hex string) string {
+	if len(hex) != 7 {
+		return hex
+	}
+	b, err := strconv.ParseUint(hex[5:], 16, 8)
+	if err != nil {
+		return hex
+	}
+	if b >= 0x80 {
+		b -= 4
+	} else {
+		b += 4
+	}
+	return fmt.Sprintf("%s%02x", hex[:5], b)
 }
 
 // terminalColors queries the terminal behind f for its current default colors
@@ -140,7 +193,8 @@ func isCanvas(bg, fg string) bool {
 }
 
 // Write forwards p to the terminal, painting the canvas after an
-// alternate-screen enter and resetting it before an alternate-screen exit.
+// alternate-screen enter and restoring the terminal's colors before an
+// alternate-screen exit.
 func (o *CanvasOutput) Write(p []byte) (int, error) {
 	o.mu.Lock()
 	defer o.mu.Unlock()
@@ -156,10 +210,10 @@ func (o *CanvasOutput) Write(p []byte) (int, error) {
 }
 
 // inject returns p with the canvas paint inserted after each alternate-screen
-// enter and the canvas reset inserted before each alternate-screen exit, so
+// enter and the color restore inserted before each alternate-screen exit, so
 // each transition and its color change reach the terminal in a single write.
 func (o *CanvasOutput) inject(p []byte) []byte {
-	out := make([]byte, 0, len(p)+len(o.paint)+len(canvasReset))
+	out := make([]byte, 0, len(p)+len(o.paint)+len(o.restore))
 	for {
 		enter := bytes.Index(p, enterAltScreen)
 		exit := bytes.Index(p, exitAltScreen)
@@ -169,13 +223,13 @@ func (o *CanvasOutput) inject(p []byte) []byte {
 			out = append(out, p[:end]...)
 			if !o.painted {
 				out = append(out, o.paint...)
-				o.painted, o.touched = true, true
+				o.painted = true
 			}
 			p = p[end:]
 		case exit >= 0:
 			out = append(out, p[:exit]...)
 			if o.painted {
-				out = append(out, canvasReset...)
+				out = append(out, o.restore...)
 				o.painted = false
 			}
 			out = append(out, exitAltScreen...)
@@ -186,35 +240,17 @@ func (o *CanvasOutput) inject(p []byte) []byte {
 	}
 }
 
-// Restore finishes restoring the terminal once the program has returned; defer
-// it right after creating the output. It resets the terminal's default colors
-// if the canvas is still painted (a program that returned without leaving the
-// alternate screen), then asks the terminal for its colors and puts back any
-// that differ from the ones it had before painting. Only those are set
-// explicitly, so a terminal whose reset brought its colors back keeps
-// following its own configuration (e.g. automatic light/dark switching).
+// Restore puts the terminal's colors back if the canvas is still painted. It is
+// a safety net for a program that returns without leaving the alternate
+// screen; defer it right after creating the output.
 func (o *CanvasOutput) Restore() {
 	o.mu.Lock()
 	defer o.mu.Unlock()
-	if o.painted {
-		o.painted = false
-		_, _ = io.WriteString(o.f, canvasReset)
-	}
-	if !o.touched || o.savedBg == "" {
+	if !o.painted {
 		return
 	}
-	o.touched = false
-	bg, fg := o.query()
-	var fix string
-	if bg != "" && bg != o.savedBg {
-		fix += ansi.SetBackgroundColor(o.savedBg)
-	}
-	if fg != "" && fg != o.savedFg {
-		fix += ansi.SetForegroundColor(o.savedFg)
-	}
-	if fix != "" {
-		_, _ = io.WriteString(o.f, fix)
-	}
+	o.painted = false
+	_, _ = io.WriteString(o.f, o.restore)
 }
 
 // Read reads from the wrapped file. With Close and Fd, it lets Bubble Tea treat

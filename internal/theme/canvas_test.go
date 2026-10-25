@@ -128,111 +128,171 @@ func TestRGBHex(t *testing.T) {
 	assert.Empty(t, rgbHex(nil), "no answer")
 }
 
-func TestNewCanvasOutputSavesColors(t *testing.T) {
+func TestNudge(t *testing.T) {
+	assert.Equal(t, "#1e1e22", nudge("#1e1e1e"))
+	assert.Equal(t, "#fffffb", nudge("#ffffff"), "moves away from the channel's limit")
+	assert.Equal(t, "invalid", nudge("invalid"))
+}
+
+// TestPlanRestore checks the restore planned for each kind of terminal color,
+// and that planning leaves the terminal showing the colors it had.
+func TestPlanRestore(t *testing.T) {
+	configured := [2]string{"#1e1e1e", "#cccccc"}
+	runtime := [2]string{"#282a36", "#f8f8f2"}
+	setRuntime := ansi.SetBackgroundColor(runtime[0]) + ansi.SetForegroundColor(runtime[1])
 	tests := []struct {
-		name           string
-		bg, fg         string
-		wantBg, wantFg string
+		name         string
+		term         fakeTerminal
+		want         string
+		wantQueries  int
+		wantOverride [2]string
 	}{
-		{name: "terminal reports both", bg: "#282a36", fg: "#f8f8f2", wantBg: "#282a36", wantFg: "#f8f8f2"},
-		{name: "terminal reports only the background", bg: "#282a36"},
-		{name: "terminal reports nothing"},
-		{name: "dark canvas left by a killed run", bg: "#0d1117", fg: "#f0f6fc"},
-		{name: "light canvas left by a killed run", bg: "#ffffff", fg: "#1f2328"},
-		{name: "a GitHub-like theme of the user's own", bg: "#0d1117", fg: "#e6edf3", wantBg: "#0d1117", wantFg: "#e6edf3"},
+		{
+			name:        "configured colors are reset",
+			term:        fakeTerminal{configured: configured},
+			want:        canvasReset,
+			wantQueries: 2,
+		},
+		{
+			name:         "runtime colors are set back",
+			term:         fakeTerminal{configured: configured, override: runtime},
+			want:         setRuntime,
+			wantQueries:  2,
+			wantOverride: runtime,
+		},
+		{
+			name:         "a terminal that ignores resets gets its colors set back",
+			term:         fakeTerminal{configured: configured, ignoresReset: true},
+			want:         ansi.SetBackgroundColor(configured[0]) + ansi.SetForegroundColor(configured[1]),
+			wantQueries:  2,
+			wantOverride: configured,
+		},
+		{
+			name:         "each color is planned on its own",
+			term:         fakeTerminal{configured: configured, override: [2]string{runtime[0], ""}},
+			want:         ansi.SetBackgroundColor(runtime[0]) + ansi.ResetForegroundColor,
+			wantQueries:  2,
+			wantOverride: [2]string{runtime[0], ""},
+		},
+		{
+			name:        "a terminal that doesn't report colors is reset",
+			term:        fakeTerminal{configured: configured, silent: true},
+			want:        canvasReset,
+			wantQueries: 1,
+		},
+		{
+			name:         "a canvas left by a killed run is reset",
+			term:         fakeTerminal{configured: configured, override: [2]string{"#0d1117", "#f0f6fc"}},
+			want:         canvasReset,
+			wantQueries:  1,
+			wantOverride: [2]string{"#0d1117", "#f0f6fc"},
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			q := &scriptedColors{answers: [][2]string{{tt.bg, tt.fg}}}
-			o := newCanvasOutput(tempFile(t), true, q.query)
-			assert.Equal(t, tt.wantBg, o.savedBg)
-			assert.Equal(t, tt.wantFg, o.savedFg)
-			assert.Equal(t, 1, q.calls, "asks the terminal once before painting")
+			term := tt.term
+			term.out = tempFile(t)
+			before := term.colors()
+
+			plan := planRestore(term.out, term.query(t))
+
+			term.sync(t)
+			assert.Equal(t, tt.want, plan)
+			assert.Equal(t, tt.wantQueries, term.queries)
+			assert.Equal(t, before, term.colors(), "planning leaves the terminal's colors as they were")
+			assert.Equal(t, tt.wantOverride, term.override, "colors set explicitly")
 		})
 	}
 }
 
-// TestCanvasOutputRestoreChecksColors verifies Restore puts back the colors
-// the terminal had before painting when the reset didn't, and leaves the
-// terminal on its own configuration when it did.
-func TestCanvasOutputRestoreChecksColors(t *testing.T) {
-	const savedBg, savedFg = "#282a36", "#f8f8f2"
-	setBoth := ansi.SetBackgroundColor(savedBg) + ansi.SetForegroundColor(savedFg)
+// TestCanvasOutputRestoresTerminalColors runs a real alternate-screen program
+// that launches an external command, as submit does for $EDITOR, against a
+// fake terminal. It checks the colors the command sees and the colors left
+// after the program, including when the configured theme changes while the
+// program is open (e.g. an automatic light/dark switch).
+func TestCanvasOutputRestoresTerminalColors(t *testing.T) {
+	dark := [2]string{"#1e1e1e", "#cccccc"}
+	light := [2]string{"#fdf6e3", "#657b83"}
+	runtime := [2]string{"#282a36", "#f8f8f2"}
 	tests := []struct {
-		name      string
-		after     [2]string // the terminal's colors after the reset
-		want      string    // written after the reset
-		wantCalls int
+		name         string
+		term         fakeTerminal
+		themeChange  bool // switch the configured colors to light while the command runs
+		wantDuring   [2]string
+		wantAfter    [2]string
+		wantOverride [2]string
 	}{
-		{name: "reset brought the colors back", after: [2]string{savedBg, savedFg}, wantCalls: 2},
-		{name: "reset dropped runtime colors", after: [2]string{"#1e1e1e", "#cccccc"}, want: setBoth, wantCalls: 2},
-		{name: "terminal ignored the reset", after: [2]string{"#0d1117", "#f0f6fc"}, want: setBoth, wantCalls: 2},
-		{name: "only the foreground differs", after: [2]string{savedBg, "#cccccc"}, want: ansi.SetForegroundColor(savedFg), wantCalls: 2},
-		{name: "terminal stopped answering", wantCalls: 2},
+		{
+			name:       "configured colors",
+			term:       fakeTerminal{configured: dark},
+			wantDuring: dark,
+			wantAfter:  dark,
+		},
+		{
+			name:        "configured theme changes while open",
+			term:        fakeTerminal{configured: dark},
+			themeChange: true,
+			wantDuring:  dark,
+			wantAfter:   light,
+		},
+		{
+			name:         "runtime colors",
+			term:         fakeTerminal{configured: dark, override: runtime},
+			wantDuring:   runtime,
+			wantAfter:    runtime,
+			wantOverride: runtime,
+		},
+		{
+			name:         "runtime colors outlast a theme change",
+			term:         fakeTerminal{configured: dark, override: runtime},
+			themeChange:  true,
+			wantDuring:   runtime,
+			wantAfter:    runtime,
+			wantOverride: runtime,
+		},
+		{
+			name:         "terminal ignores resets",
+			term:         fakeTerminal{configured: dark, ignoresReset: true},
+			wantDuring:   dark,
+			wantAfter:    dark,
+			wantOverride: dark,
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			q := &scriptedColors{answers: [][2]string{{savedBg, savedFg}, tt.after}}
-			o, read := testCanvasOutputWith(t, q.query)
-			_, err := o.Write([]byte(enter + exit))
+			term := tt.term
+			term.out = tempFile(t)
+			o := newCanvasOutput(term.out, true, term.query(t))
+			planned := term.queries
+			var during [2]string
+			probe := &execProbe{out: o, run: func() {
+				term.sync(t)
+				during = term.colors()
+				if tt.themeChange {
+					term.configured = light
+				}
+			}}
+			model := execModel{cmd: tea.Exec(probe, func(error) tea.Msg { return execDoneMsg{} })}
+
+			_, err := tea.NewProgram(model,
+				tea.WithAltScreen(),
+				tea.WithInput(strings.NewReader("")),
+				tea.WithOutput(o),
+				tea.WithoutSignalHandler(),
+			).Run()
 			require.NoError(t, err)
-
 			o.Restore()
-			o.Restore()
+			term.sync(t)
 
-			assert.Equal(t, enter+canvasPaint(true)+canvasReset+exit+tt.want, read())
-			assert.Equal(t, tt.wantCalls, q.calls, "checks once, after the program")
+			assert.True(t, probe.ran)
+			assert.False(t, probe.paintedDuringRun, "the canvas is down while the command runs")
+			assert.Equal(t, tt.wantDuring, during, "colors the command sees")
+			assert.Equal(t, tt.wantAfter, term.colors(), "colors after the program")
+			assert.Equal(t, tt.wantOverride, term.override, "colors left set explicitly")
+			assert.Equal(t, planned, term.queries, "no queries while the program owns the terminal")
+			assert.Equal(t, 2, strings.Count(readAll(t, term.out)(), canvasPaint(true)), "painted on each alternate-screen enter")
 		})
 	}
-
-	t.Run("never painted", func(t *testing.T) {
-		q := &scriptedColors{answers: [][2]string{{savedBg, savedFg}}}
-		o, read := testCanvasOutputWith(t, q.query)
-		o.Restore()
-		assert.Empty(t, read())
-		assert.Equal(t, 1, q.calls, "no check without painting")
-	})
-
-	t.Run("colors unknown before painting", func(t *testing.T) {
-		q := &scriptedColors{answers: [][2]string{{"", ""}}}
-		o, read := testCanvasOutputWith(t, q.query)
-		_, err := o.Write([]byte(enter))
-		require.NoError(t, err)
-		o.Restore()
-		assert.Equal(t, enter+canvasPaint(true)+canvasReset, read(), "falls back to the reset")
-		assert.Equal(t, 1, q.calls)
-	})
-}
-
-// TestCanvasOutputWithBubbleTea runs a real alternate-screen program that
-// launches an external command, verifying the canvas is painted only while the
-// program is on screen: reset before the command runs (so $EDITOR sees the
-// terminal's colors), repainted when the program returns, and reset on exit,
-// after which Restore puts back runtime colors the reset dropped.
-func TestCanvasOutputWithBubbleTea(t *testing.T) {
-	q := &scriptedColors{answers: [][2]string{{"#282a36", "#f8f8f2"}, {"#1e1e1e", "#cccccc"}}}
-	o, read := testCanvasOutputWith(t, q.query)
-	probe := &execProbe{out: o}
-	model := execModel{cmd: tea.Exec(probe, func(error) tea.Msg { return execDoneMsg{} })}
-
-	_, err := tea.NewProgram(model,
-		tea.WithAltScreen(),
-		tea.WithInput(strings.NewReader("")),
-		tea.WithOutput(o),
-		tea.WithoutSignalHandler(),
-	).Run()
-	require.NoError(t, err)
-	assert.Equal(t, 1, q.calls, "the terminal isn't queried while the program owns it")
-	o.Restore()
-
-	assert.True(t, probe.ran)
-	assert.False(t, probe.paintedDuringRun, "the external command must see the terminal's own colors")
-	assert.Equal(t,
-		[]string{"enter", "paint", "reset", "exit", "enter", "paint", "reset", "exit"},
-		canvasEvents(read()),
-	)
-	assert.True(t, strings.HasSuffix(read(), ansi.SetBackgroundColor("#282a36")+ansi.SetForegroundColor("#f8f8f2")),
-		"runtime colors come back after the program")
 }
 
 type execDoneMsg struct{}
@@ -251,17 +311,21 @@ func (m execModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 func (m execModel) View() string { return "canvas" }
 
 // execProbe is a tea.ExecCommand that records whether the canvas was painted
-// while it ran.
+// while it ran, then calls run.
 type execProbe struct {
 	out              *CanvasOutput
+	run              func()
 	ran              bool
 	paintedDuringRun bool
 }
 
 func (p *execProbe) Run() error {
 	p.out.mu.Lock()
-	defer p.out.mu.Unlock()
 	p.ran, p.paintedDuringRun = true, p.out.painted
+	p.out.mu.Unlock()
+	if p.run != nil {
+		p.run()
+	}
 	return nil
 }
 
@@ -269,42 +333,83 @@ func (p *execProbe) SetStdin(io.Reader)  {}
 func (p *execProbe) SetStdout(io.Writer) {}
 func (p *execProbe) SetStderr(io.Writer) {}
 
-// canvasEvents returns the alternate-screen transitions and canvas color
-// changes in s, in order.
-func canvasEvents(s string) []string {
-	names := map[string]string{
-		enter:             "enter",
-		exit:              "exit",
-		canvasPaint(true): "paint",
-		canvasReset:       "reset",
-	}
-	var events []string
-	for i := 0; i < len(s); i++ {
-		for seq, name := range names {
-			if strings.HasPrefix(s[i:], seq) {
-				events = append(events, name)
-				i += len(seq) - 1
-				break
-			}
-		}
-	}
-	return events
+// fakeTerminal models a terminal's default colors: its configured colors,
+// runtime overrides set with OSC 10/11, and resets (OSC 110/111) that clear an
+// override unless the terminal ignores them. Before answering a color query or
+// reporting its state, it applies everything written to out since last time.
+type fakeTerminal struct {
+	out          *os.File
+	read         int
+	configured   [2]string // background, foreground
+	override     [2]string // "" when not set
+	ignoresReset bool
+	silent       bool // answers no color queries
+	queries      int
 }
 
-// testCanvasOutput returns a CanvasOutput over a temporary file and a func
-// that reads everything written to it.
+func (ft *fakeTerminal) query(t *testing.T) colorQuery {
+	return func() (string, string) {
+		ft.sync(t)
+		ft.queries++
+		if ft.silent {
+			return "", ""
+		}
+		c := ft.colors()
+		return c[0], c[1]
+	}
+}
+
+func (ft *fakeTerminal) colors() [2]string {
+	c := ft.configured
+	for i, o := range ft.override {
+		if o != "" {
+			c[i] = o
+		}
+	}
+	return c
+}
+
+func (ft *fakeTerminal) sync(t *testing.T) {
+	t.Helper()
+	b, err := os.ReadFile(ft.out.Name())
+	require.NoError(t, err)
+	s := string(b[ft.read:])
+	ft.read = len(b)
+	for {
+		start := strings.Index(s, "\x1b]")
+		if start < 0 {
+			return
+		}
+		s = s[start+2:]
+		end := strings.IndexAny(s, "\x07\x1b")
+		if end < 0 {
+			return
+		}
+		ft.apply(s[:end])
+		s = s[end:]
+	}
+}
+
+func (ft *fakeTerminal) apply(osc string) {
+	ps, pt, _ := strings.Cut(osc, ";")
+	switch ps {
+	case "11":
+		ft.override[0] = pt
+	case "10":
+		ft.override[1] = pt
+	case "111", "110":
+		if !ft.ignoresReset {
+			ft.override[map[string]int{"111": 0, "110": 1}[ps]] = ""
+		}
+	}
+}
+
+// testCanvasOutput returns a CanvasOutput that resets the terminal's colors,
+// over a temporary file, and a func that reads everything written to it.
 func testCanvasOutput(t *testing.T, dark bool) (*CanvasOutput, func() string) {
 	t.Helper()
 	f := tempFile(t)
-	return &CanvasOutput{f: f, paint: canvasPaint(dark)}, readAll(t, f)
-}
-
-// testCanvasOutputWith is testCanvasOutput for the dark canvas, asking query
-// for the terminal's colors.
-func testCanvasOutputWith(t *testing.T, query colorQuery) (*CanvasOutput, func() string) {
-	t.Helper()
-	f := tempFile(t)
-	return newCanvasOutput(f, true, query), readAll(t, f)
+	return &CanvasOutput{f: f, paint: canvasPaint(dark), restore: canvasReset}, readAll(t, f)
 }
 
 func readAll(t *testing.T, f *os.File) func() string {
@@ -313,22 +418,6 @@ func readAll(t *testing.T, f *os.File) func() string {
 		require.NoError(t, err)
 		return string(b)
 	}
-}
-
-// scriptedColors is a colorQuery that answers with each of answers in turn,
-// then with nothing.
-type scriptedColors struct {
-	answers [][2]string
-	calls   int
-}
-
-func (s *scriptedColors) query() (string, string) {
-	s.calls++
-	if s.calls > len(s.answers) {
-		return "", ""
-	}
-	a := s.answers[s.calls-1]
-	return a[0], a[1]
 }
 
 func tempFile(t *testing.T) *os.File {
