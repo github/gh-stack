@@ -9,15 +9,20 @@ import (
 	"sync"
 
 	"github.com/BourgeoisBear/rasterm"
+	"github.com/charmbracelet/lipgloss"
 	"golang.org/x/term"
 )
 
-// invertocatPNG is the white GitHub Invertocat mark, embedded so it never has to
-// be fetched at runtime. It is drawn via an inline-image protocol; there is no
-// character-art fallback.
+// The GitHub Invertocat marks are embedded so they never have to be fetched at
+// runtime: the white mark for dark backgrounds and the dark mark (the official
+// github-mark color, #24292f) for light ones. They are drawn via an
+// inline-image protocol; there is no character-art fallback.
 //
 //go:embed assets/invertocat-white.png
-var invertocatPNG []byte
+var invertocatWhitePNG []byte
+
+//go:embed assets/invertocat-black.png
+var invertocatBlackPNG []byte
 
 // headerLogoID is a fixed kitty image id so re-emitting the header replaces the
 // logo in place (and lets us delete it by id) instead of stacking copies.
@@ -41,10 +46,11 @@ const (
 )
 
 var (
-	logoDetectOnce sync.Once
-	logoProtocol   logoProto
-	logoBase64     string
-	logoBase64Once sync.Once
+	logoDetectOnce  sync.Once
+	logoProtocol    logoProto
+	logoBase64Once  sync.Once
+	logoBase64White string
+	logoBase64Black string
 )
 
 // detectLogoProtocol decides — once, at first use — whether an inline-image
@@ -71,11 +77,17 @@ func detectLogoProtocol() logoProto {
 	return logoProtocol
 }
 
+// pngBase64 returns the base64-encoded mark that contrasts with the detected
+// terminal background.
 func pngBase64() string {
 	logoBase64Once.Do(func() {
-		logoBase64 = base64.StdEncoding.EncodeToString(invertocatPNG)
+		logoBase64White = base64.StdEncoding.EncodeToString(invertocatWhitePNG)
+		logoBase64Black = base64.StdEncoding.EncodeToString(invertocatBlackPNG)
 	})
-	return logoBase64
+	if lipgloss.HasDarkBackground() {
+		return logoBase64White
+	}
+	return logoBase64Black
 }
 
 // LogoAvailable reports whether the inline-image logo can be drawn (a supported

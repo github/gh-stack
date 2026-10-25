@@ -1,6 +1,7 @@
 package shared
 
 import (
+	"encoding/base64"
 	"strings"
 	"testing"
 
@@ -93,4 +94,18 @@ func TestHeaderLinkPreservesLayout(t *testing.T) {
 	linked.URL = "https://github.com/o/r/stack/7"
 	assert.Equal(t, lipgloss.Width(renderHeaderInfoLabel(plain)), lipgloss.Width(renderHeaderInfoLabel(linked)))
 	assert.NotContains(t, renderHeaderInfoLabel(linked), linked.URL, "native links stay compact")
+}
+
+// TestLogoMatchesBackground verifies the header draws the white Invertocat on
+// dark backgrounds and the dark mark on light ones, so it stays visible on
+// either GitHub canvas.
+func TestLogoMatchesBackground(t *testing.T) {
+	before := lipgloss.HasDarkBackground()
+	t.Cleanup(func() { lipgloss.SetHasDarkBackground(before) })
+
+	lipgloss.SetHasDarkBackground(true)
+	assert.Equal(t, base64.StdEncoding.EncodeToString(invertocatWhitePNG), pngBase64())
+	lipgloss.SetHasDarkBackground(false)
+	assert.Equal(t, base64.StdEncoding.EncodeToString(invertocatBlackPNG), pngBase64())
+	assert.NotEqual(t, invertocatWhitePNG, invertocatBlackPNG)
 }
