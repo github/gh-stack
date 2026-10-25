@@ -12,6 +12,8 @@ import (
 	"github.com/muesli/termenv"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"github.com/github/gh-stack/internal/theme"
 )
 
 func baseOptions() Options {
@@ -533,4 +535,16 @@ func TestPRCount(t *testing.T) {
 	assert.Equal(t, "1 PR", prCount(1))
 	assert.Equal(t, "2 PRs", prCount(2))
 	assert.Equal(t, "5 PRs", prCount(5))
+}
+
+// TestStepperColors verifies completed steps use the primary (green) fill with
+// white labels, the active step is inverted ink, and upcoming steps are muted.
+func TestStepperColors(t *testing.T) {
+	const cur = 1
+	assert.Equal(t, lipgloss.TerminalColor(theme.ColorPrimaryFill), stepBg(0, cur))
+	assert.Equal(t, lipgloss.TerminalColor(theme.ColorOnPrimary), stepFg(0, cur))
+	assert.Equal(t, lipgloss.TerminalColor(theme.ColorText), stepBg(cur, cur))
+	assert.Equal(t, lipgloss.TerminalColor(theme.ColorOnInverse), stepFg(cur, cur))
+	assert.Equal(t, lipgloss.TerminalColor(theme.ColorBorder), stepBg(2, cur))
+	assert.Equal(t, lipgloss.TerminalColor(theme.ColorTextMuted), stepFg(2, cur))
 }

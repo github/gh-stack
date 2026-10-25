@@ -38,7 +38,7 @@ type HeaderInfoLine struct {
 	Label     string
 	LinkLabel string          // optional clickable text within Label
 	URL       string          // native-click target for LinkLabel
-	IconStyle *lipgloss.Style // optional override; nil uses default HeaderInfoStyle (cyan)
+	IconStyle *lipgloss.Style // optional override; nil uses default HeaderInfoStyle (accent)
 }
 
 const headerInfoStartRow = 3

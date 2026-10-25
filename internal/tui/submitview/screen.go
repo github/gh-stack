@@ -689,7 +689,7 @@ type leftRow struct {
 }
 
 // renderLeftPanel renders the stack as a vertical timeline: a circle node per
-// branch — filled cyan when it will become a PR, a dotted gray ring when skipped,
+// branch — filled accent blue when it will become a PR, a dotted gray ring when skipped,
 // a state-colored ring for an existing PR — joined by a spine down to the trunk.
 // Existing PRs show "state · #num" on a second line. The focused branch's full
 // row (and a gap above/below) is shaded edge to edge. Long names wrap, and the
@@ -879,9 +879,9 @@ func leftLine(glyph, body, trailing string, focused bool, fullW int) string {
 	return lead + body + pad(fill, focused)
 }
 
-// branchCircle renders the timeline node for a branch: a filled cyan circle when
-// it will become a PR, a dotted gray ring when skipped, or a state-colored open
-// ring for an existing PR.
+// branchCircle renders the timeline node for a branch: a filled accent circle
+// when it will become a PR, a dotted gray ring when skipped, or a state-colored
+// open ring for an existing PR.
 func (m Model) branchCircle(n SubmitNode, focused bool) string {
 	glyph, color := "○", n.State.Color()
 	switch {

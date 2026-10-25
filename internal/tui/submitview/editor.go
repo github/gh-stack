@@ -146,7 +146,7 @@ func (m Model) renderIncludeChip(n SubmitNode) string {
 
 // renderSwitch draws a two-state pill toggle with a square knob that slides
 // between the ends, kept one cell off each border so it never touches the edge:
-// "   ■ " (green track, black knob right) when on, " ■   " (light track, dark
+// "   ■ " (green track, white knob right) when on, " ■   " (muted track, dark
 // knob left) when off.
 func renderSwitch(on bool) string {
 	if on {
@@ -552,8 +552,9 @@ func (m Model) renderDraftToggle(innerW int) string {
 	return composeLR(left, hintStyle.Render("open in $EDITOR (^e)"), innerW)
 }
 
-// sectionLabelFor renders a field's section label, turning it cyan when the
-// field is focused (matching the focused branch name and CREATE AS treatment).
+// sectionLabelFor renders a field's section label, turning it the accent color
+// when the field is focused (matching the focused branch name and CREATE AS
+// treatment).
 func sectionLabelFor(text string, focused bool) string {
 	if focused {
 		return focusNameStyle.Render(text)

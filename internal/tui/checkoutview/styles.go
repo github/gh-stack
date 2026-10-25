@@ -27,9 +27,9 @@ const statusBox = "▆"
 // color toward the faint text gray, so the bar stays legible but understated in
 // both light and dark terminals.
 var (
-	statusMergedColor = lipgloss.AdaptiveColor{Dark: "#957dc1", Light: "#816abf"} // muted purple
-	statusOpenColor   = lipgloss.AdaptiveColor{Dark: "#509661", Light: "#488462"} // muted green
-	statusClosedColor = lipgloss.AdaptiveColor{Dark: "#b55d5d", Light: "#ab515d"} // muted red
+	statusMergedColor = shared.ColorPurpleDim
+	statusOpenColor   = shared.ColorGreenDim
+	statusClosedColor = shared.ColorRedDim
 )
 
 var (

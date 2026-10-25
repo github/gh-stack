@@ -17,16 +17,15 @@ var stateColors = map[BranchState]lipgloss.TerminalColor{
 	StateClosed: shared.ColorRed,
 }
 
-// State background tints for pill badges: dark washes on a dark terminal, light
-// washes on a light terminal, so the badge reads as a low-opacity tint of its
-// foreground color in either mode.
-var stateBgColors = map[BranchState]lipgloss.TerminalColor{
-	StateNew:    lipgloss.AdaptiveColor{Dark: "#10243e", Light: "#cfe7ff"},
-	StateOpen:   lipgloss.AdaptiveColor{Dark: "#0d2818", Light: "#c8f0d4"},
-	StateDraft:  lipgloss.AdaptiveColor{Dark: "#272b33", Light: "#e4e9ef"},
-	StateQueued: lipgloss.AdaptiveColor{Dark: "#2b2410", Light: "#f4ead9"},
-	StateMerged: lipgloss.AdaptiveColor{Dark: "#241a3a", Light: "#ecdcff"},
-	StateClosed: lipgloss.AdaptiveColor{Dark: "#2d1417", Light: "#ffdcd7"},
+// State pill badges: each state's color on a faint wash of the same hue, so the
+// badge reads as a low-opacity tint of its foreground color in either mode.
+var stateBadges = map[BranchState]shared.Badge{
+	StateNew:    shared.BadgeBlue,
+	StateOpen:   shared.BadgeGreen,
+	StateDraft:  shared.BadgeGray,
+	StateQueued: shared.BadgeYellow,
+	StateMerged: shared.BadgePurple,
+	StateClosed: shared.BadgeRed,
 }
 
 // Label returns the uppercase badge text for a state (e.g. "NEW").
@@ -75,9 +74,10 @@ func (s BranchState) Dot() string {
 // RenderBadge renders a state as a pill badge: the uppercase label in the state
 // color on a tinted background with single-column horizontal padding.
 func RenderBadge(s BranchState) string {
+	badge := stateBadges[s]
 	return lipgloss.NewStyle().
-		Foreground(s.Color()).
-		Background(stateBgColors[s]).
+		Foreground(badge.Fg).
+		Background(badge.Bg).
 		Bold(true).
 		Padding(0, 1).
 		Render(s.Label())
@@ -125,10 +125,10 @@ var (
 	lockedTitleStyle = lipgloss.NewStyle().Foreground(shared.ColorText).Bold(true)
 
 	// Footer bottom-right actions: nextBranchStyle is the "NEXT BRANCH" label;
-	// submitButtonStyle is the prominent inverted "SUBMIT N PRs" button shown on
-	// the last PR.
+	// submitButtonStyle is the prominent primary (green) "SUBMIT N PRs" button
+	// shown on the last PR.
 	nextBranchStyle   = lipgloss.NewStyle().Foreground(shared.ColorText).Bold(true)
-	submitButtonStyle = lipgloss.NewStyle().Foreground(shared.ColorButtonFg).Background(shared.ColorButtonBg).Bold(true).Padding(0, 1)
+	submitButtonStyle = lipgloss.NewStyle().Foreground(shared.ColorOnPrimary).Background(shared.ColorPrimaryFill).Bold(true).Padding(0, 1)
 	// prNumberStyle renders a clickable existing-PR number as an underlined link.
 	prNumberStyle = lipgloss.NewStyle().Foreground(shared.ColorText).Underline(true)
 
@@ -136,19 +136,19 @@ var (
 	spineStyle = lipgloss.NewStyle().Foreground(shared.ColorBorder)
 	ruleStyle  = lipgloss.NewStyle().Foreground(shared.ColorBorder)
 
-	// CREATE PR switch in the right-panel header. On: a green pill (matching the
-	// CREATE AS selected color) with the knob inset on the right. Off: a muted
-	// track with a darker knob inset on the left.
-	switchOnStyle  = lipgloss.NewStyle().Background(shared.ColorGreen)
-	switchOffStyle = lipgloss.NewStyle().Background(lipgloss.AdaptiveColor{Dark: "#6e7681", Light: "#afb8c1"})
-	switchOnKnob   = shared.ColorOnFill // contrasts with the green track
-	switchOffKnob  = lipgloss.AdaptiveColor{Dark: "#1c2128", Light: "#57606a"}
+	// CREATE PR switch in the right-panel header. On: a primary (green) pill
+	// matching the CREATE AS selected segment, with a white knob inset on the
+	// right. Off: a muted track with a darker knob inset on the left.
+	switchOnStyle  = lipgloss.NewStyle().Background(shared.ColorPrimaryFill)
+	switchOffStyle = lipgloss.NewStyle().Background(shared.ColorToggleOffTrack)
+	switchOnKnob   = shared.ColorOnPrimary
+	switchOffKnob  = shared.ColorToggleOffKnob
 
-	// Segmented Ready/Draft control: the selected segment is filled green; the
-	// other is muted. Brackets/divider are dim chrome.
+	// Segmented Ready/Draft control: the selected segment is the primary
+	// (green) fill; the other is muted. Brackets/divider are dim chrome.
 	segOnStyle = lipgloss.NewStyle().
-			Foreground(shared.ColorOnFill).
-			Background(shared.ColorGreen).
+			Foreground(shared.ColorOnPrimary).
+			Background(shared.ColorPrimaryFill).
 			Bold(true).
 			Padding(0, 1)
 	segOffStyle   = lipgloss.NewStyle().Foreground(shared.ColorTextMuted).Padding(0, 1)

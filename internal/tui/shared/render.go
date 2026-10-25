@@ -28,7 +28,7 @@ type BranchNodeData struct {
 	CommitsExpanded bool
 	FilesExpanded   bool
 
-	// ShowCurrentLabel controls whether "(current)" is appended and cyan
+	// ShowCurrentLabel controls whether "(current)" is appended and accent
 	// styling is used for the current branch. View sets this true; Modify
 	// leaves it false so all branches look uniform.
 	ShowCurrentLabel bool

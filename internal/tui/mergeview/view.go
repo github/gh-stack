@@ -84,12 +84,13 @@ func (m Model) banner() string {
 }
 
 // stepBg returns the background color for the step at index i given the current
-// active step: completed steps are green, the active step is the brightest
-// (near-white on dark, near-black on light), and upcoming steps are a dim gray.
+// active step: completed steps use the primary (green) fill, the active step is
+// the brightest (near-white on dark, near-black on light), and upcoming steps
+// are a dim gray.
 func stepBg(i, cur int) lipgloss.TerminalColor {
 	switch {
 	case i < cur:
-		return theme.ColorGreen
+		return theme.ColorPrimaryFill
 	case i == cur:
 		return theme.ColorText
 	default:
@@ -97,13 +98,18 @@ func stepBg(i, cur int) lipgloss.TerminalColor {
 	}
 }
 
-// stepFg returns the foreground color for the step at index i: dark text on the
-// bright/green segments, and a dim muted text on the upcoming gray segments.
+// stepFg returns the foreground color for the step at index i: white on the
+// completed green segments, canvas-colored ink on the bright active segment,
+// and muted text on the upcoming gray segments.
 func stepFg(i, cur int) lipgloss.TerminalColor {
-	if i > cur {
+	switch {
+	case i < cur:
+		return theme.ColorOnPrimary
+	case i == cur:
+		return theme.ColorOnInverse
+	default:
 		return theme.ColorTextMuted
 	}
-	return theme.ColorOnFill
 }
 
 func (m Model) stepper() string {
