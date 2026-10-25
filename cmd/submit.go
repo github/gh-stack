@@ -289,7 +289,7 @@ func runSubmit(cfg *config.Config, opts *submitOptions) error {
 	if pendingModify {
 		if !allPRsSubmitted || (!stackSynced && len(activeBranches) > 1) {
 			cfg.Errorf("modify is not fully submitted; recovery state was retained")
-			cfg.Printf("Finish submitting all remaining PRs, then retry `%s`", cfg.ColorCyan("gh stack submit"))
+			cfg.Printf("Finish submitting all remaining PRs, then retry `%s`", cfg.ColorAccent("gh stack submit"))
 			return ErrSilent
 		}
 		if err := clearPendingModifyState(cfg, s, gitDir); err != nil {
@@ -623,7 +623,7 @@ func maybeForkFromMergedBase(cfg *config.Config, client github.ClientOps, sf *st
 
 	cfg.Warningf("Every PR in this stack has already been merged on GitHub")
 	cfg.Printf("Adding to a fully merged stack isn't supported — starting a new stack for your %d unmerged %s based on %s",
-		len(forkBranches), plural(len(forkBranches), "branch", "branches"), cfg.ColorCyan(trunk.Branch))
+		len(forkBranches), plural(len(forkBranches), "branch", "branches"), cfg.ColorAccent(trunk.Branch))
 
 	// Decide the fate of the original (fully merged) stack: keep it as a record
 	// only if at least one of its branches still exists locally; otherwise drop
@@ -748,7 +748,7 @@ func handlePendingModify(cfg *config.Config, client github.ClientOps, s *stack.S
 		if !proceed {
 			cfg.Canceled = true
 			cfg.Printf("Skipping stack recreation — run `%s` when ready",
-				cfg.ColorCyan("gh stack submit"))
+				cfg.ColorAccent("gh stack submit"))
 			return true, errInterrupt
 		}
 	}
@@ -758,7 +758,7 @@ func handlePendingModify(cfg *config.Config, client github.ClientOps, s *stack.S
 		remote, lookupErr := remoteStackByID(client, state.PriorRemoteStackID)
 		if lookupErr != nil {
 			cfg.Warningf("Failed to look up existing stack: %v", lookupErr)
-			cfg.Printf("Run `%s` again to retry", cfg.ColorCyan("gh stack submit"))
+			cfg.Printf("Run `%s` again to retry", cfg.ColorAccent("gh stack submit"))
 			return true, lookupErr
 		}
 		if remote == nil {
@@ -771,7 +771,7 @@ func handlePendingModify(cfg *config.Config, client github.ClientOps, s *stack.S
 				cfg.Printf("Previous stack already deleted on GitHub")
 			} else {
 				cfg.Warningf("Failed to delete existing stack: %v", err)
-				cfg.Printf("Run `%s` again to retry", cfg.ColorCyan("gh stack submit"))
+				cfg.Printf("Run `%s` again to retry", cfg.ColorAccent("gh stack submit"))
 				return true, err
 			}
 		} else if !dissolved && !prepareStackRecreation(s, remaining) {
@@ -888,7 +888,7 @@ func reconcileUntrackedStack(cfg *config.Config, client github.ClientOps, s *sta
 		// automatically.
 		cfg.Warningf("Your PRs belong to multiple stacks on GitHub — reconcile them first")
 		cfg.Printf("  Run `%s` to import a stack, or unstack the PRs from the web",
-			cfg.ColorCyan("gh stack checkout <pr>"))
+			cfg.ColorAccent("gh stack checkout <pr>"))
 		return false
 	}
 
@@ -904,7 +904,7 @@ func reconcileUntrackedStack(cfg *config.Config, client github.ClientOps, s *sta
 		cfg.Warningf("A stack on GitHub already contains %s, which %s not in your local stack",
 			formatPRList(dropped), plural(len(dropped), "is", "are"))
 		cfg.Printf("  Run `%s` to import the full stack",
-			cfg.ColorCyan("gh stack checkout <pr>"))
+			cfg.ColorAccent("gh stack checkout <pr>"))
 		return false
 	}
 
@@ -1087,7 +1087,7 @@ func handleCreate422(cfg *config.Config, httpErr *api.HTTPError, prNumbers []int
 		}
 		cfg.Warningf("One or more PRs are already part of a different stack on GitHub")
 		cfg.Printf("  Run `%s` to import the existing stack, or unstack the PRs from the web",
-			cfg.ColorCyan("gh stack checkout <pr>"))
+			cfg.ColorAccent("gh stack checkout <pr>"))
 		return false
 	}
 

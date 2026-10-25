@@ -135,8 +135,8 @@ func ensureStackNumber(client github.ClientOps, s *stack.Stack) (int, error) {
 }
 
 // promptInput prompts the user for a single line of text input. The user's
-// input is rendered in the accent (cyan) color for visual distinction from the
-// prompt message.
+// input is rendered in the accent color for visual distinction from the prompt
+// message.
 func promptInput(cfg *config.Config, prompt string) (string, error) {
 	if cfg.InputFn != nil {
 		return cfg.InputFn(prompt)
@@ -157,17 +157,17 @@ func promptInput(cfg *config.Config, prompt string) (string, error) {
 	}
 	fmt.Fprintf(cfg.Out, "%s %s ", icon, prompt)
 
-	// Color the user's echoed input with the accent (cyan) color.
-	cyanStart, cyanReset := theme.FgSeqs(theme.ColorAccent)
+	// Color the user's echoed input with the accent color.
+	accentStart, accentReset := theme.FgSeqs(theme.ColorAccent)
 	if useColor {
-		fmt.Fprint(cfg.Out, cyanStart)
+		fmt.Fprint(cfg.Out, accentStart)
 	}
 
 	line, err := rr.ReadLine(0)
 
 	// Reset color after input
 	if useColor {
-		fmt.Fprint(cfg.Out, cyanReset)
+		fmt.Fprint(cfg.Out, accentReset)
 	}
 
 	if err != nil {
@@ -277,7 +277,7 @@ func reportBranchNotInStack(cfg *config.Config, branch string, branchFromArg boo
 		cfg.Errorf("current branch %q is not part of a stack", branch)
 	}
 	cfg.Printf("Checkout an existing stack using `%s` or create a new stack using `%s`",
-		cfg.ColorCyan("gh stack checkout"), cfg.ColorCyan("gh stack init"))
+		cfg.ColorAccent("gh stack checkout"), cfg.ColorAccent("gh stack init"))
 }
 
 // lookupStackByNumber looks up the locally tracked stack whose stack number
@@ -1234,7 +1234,7 @@ func trunkWithoutRemote(cfg *config.Config, trunk, remote string) (trunkTarget, 
 	if trackedRemote, err := git.UpstreamRemote(trunk); err == nil && trackedRemote != "" {
 		cfg.Errorf("%s no longer exists on %s", trunk, remote)
 		cfg.Printf("  Re-point the stack at an existing trunk branch, or use `%s`.",
-			cfg.ColorCyan("gh stack rebase --no-trunk"))
+			cfg.ColorAccent("gh stack rebase --no-trunk"))
 		return trunkTarget{}, ErrSilent
 	}
 
@@ -1683,7 +1683,7 @@ func resolvePR(cfg *config.Config, sf *stack.StackFile, target string) (*stack.S
 		"no locally tracked stack found for %q\n"+
 			"To pull down a stack from remote, use the PR number: `%s`",
 		target,
-		cfg.ColorCyan("gh stack checkout <pr-number>"),
+		cfg.ColorAccent("gh stack checkout <pr-number>"),
 	)
 }
 
@@ -1805,8 +1805,8 @@ func pickRemote(cfg *config.Config, branch, remoteOverride string) (string, erro
 	if save {
 		if saveErr := git.SaveRemote(selectedRemote); saveErr == nil {
 			cfg.Successf("Saved %q as the default remote for gh stack", selectedRemote)
-			cfg.Printf("To change later, run: %s", cfg.ColorCyan("git config gh-stack.remote <other-remote>"))
-			cfg.Printf("To clear, run:        %s", cfg.ColorCyan("git config --unset gh-stack.remote"))
+			cfg.Printf("To change later, run: %s", cfg.ColorAccent("git config gh-stack.remote <other-remote>"))
+			cfg.Printf("To clear, run:        %s", cfg.ColorAccent("git config --unset gh-stack.remote"))
 		} else {
 			cfg.Warningf("Could not save remote preference: %v", saveErr)
 		}
@@ -2113,7 +2113,7 @@ func resolveStackDivergence(cfg *config.Config, client github.ClientOps, sf *sta
 
 	if !cfg.IsInteractive() {
 		cfg.Printf("  Re-run in an interactive terminal to resolve, or import the remote stack with `%s`.",
-			cfg.ColorCyan("gh stack checkout <pr>"))
+			cfg.ColorAccent("gh stack checkout <pr>"))
 		cfg.Infof("Sync aborted — no changes were made")
 		return remoteReconcileResult{stop: true}, nil
 	}
@@ -2272,8 +2272,8 @@ func resolveDivergenceDeleteRemote(cfg *config.Config, client github.ClientOps, 
 
 	cfg.Printf("")
 	cfg.Printf("Your local branches and stack order are unchanged.")
-	cfg.Printf("  Run `%s` to recreate the stack on GitHub.", cfg.ColorCyan("gh stack submit"))
-	cfg.Printf("  Run `%s` first if you want to change the stack's structure.", cfg.ColorCyan("gh stack modify"))
+	cfg.Printf("  Run `%s` to recreate the stack on GitHub.", cfg.ColorAccent("gh stack submit"))
+	cfg.Printf("  Run `%s` first if you want to change the stack's structure.", cfg.ColorAccent("gh stack modify"))
 	return res, nil
 }
 

@@ -92,7 +92,7 @@ func runModify(cfg *config.Config) error {
 	// before opening the TUI, mirroring submit's "nothing to submit" behavior.
 	if s.IsFullyMerged() {
 		cfg.Warningf("All branches in this stack have been merged")
-		cfg.Printf("There's nothing to modify — start a new stack with `%s`", cfg.ColorCyan("gh stack init"))
+		cfg.Printf("There's nothing to modify — start a new stack with `%s`", cfg.ColorAccent("gh stack init"))
 		return nil
 	}
 
@@ -177,7 +177,7 @@ func runModify(cfg *config.Config) error {
 		cfg.Printf("")
 
 		cfg.Printf("Or restore the stack to its pre-modify state with `%s`",
-			cfg.ColorCyan("gh stack modify --abort"))
+			cfg.ColorAccent("gh stack modify --abort"))
 		return ErrConflict
 	}
 
@@ -211,7 +211,7 @@ func printModifySuccess(cfg *config.Config, result *modifyview.ApplyResult) {
 
 	for _, d := range result.DroppedPRs {
 		cfg.Printf("  Dropped: %s (PR #%d remains open — close with `%s`)",
-			d.Branch, d.PRNumber, cfg.ColorCyan(fmt.Sprintf("gh pr close %d", d.PRNumber)))
+			d.Branch, d.PRNumber, cfg.ColorAccent(fmt.Sprintf("gh pr close %d", d.PRNumber)))
 	}
 
 	if result.MovedBranches > 0 {
@@ -222,7 +222,7 @@ func printModifySuccess(cfg *config.Config, result *modifyview.ApplyResult) {
 	cfg.Printf("")
 	if result.NeedsSubmit {
 		cfg.Printf("Run `%s` to push your changes and update the stack of PRs on GitHub",
-			cfg.ColorCyan("gh stack submit"))
+			cfg.ColorAccent("gh stack submit"))
 	}
 }
 
@@ -260,7 +260,7 @@ func runModifyAbort(cfg *config.Config) error {
 		if err := modify.UnwindFromStateFile(cfg, gitDir); err != nil {
 			cfg.Errorf("recovery failed: %s", err)
 			cfg.Printf("Recovery state was retained. Resolve the reported problem and retry `%s`.",
-				cfg.ColorCyan("gh stack modify --abort"))
+				cfg.ColorAccent("gh stack modify --abort"))
 			return ErrSilent
 		}
 		cfg.Successf("Stack restored successfully")
@@ -269,7 +269,7 @@ func runModifyAbort(cfg *config.Config) error {
 	case modify.PhasePendingSubmit:
 		cfg.Printf("A modify completed but the stack has not been submitted")
 		cfg.Printf("Run `%s` to push changes and recreate the stack on GitHub",
-			cfg.ColorCyan("gh stack submit"))
+			cfg.ColorAccent("gh stack submit"))
 		return nil
 
 	default:
@@ -333,8 +333,8 @@ func checkModifyPreconditions(cfg *config.Config) (*loadStackResult, error) {
 	if inProgress {
 		cfg.Errorf("a rebase is currently in progress")
 		cfg.Printf("Complete the rebase with `%s` or abort with `%s`",
-			cfg.ColorCyan("gh stack rebase --continue"),
-			cfg.ColorCyan("gh stack rebase --abort"))
+			cfg.ColorAccent("gh stack rebase --continue"),
+			cfg.ColorAccent("gh stack rebase --abort"))
 		return nil, ErrRebaseActive
 	}
 
@@ -409,18 +409,18 @@ func checkNoModifyInProgress(cfg *config.Config, gitDir string) error {
 	case modify.PhaseApplying:
 		cfg.Errorf("a previous modify session was interrupted")
 		cfg.Printf("Run `%s` to restore your stack",
-			cfg.ColorCyan("gh stack modify --abort"))
+			cfg.ColorAccent("gh stack modify --abort"))
 		return ErrModifyRecovery
 	case modify.PhaseConflict:
 		cfg.Errorf("a modify has unresolved conflicts")
 		cfg.Printf("Run `%s` to continue, or `%s` to restore your stack",
-			cfg.ColorCyan("gh stack modify --continue"),
-			cfg.ColorCyan("gh stack modify --abort"))
+			cfg.ColorAccent("gh stack modify --continue"),
+			cfg.ColorAccent("gh stack modify --abort"))
 		return ErrSilent
 	case modify.PhasePendingSubmit:
 		cfg.Errorf("a modify was completed but the stack has not been submitted yet")
 		cfg.Printf("Run `%s` to push changes and recreate the stack on GitHub",
-			cfg.ColorCyan("gh stack submit"))
+			cfg.ColorAccent("gh stack submit"))
 		return ErrSilent
 	default:
 		cfg.Errorf("unexpected modify state phase: %s", state.Phase)

@@ -191,8 +191,8 @@ func CheckStackLinearity(cfg *config.Config, s *stack.Stack) error {
 		if !isAnc {
 			cfg.Errorf("%s has diverged from %s", b.Branch, parentBranch)
 			cfg.Printf("Run `%s` to normalize the stack, or `%s` to restructure manually",
-				cfg.ColorCyan("gh stack rebase"),
-				cfg.ColorCyan("gh stack unstack"))
+				cfg.ColorAccent("gh stack rebase"),
+				cfg.ColorAccent("gh stack unstack"))
 			return fmt.Errorf("%s has diverged from %s", b.Branch, parentBranch)
 		}
 
@@ -204,8 +204,8 @@ func CheckStackLinearity(cfg *config.Config, s *stack.Stack) error {
 		if len(merges) > 0 {
 			cfg.Errorf("%s contains a merge commit — modify requires linear history", b.Branch)
 			cfg.Printf("Run `%s` to replay without the merge, or `%s` to restructure manually",
-				cfg.ColorCyan("gh stack rebase"),
-				cfg.ColorCyan("gh stack unstack"))
+				cfg.ColorAccent("gh stack rebase"),
+				cfg.ColorAccent("gh stack unstack"))
 			return fmt.Errorf("%s contains merge commits", b.Branch)
 		}
 	}

@@ -404,7 +404,7 @@ func reportWorktreeOwner(cfg *config.Config, target, path string) {
 	cfg.Printf("  Your current checkout is unchanged.")
 	cfg.Printf("")
 	cfg.Printf("To work on this branch, run:")
-	cfg.Printf("  %s", cfg.ColorCyan("cd "+commandPath))
+	cfg.Printf("  %s", cfg.ColorAccent("cd "+commandPath))
 }
 
 func checkoutWorktreeBranch(cfg *config.Config, target string, printPath bool) error {

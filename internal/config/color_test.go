@@ -31,7 +31,7 @@ func TestColorFuncsAreBackgroundAware(t *testing.T) {
 		"ColorSuccess": cfg.ColorSuccess,
 		"ColorError":   cfg.ColorError,
 		"ColorWarning": cfg.ColorWarning,
-		"ColorCyan":    cfg.ColorCyan,
+		"ColorAccent":  cfg.ColorAccent,
 		"ColorBlue":    cfg.ColorBlue,
 		"ColorMagenta": cfg.ColorMagenta,
 		"ColorGray":    cfg.ColorGray,

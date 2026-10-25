@@ -285,7 +285,7 @@ func continueWorktreeRebase(cfg *config.Config, dir string, state *rebaseState) 
 		return err
 	}
 	cfg.Successf("All branches in stack rebased locally")
-	cfg.Printf("To push your changes, run `%s`", cfg.ColorCyan("gh stack push"))
+	cfg.Printf("To push your changes, run `%s`", cfg.ColorAccent("gh stack push"))
 	return nil
 }
 

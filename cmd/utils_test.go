@@ -606,7 +606,7 @@ func TestReportWorktreeOwner_Command(t *testing.T) {
 				if colored {
 					color = func(s string) string { return "\x1b[36m" + s + "\x1b[0m" }
 				}
-				cfg.ColorCyan = color
+				cfg.ColorAccent = color
 				target := "skarim/worktrees-distributed-rebase-sync"
 
 				reportWorktreeOwner(cfg, target, tt.path)

@@ -299,9 +299,9 @@ func runRebase(cfg *config.Config, opts *rebaseOptions) error {
 		cfg.Printf("")
 
 		cfg.Printf("Resolve conflicts on %s, then run `%s`",
-			rebaseResult.ConflictBranch, cfg.ColorCyan("gh stack rebase --continue"))
+			rebaseResult.ConflictBranch, cfg.ColorAccent("gh stack rebase --continue"))
 		cfg.Printf("Or abort this operation with `%s`",
-			cfg.ColorCyan("gh stack rebase --abort"))
+			cfg.ColorAccent("gh stack rebase --abort"))
 		return ErrConflict
 	}
 
@@ -331,7 +331,7 @@ func runRebase(cfg *config.Config, opts *rebaseOptions) error {
 		cfg.Printf("%s rebased locally with %s", rangeDesc, trunk.Describe())
 	}
 	cfg.Printf("To push up your changes, run `%s`",
-		cfg.ColorCyan("gh stack push"))
+		cfg.ColorAccent("gh stack push"))
 
 	return nil
 }
@@ -483,9 +483,9 @@ func continueRebase(cfg *config.Config, gitDir string) error {
 			printConflictDetails(cfg, result.ConflictBase)
 			cfg.Printf("")
 			cfg.Printf("Resolve conflicts on %s, then run `%s`",
-				result.ConflictBranch, cfg.ColorCyan("gh stack rebase --continue"))
+				result.ConflictBranch, cfg.ColorAccent("gh stack rebase --continue"))
 			cfg.Printf("Or abort this operation with `%s`",
-				cfg.ColorCyan("gh stack rebase --abort"))
+				cfg.ColorAccent("gh stack rebase --abort"))
 			return ErrConflict
 		}
 	}
@@ -648,7 +648,7 @@ func finishLegacyRebase(cfg *config.Config, gitDir string, state *rebaseState, s
 		cfg.Printf("All branches in stack rebased locally with %s", trunkRef)
 	}
 	cfg.Printf("To push up your changes and open/update the stack of PRs, run `%s`",
-		cfg.ColorCyan("gh stack submit"))
+		cfg.ColorAccent("gh stack submit"))
 	return nil
 }
 
@@ -733,10 +733,10 @@ func printConflictDetailsAt(cfg *config.Config, ops git.Ops, path, branch, conti
 	cfg.Printf("")
 	cfg.Printf("%s", cfg.ColorBold("To resolve:"))
 	cfg.Printf("  1. Open each conflicted file and look for conflict markers:")
-	cfg.Printf("     %s  (incoming changes from %s)", cfg.ColorCyan("<<<<<<< HEAD"), branch)
-	cfg.Printf("     %s", cfg.ColorCyan("======="))
-	cfg.Printf("     %s  (changes being rebased)", cfg.ColorCyan(">>>>>>>"))
+	cfg.Printf("     %s  (incoming changes from %s)", cfg.ColorAccent("<<<<<<< HEAD"), branch)
+	cfg.Printf("     %s", cfg.ColorAccent("======="))
+	cfg.Printf("     %s  (changes being rebased)", cfg.ColorAccent(">>>>>>>"))
 	cfg.Printf("  2. Edit the file to keep the desired changes and remove the markers")
-	cfg.Printf("  3. Stage resolved files: `%s`", cfg.ColorCyan("git add <file>"))
-	cfg.Printf("  4. Continue:  `%s`", cfg.ColorCyan(continueCmd))
+	cfg.Printf("  3. Stage resolved files: `%s`", cfg.ColorAccent("git add <file>"))
+	cfg.Printf("  4. Continue:  `%s`", cfg.ColorAccent(continueCmd))
 }

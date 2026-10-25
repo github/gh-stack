@@ -99,7 +99,7 @@ func TestColorizersAreBackgroundAware(t *testing.T) {
 		"Warning": Warning,
 		"Blue":    Blue,
 		"Magenta": Magenta,
-		"Cyan":    Cyan,
+		"Accent":  Accent,
 		"Gray":    Gray,
 	}
 	for name, fn := range fns {

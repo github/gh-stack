@@ -114,8 +114,8 @@ func Blue(s string) string { return Colorize(ColorBlue, s) }
 // Magenta renders s in the magenta/purple color.
 func Magenta(s string) string { return Colorize(ColorPurple, s) }
 
-// Cyan renders s in the accent (cyan/teal) color.
-func Cyan(s string) string { return Colorize(ColorAccent, s) }
+// Accent renders s in the accent (teal) color.
+func Accent(s string) string { return Colorize(ColorAccent, s) }
 
 // Gray renders s in the muted gray color.
 func Gray(s string) string { return Colorize(ColorGray, s) }

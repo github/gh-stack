@@ -94,7 +94,7 @@ func runUnstack(cfg *config.Config, opts *unstackOptions) error {
 				// --local never contacts GitHub, and there is nothing to remove
 				// locally, so there is nothing to do.
 				cfg.Errorf("stack %s is not tracked locally", cfg.StackLink(opts.stackNumber))
-				cfg.Printf("Omit %s to unstack it on GitHub", cfg.ColorCyan("--local"))
+				cfg.Printf("Omit %s to unstack it on GitHub", cfg.ColorAccent("--local"))
 				return ErrNotInStack
 			}
 			return runRemoteUnstack(cfg, opts.stackNumber)

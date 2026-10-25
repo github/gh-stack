@@ -664,7 +664,7 @@ func ContinueApply(
 	if needsSubmit {
 		cfg.Printf("")
 		cfg.Printf("Run `%s` to push your changes and update the stack of PRs on GitHub",
-			cfg.ColorCyan("gh stack submit"))
+			cfg.ColorAccent("gh stack submit"))
 	}
 	return nil
 }
@@ -680,8 +680,8 @@ func printContinueConflict(cfg *config.Config, state *StateFile, conflict *modif
 	}
 	cfg.Printf("")
 	cfg.Printf("Resolve the conflicts in %s, stage with `%s`, then run `%s`",
-		path, cfg.ColorCyan("git add <file>"), cfg.ColorCyan("gh stack modify --continue"))
-	cfg.Printf("Or restore the stack with `%s`", cfg.ColorCyan("gh stack modify --abort"))
+		path, cfg.ColorAccent("git add <file>"), cfg.ColorAccent("gh stack modify --continue"))
+	cfg.Printf("Or restore the stack with `%s`", cfg.ColorAccent("gh stack modify --abort"))
 }
 
 // Unwind restores the stack to its pre-modify state using the snapshot.

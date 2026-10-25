@@ -150,7 +150,7 @@ func runCheckout(cfg *config.Config, opts *checkoutOptions) error {
 			if errors.Is(err, errRemoteBranchNotFound) {
 				cfg.Errorf("no local or remote stack found for %q", opts.target)
 				cfg.Printf("Try a stack or PR number with `%s`",
-					cfg.ColorCyan("gh stack checkout <number>"))
+					cfg.ColorAccent("gh stack checkout <number>"))
 				return ErrNotInStack
 			}
 			if err != nil {
@@ -181,7 +181,7 @@ func runCheckout(cfg *config.Config, opts *checkoutOptions) error {
 	cfg.Successf("Switched to %s", targetBranch)
 	cfg.Printf("Stack: %s", s.DisplayChain())
 	cfg.Printf("Run `%s` to see the full stack",
-		cfg.ColorCyan("gh stack view"))
+		cfg.ColorAccent("gh stack view"))
 	return nil
 }
 
@@ -297,7 +297,7 @@ func checkoutRemoteStackByBranch(cfg *config.Config, sf *stack.StackFile, gitDir
 		cfg.Errorf("branch %q belongs to multiple stacks on GitHub (%s)",
 			branch, strings.Join(stackNumbers, ", "))
 		cfg.Printf("Use `%s` with a stack or PR number to choose one",
-			cfg.ColorCyan("gh stack checkout <number>"))
+			cfg.ColorAccent("gh stack checkout <number>"))
 		return nil, "", ErrDisambiguate
 	}
 
@@ -424,7 +424,7 @@ func reconcileAndImportRemoteStack(cfg *config.Config, client github.ClientOps, 
 	}
 	if allMerged {
 		cfg.Infof("All PRs in this stack have been merged")
-		cfg.Printf("To start a new stack, use `%s`", cfg.ColorCyan("gh stack init"))
+		cfg.Printf("To start a new stack, use `%s`", cfg.ColorAccent("gh stack init"))
 		return nil, "", ErrSilent
 	}
 
@@ -566,7 +566,7 @@ func handleCompositionConflict(
 		}
 		cfg.Printf("  Remote: (%s) <- %s", trunk, strings.Join(remoteBranches, " <- "))
 		cfg.Printf("  Unstack on remote or use `%s` to unstack locally",
-			cfg.ColorCyan("gh stack unstack --local"))
+			cfg.ColorAccent("gh stack unstack --local"))
 		return nil, ErrConflict
 	}
 
@@ -758,8 +758,8 @@ func interactiveCheckout(cfg *config.Config, sf *stack.StackFile, gitDir string)
 	if len(rows) == 0 {
 		cfg.Infof("No stacks available to check out")
 		cfg.Printf("Create a stack with `%s` or check out a stack by number with `%s`",
-			cfg.ColorCyan("gh stack init"),
-			cfg.ColorCyan("gh stack checkout <number>"))
+			cfg.ColorAccent("gh stack init"),
+			cfg.ColorAccent("gh stack checkout <number>"))
 		return nil, "", nil
 	}
 

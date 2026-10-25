@@ -129,9 +129,9 @@ func runPush(cfg *config.Config, opts *pushOptions) error {
 	}
 	if hasBranchWithoutPR {
 		cfg.Printf("To create PRs for this stack, run `%s`",
-			cfg.ColorCyan("gh stack submit"))
+			cfg.ColorAccent("gh stack submit"))
 	} else {
-		cfg.Printf("Run `%s` to see your stack of PRs", cfg.ColorCyan("gh stack view"))
+		cfg.Printf("Run `%s` to see your stack of PRs", cfg.ColorAccent("gh stack view"))
 	}
 	return nil
 }

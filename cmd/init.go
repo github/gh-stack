@@ -149,7 +149,7 @@ func runInit(cfg *config.Config, opts *initOptions) error {
 	if opts.adopt {
 		cfg.Warningf("The --adopt flag is deprecated. Existing branches are now adopted automatically.")
 		cfg.Printf("You can simply run: %s",
-			cfg.ColorCyan("gh stack init <branch1> <branch2> ..."))
+			cfg.ColorAccent("gh stack init <branch1> <branch2> ..."))
 	}
 
 	// --- Branch collection ---
@@ -327,7 +327,7 @@ func runInteractiveInitWithPreflight(cfg *config.Config, sf *stack.StackFile, tr
 
 	cfg.Printf("Initializing a stack from %s.", trunk)
 	cfg.Printf("Have multiple branches already? Run: %s",
-		cfg.ColorCyan("gh stack init <branch1> <branch2> ..."))
+		cfg.ColorAccent("gh stack init <branch1> <branch2> ..."))
 	cfg.Printf("")
 
 	var branchName string
@@ -467,12 +467,12 @@ func printWhatsNextInWorktree(cfg *config.Config, s *stack.Stack, branches []str
 	cfg.Printf("")
 	cfg.Printf("What's next:")
 	if hasAdopted {
-		cfg.Printf("  • see the full stack:                          %s", cfg.ColorCyan("gh stack view"))
-		cfg.Printf("  • move between branches:                       %s", cfg.ColorCyan("gh stack switch"))
-		cfg.Printf("  • link these PRs into a Stack on GitHub:       %s", cfg.ColorCyan("gh stack submit"))
+		cfg.Printf("  • see the full stack:                          %s", cfg.ColorAccent("gh stack view"))
+		cfg.Printf("  • move between branches:                       %s", cfg.ColorAccent("gh stack switch"))
+		cfg.Printf("  • link these PRs into a Stack on GitHub:       %s", cfg.ColorAccent("gh stack submit"))
 	} else {
-		cfg.Printf("  • commit your work as usual, then add a layer:  %s", cfg.ColorCyan("gh stack add"))
-		cfg.Printf("  • see your stack any time:                      %s", cfg.ColorCyan("gh stack view"))
-		cfg.Printf("  • when ready to open PRs:                       %s", cfg.ColorCyan("gh stack submit"))
+		cfg.Printf("  • commit your work as usual, then add a layer:  %s", cfg.ColorAccent("gh stack add"))
+		cfg.Printf("  • see your stack any time:                      %s", cfg.ColorAccent("gh stack view"))
+		cfg.Printf("  • when ready to open PRs:                       %s", cfg.ColorAccent("gh stack submit"))
 	}
 }

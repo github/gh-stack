@@ -106,14 +106,14 @@ func runAlias(cfg *config.Config, name string, binDir string) error {
 	// Check for an existing command with this name.
 	if existing, err := exec.LookPath(name); err == nil {
 		cfg.Errorf("a command named %q already exists at %s", name, existing)
-		cfg.Printf("Choose a different alias name, for example: %s", cfg.ColorCyan("gh stack alias gst"))
+		cfg.Printf("Choose a different alias name, for example: %s", cfg.ColorAccent("gh stack alias gst"))
 		return ErrInvalidArgs
 	}
 
 	// Guard against overwriting an existing file that isn't on PATH
 	if _, err := os.Stat(scriptPath); err == nil {
 		cfg.Errorf("a file already exists at %s", scriptPath)
-		cfg.Printf("Choose a different alias name, for example: %s", cfg.ColorCyan("gh stack alias gst"))
+		cfg.Printf("Choose a different alias name, for example: %s", cfg.ColorAccent("gh stack alias gst"))
 		return ErrInvalidArgs
 	}
 
@@ -130,7 +130,7 @@ func runAlias(cfg *config.Config, name string, binDir string) error {
 	}
 
 	cfg.Successf("Created alias %q at %s", name, scriptPath)
-	cfg.Printf("You can now use %s instead of %s", cfg.ColorCyan(name+" <command>"), cfg.ColorCyan("gh stack <command>"))
+	cfg.Printf("You can now use %s instead of %s", cfg.ColorAccent(name+" <command>"), cfg.ColorAccent("gh stack <command>"))
 
 	// Warn if the bin directory is not in PATH.
 	if !dirInPath(binDir) {

@@ -240,7 +240,7 @@ func runSync(cfg *config.Config, opts *syncOptions) error {
 				}
 				cfg.Printf("Branches restored to their pre-rebase state")
 				cfg.Printf("  Run `%s` to resolve conflicts interactively.",
-					cfg.ColorCyan("gh stack rebase"))
+					cfg.ColorAccent("gh stack rebase"))
 
 				// Persist refreshed PR state even on conflict, then bail out
 				// before pushing or reporting success.
@@ -297,10 +297,10 @@ func runSync(cfg *config.Config, opts *syncOptions) error {
 			if !force {
 				cfg.Warningf("Push failed — branches may need force push after rebase")
 				cfg.Printf("  Run `%s` to push with --force-with-lease.",
-					cfg.ColorCyan("gh stack push"))
+					cfg.ColorAccent("gh stack push"))
 			} else {
 				cfg.Warningf("Push failed: %v", err)
-				cfg.Printf("  Run `%s` to retry.", cfg.ColorCyan("gh stack push"))
+				cfg.Printf("  Run `%s` to retry.", cfg.ColorAccent("gh stack push"))
 			}
 		} else {
 			cfg.Successf("Pushed %d branches", len(branches))

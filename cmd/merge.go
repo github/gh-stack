@@ -187,7 +187,7 @@ func runMerge(cfg *config.Config, opts *mergeOptions, args []string) error {
 		if blocker != nil {
 			top := candidates[len(candidates)-1].Number
 			cfg.Errorf("cannot merge the whole stack: pull request #%d is %s", blocker.Number, blockerState(blocker))
-			cfg.Printf("Merge up to #%d with `%s`", top, cfg.ColorCyan(fmt.Sprintf("gh stack merge %d", top)))
+			cfg.Printf("Merge up to #%d with `%s`", top, cfg.ColorAccent(fmt.Sprintf("gh stack merge %d", top)))
 			return ErrInvalidArgs
 		}
 		targetPR = candidates[len(candidates)-1].Number
@@ -264,12 +264,12 @@ func resolveActiveRemoteStack(cfg *config.Config, client github.ClientOps) (*git
 	stacks := sf.FindAllStacksForBranch(currentBranch)
 	if len(stacks) == 0 {
 		cfg.Errorf("current branch %q is not part of a stack", currentBranch)
-		cfg.Printf("Checkout a stack first, or specify which stack or pull request to merge with `%s`", cfg.ColorCyan("gh stack merge [number]"))
+		cfg.Printf("Checkout a stack first, or specify which stack or pull request to merge with `%s`", cfg.ColorAccent("gh stack merge [number]"))
 		return nil, ErrNotInStack
 	}
 	if len(stacks) > 1 {
 		cfg.Errorf("branch %q belongs to multiple stacks", currentBranch)
-		cfg.Printf("Checkout a stack first, or specify which stack or pull request to merge with `%s`", cfg.ColorCyan("gh stack merge [number]"))
+		cfg.Printf("Checkout a stack first, or specify which stack or pull request to merge with `%s`", cfg.ColorAccent("gh stack merge [number]"))
 		return nil, ErrDisambiguate
 	}
 	s := stacks[0]

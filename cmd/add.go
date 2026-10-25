@@ -93,7 +93,7 @@ func runAdd(cfg *config.Config, opts *addOptions, args []string) error {
 
 	if s.IsFullyMerged() {
 		cfg.Warningf("All branches in this stack have been merged")
-		cfg.Printf("Consider creating a new stack with `%s`", cfg.ColorCyan("gh stack init"))
+		cfg.Printf("Consider creating a new stack with `%s`", cfg.ColorAccent("gh stack init"))
 		return nil
 	}
 
@@ -101,8 +101,8 @@ func runAdd(cfg *config.Config, opts *addOptions, args []string) error {
 	// idx < 0 means we're on the trunk — that's allowed (we'll create
 	// a new branch from it). Only block if we're in the middle of the stack.
 	if idx >= 0 && idx < len(s.Branches)-1 {
-		cfg.Errorf("can only add branches to the top of the stack; run `%s` then `%s`", cfg.ColorCyan("gh stack top"), cfg.ColorCyan("gh stack add"))
-		cfg.Printf("Or to restructure your stack and insert a branch, use `%s`", cfg.ColorCyan("gh stack modify"))
+		cfg.Errorf("can only add branches to the top of the stack; run `%s` then `%s`", cfg.ColorAccent("gh stack top"), cfg.ColorAccent("gh stack add"))
+		cfg.Printf("Or to restructure your stack and insert a branch, use `%s`", cfg.ColorAccent("gh stack modify"))
 		return ErrInvalidArgs
 	}
 
@@ -130,7 +130,7 @@ func runAdd(cfg *config.Config, opts *addOptions, args []string) error {
 		}
 		cfg.Successf("Created commit %s on %s", cfg.ColorBold(sha), currentBranch)
 		cfg.Warningf("Branch %s has no prior commits — adding your commit here instead of creating a new branch", currentBranch)
-		cfg.Printf("When you're ready for the next layer, run `%s` again", cfg.ColorCyan("gh stack add"))
+		cfg.Printf("When you're ready for the next layer, run `%s` again", cfg.ColorAccent("gh stack add"))
 		return nil
 	}
 

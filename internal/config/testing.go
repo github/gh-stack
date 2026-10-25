@@ -26,7 +26,7 @@ func NewTestConfig() (*Config, *os.File, *os.File) {
 		ColorBold:            noop,
 		ColorBlue:            noop,
 		ColorMagenta:         noop,
-		ColorCyan:            noop,
+		ColorAccent:          noop,
 		ColorGray:            noop,
 		GitHubClientOverride: &github.MockClient{},
 	}

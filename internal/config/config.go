@@ -26,7 +26,7 @@ type Config struct {
 	ColorBold    func(string) string
 	ColorBlue    func(string) string
 	ColorMagenta func(string) string
-	ColorCyan    func(string) string
+	ColorAccent  func(string) string
 	ColorGray    func(string) string
 
 	// GitHubClientOverride, when non-nil, is returned by GitHubClient()
@@ -92,7 +92,7 @@ func New() *Config {
 		cfg.ColorBold = theme.Bold
 		cfg.ColorBlue = theme.Blue
 		cfg.ColorMagenta = theme.Magenta
-		cfg.ColorCyan = theme.Cyan
+		cfg.ColorAccent = theme.Accent
 		cfg.ColorGray = theme.Gray
 	} else {
 		noop := func(s string) string { return s }
@@ -102,7 +102,7 @@ func New() *Config {
 		cfg.ColorBold = noop
 		cfg.ColorBlue = noop
 		cfg.ColorMagenta = noop
-		cfg.ColorCyan = noop
+		cfg.ColorAccent = noop
 		cfg.ColorGray = noop
 	}
 
@@ -163,7 +163,7 @@ func (c *Config) Warningf(format string, args ...any) {
 }
 
 func (c *Config) Infof(format string, args ...any) {
-	fmt.Fprintf(c.Err, "%s %s\n", c.ColorCyan("\u2139"), fmt.Sprintf(format, args...))
+	fmt.Fprintf(c.Err, "%s %s\n", c.ColorAccent("\u2139"), fmt.Sprintf(format, args...))
 }
 
 func (c *Config) Printf(format string, args ...any) {
