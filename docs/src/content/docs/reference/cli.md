@@ -384,6 +384,7 @@ gh stack sync [flags]
 |------|-------------|
 | `--remote <name>` | Remote to fetch from and push to (defaults to auto-detected remote) |
 | `--prune` | Delete local branches for merged PRs |
+| `--accept-base-change` | Rebase onto a base GitHub retargeted the stack to, even if the old base did not merge |
 
 Performs a synchronization of the entire stack:
 
@@ -396,7 +397,11 @@ Performs a synchronization of the entire stack:
 7. **Sync the stack** — links the stack's open PRs into a stack on GitHub, creating the remote stack object if it doesn't exist yet or updating it if it's partially formed. This only happens when two or more PRs exist; sync never opens PRs (use `gh stack submit` for that).
 8. **Prune** — in interactive terminals, prompts to delete local branches for merged PRs. Use `--prune` to prune automatically.
 
-A clean remote-ahead update (PRs added on top of your local stack) is pulled down automatically without prompting, so `sync` is safe to run in automation. Sync only prompts when the stacks have truly diverged.
+A clean remote-ahead update (PRs added on top of your local stack) is pulled down automatically without prompting, so `sync` is safe to run in automation. Sync only prompts when the stacks have truly diverged, or before removing an unmerged base's commits (see **Retargeted stacks** below).
+
+**Retargeted stacks**
+
+When a stack's base branch is deleted, GitHub moves the stack onto a new base but does not rebase its branches. `sync` and `rebase` rebase the stack onto that base, keep its stack and PR numbers, and drop the old base's commits. If the old base did not merge into the new base, they ask before dropping its commits; in a non-interactive terminal, pass `--accept-base-change`. Until the stack is rebased, `push` and `submit` stop, and `view` reports the new base.
 
 **Diverged stacks**
 
@@ -430,6 +435,7 @@ gh stack rebase [flags] [branch]
 | `--downstack` | Only rebase branches from trunk to the current branch |
 | `--upstack` | Only rebase branches from the current branch to the top |
 | `--no-trunk` | Skip trunk — only rebase stack branches onto each other (no fetch, no trunk rebase) |
+| `--accept-base-change` | Rebase onto a base GitHub retargeted the stack to, even if the old base did not merge (see [`gh stack sync`](#gh-stack-sync)) |
 | `--continue` | Continue the rebase after resolving conflicts |
 | `--abort` | Abort the rebase and restore all branches to their pre-rebase state |
 | `--remote <name>` | Remote to fetch from (defaults to auto-detected remote) |
