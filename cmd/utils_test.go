@@ -10,12 +10,14 @@ import (
 	"testing"
 
 	"github.com/AlecAivazis/survey/v2/terminal"
+	"github.com/charmbracelet/lipgloss"
 	"github.com/cli/go-gh/v2/pkg/repository"
 	"github.com/github/gh-stack/internal/config"
 	"github.com/github/gh-stack/internal/git"
 	"github.com/github/gh-stack/internal/github"
 	"github.com/github/gh-stack/internal/modify"
 	"github.com/github/gh-stack/internal/stack"
+	"github.com/muesli/termenv"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -2050,4 +2052,48 @@ func TestUpdateBaseSHAsPreservesLastValidBase(t *testing.T) {
 
 	assert.Equal(t, "old-parent", s.Branches[1].Base)
 	assert.Equal(t, "child-tip", s.Branches[1].Head)
+}
+
+// TestFullScreenCanvas verifies that the full-screen TUIs paint the GitHub
+// canvas only on a color-enabled truecolor terminal, and honor the
+// GH_STACK_BACKGROUND opt-out.
+func TestFullScreenCanvas(t *testing.T) {
+	tests := []struct {
+		name    string
+		env     map[string]string
+		profile termenv.Profile
+		want    bool
+	}{
+		{name: "truecolor terminal", profile: termenv.TrueColor, want: true},
+		{name: "explicit github background", env: map[string]string{"GH_STACK_BACKGROUND": "github"}, profile: termenv.TrueColor, want: true},
+		{name: "terminal background opt-out", env: map[string]string{"GH_STACK_BACKGROUND": "terminal"}, profile: termenv.TrueColor},
+		{name: "NO_COLOR", env: map[string]string{"NO_COLOR": "1"}, profile: termenv.TrueColor},
+		{name: "dumb terminal", env: map[string]string{"TERM": "dumb"}, profile: termenv.TrueColor},
+		{name: "256-color terminal", profile: termenv.ANSI256},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			profile := lipgloss.ColorProfile()
+			t.Cleanup(func() { lipgloss.SetColorProfile(profile) })
+			lipgloss.SetColorProfile(tt.profile)
+			for key, value := range map[string]string{
+				"GH_FORCE_TTY": "1", "TERM": "xterm-256color",
+				"NO_COLOR": "", "CLICOLOR": "", "GH_STACK_BACKGROUND": "",
+			} {
+				t.Setenv(key, value)
+			}
+			for key, value := range tt.env {
+				t.Setenv(key, value)
+			}
+			cfg, outR, errR := config.NewTestConfig()
+
+			out := fullScreenCanvas(cfg)
+
+			assert.Equal(t, tt.want, out != nil)
+			if out != nil {
+				assert.Equal(t, cfg.Out.Fd(), out.Fd(), "paints the command's own output")
+			}
+			commandOutput(t, cfg, outR, errR)
+		})
+	}
 }

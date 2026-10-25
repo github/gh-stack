@@ -6,7 +6,9 @@
 // borders, and the canvas) are GitHub's own interface colors, and the chromatic
 // roles (accent, PR states, status messages) use the vivid Primer Brand scales
 // (https://primer.style/brand), choosing the step on each scale that keeps WCAG
-// AA contrast on GitHub's dark (#0d1117) and light (#ffffff) canvases.
+// AA contrast on GitHub's dark (#0d1117) and light (#ffffff) canvases. The
+// full-screen TUIs paint that canvas behind themselves (see CanvasOutput); all
+// other output keeps the user's terminal background.
 //
 // Colors are expressed as lipgloss.AdaptiveColor, whose Light/Dark variant is
 // chosen at render time from the terminal's detected background. Bubble Tea
@@ -31,12 +33,13 @@ import (
 
 // Neutrals: GitHub's interface colors (Primer fgColor/borderColor/bgColor).
 var (
-	// ColorCanvas is GitHub's page background, the surface the palette's
-	// contrast is designed against.
+	// ColorCanvas is GitHub's page background. The full-screen TUIs paint it as
+	// the terminal's default background (see CanvasOutput).
 	ColorCanvas = lipgloss.AdaptiveColor{Dark: "#0d1117", Light: "#ffffff"}
 
 	// ColorText is primary/emphasis ink: titles, branch names, links, active
-	// keys, the description scrollbar thumb.
+	// keys, the description scrollbar thumb. The full-screen TUIs paint it as
+	// the terminal's default foreground alongside ColorCanvas.
 	ColorText = lipgloss.AdaptiveColor{Dark: "#f0f6fc", Light: "#1f2328"}
 	// ColorTextMuted is secondary ink and dim chrome text: section labels,
 	// shortcut descriptions, hints, trunk/merged branches, timestamps.

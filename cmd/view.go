@@ -315,13 +315,7 @@ func viewFullTUI(cfg *config.Config, s *stack.Stack, currentBranch string, prDet
 
 	model := stackview.New(reversed, s.Trunk, Version, s.Number).WithStackURL(cfg.StackURL(s.Number))
 
-	p := tea.NewProgram(
-		model,
-		tea.WithAltScreen(),
-		tea.WithMouseAllMotion(),
-	)
-
-	finalModel, err := p.Run()
+	finalModel, err := runFullScreenTUI(cfg, model, tea.WithMouseAllMotion())
 	if err != nil {
 		return fmt.Errorf("running TUI: %w", err)
 	}

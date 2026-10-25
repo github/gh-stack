@@ -117,13 +117,7 @@ func runModify(cfg *config.Config) error {
 	// Run the TUI
 	model := modifyview.New(modifyNodes, s.Trunk, Version)
 
-	p := tea.NewProgram(
-		model,
-		tea.WithAltScreen(),
-		tea.WithMouseAllMotion(),
-	)
-
-	finalModel, err := p.Run()
+	finalModel, err := runFullScreenTUI(cfg, model, tea.WithMouseAllMotion())
 	if err != nil {
 		return fmt.Errorf("running TUI: %w", err)
 	}

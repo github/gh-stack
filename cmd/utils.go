@@ -10,6 +10,7 @@ import (
 	"sync"
 
 	"github.com/AlecAivazis/survey/v2/terminal"
+	tea "github.com/charmbracelet/bubbletea"
 	"github.com/cli/go-gh/v2/pkg/api"
 	"github.com/cli/go-gh/v2/pkg/prompter"
 	"github.com/github/gh-stack/internal/config"
@@ -132,6 +133,28 @@ func ensureStackNumber(client github.ClientOps, s *stack.Stack) (int, error) {
 		s.Number = number
 	}
 	return number, nil
+}
+
+// runFullScreenTUI runs a Bubble Tea program on the alternate screen, painting
+// the GitHub canvas behind it when the terminal supports it.
+func runFullScreenTUI(cfg *config.Config, model tea.Model, opts ...tea.ProgramOption) (tea.Model, error) {
+	opts = append([]tea.ProgramOption{tea.WithAltScreen()}, opts...)
+	if out := fullScreenCanvas(cfg); out != nil {
+		defer out.Restore()
+		opts = append(opts, tea.WithOutput(out))
+	}
+	return tea.NewProgram(model, opts...).Run()
+}
+
+// fullScreenCanvas returns the program output that paints the GitHub canvas
+// while a full-screen TUI is on screen and restores the terminal's colors on
+// every exit path (see theme.CanvasOutput), or nil when the canvas is
+// unsupported or disabled.
+func fullScreenCanvas(cfg *config.Config) *theme.CanvasOutput {
+	if !theme.CanvasSupported(cfg.Terminal.IsTerminalOutput(), cfg.Terminal.IsColorEnabled()) {
+		return nil
+	}
+	return theme.NewCanvasOutput(cfg.Out)
 }
 
 // promptInput prompts the user for a single line of text input. The user's

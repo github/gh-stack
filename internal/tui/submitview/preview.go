@@ -58,12 +58,22 @@ func (m Model) openEditor() (tea.Model, tea.Cmd) {
 		return m, nil
 	}
 
+	return m, tea.ExecProcess(editorCommand(editor, path), func(err error) tea.Msg {
+		return editorFinishedMsg{path: path, err: err}
+	})
+}
+
+// editorCommand builds the $EDITOR invocation for path. Its stdout is pinned
+// to the real terminal: tea.ExecProcess would otherwise hand the editor the
+// program's output, which is the canvas-painting wrapper (theme.CanvasOutput)
+// when the canvas is on, so the editor would see a pipe instead of a terminal.
+// Stdin is left unset so Bubble Tea passes its own terminal input.
+func editorCommand(editor, path string) *exec.Cmd {
 	fields := strings.Fields(editor)
 	args := append(fields[1:], path)
 	cmd := exec.Command(fields[0], args...)
-	return m, tea.ExecProcess(cmd, func(err error) tea.Msg {
-		return editorFinishedMsg{path: path, err: err}
-	})
+	cmd.Stdout = os.Stdout
+	return cmd
 }
 
 // handleEditorFinished reloads the description from the temp file after the

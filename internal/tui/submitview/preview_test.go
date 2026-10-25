@@ -156,3 +156,10 @@ func TestPreview_RendersWithoutHanging(t *testing.T) {
 	out := m.View()
 	assert.Contains(t, out, "Heading")
 }
+
+func TestEditorCommand(t *testing.T) {
+	cmd := editorCommand("code --wait", "/tmp/desc.md")
+	assert.Equal(t, []string{"code", "--wait", "/tmp/desc.md"}, cmd.Args)
+	assert.Same(t, os.Stdout, cmd.Stdout, "the editor writes to the terminal, not the program output")
+	assert.Nil(t, cmd.Stdin, "Bubble Tea supplies its own terminal input")
+}
