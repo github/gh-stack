@@ -1141,47 +1141,27 @@ func retargetCutoff(cfg *config.Config, s *stack.Stack, target trunkTarget, plan
 	if i < 0 {
 		return "", nil
 	}
-	b := s.Branches[i]
-	head := b.Branch
-	for _, forward := range planned {
-		if forward.Branch == b.Branch {
-			head = forward.NewSHA
-			break
-		}
-	}
 	var cutoff string
-	var err error
+	landed := false
 	if i == 0 {
-		cutoff, err = resolveRetargetOldBase(s.Trunk, b.Base, head)
-	} else {
-		parent := s.Branches[i-1]
-		if !parent.IsMerged() {
-			cfg.Errorf("the retargeted bottom PR is queued; wait for it to leave the merge queue before rebasing")
+		b := s.Branches[0]
+		head := b.Branch
+		for _, forward := range planned {
+			if forward.Branch == b.Branch {
+				head = forward.NewSHA
+			}
+		}
+		var err error
+		if cutoff, err = resolveRetargetOldBase(s.Trunk.Branch, b.Base, head); err == nil {
+			landed, err = git.IsAncestor(cutoff, target.SHA)
+		}
+		if err != nil {
+			cfg.Errorf("%s", err)
 			return "", ErrSilent
 		}
-		refs, lookupErr := resolveOriginalRefs(s)
-		if lookupErr != nil {
-			return "", lookupErr
-		}
-		cutoff, err = resolveMergedRebaseOldBase(parent.PullRequest.MergedHead, refs[parent.Branch], b.Base, target.SHA, head)
-	}
-	if err != nil {
-		cfg.Errorf("%s", err)
-		return "", ErrSilent
-	}
-	landed, err := git.IsAncestor(cutoff, target.SHA)
-	if err != nil {
-		return "", err
 	}
 	if !landed && !accept {
-		landed, err = retargetBaseMerged(cfg, s.Trunk.Branch, cutoff, target.SHA)
-		if err != nil {
-			cfg.Warningf("could not verify whether the old base landed in %s: %v", target.Branch, err)
-		}
-	}
-	if i > 0 {
-		// The existing merged-predecessor cascade selects this same boundary.
-		cutoff = ""
+		landed = retargetBaseMerged(cfg, s.Trunk.Branch, cutoff, target.SHA)
 	}
 	if landed || accept {
 		return cutoff, nil
@@ -1194,10 +1174,7 @@ func retargetCutoff(cfg *config.Config, s *stack.Stack, target trunkTarget, plan
 			printInterrupt(cfg)
 			return "", ErrSilent
 		}
-		if err != nil {
-			return "", err
-		}
-		if ok {
+		if err == nil && ok {
 			return cutoff, nil
 		}
 		cfg.Canceled = true
@@ -1206,78 +1183,45 @@ func retargetCutoff(cfg *config.Config, s *stack.Stack, target trunkTarget, plan
 	return "", ErrSilent
 }
 
-// Only old-parent evidence can identify the cutoff; the new base's fork point
-// may sit below commits that must be excluded from the retargeted stack.
-func resolveRetargetOldBase(trunk stack.BranchRef, recordedBase, head string) (string, error) {
-	candidates := []string{recordedBase, trunk.Head}
-	exists, err := git.BranchExists(trunk.Branch)
+// resolveRetargetOldBase finds the old base from the recorded base and the old
+// trunk's reflog. The new base's fork point may sit below the old base's
+// commits, so it is never used.
+func resolveRetargetOldBase(oldTrunk, recordedBase, head string) (string, error) {
+	exists, err := git.BranchExists(oldTrunk)
 	if err != nil {
 		return "", err
 	}
 	if exists {
-		tip, err := git.RevParse(trunk.Branch)
-		if err != nil {
-			return "", err
-		}
-		forkPoint, err := git.MergeBaseForkPoint(trunk.Branch, head)
-		if err != nil {
-			return "", err
-		}
-		candidates = append(candidates, tip, forkPoint)
+		return resolveRebaseOldBase("", recordedBase, oldTrunk, head)
 	}
-	var cutoff string
-	for _, candidate := range candidates {
-		valid, err := rebaseBoundaryContains(candidate, head)
-		if err != nil {
-			return "", err
-		}
-		if !valid || candidate == cutoff {
-			continue
-		}
-		if cutoff == "" {
-			cutoff = candidate
-			continue
-		}
-		newer, err := git.IsAncestor(cutoff, candidate)
-		if err != nil {
-			return "", err
-		}
-		if newer {
-			cutoff = candidate
-			continue
-		}
-		older, err := git.IsAncestor(candidate, cutoff)
-		if err != nil {
-			return "", err
-		}
-		if !older {
-			return "", fmt.Errorf("conflicting previous bases of %s; rebase this branch manually", trunk.Branch)
-		}
+	valid, err := rebaseBoundaryContains(recordedBase, head)
+	if err != nil {
+		return "", err
 	}
-	if cutoff == "" {
-		return "", fmt.Errorf("could not determine the previous base from %s; rebase this branch manually", trunk.Branch)
+	if !valid {
+		return "", fmt.Errorf("could not determine the previous base from %s; rebase this branch manually", oldTrunk)
 	}
-	return cutoff, nil
+	return recordedBase, nil
 }
 
-func retargetBaseMerged(cfg *config.Config, oldBranch, cutoff, target string) (bool, error) {
+// retargetBaseMerged reports whether the old base's PR merged into the new base
+// before the stack built on any later commits to the old base.
+func retargetBaseMerged(cfg *config.Config, oldBase, cutoff, target string) bool {
 	client, err := cfg.GitHubClient()
 	if err != nil {
-		return false, err
+		return false
 	}
-	pr, err := client.FindPRDetailsForBranch(oldBranch)
-	if err != nil || pr == nil || !pr.Merged || pr.HeadRefOID == "" || pr.MergeCommitOID == "" {
-		return false, err
+	pr, err := client.FindPRDetailsForBranch(oldBase)
+	if err != nil || pr == nil || !pr.Merged {
+		return false
 	}
-	exists, err := git.CommitExists(pr.HeadRefOID)
-	if err != nil || !exists {
-		return false, err
+	if cutoff != "" && cutoff != pr.HeadRefOID {
+		if after, err := rebaseBoundaryContains(pr.HeadRefOID, cutoff); err != nil || after {
+			return false
+		}
 	}
-	covered, err := git.IsAncestor(cutoff, pr.HeadRefOID)
-	if err != nil || !covered {
-		return false, err
-	}
-	return rebaseBoundaryContains(pr.MergeCommitOID, target)
+	landed, err := rebaseBoundaryContains(pr.MergeCommitOID, target)
+	return err == nil && landed
 }
 
 type trunkTarget struct {

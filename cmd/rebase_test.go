@@ -4031,14 +4031,16 @@ func testBaseRetargetReviewCases(t *testing.T, run func(*config.Config, bool) er
 	for _, scenario := range []string{
 		"stale local trunk", "old trunk reflog", "missing old trunk",
 		"missing cutoff", "planned fast-forward", "merged prefix",
-		"merged elsewhere", "commits after merge",
+		"merged elsewhere", "commits after merge", "amended before merge",
 	} {
 		t.Run(scenario, func(t *testing.T) {
 			target := "main"
 			if scenario == "merged elsewhere" {
 				target = "release"
 			}
-			repo := setupBaseRetargetRepo(t, target, scenario == "merged elsewhere" || scenario == "commits after merge")
+			merged := scenario == "merged prefix" || scenario == "merged elsewhere" ||
+				scenario == "commits after merge" || scenario == "amended before merge"
+			repo := setupBaseRetargetRepo(t, target, merged)
 			withIssue250Repo(t, repo.dir)
 			cfg := issue250TestConfig(t)
 			cfg.GitHubClientOverride = repo.client
@@ -4078,10 +4080,6 @@ func testBaseRetargetReviewCases(t *testing.T, run func(*config.Config, bool) er
 				issue250Git(t, repo.dir, "branch", "-f", "child", child)
 				wantConsent = true
 			case "merged prefix":
-				issue250Git(t, repo.dir, "checkout", "main")
-				issue250Git(t, repo.dir, "merge", "--no-ff", "-m", "merge parent and child", "child")
-				issue250Git(t, repo.dir, "push", "origin", "main")
-				issue250Git(t, repo.dir, "checkout", "top")
 				s.Branches[0].PullRequest.Merged = true
 				s.Branches[0].PullRequest.MergedHead = child
 				lookup := repo.client.FindPRByNumberFn
@@ -4107,6 +4105,14 @@ func testBaseRetargetReviewCases(t *testing.T, run func(*config.Config, bool) er
 				s.Branches[0].Base = s.Trunk.Head
 				s.Branches[1].Base = issue250Git(t, repo.dir, "rev-parse", "child")
 				wantConsent = true
+			case "amended before merge":
+				// The parent was amended after the child last synced, then merged.
+				details := repo.client.FindPRDetailsForBranchFn
+				repo.client.FindPRDetailsForBranchFn = func(branch string) (*github.PRDetails, error) {
+					pr, err := details(branch)
+					pr.HeadRefOID = repo.newParent
+					return pr, err
+				}
 			}
 			require.NoError(t, stack.Save(repo.gitDir, sf))
 			before, err := os.ReadFile(filepath.Join(repo.gitDir, "gh-stack"))

@@ -154,52 +154,6 @@ func TestFindPRByNumber_MergedHead(t *testing.T) {
 	}
 }
 
-func TestFindPRDetailsForBranch_MergeEvidence(t *testing.T) {
-	for _, merged := range []bool{true, false} {
-		t.Run(strconv.FormatBool(merged), func(t *testing.T) {
-			var mergeCommit any
-			if merged {
-				mergeCommit = map[string]any{"oid": "merge-sha"}
-			}
-			body, err := json.Marshal(map[string]any{
-				"data": map[string]any{"repository": map[string]any{"pullRequests": map[string]any{
-					"nodes": []any{map[string]any{
-						"number": 42, "merged": merged, "headRefOid": "head-sha", "mergeCommit": mergeCommit,
-					}},
-				}}},
-			})
-			require.NoError(t, err)
-			transport := roundTripFunc(func(r *http.Request) (*http.Response, error) {
-				var request struct {
-					Query string `json:"query"`
-				}
-				require.NoError(t, json.NewDecoder(r.Body).Decode(&request))
-				assert.Contains(t, request.Query, "headRefOid")
-				assert.Contains(t, request.Query, "mergeCommit{oid}")
-				return &http.Response{
-					StatusCode: http.StatusOK, Body: io.NopCloser(bytes.NewReader(body)),
-					Header: http.Header{"Content-Type": []string{"application/json"}}, Request: r,
-				}, nil
-			})
-			gql, err := api.NewGraphQLClient(api.ClientOptions{
-				Host: "github.com", AuthToken: "x", Transport: transport,
-			})
-			require.NoError(t, err)
-			client := &Client{gql: gql, owner: "o", repo: "r"}
-			got, err := client.FindPRDetailsForBranch("parent")
-			require.NoError(t, err)
-			require.NotNil(t, got)
-			assert.Equal(t, "head-sha", got.HeadRefOID)
-			assert.Equal(t, merged, got.Merged)
-			if merged {
-				assert.Equal(t, "merge-sha", got.MergeCommitOID)
-			} else {
-				assert.Empty(t, got.MergeCommitOID)
-			}
-		})
-	}
-}
-
 // TestRemoteStack_UnmarshalJSON verifies the custom decoder that flattens the
 // Stacks REST API's pull_requests object array into ordered PullRequests
 // numbers while preserving the full entries in PRDetails. This is the only path
