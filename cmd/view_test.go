@@ -642,3 +642,50 @@ func TestView_BaseRetarget(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, string(catalog), string(after))
 }
+
+func TestView_BaseRetargetRemoteQualifiedTrunk(t *testing.T) {
+	for _, localBranch := range []bool{false, true} {
+		name := "tracking ref"
+		if localBranch {
+			name = "real local branch"
+		}
+		t.Run(name, func(t *testing.T) {
+			dir := t.TempDir()
+			writeStackFile(t, dir, stack.Stack{
+				ID: "9", Number: 9, Trunk: stack.BranchRef{Branch: "origin/main"},
+				Branches: []stack.BranchRef{{Branch: "child"}},
+			})
+			restore := git.SetOps(&git.MockOps{
+				GitDirFn:        func() (string, error) { return dir, nil },
+				CurrentBranchFn: func() (string, error) { return "child", nil },
+				ResolveRemoteFn: func(string) (string, error) { return "origin", nil },
+				BranchExistsFn:  func(branch string) (bool, error) { return branch != "origin/main" || localBranch, nil },
+				IsAncestorFn:    func(string, string) (bool, error) { return true, nil },
+			})
+			defer restore()
+			cfg, outR, errR := config.NewTestConfig()
+			cfg.ForceInteractive = true
+			cfg.SelectFn = func(string, string, []string) (int, error) {
+				t.Fatal("view must not prompt for a remote")
+				return 0, nil
+			}
+			cfg.GitHubClientOverride = &github.MockClient{
+				GetStackFn: func(int) (*github.RemoteStack, error) {
+					return &github.RemoteStack{ID: 9, Number: 9, Base: github.RemoteStackBase{Ref: "main"}}, nil
+				},
+			}
+			require.NoError(t, runView(cfg, &viewOptions{asJSON: true}))
+			out, diagnostics := commandOutput(t, cfg, outR, errR)
+			var result viewJSONOutput
+			require.NoError(t, json.Unmarshal([]byte(out), &result))
+			assert.Equal(t, "origin/main", result.Trunk)
+			assert.Equal(t, localBranch, result.Branches[0].NeedsRebase)
+			if !localBranch {
+				assert.NotContains(t, diagnostics, "retargeted")
+			}
+			sf, err := stack.Load(dir)
+			require.NoError(t, err)
+			assert.Equal(t, "origin/main", sf.Stacks[0].Trunk.Branch)
+		})
+	}
+}
