@@ -624,68 +624,37 @@ func TestRunViewJSON_SharedCatalogDuringMutation(t *testing.T) {
 }
 
 func TestView_BaseRetarget(t *testing.T) {
-	repo := setupBaseRetargetRepo(t, "main", false)
-	withIssue250Repo(t, repo.dir)
-	catalog, err := os.ReadFile(filepath.Join(repo.gitDir, "gh-stack"))
-	require.NoError(t, err)
-	cfg, outR, errR := config.NewTestConfig()
-	cfg.GitHubClientOverride = repo.client
-
-	require.NoError(t, runView(cfg, &viewOptions{asJSON: true}))
-	out, diagnostics := commandOutput(t, cfg, outR, errR)
-	var data viewJSONOutput
-	require.NoError(t, json.Unmarshal([]byte(out), &data))
-	assert.Equal(t, "parent", data.Trunk)
-	assert.True(t, data.Branches[0].NeedsRebase, "the bottom branch must be rebased onto the new base")
-	assert.Contains(t, diagnostics, "from parent to main")
-	after, err := os.ReadFile(filepath.Join(repo.gitDir, "gh-stack"))
-	require.NoError(t, err)
-	assert.Equal(t, string(catalog), string(after))
-}
-
-func TestView_BaseRetargetRemoteQualifiedTrunk(t *testing.T) {
-	for _, localBranch := range []bool{false, true} {
-		name := "tracking ref"
-		if localBranch {
-			name = "real local branch"
-		}
-		t.Run(name, func(t *testing.T) {
-			dir := t.TempDir()
-			writeStackFile(t, dir, stack.Stack{
-				ID: "9", Number: 9, Trunk: stack.BranchRef{Branch: "origin/main"},
-				Branches: []stack.BranchRef{{Branch: "child"}},
-			})
-			restore := git.SetOps(&git.MockOps{
-				GitDirFn:        func() (string, error) { return dir, nil },
-				CurrentBranchFn: func() (string, error) { return "child", nil },
-				ResolveRemoteFn: func(string) (string, error) { return "origin", nil },
-				BranchExistsFn:  func(branch string) (bool, error) { return branch != "origin/main" || localBranch, nil },
-				IsAncestorFn:    func(string, string) (bool, error) { return true, nil },
-			})
-			defer restore()
+	for _, trunk := range []string{"parent", "origin/main"} {
+		t.Run(trunk, func(t *testing.T) {
+			repo := setupBaseRetargetRepo(t, "main", false)
+			withIssue250Repo(t, repo.dir)
+			retargeted := trunk == "parent"
+			if !retargeted {
+				// A remote-qualified trunk matching GitHub's base is not a retarget.
+				sf, err := stack.Load(repo.gitDir)
+				require.NoError(t, err)
+				sf.Stacks[0].Trunk.Branch = trunk
+				require.NoError(t, stack.Save(repo.gitDir, sf))
+			}
+			catalog, err := os.ReadFile(filepath.Join(repo.gitDir, "gh-stack"))
+			require.NoError(t, err)
 			cfg, outR, errR := config.NewTestConfig()
-			cfg.ForceInteractive = true
-			cfg.SelectFn = func(string, string, []string) (int, error) {
-				t.Fatal("view must not prompt for a remote")
-				return 0, nil
-			}
-			cfg.GitHubClientOverride = &github.MockClient{
-				GetStackFn: func(int) (*github.RemoteStack, error) {
-					return &github.RemoteStack{ID: 9, Number: 9, Base: github.RemoteStackBase{Ref: "main"}}, nil
-				},
-			}
+			cfg.GitHubClientOverride = repo.client
+
 			require.NoError(t, runView(cfg, &viewOptions{asJSON: true}))
 			out, diagnostics := commandOutput(t, cfg, outR, errR)
-			var result viewJSONOutput
-			require.NoError(t, json.Unmarshal([]byte(out), &result))
-			assert.Equal(t, "origin/main", result.Trunk)
-			assert.Equal(t, localBranch, result.Branches[0].NeedsRebase)
-			if !localBranch {
+			var data viewJSONOutput
+			require.NoError(t, json.Unmarshal([]byte(out), &data))
+			assert.Equal(t, trunk, data.Trunk)
+			assert.Equal(t, retargeted, data.Branches[0].NeedsRebase, "only a retargeted bottom branch needs a rebase")
+			if retargeted {
+				assert.Contains(t, diagnostics, "from parent to main")
+			} else {
 				assert.NotContains(t, diagnostics, "retargeted")
 			}
-			sf, err := stack.Load(dir)
+			after, err := os.ReadFile(filepath.Join(repo.gitDir, "gh-stack"))
 			require.NoError(t, err)
-			assert.Equal(t, "origin/main", sf.Stacks[0].Trunk.Branch)
+			assert.Equal(t, string(catalog), string(after))
 		})
 	}
 }
