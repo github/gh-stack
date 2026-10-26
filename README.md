@@ -433,7 +433,7 @@ Push all branches and create/update PRs and the stack on GitHub.
 gh stack submit [flags]
 ```
 
-Pushes all active branches together atomically before creating or updating PRs. Atomicity applies to Git branch updates, not PR or stack API operations.
+Pushes all active branches together atomically before creating PRs or setting their final bases. For pending reorders, at-risk PRs temporarily target the trunk while branches are pushed. Atomicity applies to Git branch updates, not PR or stack API operations.
 
 After creating PRs, `submit` automatically creates a **Stack** on GitHub to link the PRs together. If the stack already exists on GitHub (e.g., from a previous submit), new PRs will be added to the top of the stack.
 

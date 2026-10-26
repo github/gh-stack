@@ -94,6 +94,7 @@ func newSubmitMock(tmpDir string, currentBranch string) *git.MockOps {
 }
 
 func TestSubmit_CreatesPRsAndStack(t *testing.T) {
+	t.Setenv("GH_STACK_NO_ATOMIC", "")
 	s := stack.Stack{
 		Trunk: stack.BranchRef{Branch: "main"},
 		Branches: []stack.BranchRef{
@@ -1885,6 +1886,8 @@ func TestSubmit_PendingModifyCompletion(t *testing.T) {
 		retry             bool
 		mergeOnRetry      bool
 		mergeAfterUnstack bool
+		reorder           bool
+		noAtomic          bool
 	}{
 		{name: "one existing PR", branches: 1},
 		{name: "last PR merged while unstacking", branches: 1, mergeAfterUnstack: true},
@@ -1901,6 +1904,10 @@ func TestSubmit_PendingModifyCompletion(t *testing.T) {
 		{name: "one PR lost during final refresh", branches: 1, failure: "refresh"},
 		{name: "one PR after partial unstack", branches: 1, mergedBase: true},
 		{name: "multiple PRs complete", branches: 3},
+		{name: "reordered PRs", branches: 3, reorder: true},
+		{name: "reordered PRs non-atomic", branches: 3, reorder: true, noAtomic: true},
+		{name: "reordered PRs preparation fails", branches: 3, reorder: true, failure: "prepare", retry: true},
+		{name: "reordered PRs push fails", branches: 3, reorder: true, failure: "push", retry: true},
 		{name: "multiple PRs after partial unstack", branches: 3, mergedBase: true},
 		{name: "retry push after partial unstack", branches: 3, mergedBase: true, failure: "push", retry: true},
 		{name: "released PR merged before retry", branches: 3, mergedBase: true, failure: "push", retry: true, mergeOnRetry: true},
@@ -1933,14 +1940,14 @@ func TestSubmit_PendingModifyCompletion(t *testing.T) {
 					if i > 0 {
 						base = fmt.Sprintf("b%d", i)
 					}
-					if name == target {
+					if name == target && !tc.reorder {
 						base = "removed"
 					}
 					prs[name] = &github.PullRequest{
 						Number: 10 + i, ID: fmt.Sprintf("PR_%d", 10+i), State: "OPEN",
 						HeadRefName: name, BaseRefName: base,
 					}
-					if tc.failure == "auto-merge" && name == target {
+					if (tc.failure == "auto-merge" || tc.reorder) && name == target {
 						prs[name].AutoMergeRequest = &github.AutoMergeRequest{EnabledAt: "2026-09-29T00:00:00Z"}
 					}
 					prs[name].IsDraft = tc.failure == "ready" && name == target
@@ -1948,6 +1955,9 @@ func TestSubmit_PendingModifyCompletion(t *testing.T) {
 					oldNumbers = append(oldNumbers, 10+i)
 				}
 				s.Branches = append(s.Branches, br)
+			}
+			if tc.reorder {
+				s.Branches[1], s.Branches[2] = s.Branches[2], s.Branches[1]
 			}
 			writeStackFile(t, dir, s)
 			pending := newPendingSubmitState("42")
@@ -1958,8 +1968,12 @@ func TestSubmit_PendingModifyCompletion(t *testing.T) {
 			saveModifyState(t, dir, pending)
 			mock := newSubmitMock(dir, "b1")
 			var pushes []string
-			mock.PushFn = func(_ string, branches []string, _, _ bool) error {
+			mock.PushFn = func(_ string, branches []string, _, atomic bool) error {
 				require.NotEmpty(t, branches)
+				if tc.reorder {
+					assert.Equal(t, "main", prs[target].BaseRefName, "detach the reversed PR base before pushing")
+					assert.Equal(t, !tc.noAtomic, atomic)
+				}
 				pushes = append(pushes, branches...)
 				if tc.failure == "push" && slices.Contains(branches, target) {
 					return assert.AnError
@@ -2050,11 +2064,20 @@ func TestSubmit_PendingModifyCompletion(t *testing.T) {
 				},
 				UpdatePRBaseFn: func(number int, base string) error {
 					baseUpdates++
-					if tc.failure == "base" {
+					if tc.failure == "base" || tc.failure == "prepare" {
 						return assert.AnError
 					}
-					require.Equal(t, prs[target].Number, number)
-					prs[target].BaseRefName = base
+					if !tc.reorder {
+						require.Equal(t, prs[target].Number, number)
+					}
+					for _, pr := range prs {
+						if pr.Number == number {
+							if tc.reorder {
+								assert.False(t, pr.IsAutoMergeEnabled(), "disable auto-merge before changing bases")
+							}
+							pr.BaseRefName = base
+						}
+					}
 					if tc.failure == "save" {
 						var err error
 						catalogLock, err = stack.Lock(dir)
@@ -2062,7 +2085,14 @@ func TestSubmit_PendingModifyCompletion(t *testing.T) {
 					}
 					return nil
 				},
-				DisableAutoMergeFn:     func(string) error { return assert.AnError },
+				DisableAutoMergeFn: func(id string) error {
+					if tc.failure == "auto-merge" {
+						return assert.AnError
+					}
+					require.Equal(t, prs[target].ID, id)
+					prs[target].AutoMergeRequest = nil
+					return nil
+				},
 				MarkPRReadyForReviewFn: func(string) error { return assert.AnError },
 				CreateStackFn: func(numbers []int) (*github.RemoteStack, error) {
 					require.GreaterOrEqual(t, len(numbers), 2)
@@ -2077,7 +2107,7 @@ func TestSubmit_PendingModifyCompletion(t *testing.T) {
 			cfg, outR, errR := config.NewTestConfig()
 			cfg.GitHubClientOverride = client
 
-			err := runSubmit(cfg, &submitOptions{auto: true, open: tc.failure == "ready"})
+			err := runSubmit(cfg, &submitOptions{auto: true, open: tc.failure == "ready", noAtomic: tc.noAtomic})
 
 			_, output := commandOutput(t, cfg, outR, errR)
 			if tc.failure != "" {
@@ -2090,6 +2120,9 @@ func TestSubmit_PendingModifyCompletion(t *testing.T) {
 				assert.NotContains(t, output, "Stack recreated")
 				assert.NotContains(t, output, "Changes from modify submitted")
 				assert.Nil(t, replacement, "an incomplete modification must not create a partial replacement stack")
+				if tc.failure == "prepare" {
+					assert.Empty(t, pushes, "do not push unless all reversed bases were detached")
+				}
 			} else {
 				require.NoError(t, err, output)
 				assert.NoFileExists(t, modify.StatePath(dir))
@@ -2113,6 +2146,8 @@ func TestSubmit_PendingModifyCompletion(t *testing.T) {
 				assert.Contains(t, output, "Changes from modify submitted")
 				if tc.newPR {
 					assert.Equal(t, 1, createdPRs)
+				} else if tc.reorder {
+					assert.Equal(t, 3, baseUpdates)
 				} else if !tc.mergeAfterUnstack {
 					assert.Equal(t, 1, baseUpdates)
 				}
@@ -2129,7 +2164,7 @@ func TestSubmit_PendingModifyCompletion(t *testing.T) {
 				pushStart := len(pushes)
 				retryCfg, retryOut, retryErr := config.NewTestConfig()
 				retryCfg.GitHubClientOverride = client
-				err := runSubmit(retryCfg, &submitOptions{auto: true})
+				err := runSubmit(retryCfg, &submitOptions{auto: true, noAtomic: tc.noAtomic})
 				_, diagnostics := commandOutput(t, retryCfg, retryOut, retryErr)
 				require.NoError(t, err, diagnostics)
 				assert.NoFileExists(t, modify.StatePath(dir))
@@ -2152,6 +2187,12 @@ func TestSubmit_PendingModifyCompletion(t *testing.T) {
 				assert.Zero(t, unstackCalls)
 			} else {
 				assert.Equal(t, 1, unstackCalls)
+			}
+			if tc.reorder {
+				assert.Equal(t, "b1", prs["b3"].BaseRefName)
+				assert.Equal(t, "b3", prs["b2"].BaseRefName)
+				require.NotNil(t, replacement)
+				assert.Equal(t, []int{10, 12, 11}, replacement.PullRequests)
 			}
 		})
 	}
@@ -2540,6 +2581,7 @@ func TestClearPendingModifyState_NoFile(t *testing.T) {
 }
 
 func TestSubmit_WithPendingModify_AtomicPush(t *testing.T) {
+	t.Setenv("GH_STACK_NO_ATOMIC", "")
 	s := stack.Stack{
 		ID:     "42",
 		Number: 7,

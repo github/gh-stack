@@ -25,6 +25,7 @@ func newPushMock(tmpDir string, currentBranch string) *git.MockOps {
 }
 
 func TestPush_PushesAllBranches(t *testing.T) {
+	t.Setenv("GH_STACK_NO_ATOMIC", "")
 	s := stack.Stack{
 		Trunk: stack.BranchRef{Branch: "main"},
 		Branches: []stack.BranchRef{

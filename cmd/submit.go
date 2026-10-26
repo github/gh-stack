@@ -242,6 +242,13 @@ func runSubmit(cfg *config.Config, opts *submitOptions) error {
 		drafts = collected
 	}
 
+	if pendingModify {
+		if err := prepareReorderedPRs(cfg, client, s); err != nil {
+			cfg.Errorf("failed to prepare reordered PRs: %s", err)
+			return ErrSilent
+		}
+	}
+
 	if len(activeBranches) > 0 {
 		cfg.Printf("Pushing to %s...", remote)
 		if err := git.Push(remote, activeBranches, true, !opts.noAtomic); err != nil {
@@ -304,6 +311,35 @@ func runSubmit(cfg *config.Config, opts *submitOptions) error {
 	}
 
 	cfg.Successf("Pushed and synced %d branches", len(s.ActiveBranches()))
+	return nil
+}
+
+// Reversed PR relationships can cause indirect merges when the new heads are
+// pushed. Use the unchanged trunk until ensurePR restores the intended bases.
+func prepareReorderedPRs(cfg *config.Config, client github.ClientOps, s *stack.Stack) error {
+	for i, b := range s.Branches {
+		if b.IsSkipped() {
+			continue
+		}
+		pr, err := client.FindPRForBranch(b.Branch)
+		if err != nil {
+			return fmt.Errorf("looking up PR for %s: %w", b.Branch, err)
+		}
+		if pr == nil || s.IndexOf(pr.BaseRefName) <= i {
+			continue
+		}
+		if pr.IsAutoMergeEnabled() {
+			if err := client.DisableAutoMerge(pr.ID); err != nil {
+				return fmt.Errorf("disabling auto-merge for PR #%d: %w", pr.Number, err)
+			}
+			cfg.Warningf("Disabled auto-merge for PR %s (incompatible with stacked PRs)",
+				cfg.PRLink(pr.Number, pr.URL))
+		}
+		if err := client.UpdatePRBase(pr.Number, s.Trunk.Branch); err != nil {
+			return fmt.Errorf("temporarily setting base of PR #%d to %s: %w", pr.Number, s.Trunk.Branch, err)
+		}
+		cfg.Successf("Temporarily set base of PR %s to %s", cfg.PRLink(pr.Number, pr.URL), s.Trunk.Branch)
+	}
 	return nil
 }
 

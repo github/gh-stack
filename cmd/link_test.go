@@ -1679,6 +1679,7 @@ func TestLink_UpdateDeletedStack_FallsBackToCreate(t *testing.T) {
 }
 
 func TestLink_PushesBranchesBeforeResolution(t *testing.T) {
+	t.Setenv("GH_STACK_NO_ATOMIC", "")
 	var pushedBranches []string
 	var pushedRemote string
 

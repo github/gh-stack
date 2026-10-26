@@ -350,7 +350,7 @@ gh stack submit [flags]
 | `--remote <name>` | Remote to push to (defaults to auto-detected remote) |
 | `--no-atomic` | Allow partial branch updates |
 
-Pushes all active branches together atomically before creating or updating PRs. After creating PRs, `submit` automatically creates a **Stack** on GitHub to link the PRs together. If the stack already exists on GitHub (e.g., from a previous submit), new PRs are added to the existing stack. Atomicity applies to Git branch updates, not PR or stack API operations.
+Pushes all active branches together atomically before creating PRs or setting their final bases. For pending reorders, at-risk PRs temporarily target the trunk while branches are pushed. After creating PRs, `submit` automatically creates a **Stack** on GitHub to link the PRs together. If the stack already exists on GitHub (e.g., from a previous submit), new PRs are added to the existing stack. Atomicity applies to Git branch updates, not PR or stack API operations.
 
 If every PR in the stack has already been merged, that stack is complete and can't be extended. In that case `submit` automatically starts a **new** stack rooted at the trunk for your unmerged branches and creates it on GitHub, leaving the merged stack untouched.
 
