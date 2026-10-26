@@ -1684,20 +1684,20 @@ func TestCheckout_BaseRetarget(t *testing.T) {
 		assert.Equal(t, "parent", sf.Stacks[0].Trunk.Branch)
 	})
 
-	t.Run("imports onto the stack base", func(t *testing.T) {
-		repo := setupBaseRetargetRepo(t, "main", true)
+	t.Run("keeps the old base until rebased", func(t *testing.T) {
+		// The child merged into the parent, which was deleted without merging.
+		repo := setupBaseRetargetRepo(t, "main", false)
 		withIssue250Repo(t, repo.dir)
 		sf, err := stack.Load(repo.gitDir)
 		require.NoError(t, err)
 		sf.Stacks = nil
 		require.NoError(t, stack.Save(repo.gitDir, sf))
-		repo.remote.PullRequests = []int{10, 11, 12}
+		child := issue250Git(t, repo.dir, "rev-parse", "child")
 		repo.client.FindPRByNumberFn = func(n int) (*github.PullRequest, error) {
-			if n == 10 {
-				return &github.PullRequest{Number: 10, HeadRefName: "parent-old", BaseRefName: "deleted", State: "MERGED", Merged: true}, nil
+			if n == 11 {
+				return &github.PullRequest{Number: 11, HeadRefName: "child", BaseRefName: "parent", State: "MERGED", Merged: true, HeadRefOID: child}, nil
 			}
-			heads := map[int]string{11: "child", 12: "top"}
-			return &github.PullRequest{Number: n, HeadRefName: heads[n], BaseRefName: "parent", State: "OPEN"}, nil
+			return &github.PullRequest{Number: 12, HeadRefName: "top", BaseRefName: "main", State: "OPEN"}, nil
 		}
 		cfg := issue250TestConfig(t)
 		cfg.GitHubClientOverride = repo.client
@@ -1705,6 +1705,9 @@ func TestCheckout_BaseRetarget(t *testing.T) {
 		require.NoError(t, runCheckout(cfg, &checkoutOptions{target: "9"}))
 		sf, err = stack.Load(repo.gitDir)
 		require.NoError(t, err)
-		assert.Equal(t, "main", sf.Stacks[0].Trunk.Branch)
+		assert.Equal(t, "parent", sf.Stacks[0].Trunk.Branch)
+		top := issue250Git(t, repo.dir, "rev-parse", "top")
+		require.Error(t, runRebase(cfg, &rebaseOptions{remote: "origin"}), "dropping the unmerged parent needs consent")
+		assert.Equal(t, top, issue250Git(t, repo.dir, "rev-parse", "top"))
 	})
 }

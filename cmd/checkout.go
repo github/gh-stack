@@ -415,10 +415,6 @@ func checkoutStackByNumber(cfg *config.Config, sf *stack.StackFile, gitDir strin
 // importing the stack from the remote — and returns the resolved local stack
 // and the branch to check out.
 func reconcileAndImportRemoteStack(cfg *config.Config, client github.ClientOps, sf *stack.StackFile, gitDir string, remoteStack *github.RemoteStack, prs []*github.PullRequest, trunk, targetBranch string) (*stack.Stack, string, error) {
-	// A merged first PR keeps its old base after GitHub retargets the stack.
-	if remoteStack.Base.Ref != "" {
-		trunk = remoteStack.Base.Ref
-	}
 	allMerged := true
 	for _, pr := range prs {
 		if !pr.Merged {
@@ -479,9 +475,9 @@ func reconcileAndImportRemoteStack(cfg *config.Config, client github.ClientOps, 
 			if err := stack.Save(gitDir, sf); err != nil {
 				return nil, "", stackSaveError(cfg, err)
 			}
-			if localStack.Trunk.Branch != trunk {
-				cfg.Warningf("GitHub retargeted this stack%s from %s to %s", linkedStackLabel(cfg, remoteStack.Number), localStack.Trunk.Branch, trunk)
-				cfg.Printf("  Run `%s` to rebase the stack onto %s", cfg.ColorCyan("gh stack sync"), trunk)
+			if base := remoteStack.Base.Ref; base != "" && localStack.Trunk.Branch != base {
+				cfg.Warningf("GitHub retargeted this stack%s from %s to %s", linkedStackLabel(cfg, remoteStack.Number), localStack.Trunk.Branch, base)
+				cfg.Printf("  Run `%s` to rebase the stack onto %s", cfg.ColorCyan("gh stack sync"), base)
 			} else {
 				cfg.Successf("Local stack matches remote%s", linkedStackLabel(cfg, remoteStack.Number))
 			}
