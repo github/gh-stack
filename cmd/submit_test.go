@@ -3248,12 +3248,41 @@ func TestSubmit_BaseRetarget(t *testing.T) {
 	}
 }
 
+func TestSubmit_SelectedRemoteMissingDefault(t *testing.T) {
+	repo := setupAmendedParentRepo(t, false)
+	upstream := filepath.Join(t.TempDir(), "upstream.git")
+	issue250Git(t, ".", "-c", "safe.bareRepository=all", "init", "--bare", "-b", "release", upstream)
+	issue250Git(t, repo.dir, "remote", "add", "upstream", upstream)
+	issue250Git(t, repo.dir, "push", "upstream", "main:release")
+	issue250Git(t, repo.dir, "symbolic-ref", "refs/remotes/origin/HEAD", "refs/remotes/origin/main")
+	writeStackFile(t, repo.gitDir, stack.Stack{
+		Trunk: stack.BranchRef{Branch: "main"}, Branches: []stack.BranchRef{{Branch: "child"}},
+	})
+	withIssue250Repo(t, repo.dir)
+	cfg, outR, errR := config.NewTestConfig()
+	cfg.GitHubClientOverride = &github.MockClient{
+		CreatePRFn: func(string, string, string, string, bool) (*github.PullRequest, error) {
+			t.Fatal("must reject the selected remote's missing base before opening PRs")
+			return nil, nil
+		},
+	}
+	before, err := os.ReadFile(filepath.Join(repo.gitDir, "gh-stack"))
+	require.NoError(t, err)
+	require.ErrorIs(t, runSubmit(cfg, &submitOptions{auto: true, remote: "upstream"}), ErrInvalidArgs)
+	_, output := commandOutput(t, cfg, outR, errR)
+	assert.Contains(t, output, "main does not exist on upstream")
+	assert.Empty(t, issue250Git(t, repo.dir, "ls-remote", "--heads", "upstream", "refs/heads/child"))
+	after, err := os.ReadFile(filepath.Join(repo.gitDir, "gh-stack"))
+	require.NoError(t, err)
+	assert.Equal(t, before, after)
+}
+
 func TestSubmit_BasePreflight(t *testing.T) {
-	for _, mode := range []string{"unpublished", "transport error", "published", "default", "retargeted", "closed"} {
+	for _, mode := range []string{"unpublished", "transport error", "published", "default", "missing selected default", "retargeted", "closed"} {
 		t.Run(mode, func(t *testing.T) {
 			dir := t.TempDir()
 			trunk := "parent"
-			if mode == "default" {
+			if mode == "default" || mode == "missing selected default" {
 				trunk = "main"
 			}
 			s := stack.Stack{Trunk: stack.BranchRef{Branch: trunk}, Branches: []stack.BranchRef{{Branch: "child"}}}
@@ -3268,23 +3297,22 @@ func TestSubmit_BasePreflight(t *testing.T) {
 				pr.State = "CLOSED"
 			}
 			writeStackFile(t, dir, s)
-			var fetched, pushed int
+			var checked, pushed int
 			mock := newSubmitMock(dir, "child")
 			mock.CommitExistsFn = func(ref string) (bool, error) {
 				return mode == "retargeted" && ref == "refs/remotes/upstream/parent", nil
 			}
-			mock.RemoteBranchExistsFn = func(string, string) (bool, error) { return mode != "retargeted", nil }
-			mock.FetchBranchFn = func(remote, branch string) error {
+			mock.RemoteBranchExistsFn = func(remote, branch string) (bool, error) {
 				assert.Equal(t, "upstream", remote)
 				assert.Equal(t, trunk, branch)
-				fetched++
-				if mode == "unpublished" || mode == "closed" {
-					return git.ErrRemoteBranchNotFound
+				checked++
+				if mode == "unpublished" || mode == "closed" || mode == "missing selected default" || mode == "retargeted" {
+					return false, nil
 				}
 				if mode == "transport error" {
-					return fmt.Errorf("network unavailable")
+					return false, fmt.Errorf("network unavailable")
 				}
-				return nil
+				return true, nil
 			}
 			mock.PushFn = func(_ string, branches []string, _, _ bool) error {
 				assert.Contains(t, []string{"published", "default"}, mode)
@@ -3324,7 +3352,7 @@ func TestSubmit_BasePreflight(t *testing.T) {
 				require.NoError(t, loadErr)
 				assert.Equal(t, s, sf.Stacks[0])
 				switch mode {
-				case "unpublished":
+				case "unpublished", "missing selected default":
 					assert.ErrorIs(t, err, ErrInvalidArgs)
 					assert.Contains(t, output, "Publish the parent stack")
 				case "retargeted":
@@ -3333,11 +3361,7 @@ func TestSubmit_BasePreflight(t *testing.T) {
 					assert.Contains(t, output, "PR #11 is closed")
 				}
 			}
-			if mode == "default" || mode == "retargeted" {
-				assert.Zero(t, fetched)
-			} else {
-				assert.Equal(t, 1, fetched)
-			}
+			assert.Equal(t, 1, checked)
 		})
 	}
 }

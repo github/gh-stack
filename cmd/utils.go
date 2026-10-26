@@ -1260,9 +1260,6 @@ func requireCurrentBase(cfg *config.Config, sf *stack.StackFile, s *stack.Stack,
 	if err != nil {
 		return nil, err
 	}
-	if defaultBranch, err := git.DefaultBranch(); err == nil && defaultBranch == trunk && base.ClosedPR == 0 {
-		return details, nil
-	}
 	if !submitting && !base.Published && base.ClosedPR == 0 {
 		known, err := baseWasPublished(sf, trunk, remote)
 		if err != nil {
@@ -1272,12 +1269,13 @@ func requireCurrentBase(cfg *config.Config, sf *stack.StackFile, s *stack.Stack,
 			return details, nil
 		}
 	}
-	if err := git.FetchBranch(remote, trunk); err != nil {
-		if errors.Is(err, git.ErrRemoteBranchNotFound) {
-			reportMissingBase(cfg, trunk, remote, base.ClosedPR)
-			return nil, ErrInvalidArgs
-		}
+	exists, err := git.RemoteBranchExists(remote, trunk)
+	if err != nil {
 		return nil, fmt.Errorf("checking base branch %s on %s: %w", trunk, remote, err)
+	}
+	if !exists {
+		reportMissingBase(cfg, trunk, remote, base.ClosedPR)
+		return nil, ErrInvalidArgs
 	}
 	return details, nil
 }

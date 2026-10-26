@@ -364,7 +364,7 @@ gh stack submit [flags]
 
 Creates a Stacked PR for every branch in the stack, pushing branches to the remote. After creating PRs, `submit` automatically creates a **Stack** on GitHub to link the PRs together. If the stack already exists on GitHub (e.g., from a previous submit), new PRs are added to the existing stack.
 
-For a non-default base, publish the parent stack or base branch first. `submit` checks that the base exists on the selected remote before pushing any child branches; it never publishes another stack for you. If GitHub has retargeted this stack or its single PR, run `gh stack sync` before publishing.
+Publish the parent stack or base branch first. `submit` checks that the base exists on the selected remote before pushing any child branches, including when its name matches the default branch; it never publishes another stack for you. If GitHub has retargeted this stack or its single PR, run `gh stack sync` before publishing.
 
 If every PR in the stack has already been merged, that stack is complete and can't be extended. In that case `submit` automatically starts a **new** stack rooted at the trunk for your unmerged branches and creates it on GitHub, leaving the merged stack untouched.
 

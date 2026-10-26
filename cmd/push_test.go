@@ -436,10 +436,10 @@ func TestPush_RetargetedClosedPRRequiresBase(t *testing.T) {
 	})
 	mock := newPushMock(dir, "child")
 	mock.CommitExistsFn = func(string) (bool, error) { return false, nil }
-	mock.FetchBranchFn = func(remote, branch string) error {
+	mock.RemoteBranchExistsFn = func(remote, branch string) (bool, error) {
 		assert.Equal(t, "origin", remote)
 		assert.Equal(t, "parent", branch)
-		return git.ErrRemoteBranchNotFound
+		return false, nil
 	}
 	mock.PushFn = func(string, []string, bool, bool) error {
 		t.Fatal("a closed associated PR must not use the local-only exemption")
