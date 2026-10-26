@@ -13,6 +13,7 @@ import (
 )
 
 type addOptions struct {
+	fork         bool
 	stageAll     bool
 	stageTracked bool
 	message      string
@@ -26,6 +27,9 @@ func AddCmd(cfg *config.Config) *cobra.Command {
 		Short: "Add a new branch on top of the current stack",
 		Long: `Add a new branch on top of the current stack.
 
+Use --fork to start a separate stack based on the current branch instead.
+When run in the middle of a stack, offers to fork in an interactive terminal.
+
 When -m is omitted but -A or -u is used, your editor opens for the
 commit message. When -m is provided without an explicit branch name,
 the branch name is auto-generated from the commit message.`,
@@ -37,6 +41,9 @@ the branch name is auto-generated from the commit message.`,
 
   # Auto-generate branch name from the commit message
   $ gh stack add -m "Fix login bug"
+
+  # Start a separate stack based on the current branch
+  $ gh stack add --fork parallel-feature
   
   # Add a branch and open editor to write commit message
   $ gh stack add -A my-feature`,
@@ -49,6 +56,7 @@ the branch name is auto-generated from the commit message.`,
 	cmd.Flags().BoolVarP(&opts.stageAll, "all", "A", false, "Stage all changes including untracked files")
 	cmd.Flags().BoolVarP(&opts.stageTracked, "update", "u", false, "Stage changes to tracked files only")
 	cmd.Flags().StringVarP(&opts.message, "message", "m", "", "Create a commit with this message")
+	cmd.Flags().BoolVar(&opts.fork, "fork", false, "Start a new stack based on the current branch")
 
 	return cmd
 }
@@ -73,13 +81,35 @@ func runAdd(cfg *config.Config, opts *addOptions, args []string) error {
 			return err
 		}
 	}
-	result, err := loadStackOptional(cfg, "")
+	var result *loadStackResult
+	if opts.fork {
+		// A fork needs the current branch, not a selected stack or a checkout.
+		dir, err := stackStateDir(cfg)
+		if err != nil {
+			return err
+		}
+		sf, err := stack.Load(dir)
+		if err != nil {
+			return fmt.Errorf("loading stack state: %w", err)
+		}
+		current, err := git.CurrentBranch()
+		if err != nil || current == "" {
+			if err != nil {
+				cfg.Errorf("could not determine the current branch: %s", err)
+			}
+			cfg.Errorf("check out a branch before starting a new stack")
+			return ErrInvalidArgs
+		}
+		result = &loadStackResult{GitDir: dir, StackFile: sf, CurrentBranch: current}
+	} else {
+		result, err = loadStackOptional(cfg, "")
+	}
 	if err != nil {
 		return stackLookupError(err)
 	}
 	gitDir := result.GitDir
 
-	if result.Stack == nil {
+	if result.Stack == nil && !opts.fork {
 		branchName, err := addBranchNameFromArgs(cfg, opts, args)
 		if err != nil {
 			return err
@@ -90,27 +120,59 @@ func runAdd(cfg *config.Config, opts *addOptions, args []string) error {
 	sf := result.StackFile
 	s := result.Stack
 	currentBranch := result.CurrentBranch
+	fork := opts.fork
 
-	if s.IsFullyMerged() {
+	if !fork && s.IsFullyMerged() {
 		cfg.Warningf("All branches in this stack have been merged")
 		cfg.Printf("Consider creating a new stack with `%s`", cfg.ColorCyan("gh stack init"))
 		return nil
 	}
 
-	idx := s.IndexOf(currentBranch)
+	idx := -1
+	if s != nil {
+		idx = s.IndexOf(currentBranch)
+	}
 	// idx < 0 means we're on the trunk — that's allowed (we'll create
 	// a new branch from it). Only block if we're in the middle of the stack.
-	if idx >= 0 && idx < len(s.Branches)-1 {
-		cfg.Errorf("can only add branches to the top of the stack; run `%s` then `%s`", cfg.ColorCyan("gh stack top"), cfg.ColorCyan("gh stack add"))
-		cfg.Printf("Or to restructure your stack and insert a branch, use `%s`", cfg.ColorCyan("gh stack modify"))
-		return ErrInvalidArgs
+	if !fork && idx >= 0 && idx < len(s.Branches)-1 {
+		if cfg.IsInteractive() {
+			cfg.Infof("%s is in the middle of the stack%s", currentBranch, linkedStackLabel(cfg, s.Number))
+			prompt := "Start a new stack based on " + currentBranch + "?"
+			var promptErr error
+			if cfg.ConfirmFn != nil {
+				fork, promptErr = cfg.ConfirmFn(prompt, true)
+			} else {
+				fork, promptErr = prompter.New(cfg.In, cfg.Out, cfg.Err).Confirm(prompt, true)
+			}
+			if promptErr != nil {
+				if !isInterruptError(promptErr) {
+					return fmt.Errorf("reading fork confirmation: %w", promptErr)
+				}
+				printInterrupt(cfg)
+				fork = false
+			}
+		}
+		if !fork {
+			cfg.Errorf("can only add branches to the top of the stack; run `%s` then `%s`", cfg.ColorCyan("gh stack top"), cfg.ColorCyan("gh stack add"))
+			cfg.Printf("Or to restructure your stack and insert a branch, use `%s`", cfg.ColorCyan("gh stack modify"))
+			cfg.Printf("To start a separate stack here, use `%s`", cfg.ColorCyan("gh stack add --fork <branch>"))
+			return ErrInvalidArgs
+		}
+	}
+	if fork {
+		for _, parent := range sf.StacksForBranch(currentBranch) {
+			if i := parent.IndexOf(currentBranch); i >= 0 && parent.Branches[i].IsMerged() {
+				cfg.Errorf("branch %q has already merged; check out its updated base before starting a new stack", currentBranch)
+				return ErrInvalidArgs
+			}
+		}
 	}
 
 	// Check if the current branch is a stack branch with no unique commits
 	// relative to its parent. If so, the commit should land on this branch
 	// without creating a new one (e.g., right after init).
 	var branchIsEmpty bool
-	if wantsCommit && idx >= 0 {
+	if !fork && wantsCommit && idx >= 0 {
 		parentBranch := s.ActiveBaseBranch(currentBranch)
 		shas, err := git.RevParseMulti([]string{parentBranch, currentBranch})
 		if err == nil {
@@ -143,6 +205,10 @@ func runAdd(cfg *config.Config, opts *addOptions, args []string) error {
 		return err
 	}
 	if branchName == "" {
+		if fork && !cfg.IsInteractive() {
+			cfg.Errorf("provide a branch name or -m when using --fork without an interactive terminal")
+			return ErrInvalidArgs
+		}
 		// No -m and no explicit name — prompt for one.
 		for {
 			input, err := promptInput(cfg, "Enter a name for the new branch:")
@@ -167,6 +233,14 @@ func runAdd(cfg *config.Config, opts *addOptions, args []string) error {
 		return ErrInvalidArgs
 	}
 
+	if err := git.ValidateRefName(branchName); err != nil {
+		cfg.Errorf("invalid branch name %q: must be a valid git ref", branchName)
+		return ErrInvalidArgs
+	}
+	if fork && branchName == currentBranch {
+		cfg.Errorf("the new stack's branch must differ from its base %q", currentBranch)
+		return ErrInvalidArgs
+	}
 	if err := sf.ValidateNoDuplicateBranch(branchName); err != nil {
 		cfg.Errorf("branch %q already exists in the stack", branchName)
 		return ErrInvalidArgs
@@ -189,9 +263,21 @@ func runAdd(cfg *config.Config, opts *addOptions, args []string) error {
 		cfg.Errorf("commit and staging flags cannot be used when adopting a branch checked out in another worktree")
 		return ErrInvalidArgs
 	}
-	var adoptedBase string
+	var adoptedBase, trunkSHA string
+	baseRef := currentBranch
+	if fork {
+		trunkSHA, err = git.RevParse("refs/heads/" + currentBranch)
+		if err != nil {
+			return fmt.Errorf("resolving the new stack's base %s: %w", currentBranch, err)
+		}
+		baseRef = trunkSHA
+	}
 	if adopted {
-		adoptedBase, err = git.MergeBase(currentBranch, branchName)
+		branchRef := branchName
+		if fork {
+			branchRef = "refs/heads/" + branchName
+		}
+		adoptedBase, err = git.MergeBase(baseRef, branchRef)
 		if err != nil {
 			cfg.Errorf("failed to determine the common base of %s and %s: %s", currentBranch, branchName, err)
 			return ErrSilent
@@ -208,7 +294,7 @@ func runAdd(cfg *config.Config, opts *addOptions, args []string) error {
 
 	if !adopted {
 		// Create the new branch from the current HEAD and check it out
-		if err := git.CreateBranch(branchName, currentBranch); err != nil {
+		if err := git.CreateBranch(branchName, baseRef); err != nil {
 			cfg.Errorf("failed to create branch: %s", err)
 			return ErrSilent
 		}
@@ -227,12 +313,23 @@ func runAdd(cfg *config.Config, opts *addOptions, args []string) error {
 
 	base := adoptedBase
 	if !adopted {
-		base, err = git.RevParse(currentBranch)
-		if err != nil {
-			cfg.Warningf("could not resolve base SHA for %s: %s", currentBranch, err)
+		base = trunkSHA
+		if !fork {
+			base, err = git.RevParse(currentBranch)
+			if err != nil {
+				cfg.Warningf("could not resolve base SHA for %s: %s", currentBranch, err)
+			}
 		}
 	}
-	s.Branches = append(s.Branches, stack.BranchRef{Branch: branchName, Base: base})
+	if fork {
+		sf.AddStack(stack.Stack{
+			Trunk:    stack.BranchRef{Branch: currentBranch, Head: trunkSHA},
+			Branches: []stack.BranchRef{{Branch: branchName, Base: base}},
+		})
+		s = &sf.Stacks[len(sf.Stacks)-1]
+	} else {
+		s.Branches = append(s.Branches, stack.BranchRef{Branch: branchName, Base: base})
+	}
 
 	// Commit on the NEW branch (staging already done above)
 	var commitSHA string
@@ -250,6 +347,9 @@ func runAdd(cfg *config.Config, opts *addOptions, args []string) error {
 	}
 
 	// Print summary
+	if fork {
+		cfg.Successf("Started a new stack based on %s", cfg.ColorBold(currentBranch))
+	}
 	position := len(s.Branches)
 	if adopted {
 		if commitSHA != "" {

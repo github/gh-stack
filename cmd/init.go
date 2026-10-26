@@ -116,6 +116,7 @@ func runInit(cfg *config.Config, opts *initOptions) error {
 		for _, s := range sf.FindAllStacksForBranch(currentBranch) {
 			if s.IndexOf(currentBranch) >= 0 {
 				cfg.Errorf("current branch %q is already part of a stack", currentBranch)
+				cfg.Printf("To start a separate stack based on it, use `%s`", cfg.ColorCyan("gh stack add --fork <branch>"))
 				return ErrInvalidArgs
 			}
 		}

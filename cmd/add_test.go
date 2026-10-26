@@ -220,6 +220,265 @@ func TestAdd_CreatesNewBranch(t *testing.T) {
 	assert.Equal(t, "newbranch", names[len(names)-1], "top branch")
 }
 
+func TestAdd_Fork(t *testing.T) {
+	for _, tt := range []struct {
+		name, current              string
+		opts                       addOptions
+		adopted, foreign, generate bool
+		noCatalog, prompt          bool
+	}{
+		{name: "middle", current: "b1"},
+		{name: "top", current: "b2"},
+		{name: "shared trunk", current: "main"},
+		{name: "untracked", current: "outside"},
+		{name: "first stack", current: "main", noCatalog: true},
+		{name: "prompted name", current: "b1", prompt: true},
+		{name: "adopt", current: "b1", adopted: true},
+		{name: "foreign adoption", current: "b1", adopted: true, foreign: true},
+		{name: "stage all", current: "b1", opts: addOptions{stageAll: true, message: "New layer"}},
+		{name: "stage tracked", current: "b1", opts: addOptions{stageTracked: true, message: "New layer"}},
+		{name: "staged commit", current: "b1", opts: addOptions{message: "New layer"}},
+		{name: "editor", current: "b1", opts: addOptions{stageAll: true}},
+		{name: "generated name", current: "b1", opts: addOptions{message: "New layer"}, generate: true},
+		{name: "adopt and commit", current: "b1", opts: addOptions{message: "New layer"}, adopted: true},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			dir, owner := t.TempDir(), t.TempDir()
+			if !tt.noCatalog {
+				writeStackFileMulti(t, dir,
+					stack.Stack{Trunk: stack.BranchRef{Branch: "b1"}, Branches: []stack.BranchRef{{Branch: "old-child"}}},
+					stack.Stack{Trunk: stack.BranchRef{Branch: "main"}, Branches: []stack.BranchRef{{Branch: "b1"}, {Branch: "b2"}}},
+					stack.Stack{Trunk: stack.BranchRef{Branch: "main"}, Branches: []stack.BranchRef{{Branch: "other"}}},
+				)
+			}
+			before, err := stack.Load(dir)
+			require.NoError(t, err)
+			current := tt.current
+			name := "new-child"
+			args := []string{name}
+			if tt.generate {
+				args = nil
+				name = time.Now().Format("01-02") + "-new_layer"
+			} else if tt.prompt {
+				args = nil
+			}
+			var staged, committed, created bool
+			commit := func() (string, error) {
+				assert.Equal(t, name, current, "never commit on the parent, even when it is empty")
+				committed = true
+				return "commit", nil
+			}
+			restore := git.SetOps(&git.MockOps{
+				GitDirFn:        func() (string, error) { return dir, nil },
+				CurrentBranchFn: func() (string, error) { return current, nil },
+				BranchExistsFn:  func(branch string) (bool, error) { return tt.adopted && branch == name, nil },
+				RevParseFn: func(ref string) (string, error) {
+					assert.Equal(t, "refs/heads/"+tt.current, ref)
+					return "parent-sha", nil
+				},
+				RevParseMultiFn: func([]string) ([]string, error) {
+					t.Fatal("fork must bypass the empty-layer shortcut")
+					return nil, nil
+				},
+				MergeBaseFn: func(base, branch string) (string, error) {
+					assert.Equal(t, "parent-sha", base)
+					assert.Equal(t, "refs/heads/"+name, branch)
+					return "common-base", nil
+				},
+				WorktreesFn: func() ([]git.Worktree, error) {
+					if tt.foreign {
+						return []git.Worktree{{Path: owner, Branch: name}}, nil
+					}
+					return nil, nil
+				},
+				CreateBranchFn: func(branch, base string) error {
+					assert.Equal(t, name, branch)
+					assert.Equal(t, "parent-sha", base)
+					created = true
+					return nil
+				},
+				CheckoutBranchFn:    func(branch string) error { current = branch; return nil },
+				StageAllFn:          func() error { staged = true; return nil },
+				StageTrackedFn:      func() error { staged = true; return nil },
+				HasStagedChangesFn:  func() (bool, error) { return true, nil },
+				CommitFn:            func(string) (string, error) { return commit() },
+				CommitInteractiveFn: commit,
+			})
+			defer restore()
+			cfg, outR, errR := config.NewTestConfig()
+			cfg.ForceInteractive = tt.prompt
+			cfg.InputFn = func(string) (string, error) {
+				assert.True(t, tt.prompt)
+				return name, nil
+			}
+			cfg.ConfirmFn = func(string, bool) (bool, error) {
+				t.Fatal("explicit fork does not require confirmation")
+				return false, nil
+			}
+			cfg.SelectFn = func(string, string, []string) (int, error) {
+				t.Fatal("explicit fork must not select an existing stack")
+				return 0, nil
+			}
+			cfg.GitHubClientOverride = &github.MockClient{FindPRForBranchFn: func(string) (*github.PullRequest, error) {
+				t.Fatal("fork is local-only")
+				return nil, nil
+			}}
+			tt.opts.fork = true
+			require.NoError(t, runAdd(cfg, &tt.opts, args))
+			_, output := commandOutput(t, cfg, outR, errR)
+			after, err := stack.Load(dir)
+			require.NoError(t, err)
+			require.Len(t, after.Stacks, len(before.Stacks)+1)
+			assert.Equal(t, before.Stacks, after.Stacks[:len(before.Stacks)])
+			child := after.Stacks[len(before.Stacks)]
+			assert.Equal(t, stack.BranchRef{Branch: tt.current, Head: "parent-sha"}, child.Trunk)
+			assert.Equal(t, []string{name}, child.BranchNames())
+			base := "parent-sha"
+			if tt.adopted {
+				base = "common-base"
+			}
+			assert.Equal(t, base, child.Branches[0].Base)
+			assert.Equal(t, !tt.adopted, created)
+			assert.Equal(t, tt.opts.stageAll || tt.opts.stageTracked, staged)
+			assert.Equal(t, tt.opts.message != "" || staged, committed)
+			if tt.foreign {
+				assert.Equal(t, tt.current, current)
+				assert.Contains(t, output, owner)
+			} else {
+				assert.Equal(t, name, current)
+			}
+			assert.Contains(t, output, "Started a new stack based on "+tt.current)
+		})
+	}
+}
+
+func TestAdd_MidStackForkPrompt(t *testing.T) {
+	for _, mode := range []string{"yes", "no", "interrupt", "error", "noninteractive"} {
+		t.Run(mode, func(t *testing.T) {
+			dir := t.TempDir()
+			saveStack(t, dir, stack.Stack{
+				Trunk: stack.BranchRef{Branch: "main"}, Branches: []stack.BranchRef{{Branch: "b1"}, {Branch: "b2"}},
+			})
+			confirmed, created := false, false
+			restore := git.SetOps(&git.MockOps{
+				GitDirFn:        func() (string, error) { return dir, nil },
+				CurrentBranchFn: func() (string, error) { return "b1", nil },
+				CreateBranchFn: func(string, string) error {
+					assert.Equal(t, "yes", mode)
+					created = true
+					return nil
+				},
+			})
+			defer restore()
+			cfg, outR, errR := config.NewTestConfig()
+			cfg.ForceInteractive = mode != "noninteractive"
+			cfg.ConfirmFn = func(prompt string, def bool) (bool, error) {
+				assert.True(t, def)
+				assert.Contains(t, prompt, "b1")
+				assert.NotEqual(t, "noninteractive", mode)
+				confirmed = true
+				if mode == "interrupt" {
+					return false, terminal.InterruptErr
+				}
+				if mode == "error" {
+					return false, fmt.Errorf("prompt failed")
+				}
+				return mode == "yes", nil
+			}
+			cfg.InputFn = func(string) (string, error) {
+				assert.True(t, confirmed, "confirm the fork before asking for a name")
+				assert.Equal(t, "yes", mode)
+				return "child", nil
+			}
+			err := runAdd(cfg, &addOptions{}, nil)
+			_, output := commandOutput(t, cfg, outR, errR)
+			sf, loadErr := stack.Load(dir)
+			require.NoError(t, loadErr)
+			if mode == "yes" {
+				require.NoError(t, err)
+				require.Len(t, sf.Stacks, 2)
+				assert.Equal(t, "b1", sf.Stacks[1].Trunk.Branch)
+			} else {
+				require.Error(t, err)
+				assert.Len(t, sf.Stacks, 1)
+				if mode != "error" {
+					assert.ErrorIs(t, err, ErrInvalidArgs)
+					assert.Contains(t, output, "gh stack add --fork")
+					assert.Contains(t, output, "gh stack modify")
+				}
+			}
+			assert.Equal(t, mode == "yes", created)
+		})
+	}
+}
+
+func TestAdd_ForkRefusals(t *testing.T) {
+	for _, mode := range []string{"merged", "duplicate", "self", "invalid name", "missing name", "detached", "base lookup", "foreign commit", "nothing staged"} {
+		t.Run(mode, func(t *testing.T) {
+			dir, owner := t.TempDir(), t.TempDir()
+			s := stack.Stack{Trunk: stack.BranchRef{Branch: "main"}, Branches: []stack.BranchRef{{Branch: "parent"}}}
+			if mode == "merged" {
+				s.Branches[0].PullRequest = &stack.PullRequestRef{Number: 1, Merged: true}
+			}
+			saveStack(t, dir, s)
+			opts := &addOptions{fork: true}
+			args := []string{"child"}
+			switch mode {
+			case "duplicate":
+				args[0] = "main"
+			case "self":
+				args[0] = "parent"
+			case "invalid name":
+				args[0] = "invalid name"
+			case "missing name":
+				args = nil
+			case "foreign commit", "nothing staged":
+				opts.message = "commit"
+			}
+			restore := git.SetOps(&git.MockOps{
+				GitDirFn: func() (string, error) { return dir, nil },
+				ValidateRefNameFn: func(string) error {
+					if mode == "invalid name" {
+						return fmt.Errorf("invalid ref")
+					}
+					return nil
+				},
+				CurrentBranchFn: func() (string, error) {
+					if mode == "detached" {
+						return "", fmt.Errorf("detached HEAD")
+					}
+					return "parent", nil
+				},
+				RevParseFn: func(string) (string, error) {
+					if mode == "base lookup" {
+						return "", fmt.Errorf("base lookup failed")
+					}
+					return "parent-sha", nil
+				},
+				WorktreesFn: func() ([]git.Worktree, error) {
+					if mode == "foreign commit" {
+						return []git.Worktree{{Path: owner, Branch: "child"}}, nil
+					}
+					return nil, nil
+				},
+				CreateBranchFn:   func(string, string) error { t.Fatal("must not create a branch"); return nil },
+				CheckoutBranchFn: func(string) error { t.Fatal("must not change checkout"); return nil },
+				StageAllFn:       func() error { t.Fatal("must not stage"); return nil },
+				CommitFn:         func(string) (string, error) { t.Fatal("must not commit"); return "", nil },
+			})
+			defer restore()
+			cfg, outR, errR := config.NewTestConfig()
+			cfg.InputFn = func(string) (string, error) { t.Fatal("must not prompt"); return "", nil }
+			require.Error(t, runAdd(cfg, opts, args))
+			_, output := commandOutput(t, cfg, outR, errR)
+			assert.NotContains(t, output, "Started a new stack")
+			sf, err := stack.Load(dir)
+			require.NoError(t, err)
+			assert.Equal(t, []stack.Stack{s}, sf.Stacks)
+		})
+	}
+}
+
 func TestAdd_OnlyAllowedOnTopOfStack(t *testing.T) {
 	gitDir := t.TempDir()
 	saveStack(t, gitDir, stack.Stack{
