@@ -1149,7 +1149,7 @@ func requireCurrentBase(cfg *config.Config, s *stack.Stack, remote string) error
 		return ErrAPIFailure
 	}
 	if newBase != "" {
-		cfg.Errorf("run `%s` to rebase the stack onto %s before publishing", cfg.ColorCyan("gh stack sync"), newBase)
+		cfg.Errorf("run `%s` to rebase the stack onto %s before publishing", cfg.ColorAccent("gh stack sync"), newBase)
 		return ErrSilent
 	}
 	return nil

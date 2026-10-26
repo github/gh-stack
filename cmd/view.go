@@ -143,7 +143,7 @@ func warnRetargeted(cfg *config.Config, s *stack.Stack) bool {
 	remote, _ := git.ResolveRemote(s.Trunk.Branch)
 	newBase, _ := retargetedBase(cfg, s, remote)
 	if newBase != "" {
-		cfg.Printf("  Run `%s` to rebase the stack onto %s", cfg.ColorCyan("gh stack sync"), newBase)
+		cfg.Printf("  Run `%s` to rebase the stack onto %s", cfg.ColorAccent("gh stack sync"), newBase)
 	}
 	return newBase != ""
 }

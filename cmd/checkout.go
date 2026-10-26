@@ -477,7 +477,7 @@ func reconcileAndImportRemoteStack(cfg *config.Config, client github.ClientOps, 
 			}
 			if base := remoteStack.Base.Ref; base != "" && localStack.Trunk.Branch != base {
 				cfg.Warningf("GitHub retargeted this stack%s from %s to %s", linkedStackLabel(cfg, remoteStack.Number), localStack.Trunk.Branch, base)
-				cfg.Printf("  Run `%s` to rebase the stack onto %s", cfg.ColorCyan("gh stack sync"), base)
+				cfg.Printf("  Run `%s` to rebase the stack onto %s", cfg.ColorAccent("gh stack sync"), base)
 			} else {
 				cfg.Successf("Local stack matches remote%s", linkedStackLabel(cfg, remoteStack.Number))
 			}
