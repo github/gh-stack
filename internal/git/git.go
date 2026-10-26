@@ -276,6 +276,11 @@ func BranchExists(name string) (bool, error) {
 	return ops.BranchExists(name)
 }
 
+// RemoteBranchExists checks the selected remote without updating local refs.
+func RemoteBranchExists(remote, branch string) (bool, error) {
+	return ops.RemoteBranchExists(remote, branch)
+}
+
 // CheckoutBranch switches to the specified branch.
 func CheckoutBranch(name string) error {
 	return ops.CheckoutBranch(name)

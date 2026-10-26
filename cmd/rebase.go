@@ -195,7 +195,7 @@ func runRebase(cfg *config.Config, opts *rebaseOptions) error {
 			}
 			return ErrSilent
 		}
-		serverBase, err = retargetedBase(cfg, s, remote)
+		serverBase, err = retargetedBase(cfg, sf, s, remote)
 		if err != nil {
 			cfg.Errorf("failed to read the stack's base on GitHub: %v", err)
 			return ErrAPIFailure

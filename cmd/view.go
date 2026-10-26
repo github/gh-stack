@@ -75,7 +75,7 @@ func runView(cfg *config.Config, opts *viewOptions) error {
 	sf := result.StackFile
 	s := result.Stack
 	currentBranch := result.CurrentBranch
-	warnRetargeted(cfg, s)
+	warnRetargeted(cfg, sf, s)
 
 	// Show loading indicator for interactive TUI mode.
 	showingLoader := false
@@ -131,7 +131,7 @@ func runViewJSON(cfg *config.Config) error {
 	}
 	s := stacks[0]
 
-	retargeted := warnRetargeted(cfg, s)
+	retargeted := warnRetargeted(cfg, sf, s)
 	syncStackPRs(cfg, s)
 	stack.SaveNonBlocking(gitDir, sf)
 
@@ -139,9 +139,9 @@ func runViewJSON(cfg *config.Config) error {
 }
 
 // warnRetargeted reports a GitHub retarget that has not been rebased onto yet.
-func warnRetargeted(cfg *config.Config, s *stack.Stack) bool {
+func warnRetargeted(cfg *config.Config, sf *stack.StackFile, s *stack.Stack) bool {
 	remote, _ := git.ResolveRemote(s.Trunk.Branch)
-	base, _ := retargetedBase(cfg, s, remote)
+	base, _ := retargetedBase(cfg, sf, s, remote)
 	if base.Branch != "" {
 		cfg.Printf("  Run `%s` to rebase the stack onto %s", cfg.ColorCyan("gh stack sync"), base.Branch)
 	}

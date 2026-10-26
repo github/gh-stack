@@ -1096,7 +1096,7 @@ type remoteBase struct {
 
 // retargetedBase reads the server base without discarding closed-PR evidence.
 // GitHub can retarget either a server stack or an individual PR.
-func retargetedBase(cfg *config.Config, s *stack.Stack, remote string) (remoteBase, error) {
+func retargetedBase(cfg *config.Config, sf *stack.StackFile, s *stack.Stack, remote string) (remoteBase, error) {
 	result := remoteBase{Published: s.ID != ""}
 	trunk, err := normalizeTrunkBranch(s.Trunk.Branch, remote)
 	if err != nil {
@@ -1135,6 +1135,34 @@ func retargetedBase(cfg *config.Config, s *stack.Stack, remote string) (remoteBa
 		base = rs.Base.Ref
 	}
 	if base != "" && base != trunk {
+		if s.ID == "" {
+			exists, err := git.RemoteBranchExists(remote, trunk)
+			if err != nil {
+				return result, err
+			}
+			if exists {
+				result.Published = true
+				return result, nil
+			}
+			published, err := baseWasPublished(sf, trunk, remote)
+			if err != nil {
+				return result, err
+			}
+			if !published {
+				client, err := cfg.GitHubClient()
+				if err != nil {
+					return result, err
+				}
+				parent, err := client.FindPRDetailsForBranch(trunk)
+				if err != nil {
+					return result, err
+				}
+				published = parent != nil && parent.Number > 0
+			}
+			if !published {
+				return result, nil // an unpublished local base is an intentional choice
+			}
+		}
 		result.Branch = base
 		result.Published = true
 		cfg.Warningf("GitHub retargeted this stack%s from %s to %s", linkedStackLabel(cfg, s.Number), s.Trunk.Branch, base)
@@ -1214,7 +1242,7 @@ func reportMissingBase(cfg *config.Config, trunk, remote string, closedPR int) {
 // requireCurrentBase stops publishing until a retarget is repaired. Submit
 // additionally requires even a previously local-only base to exist remotely.
 func requireCurrentBase(cfg *config.Config, sf *stack.StackFile, s *stack.Stack, remote string, submitting bool) (map[string]*github.PRDetails, error) {
-	base, err := retargetedBase(cfg, s, remote)
+	base, err := retargetedBase(cfg, sf, s, remote)
 	if err != nil {
 		cfg.Errorf("failed to read the stack's base on GitHub: %v", err)
 		return nil, ErrAPIFailure

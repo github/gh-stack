@@ -1369,6 +1369,69 @@ func TestSyncStack_SkipsBranchesWithoutPR(t *testing.T) {
 	assert.Equal(t, []int{10, 12}, gotNumbers, "should skip branches without PRs")
 }
 
+func TestSubmit_AdoptedPRKeepsChosenBase(t *testing.T) {
+	for _, method := range []string{"fork", "init"} {
+		for _, published := range []bool{false, true} {
+			t.Run(fmt.Sprintf("%s/published=%t", method, published), func(t *testing.T) {
+				repo := setupAmendedParentRepo(t, false)
+				issue250Git(t, repo.dir, "branch", "-f", "parent", repo.oldParent)
+				sf, err := stack.Load(repo.gitDir)
+				require.NoError(t, err)
+				sf.Stacks[0].Branches = sf.Stacks[0].Branches[:1]
+				require.NoError(t, stack.Save(repo.gitDir, sf))
+				base := "parent"
+				if !published {
+					base = "local-parent"
+					issue250Git(t, repo.dir, "branch", base, "parent")
+				}
+				withIssue250Repo(t, repo.dir)
+				cfg := issue250TestConfig(t)
+				pr := &github.PullRequest{Number: 11, ID: "PR_11", State: "OPEN", HeadRefName: "child", BaseRefName: "main"}
+				updates := 0
+				cfg.GitHubClientOverride = &github.MockClient{
+					FindPRByNumberFn: func(int) (*github.PullRequest, error) { return pr, nil },
+					FindPRForBranchFn: func(branch string) (*github.PullRequest, error) {
+						if branch == "child" {
+							return pr, nil
+						}
+						return nil, nil
+					},
+					UpdatePRBaseFn: func(number int, target string) error {
+						assert.Equal(t, 11, number)
+						assert.Equal(t, base, target)
+						updates++
+						pr.BaseRefName = target
+						return nil
+					},
+				}
+				if method == "fork" {
+					issue250Git(t, repo.dir, "checkout", base)
+					require.NoError(t, runAdd(cfg, &addOptions{fork: true}, []string{"child"}))
+				} else {
+					issue250Git(t, repo.dir, "checkout", "main")
+					require.NoError(t, runInit(cfg, &initOptions{base: base, branches: []string{"child"}}))
+				}
+				before := issue250Git(t, repo.dir, "rev-parse", "child")
+				require.NoError(t, runRebase(cfg, &rebaseOptions{remote: "origin"}))
+				assert.Equal(t, before, issue250Git(t, repo.dir, "rev-parse", "child"))
+				assert.Zero(t, updates, "rebase must not change the PR base")
+				if !published {
+					require.ErrorIs(t, runSubmit(cfg, &submitOptions{auto: true, remote: "origin"}), ErrInvalidArgs)
+					assert.Zero(t, updates)
+					issue250Git(t, repo.dir, "push", "origin", base)
+				}
+				require.NoError(t, runSync(cfg, &syncOptions{remote: "origin"}))
+				require.NoError(t, runSubmit(cfg, &submitOptions{auto: true, remote: "origin"}))
+				assert.Equal(t, 1, updates)
+				after, err := stack.Load(repo.gitDir)
+				require.NoError(t, err)
+				assert.Equal(t, base, after.Stacks[1].Trunk.Branch)
+				assert.Equal(t, before, issue250Git(t, repo.dir, "rev-parse", "child"))
+			})
+		}
+	}
+}
+
 func TestSubmit_UpdatesBaseBranch(t *testing.T) {
 	// b1's PR has base "main" but it should be "main" (correct).
 	// b2's PR has base "main" but it should be "b1" (wrong — needs update).
@@ -1888,6 +1951,7 @@ func TestSubmit_PendingModifyCompletion(t *testing.T) {
 		{name: "one PR failed creation", branches: 1, newPR: true, failure: "create"},
 		{name: "one PR invalid creation result", branches: 1, newPR: true, failure: "invalid-create"},
 		{name: "one PR failed base update", branches: 1, failure: "base"},
+		{name: "retry one PR base update", branches: 1, failure: "base", retry: true},
 		{name: "one PR failed auto-merge update", branches: 1, failure: "auto-merge"},
 		{name: "one PR failed ready update", branches: 1, failure: "ready"},
 		{name: "one PR failed catalog save", branches: 1, failure: "save"},
@@ -2120,7 +2184,13 @@ func TestSubmit_PendingModifyCompletion(t *testing.T) {
 				require.NoError(t, loadErr)
 				require.Len(t, saved.Stacks, 1)
 				assert.Equal(t, s.BranchNames(), saved.Stacks[0].BranchNames())
-				assert.Equal(t, "77", saved.Stacks[0].ID)
+				if tc.branches == 1 {
+					assert.Empty(t, saved.Stacks[0].ID)
+					assert.Nil(t, replacement)
+					assert.Equal(t, 2, baseUpdates)
+				} else {
+					assert.Equal(t, "77", saved.Stacks[0].ID)
+				}
 				if tc.mergeOnRetry {
 					assert.Equal(t, []string{"b1", "b3"}, pushes[pushStart:])
 					assert.Zero(t, createdPRs)
@@ -3200,7 +3270,10 @@ func TestSubmit_BasePreflight(t *testing.T) {
 			writeStackFile(t, dir, s)
 			var fetched, pushed int
 			mock := newSubmitMock(dir, "child")
-			mock.CommitExistsFn = func(string) (bool, error) { return false, nil }
+			mock.CommitExistsFn = func(ref string) (bool, error) {
+				return mode == "retargeted" && ref == "refs/remotes/upstream/parent", nil
+			}
+			mock.RemoteBranchExistsFn = func(string, string) (bool, error) { return mode != "retargeted", nil }
 			mock.FetchBranchFn = func(remote, branch string) error {
 				assert.Equal(t, "upstream", remote)
 				assert.Equal(t, trunk, branch)

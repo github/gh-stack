@@ -1986,7 +1986,11 @@ func TestRetargetedBase_SinglePR(t *testing.T) {
 				pr.BaseRefName = "top"
 			}
 			restore := git.SetOps(&git.MockOps{
-				CommitExistsFn: func(string) (bool, error) { return mode == "unrelated closed", nil },
+				CommitExistsFn: func(ref string) (bool, error) {
+					return ref == "refs/remotes/origin/parent" &&
+						(mode == "tracked" || mode == "discovered" || mode == "replacement"), nil
+				},
+				RemoteBranchExistsFn: func(string, string) (bool, error) { return false, nil },
 			})
 			defer restore()
 			cfg, outR, errR := config.NewTestConfig()
@@ -2024,7 +2028,7 @@ func TestRetargetedBase_SinglePR(t *testing.T) {
 					return nil, nil
 				},
 			}
-			base, err := retargetedBase(cfg, s, "origin")
+			base, err := retargetedBase(cfg, nil, s, "origin")
 			_, output := commandOutput(t, cfg, outR, errR)
 			if mode == "tracked failure" {
 				require.ErrorIs(t, err, lookupErr)

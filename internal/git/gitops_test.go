@@ -95,6 +95,40 @@ func setupLocalRepo(t *testing.T) string {
 	return dir
 }
 
+func TestIntegration_RemoteBranchExists(t *testing.T) {
+	bare, clone := setupBareAndClone(t)
+	gitExec(t, clone, "branch", "feature")
+	gitExec(t, clone, "branch", "refs/heads/missing")
+	gitExec(t, clone, "tag", "missing")
+	gitExec(t, clone, "push", "origin", "feature", "refs/heads/refs/heads/missing", "refs/tags/missing")
+	other := filepath.Join(t.TempDir(), "other")
+	gitExec(t, ".", "clone", bare, other)
+	gitExec(t, other, "push", "origin", "--delete", "feature")
+	before := gitExec(t, clone, "for-each-ref", "--format=%(refname) %(objectname)", "refs/remotes")
+	restore := withGitDir(t, clone)
+	defer restore()
+	for _, tc := range []struct {
+		name   string
+		exists bool
+	}{
+		{"main", true},
+		{"feature", false},
+		{"missing", false},
+		{"refs/heads/missing", true},
+	} {
+		exists, err := RemoteBranchExists("origin", tc.name)
+		require.NoError(t, err)
+		assert.Equal(t, tc.exists, exists, tc.name)
+	}
+	assert.Equal(t, before, gitExec(t, clone, "for-each-ref", "--format=%(refname) %(objectname)", "refs/remotes"))
+	_, err := RemoteBranchExists("unavailable", "main")
+	require.Error(t, err, "transport errors are not missing branches")
+	scoped := requireWorktree(t, &defaultOps{}, clone)
+	exists, err := scoped.RemoteBranchExists("origin", "main")
+	require.NoError(t, err)
+	assert.True(t, exists)
+}
+
 func TestIntegration_RebaseBoundaryLookups(t *testing.T) {
 	dir := setupLocalRepo(t)
 	restore := withGitDir(t, dir)

@@ -156,7 +156,7 @@ func runSync(cfg *config.Config, opts *syncOptions) error {
 	if cb, cbErr := git.CurrentBranch(); cbErr == nil {
 		currentBranch = cb
 	}
-	serverBase, err := retargetedBase(cfg, s, remote)
+	serverBase, err := retargetedBase(cfg, sf, s, remote)
 	if err != nil {
 		cfg.Errorf("failed to read the stack's base on GitHub: %v", err)
 		return ErrAPIFailure

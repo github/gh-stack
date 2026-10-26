@@ -41,6 +41,7 @@ type Ops interface {
 	RootDir() (string, error)
 	CurrentBranch() (string, error)
 	BranchExists(name string) (bool, error)
+	RemoteBranchExists(remote, branch string) (bool, error)
 	CheckoutBranch(name string) error
 	Fetch(remote string) error
 	FetchBranch(remote, branch string) error
@@ -163,6 +164,20 @@ func (d *defaultOps) BranchExists(name string) (bool, error) {
 		return false, err
 	}
 	return true, nil
+}
+
+func (d *defaultOps) RemoteBranchExists(remote, branch string) (bool, error) {
+	ref := "refs/heads/" + branch
+	out, err := d.run("ls-remote", "--heads", remote, ref)
+	if err != nil {
+		return false, err
+	}
+	for _, line := range strings.Split(out, "\n") {
+		if _, name, ok := strings.Cut(line, "\t"); ok && name == ref {
+			return true, nil
+		}
+	}
+	return false, nil
 }
 
 func (d *defaultOps) CheckoutBranch(name string) error {
