@@ -428,6 +428,36 @@ func TestPush_BaseRetarget(t *testing.T) {
 	assert.ErrorIs(t, runPush(cfg, &pushOptions{remote: "origin"}), ErrSilent)
 }
 
+func TestPush_RetargetedClosedPRRequiresBase(t *testing.T) {
+	dir := t.TempDir()
+	writeStackFile(t, dir, stack.Stack{
+		Trunk:    stack.BranchRef{Branch: "parent"},
+		Branches: []stack.BranchRef{{Branch: "child", PullRequest: &stack.PullRequestRef{Number: 11}}},
+	})
+	mock := newPushMock(dir, "child")
+	mock.CommitExistsFn = func(string) (bool, error) { return false, nil }
+	mock.FetchBranchFn = func(remote, branch string) error {
+		assert.Equal(t, "origin", remote)
+		assert.Equal(t, "parent", branch)
+		return git.ErrRemoteBranchNotFound
+	}
+	mock.PushFn = func(string, []string, bool, bool) error {
+		t.Fatal("a closed associated PR must not use the local-only exemption")
+		return nil
+	}
+	restore := git.SetOps(mock)
+	defer restore()
+	cfg, outR, errR := config.NewTestConfig()
+	cfg.GitHubClientOverride = &github.MockClient{
+		FindPRByNumberFn: func(int) (*github.PullRequest, error) {
+			return &github.PullRequest{Number: 11, State: "CLOSED", BaseRefName: "main"}, nil
+		},
+	}
+	require.ErrorIs(t, runPush(cfg, &pushOptions{remote: "origin"}), ErrInvalidArgs)
+	_, output := commandOutput(t, cfg, outR, errR)
+	assert.Contains(t, output, "PR #11 is closed")
+}
+
 func TestPush_SinglePRRetarget(t *testing.T) {
 	for _, closed := range []bool{false, true} {
 		t.Run(fmt.Sprint(closed), func(t *testing.T) {

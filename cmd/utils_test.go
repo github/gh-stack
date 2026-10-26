@@ -1958,7 +1958,7 @@ func TestTrunkLookupFailureStopsBeforeMutation(t *testing.T) {
 }
 
 func TestRetargetedBase_SinglePR(t *testing.T) {
-	for _, mode := range []string{"tracked", "discovered", "replacement", "no PR", "closed", "queued bottom", "internal base", "discovery failure", "tracked failure"} {
+	for _, mode := range []string{"tracked", "discovered", "replacement", "no PR", "closed", "closed without tracking", "unrelated closed", "tracked closed retargeted", "queued bottom", "internal base", "discovery failure", "tracked failure"} {
 		t.Run(mode, func(t *testing.T) {
 			s := &stack.Stack{Trunk: stack.BranchRef{Branch: "parent"}, Branches: []stack.BranchRef{
 				{Branch: "child", PullRequest: &stack.PullRequestRef{Number: 11}},
@@ -1970,6 +1970,14 @@ func TestRetargetedBase_SinglePR(t *testing.T) {
 				s.Branches[0].PullRequest = nil
 			case "closed":
 				pr.BaseRefName, pr.State = "parent", "CLOSED"
+			case "closed without tracking", "unrelated closed":
+				s.Branches[0].PullRequest = nil
+				pr.BaseRefName, pr.State = "parent", "CLOSED"
+				if mode == "unrelated closed" {
+					pr.BaseRefName = "other-parent"
+				}
+			case "tracked closed retargeted":
+				pr.State = "CLOSED"
 			case "queued bottom":
 				pr.BaseRefName = "parent"
 				pr.MergeQueueEntry = &github.MergeQueueEntry{ID: "queued"}
@@ -1978,7 +1986,7 @@ func TestRetargetedBase_SinglePR(t *testing.T) {
 				pr.BaseRefName = "top"
 			}
 			restore := git.SetOps(&git.MockOps{
-				CommitExistsFn: func(string) (bool, error) { return false, nil },
+				CommitExistsFn: func(string) (bool, error) { return mode == "unrelated closed", nil },
 			})
 			defer restore()
 			cfg, outR, errR := config.NewTestConfig()
@@ -1999,10 +2007,17 @@ func TestRetargetedBase_SinglePR(t *testing.T) {
 					if mode == "discovery failure" {
 						return nil, lookupErr
 					}
-					if mode == "no PR" || mode == "closed" {
+					if mode == "no PR" || pr.State == "CLOSED" {
 						return nil, nil
 					}
 					return pr, nil
+				},
+				FindPRDetailsForBranchFn: func(branch string) (*github.PRDetails, error) {
+					assert.Equal(t, "child", branch)
+					if pr.State == "CLOSED" {
+						return &github.PRDetails{Number: pr.Number, State: pr.State, BaseRefName: pr.BaseRefName}, nil
+					}
+					return nil, nil
 				},
 				GetStackFn: func(int) (*github.RemoteStack, error) {
 					t.Fatal("ID-less lookup must not fetch a server stack")
@@ -2021,8 +2036,16 @@ func TestRetargetedBase_SinglePR(t *testing.T) {
 			} else {
 				assert.Empty(t, base.Branch)
 			}
-			if mode == "closed" {
+			if mode == "closed" || mode == "closed without tracking" {
 				assert.True(t, base.Published)
+				assert.Equal(t, 11, base.ClosedPR)
+			}
+			if mode == "unrelated closed" {
+				assert.False(t, base.Published)
+				assert.Zero(t, base.ClosedPR)
+			}
+			if mode == "tracked closed retargeted" {
+				assert.False(t, base.Published)
 				assert.Equal(t, 11, base.ClosedPR)
 			}
 			if mode == "discovery failure" {

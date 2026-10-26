@@ -4111,9 +4111,30 @@ func setupSinglePRRetargetRepo(t *testing.T, merged, closed bool) baseRetargetRe
 	return repo
 }
 
+func TestRebase_UnrelatedClosedPRKeepsLocalBase(t *testing.T) {
+	repo := setupLinkedParentRepo(t)
+	issue250Git(t, repo.dir, "push", "origin", "--delete", "parent")
+	issue250Git(t, repo.dir, "config", "--unset", "branch.parent.remote")
+	issue250Git(t, repo.dir, "config", "--unset", "branch.parent.merge")
+	withIssue250Repo(t, repo.dir)
+	cfg := issue250TestConfig(t)
+	cfg.GitHubClientOverride = &github.MockClient{
+		FindPRDetailsForBranchFn: func(branch string) (*github.PRDetails, error) {
+			require.Equal(t, "child", branch)
+			return &github.PRDetails{Number: 11, State: "CLOSED", BaseRefName: "other-parent"}, nil
+		},
+	}
+	require.NoError(t, runRebase(cfg, &rebaseOptions{remote: "origin"}))
+	assert.Equal(t, "child commit", issue250Git(t, repo.dir, "log", "--format=%s", "parent..child"))
+	sf, err := stack.Load(repo.gitDir)
+	require.NoError(t, err)
+	assert.Equal(t, "parent", sf.Stacks[1].Trunk.Branch)
+	assert.Nil(t, sf.Stacks[1].Branches[0].PullRequest)
+}
+
 func testSinglePRRetarget(t *testing.T, run func(*config.Config, bool) error) {
 	t.Helper()
-	for _, mode := range []string{"merged parent", "unmerged refusal", "unmerged accepted", "closed", "closed after view", "replacement"} {
+	for _, mode := range []string{"merged parent", "unmerged refusal", "unmerged accepted", "closed", "closed after view", "closed after prune", "replacement"} {
 		t.Run(mode, func(t *testing.T) {
 			closed := strings.HasPrefix(mode, "closed")
 			repo := setupSinglePRRetargetRepo(t, mode == "merged parent" || mode == "replacement", closed || mode == "replacement")
@@ -4131,11 +4152,15 @@ func testSinglePRRetarget(t *testing.T, run func(*config.Config, bool) error) {
 			withIssue250Repo(t, repo.dir)
 			cfg := issue250TestConfig(t)
 			cfg.GitHubClientOverride = repo.client
-			if mode == "closed after view" {
+			if strings.HasPrefix(mode, "closed after") {
 				require.NoError(t, runViewJSON(cfg))
 				sf, err := stack.Load(repo.gitDir)
 				require.NoError(t, err)
 				assert.Nil(t, sf.Stacks[0].Branches[0].PullRequest)
+			}
+			if mode == "closed after prune" {
+				issue250Git(t, repo.dir, "push", "origin", "--delete", "child")
+				issue250Git(t, repo.dir, "fetch", "--prune", "origin")
 			}
 			before := issue250Git(t, repo.dir, "rev-parse", "child")
 			catalog, err := os.ReadFile(filepath.Join(repo.gitDir, "gh-stack"))
@@ -4144,7 +4169,11 @@ func testSinglePRRetarget(t *testing.T, run func(*config.Config, bool) error) {
 			if closed || mode == "unmerged refusal" {
 				require.Error(t, err)
 				assert.Equal(t, before, issue250Git(t, repo.dir, "rev-parse", "child"))
-				assert.Equal(t, before, issue250Git(t, repo.dir, "rev-parse", "origin/child"))
+				if mode == "closed after prune" {
+					assert.Error(t, issue250GitMayFail(t, repo.dir, "show-ref", "--verify", "refs/remotes/origin/child"))
+				} else {
+					assert.Equal(t, before, issue250Git(t, repo.dir, "rev-parse", "origin/child"))
+				}
 				after, err := os.ReadFile(filepath.Join(repo.gitDir, "gh-stack"))
 				require.NoError(t, err)
 				assert.Equal(t, catalog, after)

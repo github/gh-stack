@@ -1104,13 +1104,15 @@ func retargetedBase(cfg *config.Config, s *stack.Stack, remote string) (remoteBa
 	}
 	var base string
 	if s.ID == "" {
-		pr, err := stackBasePR(cfg, s, remote)
+		pr, tracked, err := stackBasePR(cfg, s)
 		if err != nil || pr == nil || s.IndexOf(pr.BaseRefName) >= 0 {
 			return result, err
 		}
 		result.Published = pr.BaseRefName == trunk
 		if pr.State == "CLOSED" {
-			result.ClosedPR = pr.Number
+			if tracked || result.Published {
+				result.ClosedPR = pr.Number
+			}
 			return result, nil
 		}
 		base = pr.BaseRefName
@@ -1140,18 +1142,10 @@ func retargetedBase(cfg *config.Config, s *stack.Stack, remote string) (remoteBa
 	return result, nil
 }
 
-func stackBasePR(cfg *config.Config, s *stack.Stack, remote string) (*github.PullRequest, error) {
+func stackBasePR(cfg *config.Config, s *stack.Stack) (*github.PullRequest, bool, error) {
 	for _, b := range s.Branches {
 		if b.IsMerged() {
 			continue
-		}
-		published := b.PullRequest != nil
-		if !published {
-			var err error
-			published, err = git.CommitExists("refs/remotes/" + remote + "/" + b.Branch)
-			if err != nil {
-				return nil, err
-			}
 		}
 		client, err := cfg.GitHubClient()
 		var pr *github.PullRequest
@@ -1165,7 +1159,7 @@ func stackBasePR(cfg *config.Config, s *stack.Stack, remote string) (*github.Pul
 				pr = open
 			}
 		}
-		if err == nil && pr == nil && published {
+		if err == nil && pr == nil {
 			var details *github.PRDetails
 			details, err = client.FindPRDetailsForBranch(b.Branch)
 			if details != nil {
@@ -1175,16 +1169,17 @@ func stackBasePR(cfg *config.Config, s *stack.Stack, remote string) (*github.Pul
 		if err != nil {
 			if b.PullRequest == nil {
 				cfg.Warningf("Could not look up a PR for %s: %v", b.Branch, err)
-				return nil, nil // discovery remains best-effort for untracked PRs
+				return nil, false, nil // discovery remains best-effort for untracked PRs
 			}
-			return nil, err
+			return nil, false, err
 		}
 		if pr != nil && pr.Merged {
 			continue
 		}
-		return pr, nil
+		tracked := pr != nil && pr.Number > 0 && b.PullRequest != nil && b.PullRequest.Number == pr.Number
+		return pr, tracked, nil
 	}
-	return nil, nil
+	return nil, false, nil
 }
 
 func baseWasPublished(sf *stack.StackFile, trunk, remote string) (bool, error) {
@@ -1240,7 +1235,7 @@ func requireCurrentBase(cfg *config.Config, sf *stack.StackFile, s *stack.Stack,
 	if defaultBranch, err := git.DefaultBranch(); err == nil && defaultBranch == trunk && base.ClosedPR == 0 {
 		return details, nil
 	}
-	if !submitting && !base.Published {
+	if !submitting && !base.Published && base.ClosedPR == 0 {
 		known, err := baseWasPublished(sf, trunk, remote)
 		if err != nil {
 			return nil, err
