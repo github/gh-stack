@@ -93,5 +93,10 @@ independent refactor. Do not mix efforts into one stack just because you happene
 Use `gh stack init` for the new effort, or `gh stack checkout <target>` to move between existing
 stacks.
 
+If the separate effort depends on a layer in the current stack, check out that layer and run
+`gh stack add --fork <branch>`. The layer becomes the new stack's base without becoming a member
+of both stacks. Publish the parent before submitting the child, and sync parent then child after
+rewrites. Each stack stays linear; commands do not traverse all dependent stacks.
+
 A trivial incidental fix can ride along in the current stack. Once it grows into its own project, it
 deserves its own stack.

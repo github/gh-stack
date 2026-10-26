@@ -54,6 +54,7 @@ Agent harnesses differ, so always pass the flags below instead of relying on tha
 | `gh stack merge <target> --yes` | `gh pr merge` | `gh pr merge` cannot merge a stack |
 | `gh stack init <branch>...` | `gh stack init` | prompts for branch names |
 | `gh stack add <branch>` | `gh stack add` | prompts for a name, and fails even when piped |
+| `gh stack add --fork <branch>` | mid-stack `gh stack add` | starts a separate stack without a confirmation prompt |
 | `gh stack checkout <target>` | `gh stack checkout` | opens a selection menu |
 | `gh stack up` / `down` / `top` / `bottom` | `gh stack switch` | `switch` is menu-only |
 | — | `gh stack modify` | TUI-only, no non-interactive path |
@@ -97,6 +98,10 @@ gh stack view --json            # confirm
 Add `--open` to `submit` to create PRs ready for review instead of drafts. Branch names are
 verbatim — `gh stack add refactor/foo` creates `refactor/foo`.
 
+For a separate stack based on the current branch, use `gh stack add --fork <branch>`.
+Publish the parent first: child `submit` refuses an unpublished base and never pushes the parent.
+Fork commit flags always commit on the new branch, including when the parent is empty.
+
 ## Staying in sync
 
 ```bash
@@ -107,6 +112,11 @@ gh stack sync --prune           # also delete local branches for merged PRs
 Pruning never happens without `--prune` when non-interactive. If the local and remote stacks have
 diverged, `sync` prints both chains, makes no changes, and exits 0 with `Sync aborted` — see
 `references/troubleshooting.md`.
+
+For linked stacks, sync the parent first, then check out and sync each child. Parent rewrites and
+server base retargets are repaired within the child stack, including one-PR children. Retargeting
+away from unmerged commits still needs confirmation or `--accept-base-change`. A closed PR with a
+missing base requires manual repair; do not assume it moved to the default branch.
 
 ## Merging
 
@@ -167,7 +177,11 @@ an ancestor of the branch.
 
 ## Constraints
 
-- Stacks are strictly linear: one parent, at most one child. Use separate stacks for parallel work.
+- Each stack is linear, but its base may belong to another stack. A branch may be a member of only
+  one stack. On a member that is also another stack's base, commands select the member stack.
+- Operations do not traverse dependent stacks. There is no tree view or merge ordering; merge
+  targets the selected stack's own base. Modify refuses rename/drop/fold of locally known child
+  stack bases, while still allowing reorder/insert.
 - `rebase` and `sync` automatically update affected clean worktrees; they never auto-stash or
   create/remove worktrees. Mutations serialize across the clone, and paused operations require
   recovery in their recorded owners.

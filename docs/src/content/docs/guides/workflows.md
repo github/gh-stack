@@ -175,6 +175,29 @@ gh stack top
 
 This keeps each branch focused on one concern and avoids muddying the diff for reviewers.
 
+## Branching into a Separate Stack
+
+Use `add --fork` when new work depends on an existing layer but should be reviewed as a separate stack:
+
+```sh
+# Publish the existing stack first
+gh stack submit --auto
+
+# Branch from the layer this work depends on
+gh stack checkout auth
+gh stack add --fork alternative-ui
+# Make and commit the child changes
+gh stack submit --auto
+```
+
+Each stack remains linear, and a branch can be a member of only one stack. That branch can also be the base of other stacks. Ordinary `add` at the top still extends the current stack; in the middle, an interactive terminal offers to fork instead.
+
+Commands stay within the selected stack. On a branch that is both a member and another stack's base, the member stack wins. To work on the child, check out one of its own branches.
+
+After rewriting the parent, sync the parent first, then sync each child separately. If GitHub changes a child's base after deleting the old base, child `sync`/`rebase` repairs its history; this also works when the child has only one PR. Dropping an unmerged old base still requires consent. A closed PR with a missing base needs manual repair rather than an inferred new target.
+
+There is no tree-wide sync, view, navigation, or merge ordering. `merge` still merges the selected stack into its own base, not automatically into the repository's default branch. `modify` refuses to rename, drop, or fold a branch used as another locally tracked stack's base; reordering and inserting layers remain available.
+
 ## Responding to Review Feedback
 
 When a reviewer requests changes on a PR mid-stack:

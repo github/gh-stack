@@ -84,6 +84,8 @@ When explicit branch names are given, existing branches are adopted automaticall
 
 Branches checked out in other worktrees can be adopted. If the final branch is occupied elsewhere, `init` leaves your current checkout unchanged and reports the owner instead.
 
+If your current branch already belongs to a stack, use `gh stack add --fork <branch>` to start a separate stack based on it.
+
 Enables `git rerere` automatically so that conflict resolutions are remembered across rebases.
 
 **Examples:**
@@ -112,13 +114,16 @@ gh stack add [flags] [branch]
 
 | Flag | Description |
 |------|-------------|
-| `-A, --all` | Stage all changes (including untracked files); requires `-m` |
-| `-u, --update` | Stage changes to tracked files only; requires `-m` |
-| `-m, --message <string>` | Create a commit with this message before creating the branch |
+| `--fork` | Start a separate stack based on the current branch |
+| `-A, --all` | Stage all changes (including untracked files); opens the editor if `-m` is omitted |
+| `-u, --update` | Stage changes to tracked files only; opens the editor if `-m` is omitted |
+| `-m, --message <string>` | Commit staged changes with this message on the added branch |
 
 > **Note:** `-A` and `-u` are mutually exclusive.
 
-For an existing stack, creates a new branch at the current HEAD, adds it to the top of the stack, and checks it out. Must be run while on the topmost branch of a stack. If no branch name is given, prompts for one.
+Normally creates a branch at the current HEAD, adds it to the top of the stack, and checks it out. From a middle layer, an interactive terminal offers to start a separate stack based on that layer instead; the default is Yes. Without an interactive terminal, use `--fork` explicitly or move to the top to extend the existing stack.
+
+`--fork` always creates a separate local stack, even at the top of a stack or on a shared trunk. The current branch becomes its base, not a member of both stacks. It does not contact GitHub or publish the parent. Supply a branch name or `-m` without a TTY; otherwise, a missing name is prompted for.
 
 Existing foreign-owned branches are adopted without switching either checkout. Commit/stage shortcuts (`-m`, `-A`, `-u`) are incompatible with that adoption and fail before staging or changing membership.
 
@@ -126,11 +131,19 @@ When run interactively from a branch that is not part of a stack, `add` offers t
 
 You can optionally stage changes and create a commit as part of the `add` flow. When `-m` is provided without an explicit branch name, the branch name is auto-generated in date+slug format (e.g., `03-24-add_login`).
 
+Ordinary `add` commits in place when the current layer is empty. `--fork` bypasses that shortcut: the commit goes on the new branch, never on its base. A base recorded as merged is refused; sync and choose its updated base first.
+
 **Examples:**
 
 ```sh
 # Create a branch by name
 gh stack add api-routes
+
+# Start an independent stack based on the current branch
+gh stack add --fork alternative-ui
+
+# Fork and commit on the new branch
+gh stack add --fork -Am "Add alternative UI" alternative-ui
 
 # Prompt for a branch name interactively
 gh stack add
@@ -350,6 +363,8 @@ gh stack submit [flags]
 | `--remote <name>` | Remote to push to (defaults to auto-detected remote) |
 
 Creates a Stacked PR for every branch in the stack, pushing branches to the remote. After creating PRs, `submit` automatically creates a **Stack** on GitHub to link the PRs together. If the stack already exists on GitHub (e.g., from a previous submit), new PRs are added to the existing stack.
+
+For a non-default base, publish the parent stack or base branch first. `submit` checks that the base exists on the selected remote before pushing any child branches; it never publishes another stack for you. If GitHub has retargeted this stack or its single PR, run `gh stack sync` before publishing.
 
 If every PR in the stack has already been merged, that stack is complete and can't be extended. In that case `submit` automatically starts a **new** stack rooted at the trunk for your unmerged branches and creates it on GitHub, leaving the merged stack untouched.
 

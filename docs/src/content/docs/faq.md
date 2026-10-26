@@ -75,6 +75,8 @@ Yes. A stack's **trunk** (the base branch of the bottom PR) can be any branch in
 
 The same behavior applies to whatever trunk your stack targets — branch protection rules, required checks, and CI are all evaluated against your stack's base branch.
 
+The base may also be a member of another stack. Check out that branch and run `gh stack add --fork <new-branch>` to start a separate dependent stack. Publish the parent before submitting the child, and sync each stack separately after parent changes. This does not add tree-wide operations or allow a branch to be a member of multiple stacks.
+
 ## Checks, Rules & Requirements
 
 ### How are branch protection rules evaluated for Stacked PRs?
