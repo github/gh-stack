@@ -120,7 +120,7 @@ func runViewJSON(cfg *config.Config) error {
 		return ErrNotInStack
 	}
 
-	stacks := sf.FindAllStacksForBranch(currentBranch)
+	stacks := sf.StacksForBranch(currentBranch)
 	if len(stacks) == 0 {
 		cfg.Errorf("current branch %q is not part of a stack", currentBranch)
 		return ErrNotInStack

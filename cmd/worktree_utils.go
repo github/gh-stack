@@ -319,7 +319,7 @@ func loadNavigationStack(cfg *config.Config, printPath bool) (*loadStackResult, 
 		cfg.Errorf("finding current branch: %s", err)
 		return nil, ErrNotInStack
 	}
-	stacks := sf.FindAllStacksForBranch(current)
+	stacks := sf.StacksForBranch(current)
 	if len(stacks) == 0 {
 		reportBranchNotInStack(cfg, current, false)
 		return nil, ErrNotInStack

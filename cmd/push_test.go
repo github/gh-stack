@@ -33,7 +33,10 @@ func TestPush_PushesAllBranches(t *testing.T) {
 	}
 
 	tmpDir := t.TempDir()
-	writeStackFile(t, tmpDir, s)
+	writeStackFileMulti(t, tmpDir,
+		stack.Stack{Trunk: stack.BranchRef{Branch: "b1"}, Branches: []stack.BranchRef{{Branch: "child"}}},
+		s,
+	)
 
 	var pushCalls []pushCall
 

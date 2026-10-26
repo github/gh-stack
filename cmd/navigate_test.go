@@ -42,9 +42,11 @@ func TestNavigation_PrintPath(t *testing.T) {
 				}
 				t.Run(strconv.FormatBool(foreign), func(t *testing.T) {
 					common, root, owner := t.TempDir(), t.TempDir(), filepath.Join(t.TempDir(), "other tree")
-					writeStackFile(t, common, stack.Stack{
-						Trunk: stack.BranchRef{Branch: "main"}, Branches: []stack.BranchRef{{Branch: "b1"}, {Branch: "b2"}},
-					})
+					writeStackFileMulti(t, common,
+						stack.Stack{Trunk: stack.BranchRef{Branch: "b1"}, Branches: []stack.BranchRef{{Branch: "child"}}},
+						stack.Stack{Trunk: stack.BranchRef{Branch: "b2"}, Branches: []stack.BranchRef{{Branch: "sibling"}}},
+						stack.Stack{Trunk: stack.BranchRef{Branch: "main"}, Branches: []stack.BranchRef{{Branch: "b1"}, {Branch: "b2"}}},
+					)
 					var checkouts []string
 					restore := git.SetOps(&git.MockOps{
 						GitDirFn:        func() (string, error) { return common, nil },

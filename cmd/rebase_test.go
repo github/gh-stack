@@ -185,7 +185,9 @@ func TestRebase_CascadeRebase(t *testing.T) {
 	}
 
 	tmpDir := t.TempDir()
-	writeStackFile(t, tmpDir, s)
+	writeStackFileMulti(t, tmpDir, s,
+		stack.Stack{Trunk: stack.BranchRef{Branch: "b2"}, Branches: []stack.BranchRef{{Branch: "child"}}},
+	)
 
 	var allRebaseCalls []rebaseCall
 	var currentCheckedOut string

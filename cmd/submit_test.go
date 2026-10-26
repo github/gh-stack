@@ -102,7 +102,9 @@ func TestSubmit_CreatesPRsAndStack(t *testing.T) {
 	}
 
 	tmpDir := t.TempDir()
-	writeStackFile(t, tmpDir, s)
+	writeStackFileMulti(t, tmpDir, s,
+		stack.Stack{Trunk: stack.BranchRef{Branch: "b1"}, Branches: []stack.BranchRef{{Branch: "child"}}},
+	)
 
 	var pushCalls []pushCall
 	var createdPRs []string

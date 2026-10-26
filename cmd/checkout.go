@@ -137,7 +137,7 @@ func runCheckout(cfg *config.Config, opts *checkoutOptions) error {
 		}
 	} else {
 		// Non-numeric target — resolve locally before checking GitHub.
-		if len(sf.FindAllStacksForBranch(opts.target)) > 1 {
+		if len(sf.StacksForBranch(opts.target)) > 1 {
 			cfg.Errorf("branch %q belongs to multiple stacks; use a stack or PR number to choose one", opts.target)
 			return ErrDisambiguate
 		}
@@ -225,7 +225,7 @@ func resolveNumericTarget(cfg *config.Config, sf *stack.StackFile, gitDir string
 	remoteErr := err
 
 	// 4. Fall back to local branch name lookup (handles numeric branch names).
-	stacks := sf.FindAllStacksForBranch(raw)
+	stacks := sf.StacksForBranch(raw)
 	if len(stacks) > 1 {
 		cfg.Errorf("branch %q belongs to multiple stacks; use a stack or PR number to choose one", raw)
 		return nil, "", ErrDisambiguate

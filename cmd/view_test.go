@@ -549,7 +549,7 @@ func TestRunViewJSON_MultipleStacks(t *testing.T) {
 
 func TestRunViewJSON_SingleStack(t *testing.T) {
 	tmpDir := t.TempDir()
-	writeStackFile(t, tmpDir, stack.Stack{
+	writeStackFileMulti(t, tmpDir, stack.Stack{
 		Trunk: stack.BranchRef{Branch: "main", Head: "aaa"},
 		Branches: []stack.BranchRef{
 			{
@@ -559,7 +559,7 @@ func TestRunViewJSON_SingleStack(t *testing.T) {
 				PullRequest: &stack.PullRequestRef{Number: 10, URL: "https://github.com/o/r/pull/10"},
 			},
 		},
-	})
+	}, stack.Stack{Trunk: stack.BranchRef{Branch: "feat/01"}, Branches: []stack.BranchRef{{Branch: "child"}}})
 
 	restore := git.SetOps(&git.MockOps{
 		GitDirFn:        func() (string, error) { return tmpDir, nil },

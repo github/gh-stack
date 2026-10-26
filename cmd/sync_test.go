@@ -85,7 +85,9 @@ func TestSync_TrunkAlreadyUpToDate(t *testing.T) {
 	}
 
 	tmpDir := t.TempDir()
-	writeStackFile(t, tmpDir, s)
+	writeStackFileMulti(t, tmpDir, s,
+		stack.Stack{Trunk: stack.BranchRef{Branch: "b1"}, Branches: []stack.BranchRef{{Branch: "child"}}},
+	)
 
 	var rebaseCalls []rebaseCall
 	var pushCalls []pushCall
@@ -134,6 +136,7 @@ func TestSync_TrunkAlreadyUpToDate(t *testing.T) {
 	// Push should happen without force
 	require.Len(t, pushCalls, 1)
 	assert.False(t, pushCalls[0].force, "push should not use force when no rebase occurred")
+	assert.Equal(t, []string{"b1", "b2"}, pushCalls[0].branches)
 }
 
 // TestSync_TrunkUpToDate_StackStale verifies that when trunk is already up to

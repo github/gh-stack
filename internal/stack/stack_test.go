@@ -25,6 +25,35 @@ func makeMergedBranch(name string, prNum int) BranchRef {
 	return BranchRef{Branch: name, PullRequest: &PullRequestRef{Number: prNum, Merged: true}}
 }
 
+func TestStacksForBranch(t *testing.T) {
+	sf := &StackFile{Stacks: []Stack{
+		makeStack("parent", "child"),
+		makeStack("main", "parent", "top"),
+		makeStack("parent", "sibling"),
+		makeStack("main", "other"),
+	}}
+	for _, tt := range []struct {
+		branch  string
+		indices []int
+	}{
+		{"parent", []int{1}},
+		{"main", []int{1, 3}},
+		{"child", []int{0}},
+		{"missing", nil},
+	} {
+		t.Run(tt.branch, func(t *testing.T) {
+			var indices []int
+			for _, s := range sf.StacksForBranch(tt.branch) {
+				indices = append(indices, sf.IndexOfStack(s))
+			}
+			assert.Equal(t, tt.indices, indices)
+		})
+	}
+	assert.Len(t, sf.FindAllStacksForBranch("parent"), 3, "all-matches scans still include trunks")
+	sf.AddStack(makeStack("main", "parent"))
+	assert.Len(t, sf.StacksForBranch("parent"), 2, "duplicate members remain ambiguous")
+}
+
 // --- ActiveBaseBranch: skipping merged ancestors for rebase ---
 
 func TestActiveBaseBranch(t *testing.T) {

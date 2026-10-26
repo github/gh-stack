@@ -249,6 +249,22 @@ func (sf *StackFile) FindAllStacksForBranch(branch string) []*Stack {
 	return stacks
 }
 
+// StacksForBranch prefers stacks containing branch as a member over stacks
+// that only use it as their trunk.
+func (sf *StackFile) StacksForBranch(branch string) []*Stack {
+	stacks := sf.FindAllStacksForBranch(branch)
+	var members []*Stack
+	for _, s := range stacks {
+		if s.IndexOf(branch) >= 0 {
+			members = append(members, s)
+		}
+	}
+	if len(members) > 0 {
+		return members
+	}
+	return stacks
+}
+
 // IndexOfStack returns the index of the given stack within the file by identity
 // (pointer), or -1 if it is not part of this file. Use it to locate a stack
 // obtained from FindAllStacksForBranch before mutating the Stacks slice.

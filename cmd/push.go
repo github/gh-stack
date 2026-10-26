@@ -65,7 +65,7 @@ func runPush(cfg *config.Config, opts *pushOptions) error {
 
 	// Find the stack for the current branch without switching branches.
 	// Push should never change the user's checked-out branch.
-	stacks := sf.FindAllStacksForBranch(currentBranch)
+	stacks := sf.StacksForBranch(currentBranch)
 	if len(stacks) == 0 {
 		cfg.Errorf("current branch %q is not part of a stack", currentBranch)
 		return ErrNotInStack

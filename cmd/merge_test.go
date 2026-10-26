@@ -77,6 +77,30 @@ func setupLocalStack(t *testing.T, number int, currentBranch string, branches ..
 	})
 }
 
+func TestResolveActiveRemoteStack_MemberBeforeTrunk(t *testing.T) {
+	dir := t.TempDir()
+	writeStackFileMulti(t, dir,
+		stack.Stack{Number: 8, Trunk: stack.BranchRef{Branch: "parent"}, Branches: []stack.BranchRef{{Branch: "child"}}},
+		stack.Stack{Number: 7, Trunk: stack.BranchRef{Branch: "main"}, Branches: []stack.BranchRef{{Branch: "parent"}}},
+	)
+	restore := git.SetOps(&git.MockOps{
+		GitDirFn:        func() (string, error) { return dir, nil },
+		CurrentBranchFn: func() (string, error) { return "parent", nil },
+	})
+	defer restore()
+	cfg, outR, errR := config.NewTestConfig()
+	expected := remoteStack(7, "main", openStackPR(1, "parent"))
+	resolved, err := resolveActiveRemoteStack(cfg, &github.MockClient{
+		GetStackFn: func(n int) (*github.RemoteStack, error) {
+			assert.Equal(t, 7, n)
+			return expected, nil
+		},
+	})
+	require.NoError(t, err)
+	assert.Same(t, expected, resolved)
+	commandOutput(t, cfg, outR, errR)
+}
+
 func TestResolveMergeStack_FetchFailureLinks(t *testing.T) {
 	for _, mode := range []string{"explicit", "active"} {
 		for _, force := range []string{"0", "1"} {

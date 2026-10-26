@@ -78,6 +78,38 @@ func TestResolveStack_ReadOnlySelectionDoesNotCheckout(t *testing.T) {
 	commandOutput(t, cfg, outR, errR)
 }
 
+func TestResolveStack_MemberBeforeTrunk(t *testing.T) {
+	for _, interactive := range []bool{false, true} {
+		t.Run(fmt.Sprint(interactive), func(t *testing.T) {
+			sf := &stack.StackFile{Stacks: []stack.Stack{
+				{Trunk: stack.BranchRef{Branch: "parent"}, Branches: []stack.BranchRef{{Branch: "child"}}},
+				{Trunk: stack.BranchRef{Branch: "main"}, Branches: []stack.BranchRef{{Branch: "parent"}, {Branch: "top"}}},
+				{Trunk: stack.BranchRef{Branch: "parent"}, Branches: []stack.BranchRef{{Branch: "sibling"}}},
+			}}
+			cfg, outR, errR := config.NewTestConfig()
+			cfg.ForceInteractive = interactive
+			cfg.StackMutation = &config.StackMutationContext{}
+			cfg.SelectFn = func(string, string, []string) (int, error) {
+				t.Fatal("a member is not ambiguous with dependent trunks")
+				return 0, nil
+			}
+			restore := git.SetOps(&git.MockOps{CheckoutBranchFn: func(string) error {
+				t.Fatal("member resolution must not change checkout")
+				return nil
+			}})
+			defer restore()
+			selected, err := resolveStack(sf, "parent", cfg)
+			require.NoError(t, err)
+			assert.Same(t, &sf.Stacks[1], selected)
+			selected, branch, err := resolvePR(cfg, sf, "parent")
+			require.NoError(t, err)
+			assert.Same(t, &sf.Stacks[1], selected)
+			assert.Equal(t, "parent", branch.Branch)
+			commandOutput(t, cfg, outR, errR)
+		})
+	}
+}
+
 func TestResolveStack_RewriteSelectionPreservesCheckout(t *testing.T) {
 	for _, kind := range []string{"rebase", "rebase-continue", "rebase-abort", "sync", "modify", "modify-continue", "modify-abort", "add", "checkout", "submit"} {
 		t.Run(kind, func(t *testing.T) {

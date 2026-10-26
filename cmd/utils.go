@@ -419,7 +419,7 @@ func handleSaveError(cfg *config.Config, err error) error {
 // checkout; other mutating callers switch to the selected stack's top branch.
 // Returns nil with no error if no stack contains the branch.
 func resolveStack(sf *stack.StackFile, branch string, cfg *config.Config) (*stack.Stack, error) {
-	stacks := sf.FindAllStacksForBranch(branch)
+	stacks := sf.StacksForBranch(branch)
 
 	switch len(stacks) {
 	case 0:
@@ -1819,7 +1819,7 @@ func resolvePR(cfg *config.Config, sf *stack.StackFile, target string) (*stack.S
 	}
 
 	// Try matching as a branch name.
-	stacks := sf.FindAllStacksForBranch(target)
+	stacks := sf.StacksForBranch(target)
 	if len(stacks) > 0 {
 		s := stacks[0]
 		idx := s.IndexOf(target)

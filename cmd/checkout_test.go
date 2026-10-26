@@ -123,6 +123,32 @@ func TestCheckout_PrintPathAmbiguousBranch(t *testing.T) {
 	assert.Contains(t, diagnostics, "multiple stacks")
 }
 
+func TestCheckout_NumericMemberBranch(t *testing.T) {
+	dir := t.TempDir()
+	writeStackFileMulti(t, dir,
+		stack.Stack{Trunk: stack.BranchRef{Branch: "123"}, Branches: []stack.BranchRef{{Branch: "child"}}},
+		stack.Stack{Trunk: stack.BranchRef{Branch: "main"}, Branches: []stack.BranchRef{{Branch: "123"}}},
+	)
+	var checkedOut string
+	restore := git.SetOps(&git.MockOps{
+		GitDirFn:       func() (string, error) { return dir, nil },
+		BranchExistsFn: func(string) (bool, error) { return true, nil },
+		CheckoutBranchFn: func(branch string) error {
+			checkedOut = branch
+			return nil
+		},
+	})
+	defer restore()
+	cfg, outR, errR := config.NewTestConfig()
+	cfg.GitHubClientOverride = &github.MockClient{
+		GetStackFn: func(int) (*github.RemoteStack, error) { return nil, notFoundErr() },
+	}
+	require.NoError(t, runCheckout(cfg, &checkoutOptions{target: "123"}))
+	assert.Equal(t, "123", checkedOut)
+	_, diagnostics := commandOutput(t, cfg, outR, errR)
+	assert.Contains(t, diagnostics, "(main) <- 123")
+}
+
 func TestCheckout_RemotePrintPathDoesNotImportDuringRecovery(t *testing.T) {
 	t.Setenv("GH_STACK_HYPERLINKS", "1")
 	common, root, owner := t.TempDir(), t.TempDir(), t.TempDir()
