@@ -427,3 +427,23 @@ func TestPush_BaseRetarget(t *testing.T) {
 
 	assert.ErrorIs(t, runPush(cfg, &pushOptions{remote: "origin"}), ErrSilent)
 }
+
+func TestPush_SinglePRRetarget(t *testing.T) {
+	for _, closed := range []bool{false, true} {
+		t.Run(fmt.Sprint(closed), func(t *testing.T) {
+			repo := setupSinglePRRetargetRepo(t, true, closed)
+			withIssue250Repo(t, repo.dir)
+			before := issue250Git(t, repo.dir, "rev-parse", "origin/child")
+			cfg, outR, errR := config.NewTestConfig()
+			cfg.GitHubClientOverride = repo.client
+			require.Error(t, runPush(cfg, &pushOptions{remote: "origin"}))
+			_, output := commandOutput(t, cfg, outR, errR)
+			assert.Equal(t, before, issue250Git(t, repo.dir, "rev-parse", "origin/child"))
+			if closed {
+				assert.Contains(t, output, "PR #11 is closed")
+			} else {
+				assert.Contains(t, output, "gh stack sync")
+			}
+		})
+	}
+}

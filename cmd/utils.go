@@ -10,6 +10,7 @@ import (
 	"sync"
 
 	"github.com/AlecAivazis/survey/v2/terminal"
+	cligit "github.com/cli/cli/v2/git"
 	"github.com/cli/go-gh/v2/pkg/api"
 	"github.com/cli/go-gh/v2/pkg/prompter"
 	"github.com/github/gh-stack/internal/config"
@@ -1087,49 +1088,175 @@ func normalizeStackTrunk(cfg *config.Config, s *stack.Stack, remote string) erro
 	return nil
 }
 
-// retargetedBase returns the branch GitHub moved a tracked stack onto, or ""
-// if the base is unchanged. GitHub retargets a stack when its base branch is
-// deleted but does not rebase the stack's branches.
-func retargetedBase(cfg *config.Config, s *stack.Stack, remote string) (string, error) {
-	if s.ID == "" {
-		return "", nil
-	}
-	client, err := cfg.GitHubClient()
-	if err != nil {
-		return "", err
-	}
-	number, err := ensureStackNumber(client, s)
-	if err != nil || number == 0 {
-		return "", err
-	}
-	rs, err := client.GetStack(number)
-	if isNotFound(err) {
-		return "", nil
-	}
-	if err != nil || rs == nil || rs.Base.Ref == "" {
-		return "", err
-	}
-	trunk, err := normalizeTrunkBranch(s.Trunk.Branch, remote)
-	if err != nil || rs.Base.Ref == trunk {
-		return "", err
-	}
-	cfg.Warningf("GitHub retargeted this stack%s from %s to %s", linkedStackLabel(cfg, s.Number), s.Trunk.Branch, rs.Base.Ref)
-	return rs.Base.Ref, nil
+type remoteBase struct {
+	Branch    string
+	Published bool
+	ClosedPR  int
 }
 
-// requireCurrentBase stops publishing a stack that GitHub retargeted until it
-// has been rebased onto its new base.
-func requireCurrentBase(cfg *config.Config, s *stack.Stack, remote string) error {
-	newBase, err := retargetedBase(cfg, s, remote)
+// retargetedBase reads the server base without discarding closed-PR evidence.
+// GitHub can retarget either a server stack or an individual PR.
+func retargetedBase(cfg *config.Config, s *stack.Stack, remote string) (remoteBase, error) {
+	result := remoteBase{Published: s.ID != ""}
+	trunk, err := normalizeTrunkBranch(s.Trunk.Branch, remote)
+	if err != nil {
+		return result, err
+	}
+	var base string
+	if s.ID == "" {
+		pr, err := stackBasePR(cfg, s, remote)
+		if err != nil || pr == nil || s.IndexOf(pr.BaseRefName) >= 0 {
+			return result, err
+		}
+		result.Published = pr.BaseRefName == trunk
+		if pr.State == "CLOSED" {
+			result.ClosedPR = pr.Number
+			return result, nil
+		}
+		base = pr.BaseRefName
+	} else {
+		client, err := cfg.GitHubClient()
+		if err != nil {
+			return result, err
+		}
+		number, err := ensureStackNumber(client, s)
+		if err != nil || number == 0 {
+			return result, err
+		}
+		rs, err := client.GetStack(number)
+		if isNotFound(err) {
+			return result, nil
+		}
+		if err != nil || rs == nil {
+			return result, err
+		}
+		base = rs.Base.Ref
+	}
+	if base != "" && base != trunk {
+		result.Branch = base
+		result.Published = true
+		cfg.Warningf("GitHub retargeted this stack%s from %s to %s", linkedStackLabel(cfg, s.Number), s.Trunk.Branch, base)
+	}
+	return result, nil
+}
+
+func stackBasePR(cfg *config.Config, s *stack.Stack, remote string) (*github.PullRequest, error) {
+	for _, b := range s.Branches {
+		if b.IsMerged() {
+			continue
+		}
+		published := b.PullRequest != nil
+		if !published {
+			var err error
+			published, err = git.CommitExists("refs/remotes/" + remote + "/" + b.Branch)
+			if err != nil {
+				return nil, err
+			}
+		}
+		client, err := cfg.GitHubClient()
+		var pr *github.PullRequest
+		if err == nil && b.PullRequest != nil && b.PullRequest.Number > 0 {
+			pr, err = client.FindPRByNumber(b.PullRequest.Number)
+		}
+		if err == nil && (pr == nil || pr.State == "CLOSED") {
+			var open *github.PullRequest
+			open, err = client.FindPRForBranch(b.Branch)
+			if open != nil {
+				pr = open
+			}
+		}
+		if err == nil && pr == nil && published {
+			var details *github.PRDetails
+			details, err = client.FindPRDetailsForBranch(b.Branch)
+			if details != nil {
+				pr = &github.PullRequest{Number: details.Number, State: details.State, Merged: details.Merged, BaseRefName: details.BaseRefName}
+			}
+		}
+		if err != nil {
+			if b.PullRequest == nil {
+				cfg.Warningf("Could not look up a PR for %s: %v", b.Branch, err)
+				return nil, nil // discovery remains best-effort for untracked PRs
+			}
+			return nil, err
+		}
+		if pr != nil && pr.Merged {
+			continue
+		}
+		return pr, nil
+	}
+	return nil, nil
+}
+
+func baseWasPublished(sf *stack.StackFile, trunk, remote string) (bool, error) {
+	if sf != nil {
+		for _, s := range sf.StacksForBranch(trunk) {
+			if i := s.IndexOf(trunk); i >= 0 && s.Branches[i].PullRequest != nil && s.Branches[i].PullRequest.Number > 0 {
+				return true, nil
+			}
+		}
+	}
+	exists, err := git.CommitExists("refs/remotes/" + remote + "/" + trunk)
+	if err != nil || exists {
+		return exists, err
+	}
+	upstream, err := git.UpstreamRemote(trunk)
+	var gitErr *cligit.GitError
+	if errors.As(err, &gitErr) && gitErr.ExitCode == 1 {
+		return false, nil // unset branch.<name>.remote
+	}
+	return upstream == remote, err
+}
+
+func reportMissingBase(cfg *config.Config, trunk, remote string, closedPR int) {
+	cfg.Errorf("base branch %s does not exist on %s", trunk, remote)
+	if closedPR > 0 {
+		cfg.Printf("PR #%d is closed; repair its base and PR before retrying.", closedPR)
+	} else {
+		cfg.Printf("Publish the parent stack or push its base branch before retrying.")
+	}
+}
+
+// requireCurrentBase stops publishing until a retarget is repaired. Submit
+// additionally requires even a previously local-only base to exist remotely.
+func requireCurrentBase(cfg *config.Config, sf *stack.StackFile, s *stack.Stack, remote string, submitting bool) (map[string]*github.PRDetails, error) {
+	base, err := retargetedBase(cfg, s, remote)
 	if err != nil {
 		cfg.Errorf("failed to read the stack's base on GitHub: %v", err)
-		return ErrAPIFailure
+		return nil, ErrAPIFailure
 	}
-	if newBase != "" {
-		cfg.Errorf("run `%s` to rebase the stack onto %s before publishing", cfg.ColorCyan("gh stack sync"), newBase)
-		return ErrSilent
+	if base.Branch != "" {
+		cfg.Errorf("run `%s` to rebase the stack onto %s before publishing", cfg.ColorCyan("gh stack sync"), base.Branch)
+		return nil, ErrSilent
 	}
-	return nil
+	// Refresh only after reading the base: closed PRs may lose their association.
+	details := syncStackPRs(cfg, s)
+	if len(s.ActiveBranches()) == 0 {
+		return details, nil
+	}
+	trunk, err := normalizeTrunkBranch(s.Trunk.Branch, remote)
+	if err != nil {
+		return nil, err
+	}
+	if defaultBranch, err := git.DefaultBranch(); err == nil && defaultBranch == trunk && base.ClosedPR == 0 {
+		return details, nil
+	}
+	if !submitting && !base.Published {
+		known, err := baseWasPublished(sf, trunk, remote)
+		if err != nil {
+			return nil, err
+		}
+		if !known {
+			return details, nil
+		}
+	}
+	if err := git.FetchBranch(remote, trunk); err != nil {
+		if errors.Is(err, git.ErrRemoteBranchNotFound) {
+			reportMissingBase(cfg, trunk, remote, base.ClosedPR)
+			return nil, ErrInvalidArgs
+		}
+		return nil, fmt.Errorf("checking base branch %s on %s: %w", trunk, remote, err)
+	}
+	return details, nil
 }
 
 // bottomRebaseCutoff selects --onto for a retargeted or rewritten trunk.
@@ -1267,9 +1394,12 @@ type trunkTarget struct {
 }
 
 type trunkResolveOptions struct {
-	Worktrees *worktree.Context
-	Preflight func(string, bool) error
-	Branch    string // overrides the stack's trunk
+	Worktrees     *worktree.Context
+	Preflight     func(string, bool) error
+	Branch        string // overrides the stack's trunk
+	Catalog       *stack.StackFile
+	RequireRemote bool
+	ClosedPR      int
 }
 
 func (t trunkTarget) Describe() string {
@@ -1300,10 +1430,18 @@ func resolveTrunkTarget(cfg *config.Config, s *stack.Stack, remote, currentBranc
 		trunk = opts.Branch
 	}
 	remoteRef := remote + "/" + trunk
+	knownRemote := opts.RequireRemote
+	if !knownRemote {
+		var err error
+		knownRemote, err = baseWasPublished(opts.Catalog, trunk, remote)
+		if err != nil {
+			return trunkTarget{}, fmt.Errorf("checking previous publication of %s: %w", trunk, err)
+		}
+	}
 
 	if err := git.FetchBranch(remote, trunk); err != nil {
 		if errors.Is(err, git.ErrRemoteBranchNotFound) {
-			target, err := trunkWithoutRemote(cfg, trunk, remote)
+			target, err := trunkWithoutRemote(cfg, trunk, remote, knownRemote, opts.ClosedPR)
 			if err == nil {
 				err = preflight(target.SHA, target.Moved)
 			}
@@ -1398,7 +1536,11 @@ func resolveTrunkTarget(cfg *config.Config, s *stack.Stack, remote, currentBranc
 	return trunkTarget{Branch: trunk, Ref: remoteRef, SHA: remoteSHA, OldSHA: localSHA}, nil
 }
 
-func trunkWithoutRemote(cfg *config.Config, trunk, remote string) (trunkTarget, error) {
+func trunkWithoutRemote(cfg *config.Config, trunk, remote string, knownRemote bool, closedPR int) (trunkTarget, error) {
+	if knownRemote || closedPR > 0 {
+		reportMissingBase(cfg, trunk, remote, closedPR)
+		return trunkTarget{}, ErrSilent
+	}
 	exists, err := git.BranchExists(trunk)
 	if err != nil {
 		return trunkTarget{}, fmt.Errorf("checking trunk branch %s: %w", trunk, err)
@@ -1407,13 +1549,6 @@ func trunkWithoutRemote(cfg *config.Config, trunk, remote string) (trunkTarget, 
 		cfg.Errorf("trunk branch %s exists neither locally nor on %s", trunk, remote)
 		return trunkTarget{}, ErrSilent
 	}
-	if trackedRemote, err := git.UpstreamRemote(trunk); err == nil && trackedRemote != "" {
-		cfg.Errorf("%s no longer exists on %s", trunk, remote)
-		cfg.Printf("  Re-point the stack at an existing trunk branch, or use `%s`.",
-			cfg.ColorCyan("gh stack rebase --no-trunk"))
-		return trunkTarget{}, ErrSilent
-	}
-
 	localSHA, err := git.RevParse(trunk)
 	if err != nil {
 		cfg.Errorf("could not resolve local trunk branch %s: %v", trunk, err)

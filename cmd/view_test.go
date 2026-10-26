@@ -547,6 +547,25 @@ func TestRunViewJSON_MultipleStacks(t *testing.T) {
 	assert.Contains(t, string(errOut), "belongs to multiple stacks")
 }
 
+func TestView_SinglePRRetarget(t *testing.T) {
+	repo := setupSinglePRRetargetRepo(t, true, false)
+	issue250Git(t, repo.dir, "branch", "-f", "parent", repo.oldParent)
+	withIssue250Repo(t, repo.dir)
+	cfg, outR, errR := config.NewTestConfig()
+	cfg.GitHubClientOverride = repo.client
+	require.NoError(t, runViewJSON(cfg))
+	out, diagnostics := commandOutput(t, cfg, outR, errR)
+	var result viewJSONOutput
+	require.NoError(t, json.Unmarshal([]byte(out), &result))
+	assert.Equal(t, "parent", result.Trunk)
+	require.Len(t, result.Branches, 1)
+	assert.True(t, result.Branches[0].NeedsRebase)
+	assert.Contains(t, diagnostics, "gh stack sync")
+	sf, err := stack.Load(repo.gitDir)
+	require.NoError(t, err)
+	assert.Equal(t, "parent", sf.Stacks[0].Trunk.Branch)
+}
+
 func TestRunViewJSON_SingleStack(t *testing.T) {
 	tmpDir := t.TempDir()
 	writeStackFileMulti(t, tmpDir, stack.Stack{

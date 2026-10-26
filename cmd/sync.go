@@ -156,12 +156,13 @@ func runSync(cfg *config.Config, opts *syncOptions) error {
 	if cb, cbErr := git.CurrentBranch(); cbErr == nil {
 		currentBranch = cb
 	}
-	_ = syncStackPRs(cfg, s)
-	newBase, err := retargetedBase(cfg, s, remote)
+	serverBase, err := retargetedBase(cfg, s, remote)
 	if err != nil {
 		cfg.Errorf("failed to read the stack's base on GitHub: %v", err)
 		return ErrAPIFailure
 	}
+	newBase := serverBase.Branch
+	_ = syncStackPRs(cfg, s)
 	ctx, err := worktree.New()
 	if err != nil {
 		cfg.Errorf("%s", err)
@@ -171,8 +172,11 @@ func runSync(cfg *config.Config, opts *syncOptions) error {
 
 	// --- Step 2: Resolve trunk ---
 	trunk, err := resolveTrunkTarget(cfg, s, remote, currentBranch, trunkResolveOptions{
-		Worktrees: ctx,
-		Branch:    newBase,
+		Worktrees:     ctx,
+		Branch:        newBase,
+		Catalog:       sf,
+		RequireRemote: serverBase.Published,
+		ClosedPR:      serverBase.ClosedPR,
 		Preflight: func(sha string, moved bool) error {
 			var required []string
 			for _, forward := range planned {

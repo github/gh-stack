@@ -118,10 +118,11 @@ func TestResolveTrunkTarget(t *testing.T) {
 
 	t.Run("uses intentional local-only trunk", func(t *testing.T) {
 		mock := trunkTargetMock("local", "")
+		mock.CommitExistsFn = func(string) (bool, error) { return false, nil }
 		mock.FetchBranchFn = func(string, string) error {
 			return git.ErrRemoteBranchNotFound
 		}
-		mock.UpstreamRemoteFn = func(string) (string, error) { return "", errors.New("unset") }
+		mock.UpstreamRemoteFn = func(string) (string, error) { return "", nil }
 		restore := git.SetOps(mock)
 		defer restore()
 

@@ -3177,3 +3177,94 @@ func TestSubmit_BaseRetarget(t *testing.T) {
 		})
 	}
 }
+
+func TestSubmit_BasePreflight(t *testing.T) {
+	for _, mode := range []string{"unpublished", "transport error", "published", "default", "retargeted", "closed"} {
+		t.Run(mode, func(t *testing.T) {
+			dir := t.TempDir()
+			trunk := "parent"
+			if mode == "default" {
+				trunk = "main"
+			}
+			s := stack.Stack{Trunk: stack.BranchRef{Branch: trunk}, Branches: []stack.BranchRef{{Branch: "child"}}}
+			pr := &github.PullRequest{Number: 11, State: "OPEN", HeadRefName: "child", BaseRefName: trunk}
+			if mode != "unpublished" {
+				s.Branches[0].PullRequest = &stack.PullRequestRef{Number: 11}
+			}
+			if mode == "retargeted" {
+				pr.BaseRefName = "main"
+			}
+			if mode == "closed" {
+				pr.State = "CLOSED"
+			}
+			writeStackFile(t, dir, s)
+			var fetched, pushed int
+			mock := newSubmitMock(dir, "child")
+			mock.CommitExistsFn = func(string) (bool, error) { return false, nil }
+			mock.FetchBranchFn = func(remote, branch string) error {
+				assert.Equal(t, "upstream", remote)
+				assert.Equal(t, trunk, branch)
+				fetched++
+				if mode == "unpublished" || mode == "closed" {
+					return git.ErrRemoteBranchNotFound
+				}
+				if mode == "transport error" {
+					return fmt.Errorf("network unavailable")
+				}
+				return nil
+			}
+			mock.PushFn = func(_ string, branches []string, _, _ bool) error {
+				assert.Contains(t, []string{"published", "default"}, mode)
+				assert.Equal(t, []string{"child"}, branches)
+				pushed++
+				return nil
+			}
+			restore := git.SetOps(mock)
+			defer restore()
+			cfg, outR, errR := config.NewTestConfig()
+			cfg.GitHubClientOverride = &github.MockClient{
+				FindPRByNumberFn: func(int) (*github.PullRequest, error) { return pr, nil },
+				FindPRForBranchFn: func(string) (*github.PullRequest, error) {
+					if mode == "unpublished" || mode == "closed" {
+						return nil, nil
+					}
+					return pr, nil
+				},
+				CreatePRFn: func(string, string, string, string, bool) (*github.PullRequest, error) {
+					t.Fatal("must not create a PR during base preflight")
+					return nil, nil
+				},
+				UnstackFn: func(int) (*github.RemoteStack, bool, error) {
+					t.Fatal("must not unstack before base preflight")
+					return nil, false, nil
+				},
+			}
+			err := runSubmit(cfg, &submitOptions{auto: true, remote: "upstream"})
+			_, output := commandOutput(t, cfg, outR, errR)
+			if mode == "published" || mode == "default" {
+				require.NoError(t, err)
+				assert.Equal(t, 1, pushed)
+			} else {
+				require.Error(t, err)
+				assert.Zero(t, pushed)
+				sf, loadErr := stack.Load(dir)
+				require.NoError(t, loadErr)
+				assert.Equal(t, s, sf.Stacks[0])
+				switch mode {
+				case "unpublished":
+					assert.ErrorIs(t, err, ErrInvalidArgs)
+					assert.Contains(t, output, "Publish the parent stack")
+				case "retargeted":
+					assert.Contains(t, output, "gh stack sync")
+				case "closed":
+					assert.Contains(t, output, "PR #11 is closed")
+				}
+			}
+			if mode == "default" || mode == "retargeted" {
+				assert.Zero(t, fetched)
+			} else {
+				assert.Equal(t, 1, fetched)
+			}
+		})
+	}
+}

@@ -301,6 +301,8 @@ type PRDetails struct {
 	Merged   bool
 	IsQueued bool
 
+	BaseRefName string
+
 	// Merge evidence for a stack retargeted off this PR's branch.
 	HeadRefOID     string
 	MergeCommitOID string
@@ -320,6 +322,7 @@ func (c *Client) FindPRDetailsForBranch(branch string) (*PRDetails, error) {
 					Merged          bool             `graphql:"merged"`
 					MergeQueueEntry *MergeQueueEntry `graphql:"mergeQueueEntry"`
 					HeadRefOID      string           `graphql:"headRefOid"`
+					BaseRefName     string           `graphql:"baseRefName"`
 					MergeCommit     struct {
 						OID string `graphql:"oid"`
 					} `graphql:"mergeCommit"`
@@ -354,6 +357,7 @@ func (c *Client) FindPRDetailsForBranch(branch string) (*PRDetails, error) {
 
 		HeadRefOID:     n.HeadRefOID,
 		MergeCommitOID: n.MergeCommit.OID,
+		BaseRefName:    n.BaseRefName,
 	}, nil
 }
 

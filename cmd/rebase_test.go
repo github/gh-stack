@@ -4072,6 +4072,106 @@ func setupBaseRetargetRepo(t *testing.T, target string, merged bool) baseRetarge
 	return baseRetargetRepo{repo, target, remote, client}
 }
 
+func setupSinglePRRetargetRepo(t *testing.T, merged, closed bool) baseRetargetRepo {
+	t.Helper()
+	repo := setupBaseRetargetRepo(t, "main", merged)
+	issue250Git(t, repo.dir, "checkout", "child")
+	issue250Git(t, repo.dir, "config", "--unset", "branch.parent.remote")
+	issue250Git(t, repo.dir, "config", "--unset", "branch.parent.merge")
+	sf, err := stack.Load(repo.gitDir)
+	require.NoError(t, err)
+	sf.Stacks[0].ID, sf.Stacks[0].Number = "", 0
+	sf.Stacks[0].Branches = sf.Stacks[0].Branches[:1]
+	require.NoError(t, stack.Save(repo.gitDir, sf))
+	pr := &github.PullRequest{Number: 11, HeadRefName: "child", BaseRefName: "main", State: "OPEN"}
+	if closed {
+		pr.BaseRefName, pr.State = "parent", "CLOSED"
+	}
+	repo.client.FindPRByNumberFn = func(n int) (*github.PullRequest, error) {
+		assert.Equal(t, 11, n)
+		return pr, nil
+	}
+	repo.client.FindPRForBranchFn = func(branch string) (*github.PullRequest, error) {
+		if branch == "child" && !closed {
+			return pr, nil
+		}
+		return nil, nil
+	}
+	parentDetails := repo.client.FindPRDetailsForBranchFn
+	repo.client.FindPRDetailsForBranchFn = func(branch string) (*github.PRDetails, error) {
+		if branch == "child" {
+			return &github.PRDetails{Number: 11, State: pr.State, BaseRefName: pr.BaseRefName}, nil
+		}
+		return parentDetails(branch)
+	}
+	repo.client.GetStackFn = func(int) (*github.RemoteStack, error) {
+		t.Fatal("a single PR has no remote stack to fetch")
+		return nil, nil
+	}
+	return repo
+}
+
+func testSinglePRRetarget(t *testing.T, run func(*config.Config, bool) error) {
+	t.Helper()
+	for _, mode := range []string{"merged parent", "unmerged refusal", "unmerged accepted", "closed", "closed after view", "replacement"} {
+		t.Run(mode, func(t *testing.T) {
+			closed := strings.HasPrefix(mode, "closed")
+			repo := setupSinglePRRetargetRepo(t, mode == "merged parent" || mode == "replacement", closed || mode == "replacement")
+			if mode == "replacement" {
+				pr := &github.PullRequest{Number: 13, State: "OPEN", HeadRefName: "child", BaseRefName: "main"}
+				oldLookup := repo.client.FindPRByNumberFn
+				repo.client.FindPRByNumberFn = func(n int) (*github.PullRequest, error) {
+					if n == 13 {
+						return pr, nil
+					}
+					return oldLookup(n)
+				}
+				repo.client.FindPRForBranchFn = func(string) (*github.PullRequest, error) { return pr, nil }
+			}
+			withIssue250Repo(t, repo.dir)
+			cfg := issue250TestConfig(t)
+			cfg.GitHubClientOverride = repo.client
+			if mode == "closed after view" {
+				require.NoError(t, runViewJSON(cfg))
+				sf, err := stack.Load(repo.gitDir)
+				require.NoError(t, err)
+				assert.Nil(t, sf.Stacks[0].Branches[0].PullRequest)
+			}
+			before := issue250Git(t, repo.dir, "rev-parse", "child")
+			catalog, err := os.ReadFile(filepath.Join(repo.gitDir, "gh-stack"))
+			require.NoError(t, err)
+			err = run(cfg, mode == "unmerged accepted")
+			if closed || mode == "unmerged refusal" {
+				require.Error(t, err)
+				assert.Equal(t, before, issue250Git(t, repo.dir, "rev-parse", "child"))
+				assert.Equal(t, before, issue250Git(t, repo.dir, "rev-parse", "origin/child"))
+				after, err := os.ReadFile(filepath.Join(repo.gitDir, "gh-stack"))
+				require.NoError(t, err)
+				assert.Equal(t, catalog, after)
+			} else {
+				require.NoError(t, err)
+				assert.Equal(t, "child commit", issue250Git(t, repo.dir, "log", "--format=%s", "main..child"))
+				assert.Error(t, issue250GitMayFail(t, repo.dir, "merge-base", "--is-ancestor", repo.oldParent, "child"))
+				sf, err := stack.Load(repo.gitDir)
+				require.NoError(t, err)
+				assert.Empty(t, sf.Stacks[0].ID)
+				assert.Equal(t, "main", sf.Stacks[0].Trunk.Branch)
+				child := issue250Git(t, repo.dir, "rev-parse", "child")
+				require.NoError(t, run(cfg, false))
+				assert.Equal(t, child, issue250Git(t, repo.dir, "rev-parse", "child"))
+			}
+			assert.Equal(t, repo.newParent, issue250Git(t, repo.dir, "rev-parse", "parent"))
+			assert.NoFileExists(t, filepath.Join(repo.gitDir, rebaseStateFile))
+		})
+	}
+}
+
+func TestRebase_SinglePRRetarget(t *testing.T) {
+	testSinglePRRetarget(t, func(cfg *config.Config, accept bool) error {
+		return runRebase(cfg, &rebaseOptions{remote: "origin", acceptBaseChange: accept})
+	})
+}
+
 func assertBaseRetargetHistory(t *testing.T, repo baseRetargetRepo) {
 	t.Helper()
 	assert.Equal(t, "top commit\nchild commit", issue250Git(t, repo.dir, "log", "--format=%s", repo.target+"..top"))

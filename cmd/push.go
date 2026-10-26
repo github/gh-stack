@@ -84,11 +84,9 @@ func runPush(cfg *config.Config, opts *pushOptions) error {
 		}
 		return ErrSilent
 	}
-	if err := requireCurrentBase(cfg, s, remote); err != nil {
+	if _, err := requireCurrentBase(cfg, sf, s, remote, false); err != nil {
 		return err
 	}
-	// Sync PR state to detect merged/queued PRs before pushing.
-	_ = syncStackPRs(cfg, s)
 
 	merged := s.MergedBranches()
 	if len(merged) > 0 {

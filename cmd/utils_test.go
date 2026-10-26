@@ -1957,6 +1957,122 @@ func TestTrunkLookupFailureStopsBeforeMutation(t *testing.T) {
 	require.ErrorIs(t, err, lookupErr)
 }
 
+func TestRetargetedBase_SinglePR(t *testing.T) {
+	for _, mode := range []string{"tracked", "discovered", "replacement", "no PR", "closed", "queued bottom", "internal base", "discovery failure", "tracked failure"} {
+		t.Run(mode, func(t *testing.T) {
+			s := &stack.Stack{Trunk: stack.BranchRef{Branch: "parent"}, Branches: []stack.BranchRef{
+				{Branch: "child", PullRequest: &stack.PullRequestRef{Number: 11}},
+				{Branch: "top", PullRequest: &stack.PullRequestRef{Number: 12}},
+			}}
+			pr := &github.PullRequest{Number: 11, BaseRefName: "main", State: "OPEN"}
+			switch mode {
+			case "discovered", "no PR", "discovery failure":
+				s.Branches[0].PullRequest = nil
+			case "closed":
+				pr.BaseRefName, pr.State = "parent", "CLOSED"
+			case "queued bottom":
+				pr.BaseRefName = "parent"
+				pr.MergeQueueEntry = &github.MergeQueueEntry{ID: "queued"}
+				s.Branches[0].Queued = true
+			case "internal base":
+				pr.BaseRefName = "top"
+			}
+			restore := git.SetOps(&git.MockOps{
+				CommitExistsFn: func(string) (bool, error) { return false, nil },
+			})
+			defer restore()
+			cfg, outR, errR := config.NewTestConfig()
+			lookupErr := fmt.Errorf("API unavailable")
+			cfg.GitHubClientOverride = &github.MockClient{
+				FindPRByNumberFn: func(n int) (*github.PullRequest, error) {
+					assert.Equal(t, 11, n, "a queued bottom must not promote the next PR's internal base")
+					if mode == "replacement" {
+						return &github.PullRequest{Number: 11, State: "CLOSED", BaseRefName: "parent"}, nil
+					}
+					if mode == "tracked failure" {
+						return nil, lookupErr
+					}
+					return pr, nil
+				},
+				FindPRForBranchFn: func(branch string) (*github.PullRequest, error) {
+					assert.Equal(t, "child", branch)
+					if mode == "discovery failure" {
+						return nil, lookupErr
+					}
+					if mode == "no PR" || mode == "closed" {
+						return nil, nil
+					}
+					return pr, nil
+				},
+				GetStackFn: func(int) (*github.RemoteStack, error) {
+					t.Fatal("ID-less lookup must not fetch a server stack")
+					return nil, nil
+				},
+			}
+			base, err := retargetedBase(cfg, s, "origin")
+			_, output := commandOutput(t, cfg, outR, errR)
+			if mode == "tracked failure" {
+				require.ErrorIs(t, err, lookupErr)
+			} else {
+				require.NoError(t, err)
+			}
+			if mode == "tracked" || mode == "discovered" || mode == "replacement" {
+				assert.Equal(t, "main", base.Branch)
+			} else {
+				assert.Empty(t, base.Branch)
+			}
+			if mode == "closed" {
+				assert.True(t, base.Published)
+				assert.Equal(t, 11, base.ClosedPR)
+			}
+			if mode == "discovery failure" {
+				assert.Contains(t, output, "Could not look up a PR")
+			}
+		})
+	}
+}
+
+func TestBaseWasPublished(t *testing.T) {
+	for _, mode := range []string{"local", "catalog", "remote ref", "upstream", "other remote", "lookup error"} {
+		t.Run(mode, func(t *testing.T) {
+			sf := &stack.StackFile{Stacks: []stack.Stack{
+				{Trunk: stack.BranchRef{Branch: "main"}, Branches: []stack.BranchRef{{Branch: "parent"}}},
+				{Trunk: stack.BranchRef{Branch: "parent", Head: "local-only-sha"}, Branches: []stack.BranchRef{{Branch: "child"}}},
+			}}
+			if mode == "catalog" {
+				sf.Stacks[0].Branches[0].PullRequest = &stack.PullRequestRef{Number: 10, Merged: true}
+			}
+			lookupErr := fmt.Errorf("lookup failed")
+			restore := git.SetOps(&git.MockOps{
+				CommitExistsFn: func(ref string) (bool, error) {
+					assert.Equal(t, "refs/remotes/origin/parent", ref)
+					if mode == "lookup error" {
+						return false, lookupErr
+					}
+					return mode == "remote ref", nil
+				},
+				UpstreamRemoteFn: func(string) (string, error) {
+					if mode == "upstream" {
+						return "origin", nil
+					}
+					if mode == "other remote" {
+						return "upstream", nil
+					}
+					return "", nil
+				},
+			})
+			defer restore()
+			published, err := baseWasPublished(sf, "parent", "origin")
+			if mode == "lookup error" {
+				require.ErrorIs(t, err, lookupErr)
+			} else {
+				require.NoError(t, err)
+				assert.Equal(t, mode == "catalog" || mode == "remote ref" || mode == "upstream", published)
+			}
+		})
+	}
+}
+
 func TestEnsureLocalTrunk_FetchesAndCreates(t *testing.T) {
 	var fetchedBranches []string
 	var createdBranch, createdBase string

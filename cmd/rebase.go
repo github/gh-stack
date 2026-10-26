@@ -185,6 +185,22 @@ func runRebase(cfg *config.Config, opts *rebaseOptions) error {
 		cfg.Printf("No branches to rebase")
 		return nil
 	}
+	var remote string
+	var serverBase remoteBase
+	if !opts.noTrunk {
+		remote, err = pickRemote(cfg, anchor, opts.remote)
+		if err != nil {
+			if !errors.Is(err, errInterrupt) {
+				cfg.Errorf("%s", err)
+			}
+			return ErrSilent
+		}
+		serverBase, err = retargetedBase(cfg, s, remote)
+		if err != nil {
+			cfg.Errorf("failed to read the stack's base on GitHub: %v", err)
+			return ErrAPIFailure
+		}
+	}
 	_ = syncStackPRs(cfg, s)
 	ctx, err := worktree.New()
 	if err != nil {
@@ -199,20 +215,9 @@ func runRebase(cfg *config.Config, opts *rebaseOptions) error {
 	}
 
 	var trunk trunkTarget
-	var newBase, cutoff string
+	newBase := serverBase.Branch
+	var cutoff string
 	if !opts.noTrunk {
-		// Resolve remote for fetch and trunk comparison
-		remote, err := pickRemote(cfg, anchor, opts.remote)
-		if err != nil {
-			if !errors.Is(err, errInterrupt) {
-				cfg.Errorf("%s", err)
-			}
-			return ErrSilent
-		}
-		if newBase, err = retargetedBase(cfg, s, remote); err != nil {
-			cfg.Errorf("failed to read the stack's base on GitHub: %v", err)
-			return ErrAPIFailure
-		}
 		if i := s.FirstActiveBranchIndex(); newBase != "" && i >= 0 && (i < startIdx || i >= endIdx) {
 			cfg.Errorf("rebase the whole stack to move it onto %s", newBase)
 			return ErrInvalidArgs
@@ -231,7 +236,10 @@ func runRebase(cfg *config.Config, opts *rebaseOptions) error {
 			cfg.Errorf("%s", err)
 			return ErrSilent
 		}
-		trunk, err = resolveTrunkTarget(cfg, s, remote, currentBranch, trunkResolveOptions{Worktrees: ctx, Branch: newBase})
+		trunk, err = resolveTrunkTarget(cfg, s, remote, currentBranch, trunkResolveOptions{
+			Worktrees: ctx, Branch: newBase, Catalog: sf,
+			RequireRemote: serverBase.Published, ClosedPR: serverBase.ClosedPR,
+		})
 		if err != nil {
 			return err
 		}

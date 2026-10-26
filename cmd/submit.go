@@ -145,9 +145,6 @@ func runSubmit(cfg *config.Config, opts *submitOptions) error {
 		}
 	}
 
-	// Sync PR state to detect merged/queued PRs before pushing.
-	prDetails := syncStackPRs(cfg, s)
-
 	// Resolve remote for pushing
 	remote, err := pickRemote(cfg, currentBranch, opts.remote)
 	if err != nil {
@@ -156,7 +153,8 @@ func runSubmit(cfg *config.Config, opts *submitOptions) error {
 		}
 		return ErrSilent
 	}
-	if err := requireCurrentBase(cfg, s, remote); err != nil {
+	prDetails, err := requireCurrentBase(cfg, sf, s, remote, true)
+	if err != nil {
 		return err
 	}
 	merged := s.MergedBranches()

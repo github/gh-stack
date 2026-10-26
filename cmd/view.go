@@ -141,11 +141,11 @@ func runViewJSON(cfg *config.Config) error {
 // warnRetargeted reports a GitHub retarget that has not been rebased onto yet.
 func warnRetargeted(cfg *config.Config, s *stack.Stack) bool {
 	remote, _ := git.ResolveRemote(s.Trunk.Branch)
-	newBase, _ := retargetedBase(cfg, s, remote)
-	if newBase != "" {
-		cfg.Printf("  Run `%s` to rebase the stack onto %s", cfg.ColorCyan("gh stack sync"), newBase)
+	base, _ := retargetedBase(cfg, s, remote)
+	if base.Branch != "" {
+		cfg.Printf("  Run `%s` to rebase the stack onto %s", cfg.ColorCyan("gh stack sync"), base.Branch)
 	}
-	return newBase != ""
+	return base.Branch != ""
 }
 
 func viewShort(cfg *config.Config, s *stack.Stack, currentBranch string) error {
