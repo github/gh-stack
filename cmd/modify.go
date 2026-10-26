@@ -9,6 +9,7 @@ import (
 	"github.com/github/gh-stack/internal/config"
 	"github.com/github/gh-stack/internal/git"
 	"github.com/github/gh-stack/internal/modify"
+	"github.com/github/gh-stack/internal/stack"
 	"github.com/github/gh-stack/internal/tui/modifyview"
 	"github.com/github/gh-stack/internal/tui/stackview"
 	"github.com/spf13/cobra"
@@ -152,6 +153,9 @@ func runModify(cfg *config.Config) error {
 		return fmt.Errorf("the current branch changed while modify was open; reopen modify before applying")
 	}
 
+	if err := validateModifyDependents(cfg, sf, s, reordered); err != nil {
+		return err
+	}
 	applyResult, conflict, applyErr := modify.ApplyPlan(cfg, gitDir, s, sf, reordered, currentBranch, updateBaseSHAs)
 
 	if conflict != nil {
@@ -189,6 +193,29 @@ func runModify(cfg *config.Config) error {
 	// Print success summary
 	printModifySuccess(cfg, applyResult)
 
+	return nil
+}
+
+func validateModifyDependents(cfg *config.Config, sf *stack.StackFile, s *stack.Stack, nodes []modifyview.ModifyBranchNode) error {
+	for _, n := range nodes {
+		if n.PendingAction == nil {
+			continue
+		}
+		switch n.PendingAction.Type {
+		case modifyview.ActionRename, modifyview.ActionDrop, modifyview.ActionFoldDown, modifyview.ActionFoldUp:
+		default:
+			continue
+		}
+		for i := range sf.Stacks {
+			dependent := &sf.Stacks[i]
+			if dependent != s && dependent.Trunk.Branch == n.Ref.Branch {
+				cfg.Errorf("cannot %s branch %q: it is the base of another local stack%s",
+					n.PendingAction.Type, n.Ref.Branch, linkedStackLabel(cfg, dependent.Number))
+				cfg.Printf("Dependent stack: %s", dependent.DisplayChain())
+				return ErrInvalidArgs
+			}
+		}
+	}
 	return nil
 }
 

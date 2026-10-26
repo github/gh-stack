@@ -476,6 +476,51 @@ func TestBuildModifySnapshot(t *testing.T) {
 	assert.Equal(t, "b3", restoredStack.Branches[2].Branch)
 }
 
+func TestModify_DependentBaseGuard(t *testing.T) {
+	for _, number := range []int{0, 9} {
+		for _, action := range []modifyview.ActionType{
+			modifyview.ActionRename, modifyview.ActionDrop, modifyview.ActionFoldDown, modifyview.ActionFoldUp,
+			modifyview.ActionMove, modifyview.ActionInsertAbove, modifyview.ActionInsertBelow,
+		} {
+			t.Run(fmt.Sprintf("%d/%s", number, action), func(t *testing.T) {
+				sf := &stack.StackFile{Stacks: []stack.Stack{
+					{Trunk: stack.BranchRef{Branch: "main"}, Branches: []stack.BranchRef{{Branch: "parent"}, {Branch: "other"}}},
+					{Number: number, Trunk: stack.BranchRef{Branch: "parent"}, Branches: []stack.BranchRef{{Branch: "child"}}},
+				}}
+				before, err := json.Marshal(sf)
+				require.NoError(t, err)
+				nodes := []modifyview.ModifyBranchNode{
+					{
+						BranchNode:    stackview.BranchNode{Ref: stack.BranchRef{Branch: "other"}},
+						PendingAction: &modifyview.PendingAction{Type: modifyview.ActionRename, NewName: "other-new"},
+					},
+					{
+						BranchNode:    stackview.BranchNode{Ref: stack.BranchRef{Branch: "parent"}},
+						PendingAction: &modifyview.PendingAction{Type: action, NewName: "parent-new"},
+					},
+				}
+				cfg, outR, errR := config.NewTestConfig()
+				err = validateModifyDependents(cfg, sf, &sf.Stacks[0], nodes)
+				_, output := commandOutput(t, cfg, outR, errR)
+				blocked := action == modifyview.ActionRename || action == modifyview.ActionDrop ||
+					action == modifyview.ActionFoldDown || action == modifyview.ActionFoldUp
+				if blocked {
+					assert.ErrorIs(t, err, ErrInvalidArgs)
+					assert.Contains(t, output, `"parent"`)
+					assert.Contains(t, output, "(parent) <- child")
+					cfg := issue250TestConfig(t)
+					require.NoError(t, validateModifyDependents(cfg, sf, &sf.Stacks[0], nodes[:1]))
+				} else {
+					require.NoError(t, err)
+				}
+				after, err := json.Marshal(sf)
+				require.NoError(t, err)
+				assert.Equal(t, string(before), string(after), "the entire plan is validated without changing either stack")
+			})
+		}
+	}
+}
+
 func TestBuildModifyPlan(t *testing.T) {
 	t.Run("drop action", func(t *testing.T) {
 		nodes := []modifyview.ModifyBranchNode{
