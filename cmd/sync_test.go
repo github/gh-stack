@@ -2879,6 +2879,11 @@ func TestSync_BaseRetarget(t *testing.T) {
 	}
 }
 
+func TestSync_LinkedParentRewrite(t *testing.T) {
+	testLinkedParentRewrite(t, func(cfg *config.Config) error {
+		return runSync(cfg, &syncOptions{remote: "origin"})
+	})
+}
 func TestSync_BaseRetargetConflictKeepsOldBase(t *testing.T) {
 	repo := setupBaseRetargetRepo(t, "main", true)
 	issue250Git(t, repo.dir, "checkout", "main")

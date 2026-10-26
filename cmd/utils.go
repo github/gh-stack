@@ -1132,11 +1132,9 @@ func requireCurrentBase(cfg *config.Config, s *stack.Stack, remote string) error
 	return nil
 }
 
-// retargetCutoff returns the old base commit for rebasing the bottom branch
-// onto a retargeted base, or "" when merged branches below it already set the
-// cutoff. Dropping commits that are not known to have landed in the new base
-// requires consent.
-func retargetCutoff(cfg *config.Config, s *stack.Stack, target trunkTarget, planned []branchFastForward, accept bool) (string, error) {
+// bottomRebaseCutoff selects --onto for a retargeted or rewritten trunk.
+// Only retargeting away from unlanded commits requires consent.
+func bottomRebaseCutoff(cfg *config.Config, s *stack.Stack, target trunkTarget, planned []branchFastForward, retarget, accept bool) (string, error) {
 	i := s.FirstActiveBranchIndex()
 	if i < 0 {
 		return "", nil
@@ -1147,6 +1145,30 @@ func retargetCutoff(cfg *config.Config, s *stack.Stack, target trunkTarget, plan
 		if forward.Branch == b.Branch {
 			head = forward.NewSHA
 		}
+	}
+	if !retarget {
+		if i != 0 {
+			return "", nil
+		}
+		valid, err := rebaseBoundaryContains(b.Base, head)
+		if err != nil || !valid {
+			return "", err
+		}
+		landed, err := git.IsAncestor(b.Base, target.SHA)
+		if err != nil || landed {
+			return "", err
+		}
+		oldTip := target.OldSHA
+		if oldTip != "" {
+			older, err := git.IsAncestor(oldTip, b.Base)
+			if err != nil {
+				return "", err
+			}
+			if older {
+				oldTip = "" // do not prefer a local tip older than the recorded boundary
+			}
+		}
+		return resolveRebaseOldBase(oldTip, b.Base, target.Ref, head)
 	}
 	var cutoff string
 	var err error
@@ -1240,6 +1262,7 @@ type trunkTarget struct {
 	Branch string
 	Ref    string
 	SHA    string
+	OldSHA string
 	Moved  bool
 }
 
@@ -1323,7 +1346,7 @@ func resolveTrunkTarget(cfg *config.Config, s *stack.Stack, remote, currentBranc
 			return trunkTarget{}, err
 		}
 		cfg.Successf("Trunk %s is already up to date", trunk)
-		return trunkTarget{Branch: trunk, Ref: trunk, SHA: localSHA}, nil
+		return trunkTarget{Branch: trunk, Ref: trunk, SHA: localSHA, OldSHA: localSHA}, nil
 	}
 
 	canFastForward, ffErr := git.IsAncestor(localSHA, remoteSHA)
@@ -1351,7 +1374,7 @@ func resolveTrunkTarget(cfg *config.Config, s *stack.Stack, remote, currentBranc
 		}
 		if updateErr == nil {
 			cfg.Successf("Trunk %s fast-forwarded to %s", trunk, short(remoteSHA))
-			return trunkTarget{Branch: trunk, Ref: trunk, SHA: remoteSHA, Moved: true}, nil
+			return trunkTarget{Branch: trunk, Ref: trunk, SHA: remoteSHA, OldSHA: localSHA, Moved: true}, nil
 		}
 		cfg.Warningf("Could not update local %s: %v", trunk, updateErr)
 	} else if ffErr != nil {
@@ -1363,7 +1386,7 @@ func resolveTrunkTarget(cfg *config.Config, s *stack.Stack, remote, currentBranc
 			return trunkTarget{}, err
 		}
 		cfg.Successf("Trunk %s is ahead of %s — using the local branch", trunk, remoteRef)
-		return trunkTarget{Branch: trunk, Ref: trunk, SHA: localSHA}, nil
+		return trunkTarget{Branch: trunk, Ref: trunk, SHA: localSHA, OldSHA: localSHA}, nil
 	} else {
 		cfg.Warningf("Local %s has diverged from %s", trunk, remoteRef)
 	}
@@ -1372,7 +1395,7 @@ func resolveTrunkTarget(cfg *config.Config, s *stack.Stack, remote, currentBranc
 		return trunkTarget{}, err
 	}
 	cfg.Printf("  Rebasing the stack onto %s instead; local %s is unchanged.", remoteRef, trunk)
-	return trunkTarget{Branch: trunk, Ref: remoteRef, SHA: remoteSHA}, nil
+	return trunkTarget{Branch: trunk, Ref: remoteRef, SHA: remoteSHA, OldSHA: localSHA}, nil
 }
 
 func trunkWithoutRemote(cfg *config.Config, trunk, remote string) (trunkTarget, error) {
@@ -1397,7 +1420,7 @@ func trunkWithoutRemote(cfg *config.Config, trunk, remote string) (trunkTarget, 
 		return trunkTarget{}, ErrSilent
 	}
 	cfg.Warningf("Trunk %s only exists locally — %s has no such branch", trunk, remote)
-	return trunkTarget{Branch: trunk, Ref: trunk, SHA: localSHA}, nil
+	return trunkTarget{Branch: trunk, Ref: trunk, SHA: localSHA, OldSHA: localSHA}, nil
 }
 
 // cascadeRebaseOpts holds parameters for a cascade rebase across a range of
@@ -1705,7 +1728,7 @@ func cascadeRebase(opts cascadeRebaseOpts) cascadeRebaseResult {
 				}
 			}
 
-			cfg.Successf("Rebased %s onto %s (adjusted for merged PR)", br.Branch, newBase)
+			cfg.Successf("Rebased %s onto %s (adjusted for changed base)", br.Branch, newBase)
 			result.Rebased = true
 			ontoOldBase = originalRefs[br.Branch]
 		} else {

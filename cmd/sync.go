@@ -191,10 +191,14 @@ func runSync(cfg *config.Config, opts *syncOptions) error {
 	if err != nil {
 		return err
 	}
-	var cutoff string
-	if newBase != "" {
-		if cutoff, err = retargetCutoff(cfg, s, trunk, planned, opts.acceptBaseChange); err != nil {
-			return err
+	cutoff, err := bottomRebaseCutoff(cfg, s, trunk, planned, newBase != "", opts.acceptBaseChange)
+	if err != nil {
+		return err
+	}
+	if cutoff != "" {
+		if err := ctx.Preflight(activeBranchNames(s)); err != nil {
+			cfg.Errorf("%s", err)
+			return ErrSilent
 		}
 	}
 
@@ -206,7 +210,7 @@ func runSync(cfg *config.Config, opts *syncOptions) error {
 	}
 
 	// --- Step 3: Cascade rebase ---
-	needsRebase := newBase != "" || trunk.Moved || len(updatedBranches) > 0 || stackNeedsRebase(s, trunk.Ref)
+	needsRebase := newBase != "" || cutoff != "" || trunk.Moved || len(updatedBranches) > 0 || stackNeedsRebase(s, trunk.Ref)
 	rebased := false
 	var originalRefs map[string]string
 	var state *rebaseState

@@ -871,7 +871,7 @@ func TestRebase_QueuedBranch_DownstreamStaysStacked(t *testing.T) {
 	assert.NoError(t, err)
 	assert.Contains(t, output, "Skipping b1")
 	assert.Contains(t, output, "queued")
-	assert.NotContains(t, output, "adjusted for merged PR",
+	assert.NotContains(t, output, "adjusted for changed base",
 		"queued branches must not trigger the merged --onto path")
 
 	// b2 stays stacked on the queued b1 (not rebased --onto main); b3 onto b2.
@@ -934,7 +934,7 @@ func TestRebase_MergedBelowQueued_KeepsStackedOnQueued(t *testing.T) {
 	require.Len(t, rebaseCalls, 1)
 	assert.Equal(t, rebaseCall{"b2", "sha-b2", "b3"}, rebaseCalls[0],
 		"b3 should rebase onto the queued b2, not --onto main")
-	assert.NotContains(t, output, "adjusted for merged PR")
+	assert.NotContains(t, output, "adjusted for changed base")
 }
 
 // TestRebase_UpstackAboveQueuedBranch verifies the onto-seed fix: with --upstack
@@ -984,7 +984,7 @@ func TestRebase_UpstackAboveQueuedBranch(t *testing.T) {
 		"b2 should rebase onto the queued predecessor b1, not --onto main")
 	assert.Equal(t, rebaseCall{"b2", "sha-b2", "b3"}, rebaseCalls[1],
 		"b3 should rebase onto b2")
-	assert.NotContains(t, output, "adjusted for merged PR")
+	assert.NotContains(t, output, "adjusted for changed base")
 }
 
 // TestRebase_StateRoundTrip verifies that rebase state can be saved and loaded
@@ -2230,6 +2230,74 @@ func TestResolveRebaseOldBase(t *testing.T) {
 	})
 }
 
+func TestBottomRebaseCutoff(t *testing.T) {
+	for _, tt := range []struct {
+		name                          string
+		base                          string
+		valid, landed, planned, older bool
+		skipped                       bool
+		fail                          bool
+		want                          string
+	}{
+		{name: "rewritten", base: "old", valid: true, want: "old"},
+		{name: "forward only", base: "old", valid: true, landed: true},
+		{name: "empty recorded base"},
+		{name: "imported nonancestor base", base: "old"},
+		{name: "planned child fast-forward", base: "old", valid: true, planned: true, want: "old"},
+		{name: "older local tip", base: "old", valid: true, older: true, want: "old"},
+		{name: "queued bottom", base: "old", valid: true, skipped: true},
+		{name: "lookup error", base: "old", fail: true},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			lookupErr := errors.New("lookup failed")
+			restore := git.SetOps(&git.MockOps{
+				IsAncestorFn: func(a, b string) (bool, error) {
+					if tt.fail {
+						return false, lookupErr
+					}
+					switch a + ":" + b {
+					case "old:child":
+						return tt.valid && !tt.planned, nil
+					case "old:remote-child":
+						return tt.valid, nil
+					case "old:new":
+						return tt.landed, nil
+					case "previous:old", "previous:child":
+						return tt.older, nil
+					}
+					return false, nil
+				},
+				CommitExistsFn: func(string) (bool, error) { return true, nil },
+			})
+			defer restore()
+			s := &stack.Stack{
+				Trunk: stack.BranchRef{Branch: "parent"},
+				Branches: []stack.BranchRef{
+					{Branch: "child", Base: tt.base, Queued: tt.skipped},
+					{Branch: "top", Base: "child"},
+				},
+			}
+			var planned []branchFastForward
+			if tt.planned {
+				planned = []branchFastForward{{Branch: "child", NewSHA: "remote-child"}}
+			}
+			cfg := issue250TestConfig(t)
+			cfg.ConfirmFn = func(string, bool) (bool, error) {
+				t.Fatal("following a rewritten parent does not require retarget consent")
+				return false, nil
+			}
+			cutoff, err := bottomRebaseCutoff(cfg, s,
+				trunkTarget{Branch: "parent", Ref: "parent", SHA: "new", OldSHA: "previous"}, planned, false, false)
+			if tt.fail {
+				require.ErrorIs(t, err, lookupErr)
+			} else {
+				require.NoError(t, err)
+				assert.Equal(t, tt.want, cutoff)
+			}
+		})
+	}
+}
+
 type amendedParentRepo struct {
 	dir       string
 	gitDir    string
@@ -2801,6 +2869,127 @@ func assertIssue250History(t *testing.T, repo amendedParentRepo) {
 	assert.True(t, os.IsNotExist(oldErr))
 	_, newErr := os.Stat(filepath.Join(repo.dir, "new-parent.txt"))
 	assert.NoError(t, newErr)
+}
+
+func setupLinkedParentRepo(t *testing.T) amendedParentRepo {
+	t.Helper()
+	repo := setupAmendedParentRepo(t, false)
+	issue250Git(t, repo.dir, "push", "--force", "origin", "parent")
+	sf, err := stack.Load(repo.gitDir)
+	require.NoError(t, err)
+	child := sf.Stacks[0].Branches[1]
+	sf.Stacks[0].Branches = sf.Stacks[0].Branches[:1]
+	sf.AddStack(stack.Stack{
+		Trunk:    stack.BranchRef{Branch: "parent", Head: repo.oldParent},
+		Branches: []stack.BranchRef{child},
+	})
+	require.NoError(t, stack.Save(repo.gitDir, sf))
+	return repo
+}
+
+func testLinkedParentRewrite(t *testing.T, run func(*config.Config) error) {
+	t.Helper()
+	for _, mode := range []string{"amended", "partial squash", "local-only"} {
+		t.Run(mode, func(t *testing.T) {
+			repo := setupLinkedParentRepo(t)
+			parentRef := "origin/parent"
+			if mode == "local-only" {
+				issue250Git(t, repo.dir, "push", "origin", "--delete", "parent")
+				issue250Git(t, repo.dir, "config", "--unset", "branch.parent.remote")
+				issue250Git(t, repo.dir, "config", "--unset", "branch.parent.merge")
+				parentRef = "parent"
+			}
+			if mode == "partial squash" {
+				issue250Git(t, repo.dir, "checkout", "-B", "parent", repo.oldParent)
+				issue250WriteFile(t, repo.dir, "second.txt", "second parent commit\n")
+				issue250Git(t, repo.dir, "add", ".")
+				issue250Git(t, repo.dir, "commit", "-m", "parent second")
+				oldTip := issue250Git(t, repo.dir, "rev-parse", "parent")
+				issue250Git(t, repo.dir, "rebase", "--onto", "parent", repo.oldParent, "child")
+				issue250Git(t, repo.dir, "push", "--force", "origin", "child")
+				issue250Git(t, repo.dir, "checkout", "main")
+				issue250Git(t, repo.dir, "merge", "--squash", repo.oldParent)
+				issue250Git(t, repo.dir, "commit", "-m", "squashed first parent")
+				issue250Git(t, repo.dir, "rebase", "--onto", "main", repo.oldParent, "parent")
+				repo.newParent = issue250Git(t, repo.dir, "rev-parse", "parent")
+				issue250Git(t, repo.dir, "push", "--force", "origin", "main", "parent")
+				issue250Git(t, repo.dir, "checkout", "child")
+				issue250Git(t, repo.dir, "branch", "-f", "parent", oldTip)
+				repo.oldParent = oldTip
+				sf, err := stack.Load(repo.gitDir)
+				require.NoError(t, err)
+				sf.Stacks[1].Branches[0].Base = oldTip
+				require.NoError(t, stack.Save(repo.gitDir, sf))
+			}
+			issue250Git(t, repo.dir, "branch", "sibling", "child")
+			parent := issue250Git(t, repo.dir, "rev-parse", "parent")
+			sibling := issue250Git(t, repo.dir, "rev-parse", "sibling")
+			before, err := stack.Load(repo.gitDir)
+			require.NoError(t, err)
+			withIssue250Repo(t, repo.dir)
+			cfg := issue250TestConfig(t)
+
+			require.NoError(t, run(cfg))
+
+			assert.Equal(t, "child commit", issue250Git(t, repo.dir, "log", "--format=%s", parentRef+"..child"))
+			assert.Error(t, issue250GitMayFail(t, repo.dir, "merge-base", "--is-ancestor", repo.oldParent, "child"))
+			require.NoError(t, issue250GitMayFail(t, repo.dir, "merge-base", "--is-ancestor", repo.newParent, "child"))
+			assert.Equal(t, parent, issue250Git(t, repo.dir, "rev-parse", "parent"))
+			assert.Equal(t, sibling, issue250Git(t, repo.dir, "rev-parse", "sibling"))
+			after, err := stack.Load(repo.gitDir)
+			require.NoError(t, err)
+			assert.Equal(t, before.Stacks[0], after.Stacks[0], "child repair leaves the parent catalog alone")
+			assert.Equal(t, "parent", after.Stacks[1].Trunk.Branch)
+			assert.Equal(t, repo.newParent, after.Stacks[1].Branches[0].Base)
+			child := issue250Git(t, repo.dir, "rev-parse", "child")
+			require.NoError(t, run(cfg))
+			assert.Equal(t, child, issue250Git(t, repo.dir, "rev-parse", "child"))
+		})
+	}
+}
+
+func TestRebase_LinkedParentRewrite(t *testing.T) {
+	testLinkedParentRewrite(t, func(cfg *config.Config) error {
+		return runRebase(cfg, &rebaseOptions{remote: "origin"})
+	})
+}
+
+func TestRebase_LinkedParentRecovery(t *testing.T) {
+	for _, action := range []string{"continue", "abort", "sync"} {
+		t.Run(action, func(t *testing.T) {
+			repo := setupLinkedParentRepo(t)
+			issue250Git(t, repo.dir, "checkout", "parent")
+			issue250WriteFile(t, repo.dir, "child.txt", "conflicting parent change\n")
+			issue250Git(t, repo.dir, "add", ".")
+			issue250Git(t, repo.dir, "commit", "--amend", "--no-edit")
+			issue250Git(t, repo.dir, "push", "--force", "origin", "parent")
+			issue250Git(t, repo.dir, "checkout", "child")
+			original := issue250Git(t, repo.dir, "rev-parse", "child")
+			withIssue250Repo(t, repo.dir)
+			cfg := issue250TestConfig(t)
+			if action == "sync" {
+				require.ErrorIs(t, runSync(cfg, &syncOptions{remote: "origin"}), ErrConflict)
+				assert.Equal(t, original, issue250Git(t, repo.dir, "rev-parse", "child"))
+				assert.Equal(t, original, issue250Git(t, repo.dir, "rev-parse", "origin/child"))
+			} else {
+				require.ErrorIs(t, runRebase(cfg, &rebaseOptions{remote: "origin"}), ErrConflict)
+				state, err := loadRebaseState(repo.gitDir)
+				require.NoError(t, err)
+				assert.Empty(t, state.TargetTrunk)
+				assert.Equal(t, repo.oldParent, state.RebaseOldBase)
+				if action == "continue" {
+					issue250WriteFile(t, repo.dir, "child.txt", "resolved child\n")
+					issue250Git(t, repo.dir, "add", "child.txt")
+					require.NoError(t, runRebase(cfg, &rebaseOptions{cont: true}))
+					assert.Error(t, issue250GitMayFail(t, repo.dir, "merge-base", "--is-ancestor", repo.oldParent, "child"))
+				} else {
+					require.NoError(t, runRebase(cfg, &rebaseOptions{abort: true}))
+					assert.Equal(t, original, issue250Git(t, repo.dir, "rev-parse", "child"))
+				}
+			}
+			assert.NoFileExists(t, filepath.Join(repo.gitDir, rebaseStateFile))
+		})
+	}
 }
 
 func TestIntegration_AmendedParentPushThenRebase(t *testing.T) {
