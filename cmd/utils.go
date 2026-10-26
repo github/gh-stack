@@ -1141,27 +1141,39 @@ func retargetCutoff(cfg *config.Config, s *stack.Stack, target trunkTarget, plan
 	if i < 0 {
 		return "", nil
 	}
-	var cutoff string
-	landed := false
-	if i == 0 {
-		b := s.Branches[0]
-		head := b.Branch
-		for _, forward := range planned {
-			if forward.Branch == b.Branch {
-				head = forward.NewSHA
-			}
-		}
-		var err error
-		if cutoff, err = resolveRetargetOldBase(s.Trunk.Branch, b.Base, head); err == nil {
-			landed, err = git.IsAncestor(cutoff, target.SHA)
-		}
-		if err != nil {
-			cfg.Errorf("%s", err)
-			return "", ErrSilent
+	b := s.Branches[i]
+	head := b.Branch
+	for _, forward := range planned {
+		if forward.Branch == b.Branch {
+			head = forward.NewSHA
 		}
 	}
+	var cutoff string
+	var err error
+	if i == 0 {
+		cutoff, err = resolveRetargetOldBase(s.Trunk.Branch, b.Base, head)
+	} else if prev := s.Branches[i-1]; prev.IsMerged() {
+		// The cascade also drops the merged branches below; check that boundary.
+		var refs map[string]string
+		if refs, err = resolveOriginalRefs(s); err == nil {
+			cutoff, err = resolveMergedRebaseOldBase(prev.PullRequest.MergedHead, refs[prev.Branch], b.Base, target.Ref, head)
+		}
+	}
+	landed := false
+	if err == nil && cutoff != "" {
+		landed, err = git.IsAncestor(cutoff, target.SHA)
+	}
+	if err != nil {
+		cfg.Errorf("%s", err)
+		return "", ErrSilent
+	}
 	if !landed && !accept {
-		landed = retargetBaseMerged(cfg, s.Trunk.Branch, cutoff, target.SHA)
+		// Merged branches below may have landed directly in the new base.
+		landed = retargetBaseMerged(cfg, s.Trunk.Branch, cutoff, target.SHA) ||
+			i > 0 && retargetBaseMerged(cfg, s.Branches[i-1].Branch, cutoff, target.SHA)
+	}
+	if i > 0 {
+		cutoff = "" // the merged-branch cascade selects this boundary itself
 	}
 	if landed || accept {
 		return cutoff, nil

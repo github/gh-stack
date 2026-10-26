@@ -4030,7 +4030,8 @@ func testBaseRetargetReviewCases(t *testing.T, run func(*config.Config, bool) er
 	t.Helper()
 	for _, scenario := range []string{
 		"stale local trunk", "old trunk reflog", "missing old trunk",
-		"missing cutoff", "planned fast-forward", "merged prefix",
+		"missing cutoff", "planned fast-forward", "prefix merged before base",
+		"prefix merged after base", "prefix merged into target",
 		"merged elsewhere", "commits after merge", "amended before merge",
 	} {
 		t.Run(scenario, func(t *testing.T) {
@@ -4038,7 +4039,8 @@ func testBaseRetargetReviewCases(t *testing.T, run func(*config.Config, bool) er
 			if scenario == "merged elsewhere" {
 				target = "release"
 			}
-			merged := scenario == "merged prefix" || scenario == "merged elsewhere" ||
+			prefix := strings.HasPrefix(scenario, "prefix")
+			merged := prefix || scenario == "merged elsewhere" ||
 				scenario == "commits after merge" || scenario == "amended before merge"
 			repo := setupBaseRetargetRepo(t, target, merged)
 			withIssue250Repo(t, repo.dir)
@@ -4079,7 +4081,7 @@ func testBaseRetargetReviewCases(t *testing.T, run func(*config.Config, bool) er
 				issue250Git(t, repo.dir, "checkout", "top")
 				issue250Git(t, repo.dir, "branch", "-f", "child", child)
 				wantConsent = true
-			case "merged prefix":
+			case "prefix merged before base", "prefix merged after base", "prefix merged into target":
 				s.Branches[0].PullRequest.Merged = true
 				s.Branches[0].PullRequest.MergedHead = child
 				lookup := repo.client.FindPRByNumberFn
@@ -4087,6 +4089,27 @@ func testBaseRetargetReviewCases(t *testing.T, run func(*config.Config, bool) er
 					pr, err := lookup(n)
 					if n == 11 {
 						pr.Merged, pr.State, pr.HeadRefOID = true, "MERGED", child
+					}
+					return pr, err
+				}
+				wantConsent = scenario == "prefix merged after base"
+				if wantConsent {
+					break
+				}
+				// The child's changes reached main through the parent or directly.
+				issue250Git(t, repo.dir, "checkout", "main")
+				issue250Git(t, repo.dir, "merge", "--squash", "origin/child")
+				issue250Git(t, repo.dir, "commit", "-m", "squashed child")
+				issue250Git(t, repo.dir, "push", "origin", "main")
+				issue250Git(t, repo.dir, "checkout", "top")
+				squash := issue250Git(t, repo.dir, "rev-parse", "main")
+				details := repo.client.FindPRDetailsForBranchFn
+				repo.client.FindPRDetailsForBranchFn = func(branch string) (*github.PRDetails, error) {
+					pr, err := details(branch)
+					if scenario == "prefix merged before base" && branch == "parent" {
+						pr.HeadRefOID = repo.newParent // the parent took the child before merging
+					} else if scenario == "prefix merged into target" && branch == "child" {
+						pr.Merged, pr.HeadRefOID, pr.MergeCommitOID = true, child, squash
 					}
 					return pr, err
 				}
@@ -4134,7 +4157,7 @@ func testBaseRetargetReviewCases(t *testing.T, run func(*config.Config, bool) er
 			}
 			require.NoError(t, err)
 			wantCommits := "top commit\nchild commit"
-			if scenario == "merged prefix" {
+			if prefix {
 				wantCommits = "top commit"
 			}
 			assert.Equal(t, wantCommits, issue250Git(t, repo.dir, "log", "--format=%s", target+"..top"))
