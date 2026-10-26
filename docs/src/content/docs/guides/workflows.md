@@ -354,7 +354,7 @@ gh stack push
 
 This is equivalent but distinct from updating your branch using a merge commit. The key difference is that after changing a lower branch, rebase maintains a linear commit history so the unique set of commits on each branch have clean diffs.
 
-`gh stack push` then handles the force push with explicit per-branch `--force-with-lease` checks. The multi-branch push is not atomic: branches whose leases pass may update even if another branch is rejected. Fix the rejected branch and rerun the command; branches already updated will be unchanged.
+`gh stack push` then handles the force push with explicit per-branch `--force-with-lease` checks. The multi-branch push is atomic by default: all branch updates succeed or fail together. Use `--no-atomic` or set `GH_STACK_NO_ATOMIC=1` to allow partial branch updates.
 
 For a simpler all-in-one flow, `gh stack sync` combines fetch, rebase, and push into a single command — useful when you just need to pull in the latest upstream changes:
 

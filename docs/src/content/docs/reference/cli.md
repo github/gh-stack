@@ -348,8 +348,9 @@ gh stack submit [flags]
 | `--auto` | Skip the editor and use auto-generated PR titles |
 | `--open` | Create new PRs as ready for review instead of drafts, and mark existing PRs as ready for review |
 | `--remote <name>` | Remote to push to (defaults to auto-detected remote) |
+| `--no-atomic` | Allow partial branch updates |
 
-Creates a Stacked PR for every branch in the stack, pushing branches to the remote. After creating PRs, `submit` automatically creates a **Stack** on GitHub to link the PRs together. If the stack already exists on GitHub (e.g., from a previous submit), new PRs are added to the existing stack.
+Pushes all active branches together atomically before creating or updating PRs. After creating PRs, `submit` automatically creates a **Stack** on GitHub to link the PRs together. If the stack already exists on GitHub (e.g., from a previous submit), new PRs are added to the existing stack. Atomicity applies to Git branch updates, not PR or stack API operations.
 
 If every PR in the stack has already been merged, that stack is complete and can't be extended. In that case `submit` automatically starts a **new** stack rooted at the trunk for your unmerged branches and creates it on GitHub, leaving the merged stack untouched.
 
@@ -385,6 +386,7 @@ gh stack sync [flags]
 | `--remote <name>` | Remote to fetch from and push to (defaults to auto-detected remote) |
 | `--prune` | Delete local branches for merged PRs |
 | `--accept-base-change` | Rebase onto a base GitHub retargeted the stack to, even if the old base did not merge |
+| `--no-atomic` | Allow partial branch updates |
 
 Performs a synchronization of the entire stack:
 
@@ -392,7 +394,7 @@ Performs a synchronization of the entire stack:
 2. **Reconcile the remote stack** — mirrors the GitHub stack locally. When PRs have been added to the stack on GitHub (the remote is ahead of your local stack), their branches are pulled down and appended to your local stack automatically. When the local and remote stacks have genuinely diverged (for example, you added a branch locally while different PRs were added to the stack on GitHub), you are prompted to resolve (see **Diverged stacks** below). In a non-interactive terminal a divergence aborts the sync (nothing is pushed or updated).
 3. **Fast-forward trunk** — fast-forwards the trunk branch to match the remote (skips if diverged).
 4. **Cascade rebase** — rebases all stack branches onto their updated parents (only if trunk moved). If a conflict is detected, all branches are restored to their original state, and you are advised to run `gh stack rebase` to resolve conflicts interactively.
-5. **Push** — pushes all branches (uses `--force-with-lease` if a rebase occurred).
+5. **Push** — pushes all branches atomically by default (uses `--force-with-lease` if a rebase occurred).
 6. **Sync PRs** — syncs PR state from GitHub and reports the status of each PR.
 7. **Sync the stack** — links the stack's open PRs into a stack on GitHub, creating the remote stack object if it doesn't exist yet or updating it if it's partially formed. This only happens when two or more PRs exist; sync never opens PRs (use `gh stack submit` for that).
 8. **Prune** — in interactive terminals, prompts to delete local branches for merged PRs. Use `--prune` to prune automatically.
@@ -500,13 +502,15 @@ gh stack push [flags]
 | Flag | Description |
 |------|-------------|
 | `--remote <name>` | Remote to push to (defaults to auto-detected remote) |
+| `--no-atomic` | Allow partial branch updates |
 
-Pushes every active branch (excluding merged and queued branches) in one `git push` using explicit per-branch `--force-with-lease` checks. The update is not atomic: branches whose leases pass may update even if another branch is rejected. Fix the rejected branch and rerun the command; branches already updated will be unchanged. This command does not create or update pull requests — use `gh stack submit` for that.
+Pushes every active branch (excluding merged and queued branches) in one atomic `git push` using explicit per-branch `--force-with-lease` checks. All branch updates succeed or fail together. Use `--no-atomic` to allow partial branch updates. Failed atomic pushes never automatically retry non-atomically. This command does not create or update pull requests — use `gh stack submit` for that.
 
 **Examples:**
 
 ```sh
 gh stack push
+gh stack push --no-atomic
 gh stack push --remote upstream
 ```
 
@@ -523,10 +527,11 @@ gh stack link [flags] <stack-number | branch-or-pr> <branch-or-pr> [...]
 | `--base <branch>` | Base branch for the bottom of the stack (defaults to the repository's default branch); ignored when adding to an existing stack |
 | `--open` | Mark new and existing PRs as ready for review |
 | `--remote <name>` | Remote to push to (defaults to auto-detected remote) |
+| `--no-atomic` | Allow partial branch updates |
 
 Creates or updates a stack on GitHub from branch names or PR numbers/URLs. This command does not create or modify any `gh-stack` local tracking state. It is designed for users who manage branches with other tools locally (e.g., jj, Sapling, git-town) and want to simply open a stack of PRs.
 
-Arguments are provided in stack order (bottom to top). Branch arguments are automatically pushed to the remote before creating or looking up PRs. For branches that already have open PRs, those PRs are used. For branches without PRs, new PRs are created automatically with the correct base branch chaining. Existing PRs whose base branch doesn't match the expected chain are corrected automatically.
+Arguments are provided in stack order (bottom to top). Branch arguments are automatically pushed atomically to the remote before creating or looking up PRs. For branches that already have open PRs, those PRs are used. For branches without PRs, new PRs are created automatically with the correct base branch chaining. Existing PRs whose base branch doesn't match the expected chain are corrected automatically.
 
 If the PRs are not yet in a stack, a new stack is created. If some of the PRs are already in a stack, the existing stack is updated to include the new PRs. Existing PRs are never removed from a stack — the update is additive only.
 
@@ -757,6 +762,7 @@ gh stack feedback "Support for reordering branches"
 
 | Variable | Values | Description |
 |----------|--------|-------------|
+| `GH_STACK_NO_ATOMIC` | Any non-empty value | Disables atomic pushes for `push`, `submit`, `sync`, and `link`, allowing partial branch updates. Set to `1` to opt out; an explicit `--no-atomic=false` overrides the environment. |
 | `GH_STACK_THEME` | `auto` (default), `light`, `dark` | Controls the color palette of the interactive screens (`submit`, `modify`, `view`) and all colored command output. Colors adapt to your terminal background automatically; set this to force the light or dark palette (and the matching canvas) when a terminal doesn't report its background (some SSH or `tmux` setups). |
 | `GH_STACK_BACKGROUND` | `github` (default), `terminal` | Controls whether the full-screen screens (`submit`, `modify`, `view`) paint GitHub's canvas (`#0d1117` on dark terminals, `#ffffff` on light ones) behind themselves. Painting needs a truecolor terminal. The terminal's colors are restored when the screen closes and while `$EDITOR` is open. Set to `terminal` to keep your terminal's own background and text colors. |
 | `GH_STACK_HYPERLINKS` | `0`, `1` | Disables or enables OSC 8 hyperlinks for PR and stack references when terminal detection is incorrect. Text output falls back to full URLs; compact TUIs keep plain labels. Does not control application-handled clicks in `view` and `submit`. |

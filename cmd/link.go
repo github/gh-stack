@@ -3,6 +3,7 @@ package cmd
 import (
 	"errors"
 	"fmt"
+	"os"
 	"strconv"
 
 	"github.com/cli/go-gh/v2/pkg/api"
@@ -17,6 +18,7 @@ type linkOptions struct {
 	base        string
 	open        bool
 	remote      string
+	noAtomic    bool
 	baseChanged bool
 }
 
@@ -40,10 +42,12 @@ command first checks if a PR with that number exists; if not, it
 treats the argument as a branch name. PR URLs are always resolved
 as pull requests (never as branch names).
 
-Branch arguments are automatically pushed to the remote before
+Branch arguments are automatically pushed atomically to the remote before
 creating or looking up PRs. For branches that already have open PRs,
 those PRs are used. For branches without PRs, new PRs are created
 automatically with the correct base branch chaining.
+
+Use --no-atomic to allow partial branch updates.
 
 If the PRs are not yet in a stack, a new stack is created. If some of
 the PRs are already in a stack, the existing stack is updated to include
@@ -80,6 +84,7 @@ only when it matches an existing stack.`,
 	cmd.Flags().StringVar(&opts.base, "base", "", "Base branch for the bottom of the stack (defaults to the repository default branch)")
 	cmd.Flags().BoolVar(&opts.open, "open", false, "Mark new and existing PRs as ready for review")
 	cmd.Flags().StringVar(&opts.remote, "remote", "", "Remote to push to (defaults to auto-detected remote)")
+	cmd.Flags().BoolVar(&opts.noAtomic, "no-atomic", os.Getenv("GH_STACK_NO_ATOMIC") != "", "Disable atomic pushes (also set by GH_STACK_NO_ATOMIC)")
 
 	return cmd
 }
@@ -466,7 +471,7 @@ func pushBranchArgs(cfg *config.Config, opts *linkOptions, args []string) error 
 	}
 
 	cfg.Printf("Pushing %d %s to %s...", len(branches), plural(len(branches), "branch", "branches"), remote)
-	if err := git.Push(remote, branches, false, true); err != nil {
+	if err := git.Push(remote, branches, false, !opts.noAtomic); err != nil {
 		cfg.Errorf("failed to push branches: %s", err)
 		return ErrSilent
 	}

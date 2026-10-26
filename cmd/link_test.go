@@ -1689,6 +1689,8 @@ func TestLink_PushesBranchesBeforeResolution(t *testing.T) {
 		PushFn: func(remote string, branches []string, force, atomic bool) error {
 			pushedRemote = remote
 			pushedBranches = branches
+			assert.False(t, force)
+			assert.True(t, atomic)
 			return nil
 		},
 	})

@@ -318,6 +318,49 @@ func TestIntegration_Push_RemoteAdvancedByOther(t *testing.T) {
 	assert.NotEqual(t, otherSHA, finalRemoteSHA, "remote should have advanced past original other SHA")
 }
 
+func TestIntegration_Push_AtomicLeaseRejection(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		atomic bool
+	}{
+		{"atomic", true},
+		{"non-atomic", false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			bareDir, cloneDir := setupBareAndClone(t)
+			restore := withGitDir(t, cloneDir)
+			defer restore()
+			d := &defaultOps{}
+
+			gitExec(t, cloneDir, "branch", "b1")
+			gitExec(t, cloneDir, "branch", "b2")
+			gitExec(t, cloneDir, "push", "origin", "b1", "b2")
+			require.NoError(t, d.FetchBranches("origin", []string{"b1", "b2"}))
+			beforeB1 := remoteBranchSHA(t, bareDir, "b1")
+
+			gitExec(t, cloneDir, "checkout", "b1")
+			gitExec(t, cloneDir, "commit", "--allow-empty", "-m", "local update")
+			gitExec(t, cloneDir, "branch", "-f", "b2", "b1")
+			localB1 := gitExec(t, cloneDir, "rev-parse", "b1")
+
+			otherClone := filepath.Join(t.TempDir(), "other")
+			gitExec(t, ".", "clone", bareDir, otherClone)
+			gitExec(t, otherClone, "checkout", "b2")
+			gitExec(t, otherClone, "commit", "--allow-empty", "-m", "competing update")
+			gitExec(t, otherClone, "push", "origin", "b2")
+			competingB2 := remoteBranchSHA(t, bareDir, "b2")
+
+			require.Error(t, d.Push("origin", []string{"b1", "b2"}, true, tc.atomic))
+			wantB1 := beforeB1
+			if !tc.atomic {
+				wantB1 = localB1
+			}
+			assert.Equal(t, wantB1, remoteBranchSHA(t, bareDir, "b1"))
+			assert.Equal(t, competingB2, remoteBranchSHA(t, bareDir, "b2"))
+		})
+	}
+}
+
 // Test 4: Brand-new branch, absent on remote.
 // Push should create the branch via empty-expect lease.
 func TestIntegration_Push_NewBranchAbsentOnRemote(t *testing.T) {

@@ -9,6 +9,7 @@ import (
 	"github.com/github/gh-stack/internal/git"
 	"github.com/github/gh-stack/internal/github"
 	"github.com/github/gh-stack/internal/stack"
+	"github.com/spf13/cobra"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -62,9 +63,68 @@ func TestPush_PushesAllBranches(t *testing.T) {
 	assert.Equal(t, "origin", pushCalls[0].remote)
 	assert.Equal(t, []string{"b1", "b2"}, pushCalls[0].branches)
 	assert.True(t, pushCalls[0].force)
-	assert.False(t, pushCalls[0].atomic)
+	assert.True(t, pushCalls[0].atomic)
 	assert.Contains(t, output, "Pushed 2 branches")
 	assert.Contains(t, output, "gh stack submit", "should hint about submit when branches have no PRs")
+}
+
+func TestPush_AtomicOptions(t *testing.T) {
+	for _, command := range []struct {
+		name    string
+		newCmd  func(*config.Config) *cobra.Command
+		args    []string
+		force   bool
+		wantErr error
+	}{
+		{"push", PushCmd, nil, true, ErrSilent},
+		{"submit", SubmitCmd, []string{"--auto"}, true, ErrSilent},
+		{"sync", SyncCmd, nil, false, nil},
+		{"link", LinkCmd, []string{"b1", "b2"}, false, ErrSilent},
+	} {
+		for _, tc := range []struct {
+			name   string
+			env    string
+			args   []string
+			atomic bool
+		}{
+			{"default", "", nil, true},
+			{"flag", "", []string{"--no-atomic"}, false},
+			{"environment", "1", nil, false},
+			{"flag overrides environment", "1", []string{"--no-atomic=false"}, true},
+		} {
+			t.Run(command.name+"/"+tc.name, func(t *testing.T) {
+				t.Setenv("GH_STACK_NO_ATOMIC", tc.env)
+				dir := t.TempDir()
+				writeStackFile(t, dir, stack.Stack{
+					Trunk:    stack.BranchRef{Branch: "main"},
+					Branches: []stack.BranchRef{{Branch: "b1"}, {Branch: "b2"}},
+				})
+				var pushes []pushCall
+				mock := newSyncMock(dir, "b1")
+				mock.RootDirFn = func() (string, error) { return dir, nil }
+				mock.PushFn = func(remote string, branches []string, force, atomic bool) error {
+					pushes = append(pushes, pushCall{remote, branches, force, atomic})
+					return assert.AnError
+				}
+				restore := git.SetOps(mock)
+				defer restore()
+
+				cfg, outR, errR := config.NewTestConfig()
+				cfg.GitHubClientOverride = &github.MockClient{}
+				cmd := command.newCmd(cfg)
+				args := append([]string(nil), command.args...)
+				cmd.SetArgs(append(args, tc.args...))
+				cmd.SetOut(io.Discard)
+				cmd.SetErr(io.Discard)
+				err := cmd.Execute()
+				_, output := commandOutput(t, cfg, outR, errR)
+
+				require.ErrorIs(t, err, command.wantErr, output)
+				require.Len(t, pushes, 1, "failed pushes must not retry non-atomically")
+				assert.Equal(t, pushCall{"origin", []string{"b1", "b2"}, command.force, tc.atomic}, pushes[0])
+			})
+		}
+	}
 }
 
 func TestPush_NoSubmitHintWhenPRsExist(t *testing.T) {

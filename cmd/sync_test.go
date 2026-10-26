@@ -134,6 +134,7 @@ func TestSync_TrunkAlreadyUpToDate(t *testing.T) {
 	// Push should happen without force
 	require.Len(t, pushCalls, 1)
 	assert.False(t, pushCalls[0].force, "push should not use force when no rebase occurred")
+	assert.True(t, pushCalls[0].atomic)
 }
 
 // TestSync_TrunkUpToDate_StackStale verifies that when trunk is already up to
@@ -710,6 +711,7 @@ func TestSync_PushForceFlagDependsOnRebase(t *testing.T) {
 			require.Len(t, pushCalls, 1, "exactly one push call expected")
 			assert.Equal(t, tt.expectedForce, pushCalls[0].force,
 				"force flag should be %v when trunkMoved=%v", tt.expectedForce, tt.trunkMoved)
+			assert.True(t, pushCalls[0].atomic)
 		})
 	}
 }
