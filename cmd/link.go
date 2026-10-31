@@ -235,7 +235,7 @@ func runLinkCreateOrUpdate(cfg *config.Config, client github.ClientOps, opts *li
 	// given, default to the repository's default branch (like `gh stack init`).
 	bottomBase := opts.base
 	if bottomBase == "" {
-		base, err := git.DefaultBranch()
+		base, err := resolveDefaultBranch(cfg, opts.remote)
 		if err != nil {
 			cfg.Errorf("unable to determine default branch\nUse --base to specify the base branch")
 			return ErrSilent
