@@ -37,7 +37,7 @@ internal/
     gitops.go                # Ops interface, including scoped worktree execution
     mock_ops.go              # MockOps. Each method has a corresponding *Fn field.
   github/                    # github.ClientOps interface + real Client
-    client_interface.go      # ClientOps interface (18 methods)
+    client_interface.go      # ClientOps interface (19 methods)
     mock_client.go           # MockClient. Uses function-pointer fields for testing.
   stack/                     # common-directory catalog, JSON schema, migration, locking
     schema.json              # JSON Schema for the stack file format
@@ -114,7 +114,7 @@ if errors.As(err, &exitErr) { ... }
 
 - **`git.Ops`** (`internal/git/gitops.go`): wraps git CLI calls. Package-level functions (e.g., `git.CurrentBranch()`) delegate to a swappable package-level `ops` variable. `git.ForWorktree(path)` returns an explicitly scoped executor for HEAD/index/working-file operations. Never switch production context with `os.Chdir` or `git.SetOps`; reserve `SetOps` for tests. `GitDir()` remains per-worktree; `CommonDir()` is repository-wide.
 - **Scoped Git errors:** `ForWorktree(path)` returns `(Ops, error)` and no executor for invalid contexts. Each scoped operation rechecks directory identity. `BranchExists`, `HasStagedChanges`, `IsRebaseInProgress`, and `IsCherryPickInProgress` return `(bool, error)`; callers must handle lookup failures before mutating Git or recovery state, not treat them as absence.
-- **`github.ClientOps`** (`internal/github/client_interface.go`): 18 methods for GitHub API (PRs, stacks, merges). Stack operations use the public Stacks REST API (`/repos/{owner}/{repo}/stacks`): `ListStacks`, `FindStackForPR`, `GetStack`, `CreateStack`, `AddToStack` (delta append), `Unstack`. Async stack merges use `RepoMergeConfig` (GraphQL: allowed merge methods + viewer's default), `BaseBranchUsesMergeQueue` (GraphQL: detects a base-branch merge queue to select the explicit `merge_action`), `MergeStackAsync`, and `GetAsyncMergeResult` (`/repos/{owner}/{repo}/pulls/{n}/merge-async`). Injected via `cfg.GitHubClientOverride` in tests.
+- **`github.ClientOps`** (`internal/github/client_interface.go`): 19 methods for GitHub API (PRs, stacks, merges, repository default branch). Stack operations use the public Stacks REST API (`/repos/{owner}/{repo}/stacks`): `ListStacks`, `FindStackForPR`, `GetStack`, `CreateStack`, `AddToStack` (delta append), `Unstack`. Async stack merges use `RepoMergeConfig` (GraphQL: allowed merge methods + viewer's default), `BaseBranchUsesMergeQueue` (GraphQL: detects a base-branch merge queue to select the explicit `merge_action`), `MergeStackAsync`, and `GetAsyncMergeResult` (`/repos/{owner}/{repo}/pulls/{n}/merge-async`). Injected via `cfg.GitHubClientOverride` in tests.
 - **`config.Config`** (`internal/config/config.go`): Central configuration passed to all commands. Holds I/O streams, color functions, and test hook fields (`SelectFn`, `ConfirmFn`, `InputFn`, `RepoOverride`).
 
 ### Stack file
