@@ -6,6 +6,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 
@@ -2057,6 +2058,102 @@ func TestUpdateBaseSHAsPreservesLastValidBase(t *testing.T) {
 // TestFullScreenCanvas verifies that the full-screen TUIs paint the GitHub
 // canvas only on a color-enabled truecolor terminal, and honor the
 // GH_STACK_BACKGROUND opt-out.
+func TestResolveDefaultBranch(t *testing.T) {
+	gitErr := errors.New("unknown")
+	for _, tt := range []struct {
+		name           string
+		override       string
+		resolveRemote  func(string) (string, error)
+		gitDefault     map[string]string
+		apiDefault     string
+		apiErr         error
+		localBranches  []string
+		want           string
+		wantErr        error
+		wantRemoteUsed string
+	}{
+		{
+			name:           "resolved remote",
+			resolveRemote:  func(string) (string, error) { return "upstream", nil },
+			gitDefault:     map[string]string{"upstream": "develop"},
+			want:           "develop",
+			wantRemoteUsed: "upstream",
+		},
+		{
+			name:           "override wins",
+			override:       "fork",
+			gitDefault:     map[string]string{"fork": "trunk"},
+			want:           "trunk",
+			wantRemoteUsed: "fork",
+		},
+		{
+			name:           "origin when remote is ambiguous",
+			resolveRemote:  func(string) (string, error) { return "", &git.ErrMultipleRemotes{Remotes: []string{"a", "b"}} },
+			gitDefault:     map[string]string{"origin": "develop"},
+			want:           "develop",
+			wantRemoteUsed: "origin",
+		},
+		{
+			name:          "GitHub API when git cannot tell",
+			apiDefault:    "release",
+			localBranches: []string{"main"},
+			want:          "release",
+		},
+		{
+			name:          "local main as a last resort",
+			apiErr:        gitErr,
+			localBranches: []string{"master", "main"},
+			want:          "main",
+		},
+		{
+			name:          "local master as a last resort",
+			localBranches: []string{"master"},
+			want:          "master",
+		},
+		{
+			name:    "nothing found",
+			wantErr: git.ErrNoDefaultBranch,
+		},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			resolveRemote := tt.resolveRemote
+			if resolveRemote == nil {
+				resolveRemote = func(string) (string, error) { return "origin", nil }
+			}
+			var remoteUsed string
+			restore := git.SetOps(&git.MockOps{
+				ResolveRemoteFn: resolveRemote,
+				DefaultBranchFn: func(remote string) (string, error) {
+					remoteUsed = remote
+					if name, ok := tt.gitDefault[remote]; ok {
+						return name, nil
+					}
+					return "", git.ErrNoDefaultBranch
+				},
+				BranchExistsFn: func(name string) (bool, error) {
+					return slices.Contains(tt.localBranches, name), nil
+				},
+			})
+			defer restore()
+			cfg, _, _ := config.NewTestConfig()
+			cfg.GitHubClientOverride = &github.MockClient{
+				DefaultBranchFn: func() (string, error) { return tt.apiDefault, tt.apiErr },
+			}
+
+			got, err := resolveDefaultBranch(cfg, tt.override)
+			if tt.wantErr != nil {
+				assert.ErrorIs(t, err, tt.wantErr)
+				return
+			}
+			require.NoError(t, err)
+			assert.Equal(t, tt.want, got)
+			if tt.wantRemoteUsed != "" {
+				assert.Equal(t, tt.wantRemoteUsed, remoteUsed)
+			}
+		})
+	}
+}
+
 func TestFullScreenCanvas(t *testing.T) {
 	tests := []struct {
 		name    string

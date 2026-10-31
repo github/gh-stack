@@ -1923,6 +1923,38 @@ func ensureRerere(cfg *config.Config) error {
 	return nil
 }
 
+// resolveDefaultBranch finds the repository's default branch without prompting.
+// It asks git about the configured remote (falling back to origin), then the
+// GitHub API, and finally guesses a local main or master branch.
+func resolveDefaultBranch(cfg *config.Config, remoteOverride string) (string, error) {
+	remote := remoteOverride
+	if remote == "" {
+		remote = "origin"
+		branch, _ := git.CurrentBranch()
+		if resolved, err := git.ResolveRemote(branch); err == nil {
+			remote = resolved
+		}
+	}
+	if name, err := git.DefaultBranch(remote); err == nil && name != "" {
+		return name, nil
+	}
+	if client, err := cfg.GitHubClient(); err == nil {
+		if name, err := client.DefaultBranch(); err == nil && name != "" {
+			return name, nil
+		}
+	}
+	for _, name := range []string{"main", "master"} {
+		exists, err := git.BranchExists(name)
+		if err != nil {
+			return "", err
+		}
+		if exists {
+			return name, nil
+		}
+	}
+	return "", git.ErrNoDefaultBranch
+}
+
 // pickRemote determines which remote to use. If remoteOverride is
 // non-empty, it is returned directly. Otherwise it delegates to
 // git.ResolveRemote for config-based resolution and remote listing.
