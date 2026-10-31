@@ -761,7 +761,7 @@ func TestAdd_InitializesStackWithExplicitBranch(t *testing.T) {
 	restore := git.SetOps(&git.MockOps{
 		GitDirFn:          func() (string, error) { return gitDir, nil },
 		CurrentBranchFn:   func() (string, error) { return "unstacked", nil },
-		DefaultBranchFn:   func() (string, error) { return "main", nil },
+		DefaultBranchFn:   func(string) (string, error) { return "main", nil },
 		IsRerereEnabledFn: func() (bool, error) { return true, nil },
 		BranchExistsFn:    func(name string) (bool, error) { return name == "main" && trunkExists, nil },
 		RevParseFn: func(ref string) (string, error) {
@@ -815,7 +815,7 @@ func TestAdd_InitializesStackWithPromptedBranch(t *testing.T) {
 	restore := git.SetOps(&git.MockOps{
 		GitDirFn:          func() (string, error) { return gitDir, nil },
 		CurrentBranchFn:   func() (string, error) { return "main", nil },
-		DefaultBranchFn:   func() (string, error) { return "main", nil },
+		DefaultBranchFn:   func(string) (string, error) { return "main", nil },
 		IsRerereEnabledFn: func() (bool, error) { return true, nil },
 		CreateBranchFn: func(name, base string) error {
 			createdBranch = name
@@ -856,7 +856,7 @@ func TestAdd_InitializesGeneratedBranchAndCommits(t *testing.T) {
 	restore := git.SetOps(&git.MockOps{
 		GitDirFn:          func() (string, error) { return gitDir, nil },
 		CurrentBranchFn:   func() (string, error) { return currentBranch, nil },
-		DefaultBranchFn:   func() (string, error) { return "main", nil },
+		DefaultBranchFn:   func(string) (string, error) { return "main", nil },
 		IsRerereEnabledFn: func() (bool, error) { return true, nil },
 		BranchExistsFn:    func(name string) (bool, error) { return name == "main", nil },
 		CreateBranchFn: func(name, base string) error {

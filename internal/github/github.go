@@ -546,6 +546,17 @@ func (c *Client) FindStackForPR(prNumber int) (*RemoteStack, error) {
 	return &stacks[0], nil
 }
 
+// DefaultBranch returns the repository's default branch.
+func (c *Client) DefaultBranch() (string, error) {
+	var repo struct {
+		DefaultBranch string `json:"default_branch"`
+	}
+	if err := c.rest.Get(fmt.Sprintf("repos/%s/%s", c.owner, c.repo), &repo); err != nil {
+		return "", fmt.Errorf("fetching repository: %w", err)
+	}
+	return repo.DefaultBranch, nil
+}
+
 // GetStack fetches a single stack by its stack number.
 func (c *Client) GetStack(stackNumber int) (*RemoteStack, error) {
 	path := fmt.Sprintf("repos/%s/%s/stacks/%d", c.owner, c.repo, stackNumber)
