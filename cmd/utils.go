@@ -843,6 +843,16 @@ func fetchRemoteStackPRs(client github.ClientOps, s *stack.Stack) (*remoteStackP
 	}
 	wg.Wait()
 
+	return &remoteStackPRs{numbers: numbers, queried: remotePRNumbers, prs: prResults}, true
+}
+
+// applyRemoteStackPRs updates the local branches from a remote stack fetch and
+// returns PRDetails keyed by branch name.
+func applyRemoteStackPRs(s *stack.Stack, fetched *remoteStackPRs) map[string]*github.PRDetails {
+	remotePRCount := len(fetched.numbers)
+	prResults := fetched.prs
+	remotePRNumbers := fetched.queried
+
 	// Build map sequentially to preserve order semantics.
 	prByBranch := make(map[string]*github.PullRequest, len(remotePRNumbers))
 	prByNumber := make(map[int]*github.PullRequest, len(remotePRNumbers))
