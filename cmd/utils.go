@@ -767,18 +767,22 @@ func syncStackPRsFromRemote(client github.ClientOps, s *stack.Stack) (map[string
 		return nil, false
 	}
 
-	// Find our stack in the remote list.
-	var remotePRNumbers []int
-	for _, rs := range stacks {
-		if strconv.Itoa(rs.ID) == s.ID {
-			remotePRNumbers = rs.PRNumbers()
-			// Backfill the human-facing stack number for stack files created
-			// before it was tracked, so callers (view, submit TUI) can display
-			// it. Persisted by whichever command later saves the stack file.
-			if s.Number == 0 {
-				s.Number = rs.Number
-			}
-			break
+// remoteStackPRs is one fetch of a tracked stack's pull requests.
+// - numbers lists the stack's PRs from bottom to top
+// - queried appends merged PRs that are no longer in the stack but still need their head SHA
+// - prs is parallel to queried and holds nil where a lookup failed
+type remoteStackPRs struct {
+	numbers []int
+	queried []int
+	prs     []*github.PullRequest
+}
+
+// stackPRs returns the stack's PRs in order, or false if any lookup failed.
+func (r *remoteStackPRs) stackPRs() ([]*github.PullRequest, bool) {
+	prs := r.prs[:len(r.numbers)]
+	for _, pr := range prs {
+		if pr == nil {
+			return nil, false
 		}
 	}
 	if remotePRNumbers == nil {
