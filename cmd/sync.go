@@ -162,7 +162,12 @@ func runSync(cfg *config.Config, opts *syncOptions) error {
 	if cb, cbErr := git.CurrentBranch(); cbErr == nil {
 		currentBranch = cb
 	}
-	_ = syncStackPRs(cfg, s)
+	// Reuse reconcile's fetch when it left the stack unchanged.
+	if reconcileRes.remotePRs != nil {
+		_ = applyRemoteStackPRs(s, reconcileRes.remotePRs)
+	} else {
+		_ = syncStackPRs(cfg, s)
+	}
 	newBase, err := retargetedBase(cfg, s, remote)
 	if err != nil {
 		cfg.Errorf("failed to read the stack's base on GitHub: %v", err)
@@ -335,10 +340,9 @@ func runSync(cfg *config.Config, opts *syncOptions) error {
 		}
 	}
 
-	// --- Step 5: Sync PR state ---
+	// --- Step 5: Report PR state ---
 	cfg.Printf("")
-	cfg.Printf("Syncing PRs ...")
-	_ = syncStackPRs(cfg, s)
+	cfg.Printf("Reporting PR status ...")
 
 	// Report PR status for each branch
 	for _, b := range s.Branches {
@@ -369,12 +373,12 @@ func runSync(cfg *config.Config, opts *syncOptions) error {
 	}
 
 	// --- Step 5b: Reconcile the remote stack object ---
-	// syncStackPRs above only refreshes local PR associations; it does not touch
-	// the stack object on GitHub. When the branches have open PRs, link them into
-	// a stack so the remote reflects the local stack. This never opens PRs — that
-	// is still `gh stack submit`'s job. stackSynced records whether the remote
-	// stack object actually reflects the local stack, which determines the final
-	// summary message below.
+	// The earlier PR refresh only updates local PR associations; it does not
+	// touch the stack object on GitHub. When the branches have open PRs, link
+	// them into a stack so the remote reflects the local stack. This never opens
+	// PRs — that is still `gh stack submit`'s job. stackSynced records whether
+	// the remote stack object actually reflects the local stack, which determines
+	// the final summary message below.
 	stackSynced := false
 	if client, err := cfg.GitHubClient(); err == nil {
 		stackSynced = syncStack(cfg, client, s)
