@@ -762,10 +762,12 @@ func enrichPRContent(client github.ClientOps, details map[string]*github.PRDetai
 // closed. Returns the PRDetails map and true if sync succeeded, or nil and
 // false if we should fall back to local discovery.
 func syncStackPRsFromRemote(client github.ClientOps, s *stack.Stack) (map[string]*github.PRDetails, bool) {
-	stacks, err := client.ListStacks()
-	if err != nil {
+	fetched, ok := fetchRemoteStackPRs(client, s)
+	if !ok {
 		return nil, false
 	}
+	return applyRemoteStackPRs(s, fetched), true
+}
 
 // remoteStackPRs is one fetch of a tracked stack's pull requests.
 // - numbers lists the stack's PRs from bottom to top
