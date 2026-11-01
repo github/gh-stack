@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 
 	"github.com/cli/go-gh/v2/pkg/api"
@@ -2214,6 +2215,9 @@ func TestSync_RemoteAhead_DuplicateBranchAborts(t *testing.T) {
 		ListStacksFn: func() ([]github.RemoteStack, error) {
 			return []github.RemoteStack{{ID: 9, Number: 9, PullRequests: []int{101, 102, 103}}}, nil
 		},
+		GetStackFn: func(int) (*github.RemoteStack, error) {
+			return &github.RemoteStack{ID: 9, Number: 9, PullRequests: []int{101, 102, 103}}, nil
+		},
 		FindPRByNumberFn: prByNumberFinder(map[int]string{101: "b1", 102: "b2", 103: "b3"}),
 	}
 
@@ -2292,6 +2296,47 @@ func TestSync_RemoteInSync_NoPull(t *testing.T) {
 	assert.NotContains(t, output, "Pulling")
 	assert.NotContains(t, output, "diverged")
 	assert.Contains(t, output, "Stack synced")
+}
+
+func TestSync_RemoteInSync_ReusesRemotePRFetch(t *testing.T) {
+	s := stack.Stack{
+		ID:     "9",
+		Number: 9,
+		Trunk:  stack.BranchRef{Branch: "main"},
+		Branches: []stack.BranchRef{
+			{Branch: "b1", PullRequest: &stack.PullRequestRef{Number: 101}},
+			{Branch: "b2", PullRequest: &stack.PullRequestRef{Number: 102}},
+		},
+	}
+	tmpDir := t.TempDir()
+	writeStackFile(t, tmpDir, s)
+
+	listStacksCalls := 0
+	var mu sync.Mutex
+	prLookups := map[int]int{}
+	findPR := prByNumberFinder(map[int]string{101: "b1", 102: "b2"})
+	ghMock := &github.MockClient{
+		ListStacksFn: func() ([]github.RemoteStack, error) {
+			listStacksCalls++
+			return []github.RemoteStack{{ID: 9, Number: 9, PullRequests: []int{101, 102}}}, nil
+		},
+		GetStackFn: func(int) (*github.RemoteStack, error) {
+			return &github.RemoteStack{ID: 9, Number: 9, PullRequests: []int{101, 102}}, nil
+		},
+		FindPRByNumberFn: func(n int) (*github.PullRequest, error) {
+			mu.Lock()
+			prLookups[n]++
+			mu.Unlock()
+			return findPR(n)
+		},
+	}
+
+	output, err := runSyncCfg(t, newSyncMockNoRebase(tmpDir, "b1"), func(cfg *config.Config) { cfg.GitHubClientOverride = ghMock })
+	require.NoError(t, err)
+	assert.Contains(t, output, "Stack synced")
+
+	assert.Zero(t, listStacksCalls, "a numbered stack should not scan every stack in the repository")
+	assert.Equal(t, map[int]int{101: 1, 102: 1}, prLookups, "each PR should be fetched once per sync")
 }
 
 // divergentStack returns a stack file (ID 9) and GitHub mock configured so that

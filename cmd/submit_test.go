@@ -459,6 +459,9 @@ func TestSubmit_ForksWhenRemoteStackFullyMerged(t *testing.T) {
 				ListStacksFn: func() ([]github.RemoteStack, error) {
 					return []github.RemoteStack{{ID: 42, PullRequests: []int{1, 2}}}, nil
 				},
+				GetStackFn: func(int) (*github.RemoteStack, error) {
+					return &github.RemoteStack{ID: 42, Number: 42, PullRequests: []int{1, 2}}, nil
+				},
 				FindPRByNumberFn: func(n int) (*github.PullRequest, error) {
 					switch n {
 					case 1:
@@ -1853,10 +1856,9 @@ func TestSubmit_PreflightCheck_SkippedWhenStackIDSet(t *testing.T) {
 	_, _ = io.ReadAll(errR)
 
 	assert.NoError(t, err)
-	// ListStacks is called by syncStackPRs (remote sync), but NOT by the
-	// preflight check. Two syncStackPRs calls happen in submit (before and
-	// after PR creation), so expect exactly 2 ListStacks calls.
-	assert.Equal(t, 2, listStacksCallCount, "ListStacks should only be called by syncStackPRs, not by the preflight check")
+	// With the stack number known, neither the preflight check nor the PR
+	// refresh needs to scan every stack in the repository.
+	assert.Equal(t, 0, listStacksCallCount, "ListStacks should not be called for a tracked stack with a number")
 }
 
 // --- Modify + Submit integration tests ---
@@ -2011,6 +2013,9 @@ func TestSubmit_PendingModifyCompletion(t *testing.T) {
 				GetStackFn: func(number int) (*github.RemoteStack, error) {
 					if number == 7 && !oldDeleted {
 						return &github.RemoteStack{ID: 42, Number: 7, PullRequests: oldNumbers}, nil
+					}
+					if number == 7 && tc.mergedBase {
+						return &github.RemoteStack{ID: 42, Number: 7, PullRequests: []int{9}}, nil
 					}
 					if number == 8 && replacement != nil {
 						return replacement, nil
@@ -2660,6 +2665,12 @@ func TestSubmit_WithPendingModify_AtomicPush(t *testing.T) {
 				return []github.RemoteStack{}, nil
 			}
 			return []github.RemoteStack{{ID: 42, Number: 7, PullRequests: []int{10, 11, 12}}}, nil
+		},
+		GetStackFn: func(int) (*github.RemoteStack, error) {
+			if unstacked {
+				return nil, &api.HTTPError{StatusCode: 404}
+			}
+			return &github.RemoteStack{ID: 42, Number: 7, PullRequests: []int{10, 11, 12}}, nil
 		},
 	}
 
