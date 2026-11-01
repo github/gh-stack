@@ -785,13 +785,29 @@ func (r *remoteStackPRs) stackPRs() ([]*github.PullRequest, bool) {
 			return nil, false
 		}
 	}
-	if remotePRNumbers == nil {
+	return prs, true
+}
+
+// fetchRemoteStackPRs reads the tracked stack by number, then fetches its PRs concurrently.
+// It returns false when the stack can't be read.
+func fetchRemoteStackPRs(client github.ClientOps, s *stack.Stack) (*remoteStackPRs, bool) {
+	if s.ID == "" {
 		return nil, false
 	}
 
-	remotePRCount := len(remotePRNumbers)
-	queried := make(map[int]bool, remotePRCount)
-	for _, number := range remotePRNumbers {
+	number, err := ensureStackNumber(client, s)
+	if err != nil || number == 0 {
+		return nil, false
+	}
+	rs, err := client.GetStack(number)
+	if err != nil || rs == nil || strconv.Itoa(rs.ID) != s.ID || rs.PRNumbers() == nil {
+		return nil, false
+	}
+
+	numbers := rs.PRNumbers()
+	remotePRNumbers := slices.Clone(numbers)
+	queried := make(map[int]bool, len(numbers))
+	for _, number := range numbers {
 		queried[number] = true
 	}
 	for _, b := range s.Branches {
@@ -802,10 +818,7 @@ func (r *remoteStackPRs) stackPRs() ([]*github.PullRequest, bool) {
 		}
 	}
 
-	// Fetch each remote PR concurrently. Results are written to an ordered
-	// slice (one slot per PR number) so that when we build the branch map
-	// below, later entries win on duplicate HeadRefNames — matching the
-	// sequential behavior of the old code.
+	// Fetch each remote PR concurrently.
 	prResults := make([]*github.PullRequest, len(remotePRNumbers))
 
 	var wg sync.WaitGroup
