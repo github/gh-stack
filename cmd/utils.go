@@ -884,7 +884,7 @@ func applyRemoteStackPRs(s *stack.Stack, fetched *remoteStackPRs) map[string]*gi
 		details[b.Branch] = prDetailsFromPR(pr)
 	}
 
-	return details, true
+	return details
 }
 
 // updateBaseSHAs refreshes the Base and Head SHAs for all active branches
@@ -2080,6 +2080,10 @@ type remoteReconcileResult struct {
 	// cancels or deletes the remote stack, and when a divergence is detected in a
 	// non-interactive terminal. The resolving path prints its own outcome message.
 	stop bool
+
+	// remotePRs, when non-nil, is the PR fetch reconcile made for a stack it
+	// left unchanged, so runSync can refresh PR state without fetching again.
+	remotePRs *remoteStackPRs
 }
 
 // remoteStackClass classifies the relationship between the local stack's active
@@ -2113,29 +2117,12 @@ func reconcileRemoteStack(cfg *config.Config, sf *stack.StackFile, s *stack.Stac
 		return res, nil
 	}
 
-	stacks, err := client.ListStacks()
-	if err != nil {
-		// Covers 404 (stacked PRs unavailable) and transient API errors.
+	fetched, ok := fetchRemoteStackPRs(client, s)
+	if !ok {
 		return res, nil
 	}
-
-	var remotePRNumbers []int
-	found := false
-	for _, rs := range stacks {
-		if strconv.Itoa(rs.ID) == s.ID {
-			remotePRNumbers = rs.PRNumbers()
-			found = true
-			break
-		}
-	}
-	if !found {
-		// The remote stack was deleted; the existing updateStack 404 → recreate
-		// path in syncStack handles this.
-		return res, nil
-	}
-
-	prs, err := fetchStackPRDetails(client, remotePRNumbers)
-	if err != nil {
+	prs, ok := fetched.stackPRs()
+	if !ok {
 		return res, nil
 	}
 
@@ -2148,6 +2135,7 @@ func reconcileRemoteStack(cfg *config.Config, sf *stack.StackFile, s *stack.Stac
 		// fast-forward/rebase/push steps skip merged and merge-queued branches
 		// rather than rewriting them before the later PR-sync step runs.
 		syncRemotePRState(s, prs)
+		res.remotePRs = fetched
 		return res, nil
 	case remoteStackCleanAhead:
 		return pullRemoteAdditions(cfg, sf, s, gitDir, remote, prs)
