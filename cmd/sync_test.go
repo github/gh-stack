@@ -1921,6 +1921,69 @@ func TestSync_UpdatesPartialRemoteStack(t *testing.T) {
 	assert.Equal(t, "9", sf.Stacks[0].ID)
 }
 
+// runSyncWithClosedPR syncs a three-layer remote stack (#101-#103) in which
+// the given PR is closed, and checks that it is reported as closed with the
+// recovery hint.
+func runSyncWithClosedPR(t *testing.T, closed int) string {
+	t.Helper()
+	t.Setenv("GH_STACK_HYPERLINKS", "0")
+	s := stack.Stack{
+		ID:     "9",
+		Number: 9,
+		Trunk:  stack.BranchRef{Branch: "main"},
+		Branches: []stack.BranchRef{
+			{Branch: "b1", PullRequest: &stack.PullRequestRef{Number: 101}},
+			{Branch: "b2", PullRequest: &stack.PullRequestRef{Number: 102}},
+			{Branch: "b3", PullRequest: &stack.PullRequestRef{Number: 103}},
+		},
+	}
+	tmpDir := t.TempDir()
+	writeStackFile(t, tmpDir, s)
+
+	remote := &github.RemoteStack{ID: 9, Number: 9, PullRequests: []int{101, 102, 103}}
+	ghMock := &github.MockClient{
+		ListStacksFn: func() ([]github.RemoteStack, error) { return []github.RemoteStack{*remote}, nil },
+		GetStackFn:   func(int) (*github.RemoteStack, error) { return remote, nil },
+		FindPRByNumberFn: func(n int) (*github.PullRequest, error) {
+			state := "OPEN"
+			if n == closed {
+				state = "CLOSED"
+			}
+			return &github.PullRequest{Number: n, HeadRefName: fmt.Sprintf("b%d", n-100), State: state, URL: fmt.Sprintf("https://github.com/o/r/pull/%d", n)}, nil
+		},
+	}
+
+	output := runSyncWithGitHub(t, newSyncMockNoRebase(tmpDir, "b3"), ghMock)
+
+	closedBranch := fmt.Sprintf("b%d", closed-100)
+	assert.Contains(t, output, "("+closedBranch+") — Closed")
+	assert.NotContains(t, output, "("+closedBranch+") — Open")
+	assert.Contains(t, output, fmt.Sprintf("Reopen #%d, or run `gh stack modify` to drop it", closed))
+	assert.Contains(t, output, "gh stack submit")
+	return output
+}
+
+// TestSync_ClosedBottomPR_BlocksStack verifies that a closed bottom PR is
+// reported as blocking the whole stack.
+func TestSync_ClosedBottomPR_BlocksStack(t *testing.T) {
+	output := runSyncWithClosedPR(t, 101)
+	assert.Contains(t, output, "#101 is closed and blocks merging the stack")
+}
+
+// TestSync_ClosedMiddlePR_ListsMergeableBelow verifies that a closed middle PR
+// blocks itself and the PRs above it while the PRs below can still merge.
+func TestSync_ClosedMiddlePR_ListsMergeableBelow(t *testing.T) {
+	output := runSyncWithClosedPR(t, 102)
+	assert.Contains(t, output, "#102 is closed and blocks merging it and the PRs above it; #101 can still be merged")
+}
+
+// TestSync_ClosedTopPR_ListsMergeableBelow verifies that a closed top PR only
+// blocks itself.
+func TestSync_ClosedTopPR_ListsMergeableBelow(t *testing.T) {
+	output := runSyncWithClosedPR(t, 103)
+	assert.Contains(t, output, "#103 is closed and blocks merging it; #101, #102 can still be merged")
+}
+
 // TestSync_FewerThanTwoPRs_BranchesSynced verifies that with only one open PR
 // (no stack is possible), sync skips all stack API calls and reports
 // "Branches synced" rather than "Stack synced".
