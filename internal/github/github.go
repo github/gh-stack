@@ -35,6 +35,7 @@ type PullRequest struct {
 	HeadRefName      string            `graphql:"headRefName"`
 	HeadRefOID       string            `graphql:"headRefOid"`
 	BaseRefName      string            `graphql:"baseRefName"`
+	BaseRefOID       string            `graphql:"baseRefOid"`
 	IsDraft          bool              `graphql:"isDraft"`
 	Merged           bool              `graphql:"merged"`
 	MergeQueueEntry  *MergeQueueEntry  `graphql:"mergeQueueEntry"`
@@ -116,6 +117,7 @@ func (c *Client) FindPRForBranch(branch string) (*PullRequest, error) {
 					Title            string            `graphql:"title"`
 					Body             string            `graphql:"body"`
 					BaseRefName      string            `graphql:"baseRefName"`
+					BaseRefOID       string            `graphql:"baseRefOid"`
 					IsDraft          bool              `graphql:"isDraft"`
 					MergeQueueEntry  *MergeQueueEntry  `graphql:"mergeQueueEntry"`
 					AutoMergeRequest *AutoMergeRequest `graphql:"autoMergeRequest"`
@@ -147,6 +149,7 @@ func (c *Client) FindPRForBranch(branch string) (*PullRequest, error) {
 		Title:            n.Title,
 		Body:             n.Body,
 		BaseRefName:      n.BaseRefName,
+		BaseRefOID:       n.BaseRefOID,
 		IsDraft:          n.IsDraft,
 		MergeQueueEntry:  n.MergeQueueEntry,
 		AutoMergeRequest: n.AutoMergeRequest,
@@ -376,6 +379,7 @@ func (c *Client) FindPRByNumber(number int) (*PullRequest, error) {
 				HeadRefName      string            `graphql:"headRefName"`
 				HeadRefOID       string            `graphql:"headRefOid"`
 				BaseRefName      string            `graphql:"baseRefName"`
+				BaseRefOID       string            `graphql:"baseRefOid"`
 				IsDraft          bool              `graphql:"isDraft"`
 				Merged           bool              `graphql:"merged"`
 				MergeQueueEntry  *MergeQueueEntry  `graphql:"mergeQueueEntry"`
@@ -408,6 +412,7 @@ func (c *Client) FindPRByNumber(number int) (*PullRequest, error) {
 		HeadRefName:      n.HeadRefName,
 		HeadRefOID:       n.HeadRefOID,
 		BaseRefName:      n.BaseRefName,
+		BaseRefOID:       n.BaseRefOID,
 		IsDraft:          n.IsDraft,
 		Merged:           n.Merged,
 		MergeQueueEntry:  n.MergeQueueEntry,
