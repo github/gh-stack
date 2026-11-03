@@ -2843,6 +2843,57 @@ func TestIntegration_AmendedParentWithoutForkPointFailsSafely(t *testing.T) {
 	assert.Equal(t, childBefore, issue250Git(t, repo.dir, "rev-parse", "child"))
 }
 
+func TestRebase_ImportedStackAfterParentAdvance(t *testing.T) {
+	repo := setupIssue512Repo(t)
+	issue250Git(t, repo.dir, "checkout", "parent")
+	issue250WriteFile(t, repo.dir, "parent-extra.txt", "new parent content\n")
+	issue250Git(t, repo.dir, "add", "parent-extra.txt")
+	issue250Git(t, repo.dir, "commit", "-m", "parent extra")
+	issue250Git(t, repo.dir, "push", "origin", "parent")
+	newParent := issue250Git(t, repo.dir, "rev-parse", "parent")
+
+	prs := []*github.PullRequest{
+		{Number: 10, HeadRefName: "parent", BaseRefName: "main", BaseRefOID: repo.main, State: "OPEN"},
+		{Number: 11, HeadRefName: "child", BaseRefName: "parent", BaseRefOID: repo.parent, State: "OPEN"},
+	}
+	remote := github.RemoteStack{
+		ID: 1, Number: 1, Base: github.RemoteStackBase{Ref: "main"}, PullRequests: []int{10, 11},
+	}
+	cfg := issue250TestConfig(t)
+	cfg.GitHubClientOverride = &github.MockClient{
+		ListStacksFn: func() ([]github.RemoteStack, error) {
+			return []github.RemoteStack{remote}, nil
+		},
+		GetStackFn: func(int) (*github.RemoteStack, error) { return &remote, nil },
+		FindPRByNumberFn: func(number int) (*github.PullRequest, error) {
+			return prs[number-10], nil
+		},
+	}
+	withIssue250Repo(t, repo.writer)
+	gitDir := filepath.Join(repo.writer, ".git")
+	sf, err := stack.Load(gitDir)
+	require.NoError(t, err)
+	s, err := importRemoteStack(cfg, sf, gitDir, "origin", "main", prs, "1", 1)
+	require.NoError(t, err)
+	require.Equal(t, newParent, s.Branches[1].Base)
+	require.NoError(t, stack.Save(gitDir, sf))
+	issue250Git(t, repo.writer, "checkout", "child")
+	forkPoint, err := git.MergeBaseForkPoint("parent", "child")
+	require.NoError(t, err)
+	require.Empty(t, forkPoint)
+
+	require.NoError(t, runRebase(cfg, &rebaseOptions{remote: "origin"}))
+
+	assert.Equal(t, newParent, issue250Git(t, repo.writer, "merge-base", "parent", "child"))
+	assert.Equal(t, "child only", issue250Git(t, repo.writer, "log", "--format=%s", "parent..child"))
+	assert.Equal(t, "new parent content", issue250Git(t, repo.writer, "show", "child:parent-extra.txt"))
+	assert.Equal(t, "child", issue250Git(t, repo.writer, "show", "child:child.txt"))
+	sf, err = stack.Load(gitDir)
+	require.NoError(t, err)
+	assert.Equal(t, newParent, sf.Stacks[0].Branches[1].Base)
+	assert.NoFileExists(t, filepath.Join(gitDir, rebaseStateFile))
+}
+
 func TestIntegration_AdoptedBranchRebasesFromCommonAncestor(t *testing.T) {
 	remoteDir := filepath.Join(t.TempDir(), "remote.git")
 	cloneDir := filepath.Join(t.TempDir(), "clone")

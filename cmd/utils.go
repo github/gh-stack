@@ -549,7 +549,7 @@ func syncStackPRs(cfg *config.Config, s *stack.Stack) map[string]*github.PRDetai
 	// Each branch is processed concurrently; results are collected and applied sequentially.
 	type branchResult struct {
 		index       int
-		pullRequest *stack.PullRequestRef
+		pullRequest *github.PullRequest
 		queued      bool
 		details     *github.PRDetails
 		skip        bool // true means keep existing data, don't update
@@ -603,7 +603,7 @@ func syncStackPRs(cfg *config.Config, s *stack.Stack) map[string]*github.PRDetai
 				}
 				if pr != nil && pr.State != "CLOSED" {
 					// PR is open or merged — keep it
-					res.pullRequest = pullRequestRef(pr, branch.PullRequest)
+					res.pullRequest = pr
 					res.queued = pr.IsQueued()
 					res.details = prDetailsFromPR(pr)
 					results[idx] = res
@@ -622,7 +622,7 @@ func syncStackPRs(cfg *config.Config, s *stack.Stack) map[string]*github.PRDetai
 				results[idx] = res
 				return
 			}
-			res.pullRequest = pullRequestRef(pr, nil)
+			res.pullRequest = pr
 			res.queued = pr.IsQueued()
 			// FindPRForBranch only returns OPEN PRs
 			res.details = &github.PRDetails{
@@ -651,8 +651,9 @@ func syncStackPRs(cfg *config.Config, s *stack.Stack) map[string]*github.PRDetai
 		}
 		b := &s.Branches[res.index]
 		if res.pullRequest != nil {
-			b.PullRequest = res.pullRequest
+			b.PullRequest = pullRequestRef(res.pullRequest, b.PullRequest)
 			b.Queued = res.queued
+			updateBaseFromPR(s, b, res.pullRequest)
 		} else if !b.IsMerged() {
 			// Clear if we didn't find anything (and original was cleared during discovery)
 			if b.PullRequest != nil && res.pullRequest == nil {
@@ -692,6 +693,16 @@ func pullRequestRef(pr *github.PullRequest, previous *stack.PullRequestRef) *sta
 		ref.MergedHead = pr.HeadRefOID
 	}
 	return ref
+}
+
+func updateBaseFromPR(s *stack.Stack, b *stack.BranchRef, pr *github.PullRequest) {
+	if b.IsMerged() || pr.BaseRefOID == "" || pr.BaseRefName != s.ActiveBaseBranch(b.Branch) {
+		return
+	}
+	// A PR retains its old parent tip even when a fresh clone has no reflog for it.
+	if canUpdateBase(pr.BaseRefOID, b.Branch, b.Base) {
+		b.Base = pr.BaseRefOID
+	}
 }
 
 // prDetailsFromPR builds PRDetails from a PullRequest returned by FindPRByNumber.
@@ -854,6 +865,7 @@ func syncStackPRsFromRemote(client github.ClientOps, s *stack.Stack) (map[string
 		}
 		b.PullRequest = pullRequestRef(pr, b.PullRequest)
 		b.Queued = pr.IsQueued()
+		updateBaseFromPR(s, b, pr)
 		details[b.Branch] = prDetailsFromPR(pr)
 	}
 
