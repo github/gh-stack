@@ -338,22 +338,58 @@ func runSync(cfg *config.Config, opts *syncOptions) error {
 	// --- Step 5: Sync PR state ---
 	cfg.Printf("")
 	cfg.Printf("Syncing PRs ...")
-	_ = syncStackPRs(cfg, s)
+	prs := syncStackPRs(cfg, s)
 
 	// Report PR status for each branch
+	closedPR := 0
+	closedHasAbove := false
+	// mergeableBelow holds the contiguous bottom run of open, ready PRs, which
+	// can still be merged when a closed PR sits above them.
+	var mergeableBelow []int
+	prefixOpen := true
 	for _, b := range s.Branches {
 		if b.IsMerged() {
 			continue
+		}
+		if closedPR != 0 {
+			closedHasAbove = true
 		}
 		if b.IsQueued() {
 			cfg.Successf("PR %s (%s) — Queued", cfg.PRLink(b.PullRequest.Number, b.PullRequest.URL), b.Branch)
 			continue
 		}
 		if b.PullRequest != nil {
+			// The stack on GitHub keeps closed PRs, which blocks merging it.
+			d := prs[b.Branch]
+			if d != nil && d.State == "CLOSED" {
+				cfg.Warningf("PR %s (%s) — Closed", cfg.PRLink(b.PullRequest.Number, b.PullRequest.URL), b.Branch)
+				if closedPR == 0 {
+					closedPR = b.PullRequest.Number
+				}
+				prefixOpen = false
+				continue
+			}
+			if prefixOpen && d != nil && !d.IsDraft {
+				mergeableBelow = append(mergeableBelow, b.PullRequest.Number)
+			} else {
+				prefixOpen = false
+			}
 			cfg.Successf("PR %s (%s) — Open", cfg.PRLink(b.PullRequest.Number, b.PullRequest.URL), b.Branch)
 		} else {
+			prefixOpen = false
 			cfg.Warningf("%s has no PR", b.Branch)
 		}
+	}
+	if closedPR != 0 {
+		switch {
+		case len(mergeableBelow) == 0:
+			cfg.Warningf("#%d is closed and blocks merging the stack", closedPR)
+		case closedHasAbove:
+			cfg.Warningf("#%d is closed and blocks merging it and the PRs above it; %s can still be merged", closedPR, prNumberList(mergeableBelow))
+		default:
+			cfg.Warningf("#%d is closed and blocks merging it; %s can still be merged", closedPR, prNumberList(mergeableBelow))
+		}
+		reportClosedPRHint(cfg, closedPR)
 	}
 	merged := s.MergedBranches()
 	if len(merged) > 0 {

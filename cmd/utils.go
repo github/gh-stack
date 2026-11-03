@@ -665,6 +665,15 @@ func syncStackPRs(cfg *config.Config, s *stack.Stack) map[string]*github.PRDetai
 	return details
 }
 
+// reportClosedPRHint explains how to recover a stack that a closed pull request
+// blocks. Reopening keeps the stack intact. Otherwise, because a stacked PR's
+// base cannot be changed in place, the layer has to leave the stack and the
+// stack has to be recreated on GitHub.
+func reportClosedPRHint(cfg *config.Config, number int) {
+	cfg.Printf("  Reopen #%d, or run `%s` to drop it from the stack (or fold it to keep its changes), then run `%s` to recreate the stack on GitHub",
+		number, cfg.ColorAccent("gh stack modify"), cfg.ColorAccent("gh stack submit"))
+}
+
 // maxAPIConcurrency limits the number of concurrent API calls to avoid hitting secondary rate limits.
 const maxAPIConcurrency = 6
 

@@ -188,6 +188,7 @@ func runMerge(cfg *config.Config, opts *mergeOptions, args []string) error {
 			top := candidates[len(candidates)-1].Number
 			cfg.Errorf("cannot merge the whole stack: pull request #%d is %s", blocker.Number, blockerState(blocker))
 			cfg.Printf("Merge up to #%d with `%s`", top, cfg.ColorAccent(fmt.Sprintf("gh stack merge %d", top)))
+			hintClosedBlocker(cfg, blocker)
 			return ErrInvalidArgs
 		}
 		targetPR = candidates[len(candidates)-1].Number
@@ -543,6 +544,7 @@ func explainNothingToMerge(cfg *config.Config, rs *github.RemoteStack, blocker *
 	}
 	if blocker != nil {
 		cfg.Errorf("nothing to merge: pull request #%d is %s", blocker.Number, blockerState(blocker))
+		hintClosedBlocker(cfg, blocker)
 		return ErrNotInStack
 	}
 	cfg.Errorf("this stack has no open pull requests to merge")
@@ -563,9 +565,11 @@ func explainNonMergeableTarget(cfg *config.Config, rs *github.RemoteStack, prNum
 		return ErrInvalidArgs
 	case pr.State == "closed":
 		cfg.Errorf("pull request #%d is closed", prNumber)
+		hintClosedBlocker(cfg, pr)
 		return ErrInvalidArgs
 	case blocker != nil:
 		cfg.Errorf("pull request #%d cannot be merged yet: #%d below it is %s", prNumber, blocker.Number, blockerState(blocker))
+		hintClosedBlocker(cfg, blocker)
 		return ErrInvalidArgs
 	default:
 		cfg.Errorf("pull request #%d cannot be merged", prNumber)
@@ -680,6 +684,14 @@ func blockerState(pr *github.RemoteStackPR) string {
 		return "closed"
 	}
 	return "not mergeable"
+}
+
+// hintClosedBlocker points to the recovery path when the blocker is closed.
+func hintClosedBlocker(cfg *config.Config, blocker *github.RemoteStackPR) {
+	// Drafts do not need a hint because marking them ready unblocks the merge.
+	if blocker != nil && blocker.State == "closed" && !blocker.IsMerged() {
+		reportClosedPRHint(cfg, blocker.Number)
+	}
 }
 
 func shortMergeSHA(sha string) string {
