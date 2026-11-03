@@ -45,7 +45,7 @@ type Ops interface {
 	Fetch(remote string) error
 	FetchBranch(remote, branch string) error
 	FetchBranches(remote string, branches []string) error
-	DefaultBranch() (string, error)
+	DefaultBranch(remote string) (string, error)
 	CreateBranch(name, base string) error
 	Push(remote string, branches []string, force, atomic bool) error
 	ResolveRemote(branch string) (string, error)
@@ -230,25 +230,47 @@ func isMissingRemoteRefError(err error) bool {
 	return err != nil && strings.Contains(err.Error(), "couldn't find remote ref")
 }
 
-func (d *defaultOps) DefaultBranch() (string, error) {
-	ref, err := d.run("symbolic-ref", "--quiet", "refs/remotes/origin/HEAD")
-	if err != nil {
-		var gitErr *cligit.GitError
-		if !errors.As(err, &gitErr) || gitErr.ExitCode != 1 || gitErr.Stderr != "" {
-			return "", err
-		}
-		for _, name := range []string{"main", "master"} {
-			exists, lookupErr := d.BranchExists(name)
-			if lookupErr != nil {
-				return "", lookupErr
-			}
-			if exists {
-				return name, nil
-			}
-		}
+func (d *defaultOps) DefaultBranch(remote string) (string, error) {
+	prefix := "refs/remotes/" + remote + "/"
+	name := prefix+"HEAD"
+	ref, err := d.run("symbolic-ref", "--quiet", name)
+
+	if err == nil {
+		return strings.TrimPrefix(ref, prefix), nil
+	}
+
+	var gitErr *cligit.GitError
+	if !errors.As(err, &gitErr) || gitErr.ExitCode != 1 || gitErr.Stderr != "" {
 		return "", err
 	}
-	return strings.TrimPrefix(ref, "refs/remotes/origin/"), nil
+
+	// The local pointer is missing, e.g. when the remote was added to an
+	// existing repository instead of cloned, so ask the remote directly.
+	cmd, err := d.command("ls-remote", "--symref", remote, "HEAD")
+	if err != nil {
+		return "", err
+	}
+
+	cmd.Env = append(cmd.Environ(), "GIT_TERMINAL_PROMPT=0")
+	if out, err := cmd.Output(); err == nil {
+		if branch := parseSymrefHead(string(out)); branch != "" {
+			return branch, nil
+		}
+	}
+
+	return "", fmt.Errorf("%w for remote %q", ErrNoDefaultBranch, remote)
+}
+
+// parseSymrefHead extracts the branch from `git ls-remote --symref` output,
+// whose first line is "ref: refs/heads/<branch>\tHEAD".
+func parseSymrefHead(out string) string {
+	for _, line := range strings.Split(out, "\n") {
+		fields := strings.Fields(line)
+		if len(fields) == 3 && fields[0] == "ref:" && fields[2] == "HEAD" {
+			return strings.TrimPrefix(fields[1], "refs/heads/")
+		}
+	}
+	return ""
 }
 
 func (d *defaultOps) CreateBranch(name, base string) error {

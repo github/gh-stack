@@ -102,7 +102,7 @@ func TestInit_CreatesStackWithCorrectTrunk(t *testing.T) {
 	gitDir := t.TempDir()
 	restore := git.SetOps(&git.MockOps{
 		GitDirFn:        func() (string, error) { return gitDir, nil },
-		DefaultBranchFn: func() (string, error) { return "main", nil },
+		DefaultBranchFn: func(string) (string, error) { return "main", nil },
 		CurrentBranchFn: func() (string, error) { return "main", nil },
 	})
 	defer restore()
@@ -151,7 +151,7 @@ func TestInit_RestoresMissingLocalTrunkWhenTagResolves(t *testing.T) {
 
 	restore := git.SetOps(&git.MockOps{
 		GitDirFn:          func() (string, error) { return gitDir, nil },
-		DefaultBranchFn:   func() (string, error) { return "main", nil },
+		DefaultBranchFn:   func(string) (string, error) { return "main", nil },
 		CurrentBranchFn:   func() (string, error) { return "renamed-branch", nil },
 		IsRerereEnabledFn: func() (bool, error) { return true, nil },
 		BranchExistsFn: func(name string) (bool, error) {
@@ -205,7 +205,7 @@ func TestInit_AdoptExistingBranches(t *testing.T) {
 	gitDir := t.TempDir()
 	restore := git.SetOps(&git.MockOps{
 		GitDirFn:        func() (string, error) { return gitDir, nil },
-		DefaultBranchFn: func() (string, error) { return "main", nil },
+		DefaultBranchFn: func(string) (string, error) { return "main", nil },
 		CurrentBranchFn: func() (string, error) { return "main", nil },
 		BranchExistsFn:  func(string) (bool, error) { return true, nil },
 	})
@@ -231,7 +231,7 @@ func TestInit_ExplicitBranchNamesUsedVerbatim(t *testing.T) {
 	var created []string
 	restore := git.SetOps(&git.MockOps{
 		GitDirFn:        func() (string, error) { return gitDir, nil },
-		DefaultBranchFn: func() (string, error) { return "main", nil },
+		DefaultBranchFn: func(string) (string, error) { return "main", nil },
 		CurrentBranchFn: func() (string, error) { return "main", nil },
 		CreateBranchFn: func(name, base string) error {
 			created = append(created, name)
@@ -257,7 +257,7 @@ func TestInit_AdoptFlagShowsDeprecationWarning(t *testing.T) {
 	gitDir := t.TempDir()
 	restore := git.SetOps(&git.MockOps{
 		GitDirFn:        func() (string, error) { return gitDir, nil },
-		DefaultBranchFn: func() (string, error) { return "main", nil },
+		DefaultBranchFn: func(string) (string, error) { return "main", nil },
 		CurrentBranchFn: func() (string, error) { return "main", nil },
 		BranchExistsFn:  func(string) (bool, error) { return true, nil },
 	})
@@ -276,7 +276,7 @@ func TestInit_RerereAlreadyEnabled(t *testing.T) {
 	enableRerereCalled := false
 	restore := git.SetOps(&git.MockOps{
 		GitDirFn:          func() (string, error) { return gitDir, nil },
-		DefaultBranchFn:   func() (string, error) { return "main", nil },
+		DefaultBranchFn:   func(string) (string, error) { return "main", nil },
 		CurrentBranchFn:   func() (string, error) { return "main", nil },
 		IsRerereEnabledFn: func() (bool, error) { return true, nil },
 		EnableRerereFn: func() error {
@@ -308,7 +308,7 @@ func TestInit_RefuseIfBranchAlreadyInStack(t *testing.T) {
 
 	restore := git.SetOps(&git.MockOps{
 		GitDirFn:        func() (string, error) { return gitDir, nil },
-		DefaultBranchFn: func() (string, error) { return "main", nil },
+		DefaultBranchFn: func(string) (string, error) { return "main", nil },
 		CurrentBranchFn: func() (string, error) { return "feature-1", nil },
 	})
 	defer restore()
@@ -326,7 +326,7 @@ func TestInit_AdoptNonexistentBranch_CreatesIt(t *testing.T) {
 	var created []string
 	restore := git.SetOps(&git.MockOps{
 		GitDirFn:        func() (string, error) { return gitDir, nil },
-		DefaultBranchFn: func() (string, error) { return "main", nil },
+		DefaultBranchFn: func(string) (string, error) { return "main", nil },
 		CurrentBranchFn: func() (string, error) { return "main", nil },
 		BranchExistsFn:  func(string) (bool, error) { return false, nil },
 		CreateBranchFn: func(name, base string) error {
@@ -350,7 +350,7 @@ func TestInit_MultipleBranches_CreatesAll(t *testing.T) {
 	var created []string
 	restore := git.SetOps(&git.MockOps{
 		GitDirFn:        func() (string, error) { return gitDir, nil },
-		DefaultBranchFn: func() (string, error) { return "main", nil },
+		DefaultBranchFn: func(string) (string, error) { return "main", nil },
 		CurrentBranchFn: func() (string, error) { return "main", nil },
 		CreateBranchFn: func(name, base string) error {
 			created = append(created, name)
@@ -375,7 +375,7 @@ func TestInit_AdoptWithExistingOpenPR(t *testing.T) {
 	gitDir := t.TempDir()
 	restore := git.SetOps(&git.MockOps{
 		GitDirFn:        func() (string, error) { return gitDir, nil },
-		DefaultBranchFn: func() (string, error) { return "main", nil },
+		DefaultBranchFn: func(string) (string, error) { return "main", nil },
 		CurrentBranchFn: func() (string, error) { return "main", nil },
 		BranchExistsFn:  func(string) (bool, error) { return true, nil },
 	})
@@ -425,7 +425,7 @@ func TestInit_AdoptIgnoresClosedAndMergedPRs(t *testing.T) {
 	gitDir := t.TempDir()
 	restore := git.SetOps(&git.MockOps{
 		GitDirFn:        func() (string, error) { return gitDir, nil },
-		DefaultBranchFn: func() (string, error) { return "main", nil },
+		DefaultBranchFn: func(string) (string, error) { return "main", nil },
 		CurrentBranchFn: func() (string, error) { return "main", nil },
 		BranchExistsFn:  func(string) (bool, error) { return true, nil },
 	})
@@ -466,7 +466,7 @@ func TestInit_ImplicitAdopt_AllExist(t *testing.T) {
 	gitDir := t.TempDir()
 	restore := git.SetOps(&git.MockOps{
 		GitDirFn:        func() (string, error) { return gitDir, nil },
-		DefaultBranchFn: func() (string, error) { return "main", nil },
+		DefaultBranchFn: func(string) (string, error) { return "main", nil },
 		CurrentBranchFn: func() (string, error) { return "main", nil },
 		BranchExistsFn:  func(string) (bool, error) { return true, nil },
 	})
@@ -501,7 +501,7 @@ func TestInit_ImplicitAdopt_AllMissing(t *testing.T) {
 	var created []string
 	restore := git.SetOps(&git.MockOps{
 		GitDirFn:        func() (string, error) { return gitDir, nil },
-		DefaultBranchFn: func() (string, error) { return "main", nil },
+		DefaultBranchFn: func(string) (string, error) { return "main", nil },
 		CurrentBranchFn: func() (string, error) { return "main", nil },
 		CreateBranchFn: func(name, base string) error {
 			created = append(created, name)
@@ -528,7 +528,7 @@ func TestInit_ImplicitAdopt_Mixed(t *testing.T) {
 	var created []string
 	restore := git.SetOps(&git.MockOps{
 		GitDirFn:        func() (string, error) { return gitDir, nil },
-		DefaultBranchFn: func() (string, error) { return "main", nil },
+		DefaultBranchFn: func(string) (string, error) { return "main", nil },
 		CurrentBranchFn: func() (string, error) { return "main", nil },
 		BranchExistsFn:  func(name string) (bool, error) { return existing[name], nil },
 		CreateBranchFn: func(name, base string) error {
@@ -556,7 +556,7 @@ func TestInit_WhatsNext_Fresh(t *testing.T) {
 	gitDir := t.TempDir()
 	restore := git.SetOps(&git.MockOps{
 		GitDirFn:        func() (string, error) { return gitDir, nil },
-		DefaultBranchFn: func() (string, error) { return "main", nil },
+		DefaultBranchFn: func(string) (string, error) { return "main", nil },
 		CurrentBranchFn: func() (string, error) { return "main", nil },
 		CreateBranchFn:  func(name, base string) error { return nil },
 	})
@@ -581,7 +581,7 @@ func TestInit_WhatsNext_AdoptedWithPRs(t *testing.T) {
 	gitDir := t.TempDir()
 	restore := git.SetOps(&git.MockOps{
 		GitDirFn:        func() (string, error) { return gitDir, nil },
-		DefaultBranchFn: func() (string, error) { return "main", nil },
+		DefaultBranchFn: func(string) (string, error) { return "main", nil },
 		CurrentBranchFn: func() (string, error) { return "main", nil },
 		BranchExistsFn:  func(string) (bool, error) { return true, nil },
 	})
@@ -614,7 +614,7 @@ func TestInit_WhatsNext_AdoptedNoPRs(t *testing.T) {
 	gitDir := t.TempDir()
 	restore := git.SetOps(&git.MockOps{
 		GitDirFn:        func() (string, error) { return gitDir, nil },
-		DefaultBranchFn: func() (string, error) { return "main", nil },
+		DefaultBranchFn: func(string) (string, error) { return "main", nil },
 		CurrentBranchFn: func() (string, error) { return "main", nil },
 		BranchExistsFn:  func(string) (bool, error) { return true, nil },
 	})
@@ -639,7 +639,7 @@ func TestInit_WhatsNext_MixedWithPR(t *testing.T) {
 	gitDir := t.TempDir()
 	restore := git.SetOps(&git.MockOps{
 		GitDirFn:        func() (string, error) { return gitDir, nil },
-		DefaultBranchFn: func() (string, error) { return "main", nil },
+		DefaultBranchFn: func(string) (string, error) { return "main", nil },
 		CurrentBranchFn: func() (string, error) { return "main", nil },
 		BranchExistsFn:  func(name string) (bool, error) { return name == "existing", nil },
 		CreateBranchFn:  func(name, base string) error { return nil },
@@ -670,7 +670,7 @@ func TestInit_Interactive_OnTrunk(t *testing.T) {
 	gitDir := t.TempDir()
 	restore := git.SetOps(&git.MockOps{
 		GitDirFn:        func() (string, error) { return gitDir, nil },
-		DefaultBranchFn: func() (string, error) { return "main", nil },
+		DefaultBranchFn: func(string) (string, error) { return "main", nil },
 		CurrentBranchFn: func() (string, error) { return "main", nil },
 	})
 	defer restore()
@@ -689,7 +689,7 @@ func TestInit_Interactive_OnFeatureBranch_UseCurrent(t *testing.T) {
 	gitDir := t.TempDir()
 	restore := git.SetOps(&git.MockOps{
 		GitDirFn:        func() (string, error) { return gitDir, nil },
-		DefaultBranchFn: func() (string, error) { return "main", nil },
+		DefaultBranchFn: func(string) (string, error) { return "main", nil },
 		CurrentBranchFn: func() (string, error) { return "feat/auth", nil },
 		BranchExistsFn:  func(name string) (bool, error) { return name == "feat/auth", nil },
 	})
@@ -732,7 +732,7 @@ func TestInit_TwoPassValidation_NoBranchCreatedOnError(t *testing.T) {
 	var created []string
 	restore := git.SetOps(&git.MockOps{
 		GitDirFn:        func() (string, error) { return gitDir, nil },
-		DefaultBranchFn: func() (string, error) { return "main", nil },
+		DefaultBranchFn: func(string) (string, error) { return "main", nil },
 		CurrentBranchFn: func() (string, error) { return "main", nil },
 		CreateBranchFn: func(name, base string) error {
 			created = append(created, name)
@@ -756,7 +756,7 @@ func TestInit_TwoPassValidation_InvalidRefName(t *testing.T) {
 	var created []string
 	restore := git.SetOps(&git.MockOps{
 		GitDirFn:        func() (string, error) { return gitDir, nil },
-		DefaultBranchFn: func() (string, error) { return "main", nil },
+		DefaultBranchFn: func(string) (string, error) { return "main", nil },
 		CurrentBranchFn: func() (string, error) { return "main", nil },
 		ValidateRefNameFn: func(name string) error {
 			if name == "invalid..name" {

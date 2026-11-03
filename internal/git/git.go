@@ -297,9 +297,14 @@ func FetchBranches(remote string, branches []string) error {
 	return ops.FetchBranches(remote, branches)
 }
 
-// DefaultBranch returns the HEAD branch from origin.
-func DefaultBranch() (string, error) {
-	return ops.DefaultBranch()
+// ErrNoDefaultBranch reports that a remote's default branch is unknown.
+var ErrNoDefaultBranch = errors.New("could not determine default branch")
+
+// DefaultBranch returns the remote's default branch from the local
+// refs/remotes/<remote>/HEAD pointer, or by asking the remote when that
+// pointer is missing.
+func DefaultBranch(remote string) (string, error) {
+	return ops.DefaultBranch(remote)
 }
 
 // CreateBranch creates a new branch from the given base.
