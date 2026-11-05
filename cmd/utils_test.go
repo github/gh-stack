@@ -1465,7 +1465,7 @@ func TestSyncStackPRs_RemoteStack_MergedHeadBackfill(t *testing.T) {
 	for _, included := range []bool{false, true} {
 		t.Run(fmt.Sprintf("merged PR listed=%t", included), func(t *testing.T) {
 			s := &stack.Stack{
-				ID: "100", Trunk: stack.BranchRef{Branch: "main"},
+				ID: "100", Number: 7, Trunk: stack.BranchRef{Branch: "main"},
 				Branches: []stack.BranchRef{
 					{Branch: "parent", PullRequest: &stack.PullRequestRef{Number: 10, Merged: true}},
 					{Branch: "child", PullRequest: &stack.PullRequestRef{Number: 11}},
@@ -1474,12 +1474,12 @@ func TestSyncStackPRs_RemoteStack_MergedHeadBackfill(t *testing.T) {
 			calls := 0
 			cfg, outR, errR := config.NewTestConfig()
 			cfg.GitHubClientOverride = &github.MockClient{
-				ListStacksFn: func() ([]github.RemoteStack, error) {
+				GetStackFn: func(int) (*github.RemoteStack, error) {
 					numbers := []int{11}
 					if included {
 						numbers = []int{10, 11}
 					}
-					return []github.RemoteStack{{ID: 100, PullRequests: numbers}}, nil
+					return &github.RemoteStack{ID: 100, Number: 7, PullRequests: numbers}, nil
 				},
 				FindPRByNumberFn: func(number int) (*github.PullRequest, error) {
 					if number == 10 {
@@ -1625,20 +1625,25 @@ func TestSyncStackPRs_RemoteStack_UsesStackAPI(t *testing.T) {
 	// When the stack has a remote ID, sync should use the stack API
 	// as source of truth, matching PRs to branches by head ref name.
 	s := &stack.Stack{
-		ID:    "100",
-		Trunk: stack.BranchRef{Branch: "main"},
+		ID:     "100",
+		Number: 7,
+		Trunk:  stack.BranchRef{Branch: "main"},
 		Branches: []stack.BranchRef{
 			{Branch: "b1"},
 			{Branch: "b2"},
 		},
 	}
 
+	var gotNumber int
 	cfg, outR, errR := config.NewTestConfig()
 	cfg.GitHubClientOverride = &github.MockClient{
 		ListStacksFn: func() ([]github.RemoteStack, error) {
-			return []github.RemoteStack{
-				{ID: 100, PullRequests: []int{10, 11}},
-			}, nil
+			t.Error("ListStacks should not be called when the stack number is known")
+			return nil, nil
+		},
+		GetStackFn: func(number int) (*github.RemoteStack, error) {
+			gotNumber = number
+			return &github.RemoteStack{ID: 100, Number: 7, PullRequests: []int{10, 11}}, nil
 		},
 		FindPRByNumberFn: func(number int) (*github.PullRequest, error) {
 			switch number {
@@ -1653,6 +1658,8 @@ func TestSyncStackPRs_RemoteStack_UsesStackAPI(t *testing.T) {
 
 	_ = syncStackPRs(cfg, s)
 	collectOutput(cfg, outR, errR)
+
+	assert.Equal(t, 7, gotNumber)
 
 	// b1 should be tracked with open PR
 	require.NotNil(t, s.Branches[0].PullRequest)
@@ -1685,6 +1692,9 @@ func TestSyncStackPRs_BackfillsStackNumber(t *testing.T) {
 				{ID: 100, Number: 5, PullRequests: []int{10, 11}},
 			}, nil
 		},
+		GetStackFn: func(number int) (*github.RemoteStack, error) {
+			return &github.RemoteStack{ID: 100, Number: number, PullRequests: []int{10, 11}}, nil
+		},
 		FindPRByNumberFn: func(number int) (*github.PullRequest, error) {
 			switch number {
 			case 10:
@@ -1706,8 +1716,9 @@ func TestSyncStackPRs_RemoteStack_ClosedPRStaysAssociated(t *testing.T) {
 	// When using the stack API, a closed (not merged) PR should remain
 	// associated — the stack API is the source of truth, not PR state.
 	s := &stack.Stack{
-		ID:    "200",
-		Trunk: stack.BranchRef{Branch: "main"},
+		ID:     "200",
+		Number: 2,
+		Trunk:  stack.BranchRef{Branch: "main"},
 		Branches: []stack.BranchRef{
 			{Branch: "feature", PullRequest: &stack.PullRequestRef{Number: 5}},
 		},
@@ -1715,10 +1726,8 @@ func TestSyncStackPRs_RemoteStack_ClosedPRStaysAssociated(t *testing.T) {
 
 	cfg, outR, errR := config.NewTestConfig()
 	cfg.GitHubClientOverride = &github.MockClient{
-		ListStacksFn: func() ([]github.RemoteStack, error) {
-			return []github.RemoteStack{
-				{ID: 200, PullRequests: []int{5}},
-			}, nil
+		GetStackFn: func(int) (*github.RemoteStack, error) {
+			return &github.RemoteStack{ID: 200, Number: 2, PullRequests: []int{5}}, nil
 		},
 		FindPRByNumberFn: func(number int) (*github.PullRequest, error) {
 			return &github.PullRequest{Number: 5, ID: "PR_5", URL: "https://github.com/o/r/pull/5", HeadRefName: "feature", State: "CLOSED"}, nil
@@ -1737,8 +1746,9 @@ func TestSyncStackPRs_RemoteStack_ClosedPRStaysAssociated(t *testing.T) {
 func TestSyncStackPRs_RemoteStack_FallsBackOnAPIError(t *testing.T) {
 	// If the stack API fails, fall back to local discovery.
 	s := &stack.Stack{
-		ID:    "300",
-		Trunk: stack.BranchRef{Branch: "main"},
+		ID:     "300",
+		Number: 3,
+		Trunk:  stack.BranchRef{Branch: "main"},
 		Branches: []stack.BranchRef{
 			{Branch: "feature"},
 		},
@@ -1746,7 +1756,7 @@ func TestSyncStackPRs_RemoteStack_FallsBackOnAPIError(t *testing.T) {
 
 	cfg, outR, errR := config.NewTestConfig()
 	cfg.GitHubClientOverride = &github.MockClient{
-		ListStacksFn: func() ([]github.RemoteStack, error) {
+		GetStackFn: func(int) (*github.RemoteStack, error) {
 			return nil, fmt.Errorf("API error")
 		},
 		FindPRForBranchFn: func(branch string) (*github.PullRequest, error) {

@@ -762,32 +762,54 @@ func enrichPRContent(client github.ClientOps, details map[string]*github.PRDetai
 // closed. Returns the PRDetails map and true if sync succeeded, or nil and
 // false if we should fall back to local discovery.
 func syncStackPRsFromRemote(client github.ClientOps, s *stack.Stack) (map[string]*github.PRDetails, bool) {
-	stacks, err := client.ListStacks()
-	if err != nil {
+	fetched, ok := fetchRemoteStackPRs(client, s)
+	if !ok {
 		return nil, false
 	}
+	return applyRemoteStackPRs(s, fetched), true
+}
 
-	// Find our stack in the remote list.
-	var remotePRNumbers []int
-	for _, rs := range stacks {
-		if strconv.Itoa(rs.ID) == s.ID {
-			remotePRNumbers = rs.PRNumbers()
-			// Backfill the human-facing stack number for stack files created
-			// before it was tracked, so callers (view, submit TUI) can display
-			// it. Persisted by whichever command later saves the stack file.
-			if s.Number == 0 {
-				s.Number = rs.Number
-			}
-			break
+// remoteStackPRs is one fetch of a tracked stack's pull requests.
+// - numbers lists the stack's PRs from bottom to top
+// - queried appends merged PRs that are no longer in the stack but still need their head SHA
+// - prs is parallel to queried and holds nil where a lookup failed
+type remoteStackPRs struct {
+	numbers []int
+	queried []int
+	prs     []*github.PullRequest
+}
+
+// stackPRs returns the stack's PRs in order, or false if any lookup failed.
+func (r *remoteStackPRs) stackPRs() ([]*github.PullRequest, bool) {
+	prs := r.prs[:len(r.numbers)]
+	for _, pr := range prs {
+		if pr == nil {
+			return nil, false
 		}
 	}
-	if remotePRNumbers == nil {
+	return prs, true
+}
+
+// fetchRemoteStackPRs reads the tracked stack by number, then fetches its PRs concurrently.
+// It returns false when the stack can't be read.
+func fetchRemoteStackPRs(client github.ClientOps, s *stack.Stack) (*remoteStackPRs, bool) {
+	if s.ID == "" {
 		return nil, false
 	}
 
-	remotePRCount := len(remotePRNumbers)
-	queried := make(map[int]bool, remotePRCount)
-	for _, number := range remotePRNumbers {
+	number, err := ensureStackNumber(client, s)
+	if err != nil || number == 0 {
+		return nil, false
+	}
+	rs, err := client.GetStack(number)
+	if err != nil || rs == nil || strconv.Itoa(rs.ID) != s.ID || rs.PRNumbers() == nil {
+		return nil, false
+	}
+
+	numbers := rs.PRNumbers()
+	remotePRNumbers := slices.Clone(numbers)
+	queried := make(map[int]bool, len(numbers))
+	for _, number := range numbers {
 		queried[number] = true
 	}
 	for _, b := range s.Branches {
@@ -798,10 +820,7 @@ func syncStackPRsFromRemote(client github.ClientOps, s *stack.Stack) (map[string
 		}
 	}
 
-	// Fetch each remote PR concurrently. Results are written to an ordered
-	// slice (one slot per PR number) so that when we build the branch map
-	// below, later entries win on duplicate HeadRefNames — matching the
-	// sequential behavior of the old code.
+	// Fetch each remote PR concurrently.
 	prResults := make([]*github.PullRequest, len(remotePRNumbers))
 
 	var wg sync.WaitGroup
@@ -825,6 +844,16 @@ func syncStackPRsFromRemote(client github.ClientOps, s *stack.Stack) (map[string
 		}(i, num)
 	}
 	wg.Wait()
+
+	return &remoteStackPRs{numbers: numbers, queried: remotePRNumbers, prs: prResults}, true
+}
+
+// applyRemoteStackPRs updates the local branches from a remote stack fetch and
+// returns PRDetails keyed by branch name.
+func applyRemoteStackPRs(s *stack.Stack, fetched *remoteStackPRs) map[string]*github.PRDetails {
+	remotePRCount := len(fetched.numbers)
+	prResults := fetched.prs
+	remotePRNumbers := fetched.queried
 
 	// Build map sequentially to preserve order semantics.
 	prByBranch := make(map[string]*github.PullRequest, len(remotePRNumbers))
@@ -857,7 +886,7 @@ func syncStackPRsFromRemote(client github.ClientOps, s *stack.Stack) (map[string
 		details[b.Branch] = prDetailsFromPR(pr)
 	}
 
-	return details, true
+	return details
 }
 
 // updateBaseSHAs refreshes the Base and Head SHAs for all active branches
@@ -2053,6 +2082,10 @@ type remoteReconcileResult struct {
 	// cancels or deletes the remote stack, and when a divergence is detected in a
 	// non-interactive terminal. The resolving path prints its own outcome message.
 	stop bool
+
+	// remotePRs, when non-nil, is the PR fetch reconcile made for a stack it
+	// left unchanged, so runSync can refresh PR state without fetching again.
+	remotePRs *remoteStackPRs
 }
 
 // remoteStackClass classifies the relationship between the local stack's active
@@ -2086,29 +2119,12 @@ func reconcileRemoteStack(cfg *config.Config, sf *stack.StackFile, s *stack.Stac
 		return res, nil
 	}
 
-	stacks, err := client.ListStacks()
-	if err != nil {
-		// Covers 404 (stacked PRs unavailable) and transient API errors.
+	fetched, ok := fetchRemoteStackPRs(client, s)
+	if !ok {
 		return res, nil
 	}
-
-	var remotePRNumbers []int
-	found := false
-	for _, rs := range stacks {
-		if strconv.Itoa(rs.ID) == s.ID {
-			remotePRNumbers = rs.PRNumbers()
-			found = true
-			break
-		}
-	}
-	if !found {
-		// The remote stack was deleted; the existing updateStack 404 → recreate
-		// path in syncStack handles this.
-		return res, nil
-	}
-
-	prs, err := fetchStackPRDetails(client, remotePRNumbers)
-	if err != nil {
+	prs, ok := fetched.stackPRs()
+	if !ok {
 		return res, nil
 	}
 
@@ -2121,6 +2137,7 @@ func reconcileRemoteStack(cfg *config.Config, sf *stack.StackFile, s *stack.Stac
 		// fast-forward/rebase/push steps skip merged and merge-queued branches
 		// rather than rewriting them before the later PR-sync step runs.
 		syncRemotePRState(s, prs)
+		res.remotePRs = fetched
 		return res, nil
 	case remoteStackCleanAhead:
 		return pullRemoteAdditions(cfg, sf, s, gitDir, remote, prs)
