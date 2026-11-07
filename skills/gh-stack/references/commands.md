@@ -192,7 +192,7 @@ Removes the stack **grouping** only. It never deletes pull requests or branches.
 
 `up` and `down` accept a
 count (`gh stack up 3`). Movement clamps at the stack bounds, and merged branches are skipped when
-navigating from an active branch, so `bottom` lands on the lowest *unmerged* branch.
+navigating from an active branch, so `bottom` lands on the lowest *active* branch.
 
 `gh stack switch` is a selection menu with no non-interactive path. Use the commands above instead.
 
