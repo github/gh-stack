@@ -172,8 +172,6 @@ an ancestor of the branch.
   affected clean owners; unoccupied branches use the origin. Drop/fold source branches and
   worktrees are preserved. Recovery flags may run from any worktree and use recorded native
   operation owners; never resolve/stage in the caller's tree unless the diagnostic names it.
-- There is no non-interactive reorder or removal. Errors may suggest `gh stack modify`, but it is
-  TUI-only — restructure with `unstack` then `init` instead.
 - PR titles and bodies are auto-generated. Use `gh pr edit` afterwards to change them.
 
 ## More detail
