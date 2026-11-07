@@ -31,7 +31,7 @@ branch does not exist, it is created from the trunk; each later new branch is cr
 branch immediately before it. There is no separate adopt mode — existence decides. `--base`
 selects a non-default trunk.
 
-`init` also enables `git rerere`. Under a TTY the first run in a repo asks for confirmation; set
+Under a TTY the first run in a repo asks for confirmation; set
 `git config rerere.enabled true` beforehand to skip it.
 
 ## add
