@@ -25,9 +25,7 @@ gh stack rebase --continue     # repeat if the next branch also conflicts
 
 `gh stack rebase --abort` restores every branch in the stack, not just the current one.
 
-Because `init` enables `git rerere`, a conflict you resolve once is replayed automatically the next
-time the same conflict appears — which is common, since a change low in the stack is rebased through
-every branch above it. Without `rerere`, repeated conflicts may need manual resolution on each
+Without `rerere`, repeated conflicts may need manual resolution on each
 affected layer.
 
 ## After a squash merge
