@@ -103,7 +103,7 @@ if errors.As(err, &exitErr) { ... }
 ### Testing patterns
 
 - **Framework:** `stretchr/testify` (`assert`, `require`) for assertions.
-- **Table-driven tests** are the norm. See `cmd/utils_test.go` for examples.
+- **Test cases:** Define each case as an individual `Test...` function, sharing setup helpers where useful.
 - **Config:** Use `config.NewTestConfig()` which returns `(*Config, stdoutReader, stderrReader)` with captured I/O and no-op color functions.
 - **Git mocking:** Call `git.SetOps(&git.MockOps{...})`. It returns a restore function. Always `defer restore()` to prevent test pollution.
 - **GitHub mocking:** Set `cfg.GitHubClientOverride = &github.MockClient{...}`.
