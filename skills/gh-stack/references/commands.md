@@ -190,7 +190,7 @@ Removes the stack **grouping** only. It never deletes pull requests or branches.
 
 ## Navigation
 
-`up`, `down`, `top`, `bottom`, and `trunk` are always non-interactive. `up` and `down` accept a
+`up` and `down` accept a
 count (`gh stack up 3`). Movement clamps at the stack bounds, and merged branches are skipped when
 navigating from an active branch, so `bottom` lands on the lowest *unmerged* branch.
 
