@@ -103,7 +103,7 @@ if errors.As(err, &exitErr) { ... }
 ### Testing patterns
 
 - **Framework:** `stretchr/testify` (`assert`, `require`) for assertions.
-- **Table-driven tests** are the norm. See `cmd/utils_test.go` for examples.
+- **Test cases:** Define each case as an individual `Test...` function, sharing setup helpers where useful.
 - **Config:** Use `config.NewTestConfig()` which returns `(*Config, stdoutReader, stderrReader)` with captured I/O and no-op color functions.
 - **Git mocking:** Call `git.SetOps(&git.MockOps{...})`. It returns a restore function. Always `defer restore()` to prevent test pollution.
 - **GitHub mocking:** Set `cfg.GitHubClientOverride = &github.MockClient{...}`.
@@ -144,7 +144,6 @@ if errors.As(err, &exitErr) { ... }
 - The `Queued` field on `BranchRef` is transient (populated from GitHub API, never persisted to the stack JSON file).
 - `git.SetOps()` replaces the **package-level** ops variable. Forgetting `defer restore()` in a test will break every subsequent test in the package.
 - Interrupt detection: Ctrl+C is caught as `terminal.InterruptErr`, wrapped into an `errInterrupt` sentinel, and printed with a friendly message before a silent exit.
-- Rerere: on first rebase conflict, the user is prompted to enable `git rerere`. If declined, a flag file prevents future prompts. `tryAutoResolveRebase()` loops up to 1000 times auto-continuing when rerere resolves conflicts.
 - Rebase commands disable automatic maintenance through command-local configuration so detached `rerere gc` cannot race conflict handling. Repository settings and unrelated Git commands are unchanged.
 - Date-preserving rebase starts use the merge backend so Git persists the date setting across conflicts. Continuations use native saved settings, not start-only date flags.
 - The `.gitignore` ignores `/gh-stack` and `/gh-stack.exe` (the built binary).

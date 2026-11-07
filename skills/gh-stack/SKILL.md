@@ -58,7 +58,6 @@ Agent harnesses differ, so always pass the flags below instead of relying on tha
 | `gh stack up` / `down` / `top` / `bottom` | `gh stack switch` | `switch` is menu-only |
 | — | `gh stack modify` | TUI-only, no non-interactive path |
 
-- `view --short` is safe in both modes, but it is formatted for humans. Use `--json` to parse.
 - **`checkout <pr>` when a different local stack already covers those branches** cannot be forced.
   Run `gh stack unstack --local` first (this keeps the stack on GitHub), then retry.
 - **Worktrees:** local stacks share one common-directory catalog. Use `--print-path` with
@@ -68,8 +67,6 @@ Agent harnesses differ, so always pass the flags below instead of relying on tha
 
 ## Branch placement
 
-- **Starting multi-part work:** create the stack before writing files. Do not implement every
-  concern on trunk and split it later. Put one dependent concern in each layer, bottom to top.
 - **Editing an existing stack:** check out the layer that owns the change before editing. Never
   commit a lower layer's concern on the current top branch. Run `gh stack view --json`; if
   ownership is unclear, inspect `git log --all -- <path>`. Then check out the owner, edit, commit,
@@ -175,8 +172,6 @@ an ancestor of the branch.
   affected clean owners; unoccupied branches use the origin. Drop/fold source branches and
   worktrees are preserved. Recovery flags may run from any worktree and use recorded native
   operation owners; never resolve/stage in the caller's tree unless the diagnostic names it.
-- There is no non-interactive reorder or removal. Errors may suggest `gh stack modify`, but it is
-  TUI-only — restructure with `unstack` then `init` instead.
 - PR titles and bodies are auto-generated. Use `gh pr edit` afterwards to change them.
 
 ## More detail

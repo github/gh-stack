@@ -31,7 +31,7 @@ branch does not exist, it is created from the trunk; each later new branch is cr
 branch immediately before it. There is no separate adopt mode — existence decides. `--base`
 selects a non-default trunk.
 
-`init` also enables `git rerere`. Under a TTY the first run in a repo asks for confirmation; set
+Under a TTY the first run in a repo asks for confirmation; set
 `git config rerere.enabled true` beforehand to skip it.
 
 ## add
@@ -190,9 +190,9 @@ Removes the stack **grouping** only. It never deletes pull requests or branches.
 
 ## Navigation
 
-`up`, `down`, `top`, `bottom`, and `trunk` are always non-interactive. `up` and `down` accept a
+`up` and `down` accept a
 count (`gh stack up 3`). Movement clamps at the stack bounds, and merged branches are skipped when
-navigating from an active branch, so `bottom` lands on the lowest *unmerged* branch.
+navigating from an active branch, so `bottom` lands on the lowest *active* branch.
 
 `gh stack switch` is a selection menu with no non-interactive path. Use the commands above instead.
 
