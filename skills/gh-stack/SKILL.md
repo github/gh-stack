@@ -67,8 +67,6 @@ Agent harnesses differ, so always pass the flags below instead of relying on tha
 
 ## Branch placement
 
-- **Starting multi-part work:** create the stack before writing files. Do not implement every
-  concern on trunk and split it later. Put one dependent concern in each layer, bottom to top.
 - **Editing an existing stack:** check out the layer that owns the change before editing. Never
   commit a lower layer's concern on the current top branch. Run `gh stack view --json`; if
   ownership is unclear, inspect `git log --all -- <path>`. Then check out the owner, edit, commit,
