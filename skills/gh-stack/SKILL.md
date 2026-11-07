@@ -58,7 +58,6 @@ Agent harnesses differ, so always pass the flags below instead of relying on tha
 | `gh stack up` / `down` / `top` / `bottom` | `gh stack switch` | `switch` is menu-only |
 | — | `gh stack modify` | TUI-only, no non-interactive path |
 
-- `view --short` is safe in both modes, but it is formatted for humans. Use `--json` to parse.
 - **`checkout <pr>` when a different local stack already covers those branches** cannot be forced.
   Run `gh stack unstack --local` first (this keeps the stack on GitHub), then retry.
 - **Worktrees:** local stacks share one common-directory catalog. Use `--print-path` with
