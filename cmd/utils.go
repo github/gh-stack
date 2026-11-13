@@ -516,7 +516,8 @@ func resolveStack(sf *stack.StackFile, branch string, cfg *config.Config) (*stac
 
 // syncStackPRs discovers and updates pull request metadata for branches in a stack.
 // It also collects PRDetails for each branch, returned as a map keyed by branch name.
-// The returned map is consumed by LoadBranchNodes to avoid redundant API calls.
+// The returned map supports base revalidation after fast-forwarding and lets
+// LoadBranchNodes avoid redundant API calls.
 //
 // When the stack has a remote ID, the stack API is the source of truth: the
 // authoritative PR list is fetched from the server and matched to local
@@ -626,14 +627,16 @@ func syncStackPRs(cfg *config.Config, s *stack.Stack) map[string]*github.PRDetai
 			res.queued = pr.IsQueued()
 			// FindPRForBranch only returns OPEN PRs
 			res.details = &github.PRDetails{
-				Number:   pr.Number,
-				State:    "OPEN",
-				URL:      pr.URL,
-				Title:    pr.Title,
-				Body:     pr.Body,
-				IsDraft:  pr.IsDraft,
-				Merged:   false,
-				IsQueued: pr.IsQueued(),
+				Number:      pr.Number,
+				State:       "OPEN",
+				URL:         pr.URL,
+				Title:       pr.Title,
+				Body:        pr.Body,
+				IsDraft:     pr.IsDraft,
+				Merged:      false,
+				IsQueued:    pr.IsQueued(),
+				BaseRefName: pr.BaseRefName,
+				BaseRefOID:  pr.BaseRefOID,
 			}
 			results[idx] = res
 		}(i, b)
@@ -653,7 +656,6 @@ func syncStackPRs(cfg *config.Config, s *stack.Stack) map[string]*github.PRDetai
 		if res.pullRequest != nil {
 			b.PullRequest = pullRequestRef(res.pullRequest, b.PullRequest)
 			b.Queued = res.queued
-			updateBaseFromPR(s, b, res.pullRequest)
 		} else if !b.IsMerged() {
 			// Clear if we didn't find anything (and original was cleared during discovery)
 			if b.PullRequest != nil && res.pullRequest == nil {
@@ -662,6 +664,7 @@ func syncStackPRs(cfg *config.Config, s *stack.Stack) map[string]*github.PRDetai
 			}
 		}
 	}
+	updateBasesFromPRs(s, details)
 
 	return details
 }
@@ -695,13 +698,19 @@ func pullRequestRef(pr *github.PullRequest, previous *stack.PullRequestRef) *sta
 	return ref
 }
 
-func updateBaseFromPR(s *stack.Stack, b *stack.BranchRef, pr *github.PullRequest) {
-	if b.IsMerged() || pr.BaseRefOID == "" || pr.BaseRefName != s.ActiveBaseBranch(b.Branch) {
-		return
-	}
-	// A PR retains its old parent tip even when a fresh clone has no reflog for it.
-	if canUpdateBase(pr.BaseRefOID, b.Branch, b.Base) {
-		b.Base = pr.BaseRefOID
+func updateBasesFromPRs(s *stack.Stack, prs map[string]*github.PRDetails) {
+	parent := s.Trunk.Branch
+	for i := range s.Branches {
+		b := &s.Branches[i]
+		if b.IsMerged() {
+			continue
+		}
+		// A PR retains its old parent tip even when a fresh clone has no reflog for it.
+		if pr := prs[b.Branch]; pr != nil && pr.BaseRefName == parent &&
+			pr.BaseRefOID != "" && canUpdateBase(pr.BaseRefOID, b.Branch, b.Base) {
+			b.Base = pr.BaseRefOID
+		}
+		parent = b.Branch // Queued branches remain parents.
 	}
 }
 
@@ -711,14 +720,16 @@ func prDetailsFromPR(pr *github.PullRequest) *github.PRDetails {
 		return nil
 	}
 	return &github.PRDetails{
-		Number:   pr.Number,
-		State:    pr.State,
-		URL:      pr.URL,
-		Title:    pr.Title,
-		Body:     pr.Body,
-		IsDraft:  pr.IsDraft,
-		Merged:   pr.Merged,
-		IsQueued: pr.IsQueued(),
+		Number:      pr.Number,
+		State:       pr.State,
+		URL:         pr.URL,
+		Title:       pr.Title,
+		Body:        pr.Body,
+		IsDraft:     pr.IsDraft,
+		Merged:      pr.Merged,
+		IsQueued:    pr.IsQueued(),
+		BaseRefName: pr.BaseRefName,
+		BaseRefOID:  pr.BaseRefOID,
 	}
 }
 
@@ -865,9 +876,9 @@ func syncStackPRsFromRemote(client github.ClientOps, s *stack.Stack) (map[string
 		}
 		b.PullRequest = pullRequestRef(pr, b.PullRequest)
 		b.Queued = pr.IsQueued()
-		updateBaseFromPR(s, b, pr)
 		details[b.Branch] = prDetailsFromPR(pr)
 	}
+	updateBasesFromPRs(s, details)
 
 	return details, true
 }

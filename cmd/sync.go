@@ -162,7 +162,7 @@ func runSync(cfg *config.Config, opts *syncOptions) error {
 	if cb, cbErr := git.CurrentBranch(); cbErr == nil {
 		currentBranch = cb
 	}
-	_ = syncStackPRs(cfg, s)
+	prDetails := syncStackPRs(cfg, s)
 	newBase, err := retargetedBase(cfg, s, remote)
 	if err != nil {
 		cfg.Errorf("failed to read the stack's base on GitHub: %v", err)
@@ -210,6 +210,7 @@ func runSync(cfg *config.Config, opts *syncOptions) error {
 		cfg.Errorf("%s", err)
 		return ErrSilent
 	}
+	updateBasesFromPRs(s, prDetails)
 
 	// --- Step 3: Cascade rebase ---
 	needsRebase := newBase != "" || trunk.Moved || len(updatedBranches) > 0 || stackNeedsRebase(s, trunk.Ref)

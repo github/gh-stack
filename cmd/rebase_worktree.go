@@ -291,10 +291,19 @@ func continueWorktreeRebase(cfg *config.Config, dir string, state *rebaseState) 
 }
 
 func savedCascadeOpts(cfg *config.Config, dir string, state *rebaseState, s *stack.Stack) cascadeRebaseOpts {
+	branches := slices.Clone(s.Branches[state.CurrentBranchIndex:state.EndIndex])
+	if state.OriginalStack != nil {
+		// Continuation must keep the cutoffs captured before any branch was rebased.
+		for i := range branches {
+			if original := state.OriginalStack.IndexOf(branches[i].Branch); original >= 0 {
+				branches[i].Base = state.OriginalStack.Branches[original].Base
+			}
+		}
+	}
 	return cascadeRebaseOpts{
 		Cfg:                       cfg,
 		Stack:                     s,
-		Branches:                  s.Branches[state.CurrentBranchIndex:state.EndIndex],
+		Branches:                  branches,
 		StartAbsIdx:               state.CurrentBranchIndex,
 		OriginalRefs:              state.OriginalRefs,
 		NeedsOnto:                 state.UseOnto,
