@@ -1261,10 +1261,12 @@ func TestSyncStackPRs_NoTrackedPR_AdoptsOpenPR(t *testing.T) {
 	cfg.GitHubClientOverride = &github.MockClient{
 		FindPRForBranchFn: func(branch string) (*github.PullRequest, error) {
 			return &github.PullRequest{
-				Number: 99,
-				ID:     "PR_99",
-				URL:    "https://github.com/o/r/pull/99",
-				State:  "OPEN",
+				Number:      99,
+				ID:          "PR_99",
+				URL:         "https://github.com/o/r/pull/99",
+				State:       "OPEN",
+				BaseRefName: "main",
+				BaseRefOID:  "base-sha",
 			}, nil
 		},
 	}
@@ -1275,6 +1277,34 @@ func TestSyncStackPRs_NoTrackedPR_AdoptsOpenPR(t *testing.T) {
 	require.NotNil(t, s.Branches[0].PullRequest)
 	assert.Equal(t, 99, s.Branches[0].PullRequest.Number)
 	assert.False(t, s.Branches[0].PullRequest.Merged)
+	assert.Equal(t, "base-sha", s.Branches[0].Base)
+}
+
+func TestSyncStackPRs_PreservesDifferentLocalBaseBranch(t *testing.T) {
+	s := &stack.Stack{
+		Trunk: stack.BranchRef{Branch: "main"},
+		Branches: []stack.BranchRef{{
+			Branch: "feature", Base: "local-base", PullRequest: &stack.PullRequestRef{Number: 99},
+		}},
+	}
+	restore := git.SetOps(&git.MockOps{
+		IsAncestorFn: func(a, b string) (bool, error) {
+			return a == "remote-base" && b == "feature", nil
+		},
+	})
+	defer restore()
+	cfg := issue250TestConfig(t)
+	cfg.GitHubClientOverride = &github.MockClient{
+		FindPRByNumberFn: func(int) (*github.PullRequest, error) {
+			return &github.PullRequest{
+				Number: 99, State: "OPEN", BaseRefName: "previous-parent", BaseRefOID: "remote-base",
+			}, nil
+		},
+	}
+
+	syncStackPRs(cfg, s)
+
+	assert.Equal(t, "local-base", s.Branches[0].Base)
 }
 
 func TestSyncStackPRs_TrackedPR_DetectsMerge(t *testing.T) {

@@ -185,7 +185,7 @@ func runRebase(cfg *config.Config, opts *rebaseOptions) error {
 		cfg.Printf("No branches to rebase")
 		return nil
 	}
-	_ = syncStackPRs(cfg, s)
+	prDetails := syncStackPRs(cfg, s)
 	ctx, err := worktree.New()
 	if err != nil {
 		cfg.Errorf("%s", err)
@@ -244,6 +244,7 @@ func runRebase(cfg *config.Config, opts *rebaseOptions) error {
 			cfg.Errorf("%s", err)
 			return ErrSilent
 		}
+		updateBasesFromPRs(s, prDetails)
 	} else if err := ctx.Preflight(required); err != nil {
 		cfg.Errorf("%s", err)
 		return ErrSilent

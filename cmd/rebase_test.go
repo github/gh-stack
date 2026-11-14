@@ -2843,6 +2843,159 @@ func TestIntegration_AmendedParentWithoutForkPointFailsSafely(t *testing.T) {
 	assert.Equal(t, childBefore, issue250Git(t, repo.dir, "rev-parse", "child"))
 }
 
+func setupImportedStackAfterParentAdvance(t *testing.T) (issue512Repo, *config.Config, []*github.PullRequest) {
+	t.Helper()
+	repo := setupIssue512Repo(t)
+	issue250Git(t, repo.dir, "checkout", "parent")
+	issue250WriteFile(t, repo.dir, "parent-extra.txt", "new parent content\n")
+	issue250Git(t, repo.dir, "add", "parent-extra.txt")
+	issue250Git(t, repo.dir, "commit", "-m", "parent extra")
+	issue250Git(t, repo.dir, "push", "origin", "parent")
+	newParent := issue250Git(t, repo.dir, "rev-parse", "parent")
+
+	prs := []*github.PullRequest{
+		{Number: 10, HeadRefName: "parent", BaseRefName: "main", BaseRefOID: repo.main, State: "OPEN"},
+		{Number: 11, HeadRefName: "child", BaseRefName: "parent", BaseRefOID: repo.parent, State: "OPEN"},
+	}
+	remote := github.RemoteStack{
+		ID: 1, Number: 1, Base: github.RemoteStackBase{Ref: "main"}, PullRequests: []int{10, 11},
+	}
+	cfg := issue250TestConfig(t)
+	cfg.GitHubClientOverride = &github.MockClient{
+		ListStacksFn: func() ([]github.RemoteStack, error) {
+			return []github.RemoteStack{remote}, nil
+		},
+		GetStackFn: func(int) (*github.RemoteStack, error) { return &remote, nil },
+		FindPRByNumberFn: func(number int) (*github.PullRequest, error) {
+			return prs[number-10], nil
+		},
+	}
+	withIssue250Repo(t, repo.writer)
+	gitDir := filepath.Join(repo.writer, ".git")
+	sf, err := stack.Load(gitDir)
+	require.NoError(t, err)
+	s, err := importRemoteStack(cfg, sf, gitDir, "origin", "main", prs, "1", 1)
+	require.NoError(t, err)
+	require.Equal(t, newParent, s.Branches[1].Base)
+	require.NoError(t, stack.Save(gitDir, sf))
+	issue250Git(t, repo.writer, "checkout", "child")
+	forkPoint, err := git.MergeBaseForkPoint("parent", "child")
+	require.NoError(t, err)
+	require.Empty(t, forkPoint)
+
+	return repo, cfg, prs
+}
+
+func assertImportedStackRebased(t *testing.T, dir, recordedBase string) {
+	t.Helper()
+	parent := issue250Git(t, dir, "rev-parse", "parent")
+	assert.Equal(t, parent, issue250Git(t, dir, "merge-base", "parent", "child"))
+	assert.Equal(t, "child only", issue250Git(t, dir, "log", "--format=%s", "parent..child"))
+	assert.Equal(t, "new parent content", issue250Git(t, dir, "show", "child:parent-extra.txt"))
+	assert.Equal(t, "child", issue250Git(t, dir, "show", "child:child.txt"))
+	gitDir := filepath.Join(dir, ".git")
+	sf, err := stack.Load(gitDir)
+	require.NoError(t, err)
+	assert.Equal(t, recordedBase, sf.Stacks[0].Branches[1].Base)
+	assert.NoFileExists(t, filepath.Join(gitDir, rebaseStateFile))
+}
+
+func TestRebase_ImportedStackAfterParentAdvance(t *testing.T) {
+	repo, cfg, _ := setupImportedStackAfterParentAdvance(t)
+	parent := issue250Git(t, repo.writer, "rev-parse", "parent")
+
+	require.NoError(t, runRebase(cfg, &rebaseOptions{remote: "origin"}))
+
+	assertImportedStackRebased(t, repo.writer, parent)
+}
+
+func TestRebase_ImportedStackAfterQueuedParentAdvance(t *testing.T) {
+	repo, cfg, prs := setupImportedStackAfterParentAdvance(t)
+	prs[0].MergeQueueEntry = &github.MergeQueueEntry{ID: "queued-parent"}
+	parent := issue250Git(t, repo.writer, "rev-parse", "parent")
+
+	require.NoError(t, runRebase(cfg, &rebaseOptions{remote: "origin"}))
+
+	assert.Equal(t, parent, issue250Git(t, repo.writer, "rev-parse", "parent"))
+	assertImportedStackRebased(t, repo.writer, repo.parent)
+}
+
+func TestRebase_ImportedStackContinueWithoutPRRefresh(t *testing.T) {
+	repo, cfg, _ := setupImportedStackAfterParentAdvance(t)
+	issue250Git(t, repo.dir, "checkout", "main")
+	issue250WriteFile(t, repo.dir, "parent-extra.txt", "conflicting trunk content\n")
+	issue250Git(t, repo.dir, "add", "parent-extra.txt")
+	issue250Git(t, repo.dir, "commit", "-m", "trunk conflict")
+	issue250Git(t, repo.dir, "push", "origin", "main")
+	gitDir := filepath.Join(repo.writer, ".git")
+	catalog, err := stack.Load(gitDir)
+	require.NoError(t, err)
+	require.NotEqual(t, repo.parent, catalog.Stacks[0].Branches[1].Base)
+
+	require.ErrorIs(t, runRebase(cfg, &rebaseOptions{remote: "origin"}), ErrConflict)
+	state, err := loadRebaseState(gitDir)
+	require.NoError(t, err)
+	assert.Equal(t, "parent", state.ConflictBranch)
+	require.Equal(t, repo.parent, state.OriginalStack.Branches[1].Base)
+	issue250WriteFile(t, repo.writer, "parent-extra.txt", "new parent content\n")
+	issue250Git(t, repo.writer, "add", "parent-extra.txt")
+	cfg.GitHubClientOverride = &github.MockClient{
+		ListStacksFn: func() ([]github.RemoteStack, error) {
+			return nil, errors.New("GitHub unavailable")
+		},
+		FindPRByNumberFn: func(int) (*github.PullRequest, error) {
+			return nil, errors.New("GitHub unavailable")
+		},
+	}
+
+	require.NoError(t, runRebase(cfg, &rebaseOptions{cont: true}))
+
+	parent := issue250Git(t, repo.writer, "rev-parse", "parent")
+	assertImportedStackRebased(t, repo.writer, parent)
+	require.NoError(t, issue250GitMayFail(t, repo.writer, "merge-base", "--is-ancestor", "origin/main", "parent"))
+}
+
+func testImportedStackFastForwardUsesPRBase(t *testing.T, run func(*config.Config) error) {
+	t.Helper()
+	repo, cfg, prs := setupImportedStackAfterParentAdvance(t)
+	oldBase := issue250Git(t, repo.dir, "rev-parse", "parent")
+	issue250WriteFile(t, repo.dir, "parent-latest.txt", "latest parent content\n")
+	issue250Git(t, repo.dir, "add", "parent-latest.txt")
+	issue250Git(t, repo.dir, "commit", "-m", "parent latest")
+	issue250Git(t, repo.dir, "push", "origin", "parent")
+	issue250Git(t, repo.writer, "fetch", "origin")
+	issue250Git(t, repo.writer, "update-ref", "refs/heads/parent", "origin/parent", oldBase)
+	parent := issue250Git(t, repo.writer, "rev-parse", "parent")
+
+	// Re-import before the remote child catches up, recording the advanced parent.
+	gitDir := filepath.Join(repo.writer, ".git")
+	sf, err := stack.Load(gitDir)
+	require.NoError(t, err)
+	sf.Stacks = nil
+	_, err = importRemoteStack(cfg, sf, gitDir, "origin", "main", prs, "1", 1)
+	require.NoError(t, err)
+	require.Equal(t, parent, sf.Stacks[0].Branches[1].Base)
+	require.NoError(t, stack.Save(gitDir, sf))
+	issue250Git(t, repo.writer, "reflog", "expire", "--expire=now", "--all")
+
+	issue250Git(t, repo.dir, "checkout", "child")
+	issue250Git(t, repo.dir, "merge", "--no-ff", oldBase, "-m", "merge updated parent")
+	issue250Git(t, repo.dir, "push", "origin", "child")
+	prs[1].BaseRefOID = oldBase
+	require.Error(t, issue250GitMayFail(t, repo.writer, "merge-base", "--is-ancestor", oldBase, "child"))
+
+	require.NoError(t, run(cfg))
+
+	assertImportedStackRebased(t, repo.writer, parent)
+	assert.Equal(t, "latest parent content", issue250Git(t, repo.writer, "show", "child:parent-latest.txt"))
+}
+
+func TestRebase_ImportedStackFastForwardUsesPRBase(t *testing.T) {
+	testImportedStackFastForwardUsesPRBase(t, func(cfg *config.Config) error {
+		return runRebase(cfg, &rebaseOptions{remote: "origin"})
+	})
+}
+
 func TestIntegration_AdoptedBranchRebasesFromCommonAncestor(t *testing.T) {
 	remoteDir := filepath.Join(t.TempDir(), "remote.git")
 	cloneDir := filepath.Join(t.TempDir(), "clone")

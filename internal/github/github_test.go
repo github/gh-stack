@@ -118,6 +118,7 @@ func TestFindPRByNumber_MergedHead(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			pr := map[string]any{
 				"number": 42, "state": "MERGED", "merged": true, "headRefName": "feature",
+				"baseRefOid": "previous-base",
 			}
 			if !tt.omit {
 				pr["headRefOid"] = tt.head
@@ -132,6 +133,7 @@ func TestFindPRByNumber_MergedHead(t *testing.T) {
 				}
 				require.NoError(t, json.NewDecoder(r.Body).Decode(&request))
 				assert.Contains(t, request.Query, "headRefOid")
+				assert.Contains(t, request.Query, "baseRefOid")
 				return &http.Response{
 					StatusCode: http.StatusOK,
 					Body:       io.NopCloser(bytes.NewReader(body)),
@@ -150,6 +152,7 @@ func TestFindPRByNumber_MergedHead(t *testing.T) {
 			require.NotNil(t, got)
 			assert.True(t, got.Merged)
 			assert.Equal(t, tt.head, got.HeadRefOID)
+			assert.Equal(t, "previous-base", got.BaseRefOID)
 		})
 	}
 }

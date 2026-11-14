@@ -35,6 +35,7 @@ type PullRequest struct {
 	HeadRefName      string            `graphql:"headRefName"`
 	HeadRefOID       string            `graphql:"headRefOid"`
 	BaseRefName      string            `graphql:"baseRefName"`
+	BaseRefOID       string            `graphql:"baseRefOid"`
 	IsDraft          bool              `graphql:"isDraft"`
 	Merged           bool              `graphql:"merged"`
 	MergeQueueEntry  *MergeQueueEntry  `graphql:"mergeQueueEntry"`
@@ -116,6 +117,7 @@ func (c *Client) FindPRForBranch(branch string) (*PullRequest, error) {
 					Title            string            `graphql:"title"`
 					Body             string            `graphql:"body"`
 					BaseRefName      string            `graphql:"baseRefName"`
+					BaseRefOID       string            `graphql:"baseRefOid"`
 					IsDraft          bool              `graphql:"isDraft"`
 					MergeQueueEntry  *MergeQueueEntry  `graphql:"mergeQueueEntry"`
 					AutoMergeRequest *AutoMergeRequest `graphql:"autoMergeRequest"`
@@ -147,6 +149,7 @@ func (c *Client) FindPRForBranch(branch string) (*PullRequest, error) {
 		Title:            n.Title,
 		Body:             n.Body,
 		BaseRefName:      n.BaseRefName,
+		BaseRefOID:       n.BaseRefOID,
 		IsDraft:          n.IsDraft,
 		MergeQueueEntry:  n.MergeQueueEntry,
 		AutoMergeRequest: n.AutoMergeRequest,
@@ -290,7 +293,7 @@ func (c *Client) repositoryID() (string, error) {
 	return query.Repository.ID, nil
 }
 
-// PRDetails holds enriched pull request data for display in the TUI.
+// PRDetails holds enriched pull request data for display and stack operations.
 type PRDetails struct {
 	Number   int
 	State    string // OPEN, CLOSED, MERGED
@@ -300,6 +303,9 @@ type PRDetails struct {
 	IsDraft  bool
 	Merged   bool
 	IsQueued bool
+
+	BaseRefName string
+	BaseRefOID  string
 
 	// Merge evidence for a stack retargeted off this PR's branch.
 	HeadRefOID     string
@@ -376,6 +382,7 @@ func (c *Client) FindPRByNumber(number int) (*PullRequest, error) {
 				HeadRefName      string            `graphql:"headRefName"`
 				HeadRefOID       string            `graphql:"headRefOid"`
 				BaseRefName      string            `graphql:"baseRefName"`
+				BaseRefOID       string            `graphql:"baseRefOid"`
 				IsDraft          bool              `graphql:"isDraft"`
 				Merged           bool              `graphql:"merged"`
 				MergeQueueEntry  *MergeQueueEntry  `graphql:"mergeQueueEntry"`
@@ -408,6 +415,7 @@ func (c *Client) FindPRByNumber(number int) (*PullRequest, error) {
 		HeadRefName:      n.HeadRefName,
 		HeadRefOID:       n.HeadRefOID,
 		BaseRefName:      n.BaseRefName,
+		BaseRefOID:       n.BaseRefOID,
 		IsDraft:          n.IsDraft,
 		Merged:           n.Merged,
 		MergeQueueEntry:  n.MergeQueueEntry,
