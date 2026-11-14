@@ -112,7 +112,7 @@ gh stack add [flags] [branch]
 
 | Flag | Description |
 |------|-------------|
-| `-A, --all` | Stage all changes (including untracked files); requires `-m` |
+| `-A, --all` | Stage all changes (including untracked files) |
 | `-u, --update` | Stage changes to tracked files only; requires `-m` |
 | `-m, --message <string>` | Create a commit with this message before creating the branch |
 
