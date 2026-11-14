@@ -53,7 +53,7 @@ merged PRs.
 Divergence means the local stack and the stack on GitHub changed in different ways — for example
 branches were added locally while a PR was added to the stack on github.com.
 
-When non-interactive, `sync` prints both chains, changes nothing, and exits **0** with
+When non-interactive, `sync` prints both chains and exits **0** with
 `Sync aborted`. Success here does not mean the sync happened; check for that message, or re-run
 `gh stack view --json` and compare.
 
