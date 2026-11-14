@@ -44,7 +44,7 @@ selects a non-default trunk.
 - **`add -Am` commits in place when the current branch has no commits yet** — for example
   immediately after `init` — instead of creating a branch. This is deliberate: the first layer
   usually needs its content before a second layer exists.
-- `-A` and `-u` are mutually exclusive, and both require `-m`.
+- `-A` and `-u` are mutually exclusive.
 - Existing branches owned by another worktree may be adopted without checkout. Commit/stage
   shortcuts are rejected before staging or membership changes; they never commit another
   worktree's files.
