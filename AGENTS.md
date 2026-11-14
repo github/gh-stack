@@ -87,7 +87,7 @@ Use typed exit codes defined in `cmd/utils.go`:
 | 3 | `ErrConflict` | Rebase conflict |
 | 4 | `ErrAPIFailure` | GitHub API error |
 | 5 | `ErrInvalidArgs` | Invalid arguments or flags |
-| 6 | `ErrDisambiguate` | Multiple stacks/remotes, can't auto-select |
+| 6 | `ErrDisambiguate` | Multiple stacks, can't auto-select |
 | 7 | `ErrRebaseActive` | Rebase already in progress |
 | 8 | `ErrLockFailed` | Stack file lock contention |
 | 9 | `ErrStacksUnavailable` | Stacked PRs not enabled for repository |
