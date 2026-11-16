@@ -44,7 +44,7 @@ selects a non-default trunk.
 - **`add -Am` commits in place when the current branch has no commits yet** — for example
   immediately after `init` — instead of creating a branch. This is deliberate: the first layer
   usually needs its content before a second layer exists.
-- `-A` and `-u` are mutually exclusive, and both require `-m`.
+- `-A` and `-u` are mutually exclusive.
 - Existing branches owned by another worktree may be adopted without checkout. Commit/stage
   shortcuts are rejected before staging or membership changes; they never commit another
   worktree's files.
@@ -74,9 +74,9 @@ first non-merged ancestor, then links them into a Stack on GitHub.
   `submit` forks the remaining unmerged branches into a **new** stack rooted at the trunk and creates
   it on GitHub, leaving the merged stack untouched.
 - **Title generation with `--auto`:** a branch with a single commit uses that commit's subject as
-  the title and its body as the PR body. A branch with multiple commits humanizes the branch name
-  (hyphens and underscores become spaces). There is no flag for a custom title or body; use
-  `gh pr edit` afterwards.
+  the title and uses its body for the PR body unless a repository PR template supplies nonempty
+  content. A branch with multiple commits humanizes the branch name (hyphens and underscores
+  become spaces). There is no flag for a custom title or body; use `gh pr edit` afterwards.
 - `--open` marks new *and existing* PRs ready for review; without it new PRs are drafts.
 - Requires stacked PRs to be enabled on the repository. If not, `submit` exits **9** when
   non-interactive (under a TTY it offers to create ordinary unstacked PRs instead).

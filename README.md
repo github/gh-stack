@@ -169,8 +169,8 @@ You can optionally stage changes and create a commit as part of the `add` flow. 
 
 | Flag | Description |
 |------|-------------|
-| `-A, --all` | Stage all changes (including untracked files); requires `-m` |
-| `-u, --update` | Stage changes to tracked files only; requires `-m` |
+| `-A, --all` | Stage all changes (including untracked files) |
+| `-u, --update` | Stage changes to tracked files only |
 | `-m, --message <string>` | Create a commit with this message before creating the branch |
 
 > **Note:** `-A` and `-u` are mutually exclusive.

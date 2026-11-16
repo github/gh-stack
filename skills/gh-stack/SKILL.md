@@ -105,7 +105,7 @@ gh stack sync --prune           # also delete local branches for merged PRs
 ```
 
 Pruning never happens without `--prune` when non-interactive. If the local and remote stacks have
-diverged, `sync` prints both chains, makes no changes, and exits 0 with `Sync aborted` — see
+diverged, `sync` prints both chains and exits 0 with `Sync aborted` — see
 `references/troubleshooting.md`.
 
 ## Merging
