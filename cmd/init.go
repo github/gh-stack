@@ -87,7 +87,7 @@ func runInit(cfg *config.Config, opts *initOptions) error {
 	}
 
 	if trunk == "" {
-		trunk, err = git.DefaultBranch()
+		trunk, err = resolveDefaultBranch(cfg, "")
 		if err != nil {
 			cfg.Errorf("unable to determine default branch\nUse -b to specify the trunk branch")
 			return ErrNotInStack

@@ -22,7 +22,7 @@ type MockOps struct {
 	FetchFn                  func(string) error
 	FetchBranchFn            func(string, string) error
 	FetchBranchesFn          func(string, []string) error
-	DefaultBranchFn          func() (string, error)
+	DefaultBranchFn          func(string) (string, error)
 	CreateBranchFn           func(string, string) error
 	PushFn                   func(string, []string, bool, bool) error
 	ResolveRemoteFn          func(string) (string, error)
@@ -160,9 +160,9 @@ func (m *MockOps) FetchBranches(remote string, branches []string) error {
 	return nil
 }
 
-func (m *MockOps) DefaultBranch() (string, error) {
+func (m *MockOps) DefaultBranch(remote string) (string, error) {
 	if m.DefaultBranchFn != nil {
-		return m.DefaultBranchFn()
+		return m.DefaultBranchFn(remote)
 	}
 	return "main", nil
 }

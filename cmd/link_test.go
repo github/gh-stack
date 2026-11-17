@@ -1409,7 +1409,7 @@ func TestLink_DefaultBase_RetargetsBottomPRToDefaultBranch(t *testing.T) {
 	restore := git.SetOps(&git.MockOps{
 		GitDirFn:       func() (string, error) { return "", fmt.Errorf("not a git repository") },
 		BranchExistsFn: func(string) (bool, error) { return false, nil },
-		DefaultBranchFn: func() (string, error) {
+		DefaultBranchFn: func(string) (string, error) {
 			defaultBranchCalled = true
 			return "develop", nil
 		},
@@ -1477,7 +1477,7 @@ func TestLink_DefaultBase_CreatesBottomPROnDefaultBranch(t *testing.T) {
 		BranchExistsFn:  func(name string) (bool, error) { return name == "feat-a" || name == "feat-b", nil },
 		PushFn:          func(string, []string, bool, bool) error { return nil },
 		ResolveRemoteFn: func(string) (string, error) { return "origin", nil },
-		DefaultBranchFn: func() (string, error) { return "develop", nil },
+		DefaultBranchFn: func(string) (string, error) { return "develop", nil },
 	})
 	defer restore()
 
@@ -1521,7 +1521,7 @@ func TestLink_DefaultBase_ErrorWhenUnresolvable(t *testing.T) {
 	restore := git.SetOps(&git.MockOps{
 		GitDirFn:        func() (string, error) { return "", fmt.Errorf("not a git repository") },
 		BranchExistsFn:  func(string) (bool, error) { return false, nil },
-		DefaultBranchFn: func() (string, error) { return "", fmt.Errorf("no default branch") },
+		DefaultBranchFn: func(string) (string, error) { return "", fmt.Errorf("no default branch") },
 	})
 	defer restore()
 
@@ -1556,7 +1556,7 @@ func TestLink_ExplicitBase_SkipsDefaultBranchResolution(t *testing.T) {
 	restore := git.SetOps(&git.MockOps{
 		GitDirFn:       func() (string, error) { return "", fmt.Errorf("not a git repository") },
 		BranchExistsFn: func(string) (bool, error) { return false, nil },
-		DefaultBranchFn: func() (string, error) {
+		DefaultBranchFn: func(string) (string, error) {
 			defaultBranchCalled = true
 			return "develop", nil
 		},

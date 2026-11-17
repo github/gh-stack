@@ -678,6 +678,32 @@ func TestIntegration_ResolveRemote_GitPushConfigTakesPrecedence(t *testing.T) {
 	assert.Equal(t, "origin", remote)
 }
 
+func TestIntegration_DefaultBranch(t *testing.T) {
+	bareDir, cloneDir := setupBareAndClone(t)
+	gitExec(t, cloneDir, "push", "origin", "main:develop")
+	gitExec(t, bareDir, "-c", "safe.bareRepository=all", "symbolic-ref", "HEAD", "refs/heads/develop")
+
+	dir := setupLocalRepo(t)
+	gitExec(t, dir, "remote", "add", "upstream", bareDir)
+	restoreDir := withGitDir(t, dir)
+	defer restoreDir()
+
+	branch, err := DefaultBranch("upstream")
+	require.NoError(t, err)
+	assert.Equal(t, "develop", branch, "asks the remote when no local pointer exists")
+	_, err = gitExecMayFail(t, dir, "symbolic-ref", "refs/remotes/upstream/HEAD")
+	assert.Error(t, err, "querying the remote must not write a local pointer")
+
+	gitExec(t, dir, "update-ref", "refs/remotes/upstream/cached", "HEAD")
+	gitExec(t, dir, "symbolic-ref", "refs/remotes/upstream/HEAD", "refs/remotes/upstream/cached")
+	branch, err = DefaultBranch("upstream")
+	require.NoError(t, err)
+	assert.Equal(t, "cached", branch, "the local pointer avoids a network call")
+
+	_, err = DefaultBranch("missing")
+	assert.ErrorIs(t, err, ErrNoDefaultBranch)
+}
+
 func TestIntegration_SaveAndGetRemote(t *testing.T) {
 	_, cloneDir := setupBareAndClone(t)
 	restoreDir := withGitDir(t, cloneDir)
@@ -1755,14 +1781,13 @@ func TestIntegration_WorktreeLocalMutations(t *testing.T) {
 	linked, path := addTestWorktree(t, root, dir, "feature")
 	restore := forbidGlobalWorktreeQueries(t)
 	defer restore()
-	defaultBranch, err := linked.DefaultBranch()
-	require.NoError(t, err)
-	assert.Equal(t, "main", defaultBranch)
+	_, err := linked.DefaultBranch("origin")
+	require.ErrorIs(t, err, ErrNoDefaultBranch, "local branch names are not guessed at the git layer")
 	gitExec(t, dir, "update-ref", "refs/remotes/origin/remote-trunk", "main")
 	gitExec(t, dir, "symbolic-ref", "refs/remotes/origin/HEAD", "refs/remotes/origin/remote-trunk")
-	defaultBranch, err = linked.DefaultBranch()
+	defaultBranch, err := linked.DefaultBranch("origin")
 	require.NoError(t, err)
-	assert.Equal(t, "remote-trunk", defaultBranch, "a remote HEAD takes precedence over local branch-name fallbacks")
+	assert.Equal(t, "remote-trunk", defaultBranch)
 	initial := gitExec(t, dir, "rev-parse", "HEAD")
 	writeFile(t, dir, "new.txt", "new main commit\n")
 	gitExec(t, dir, "add", ".")

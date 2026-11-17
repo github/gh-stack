@@ -22,6 +22,7 @@ type MockClient struct {
 	GetAsyncMergeResultFn      func(int, string) (*AsyncMergeResult, error)
 	PRTitlesFn                 func([]int) (map[int]string, error)
 	BaseBranchUsesMergeQueueFn func(string) (bool, error)
+	DefaultBranchFn            func() (string, error)
 }
 
 // Compile-time check that MockClient satisfies ClientOps.
@@ -169,4 +170,11 @@ func (m *MockClient) BaseBranchUsesMergeQueue(baseRef string) (bool, error) {
 		return m.BaseBranchUsesMergeQueueFn(baseRef)
 	}
 	return false, nil
+}
+
+func (m *MockClient) DefaultBranch() (string, error) {
+	if m.DefaultBranchFn != nil {
+		return m.DefaultBranchFn()
+	}
+	return "", nil
 }
