@@ -439,7 +439,72 @@ func TestRunMerge_WholeStackBlockedByDraft(t *testing.T) {
 	assert.Contains(t, output, "cannot merge the whole stack")
 	assert.Contains(t, output, "#2 is a draft")
 	assert.Contains(t, output, "gh stack merge 1")
+	assert.NotContains(t, output, "gh stack modify", "drafts are unblocked by marking them ready")
 	assert.False(t, submitCalled, "must not silently merge only the portion below the blocker")
+}
+
+// runMergeWithClosedPR runs merge against stack #5 and checks that it fails
+// with the given message and the closed-PR recovery hint for hintPR.
+func runMergeWithClosedPR(t *testing.T, args []string, prs []github.RemoteStackPR, wantErr error, wantMsg, hintPR string) {
+	t.Helper()
+	defer mockRemoteOnlyGit()()
+	cfg, outR, errR := config.NewTestConfig()
+	cfg.GitHubClientOverride = &github.MockClient{
+		GetStackFn: func(n int) (*github.RemoteStack, error) {
+			if n != 5 {
+				return nil, notFoundErr()
+			}
+			return remoteStack(5, "main", prs...), nil
+		},
+		FindStackForPRFn: func(int) (*github.RemoteStack, error) { return remoteStack(5, "main", prs...), nil },
+		RepoMergeConfigFn: func() (*github.RepoMergeConfig, error) {
+			return &github.RepoMergeConfig{MergeAllowed: true, DefaultMethod: "merge"}, nil
+		},
+		MergeStackAsyncFn: func(int, string, string) (*github.AsyncMergeResult, error) {
+			t.Fatal("must not merge past a closed pull request")
+			return nil, nil
+		},
+	}
+
+	err := runMerge(cfg, fastOptions(), args)
+	output := collectOutput(cfg, outR, errR)
+
+	assert.ErrorIs(t, err, wantErr)
+	assert.Contains(t, output, wantMsg)
+	assert.Contains(t, output, "Reopen "+hintPR+", or run `gh stack modify` to drop it")
+	assert.Contains(t, output, "gh stack submit")
+}
+
+func TestRunMerge_ClosedBottomBlocksWholeStack(t *testing.T) {
+	runMergeWithClosedPR(t, []string{"5"},
+		[]github.RemoteStackPR{closedStackPR(1, "b1"), openStackPR(2, "b2")},
+		ErrNotInStack, "nothing to merge: pull request #1 is closed", "#1")
+}
+
+func TestRunMerge_ClosedPRBelowTarget(t *testing.T) {
+	runMergeWithClosedPR(t, []string{"2"},
+		[]github.RemoteStackPR{closedStackPR(1, "b1"), openStackPR(2, "b2")},
+		ErrInvalidArgs, "#1 below it is closed", "#1")
+}
+
+func TestRunMerge_ClosedTarget(t *testing.T) {
+	runMergeWithClosedPR(t, []string{"1"},
+		[]github.RemoteStackPR{closedStackPR(1, "b1"), openStackPR(2, "b2")},
+		ErrInvalidArgs, "pull request #1 is closed", "#1")
+}
+
+// TestRunMerge_ClosedTargetAboveDraft verifies that the hint names the closed
+// target rather than being suppressed by a draft below it.
+func TestRunMerge_ClosedTargetAboveDraft(t *testing.T) {
+	runMergeWithClosedPR(t, []string{"2"},
+		[]github.RemoteStackPR{draftStackPR(1, "b1"), closedStackPR(2, "b2")},
+		ErrInvalidArgs, "pull request #2 is closed", "#2")
+}
+
+func TestRunMerge_ClosedMiddleWithYes(t *testing.T) {
+	runMergeWithClosedPR(t, []string{"5"},
+		[]github.RemoteStackPR{openStackPR(1, "b1"), closedStackPR(2, "b2"), openStackPR(3, "b3")},
+		ErrInvalidArgs, "cannot merge the whole stack: pull request #2 is closed", "#2")
 }
 
 func TestRunMerge_NothingToMerge_AllMerged(t *testing.T) {
